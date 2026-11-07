@@ -697,7 +697,7 @@ async function fakeClaude(extra: Record<string, string> = {}) {
   const binDir = await mkdtemp(join(tmpdir(), "auto-cli-agent-"))
   await Bun.write(
     join(binDir, "claude"),
-    `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "fixtures", "fake-claude.ts"))} "$@"\n`,
+    `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "..", "..", "auto-core", "test", "fixtures", "fake-claude.ts"))} "$@"\n`,
   )
   await chmod(join(binDir, "claude"), 0o755)
   const env: Record<string, string> = { PATH: `${binDir}:${process.env.PATH ?? ""}`, OPENCODE_AUTO_AGENT: "claude", ...extra }
@@ -717,7 +717,6 @@ describe("CLI parsing: run-side options and the config", () => {
         ["--subtask", "auto"],
         ["--idle-time", "10"],
         ["--idle-max", "0"],
-        ["--phases", "admtvk"],
         ["--test-by-driver"],
         ["--handover-test"],
         ["--auto-number"],
@@ -737,6 +736,15 @@ describe("CLI parsing: run-side options and the config", () => {
         expect(run.err).toContain(".opencode/auto/config.json")
         expect(run.err).toContain("opencode-auto amend <dir>")
       }
+      // --phases is frozen with the roadmap-line remedy, never the amend
+      // command 0137 retired (plans/0193 D2, 0165-056/S29-07: the old hint
+      // taught `opencode-auto amend --phases`, which answers with its own
+      // retirement refusal — one more round trip away from the true channel).
+      const phasesFrozen = await runCli(["run", dir, "--phases", "admtvk"])
+      expect(phasesFrozen.code).toBe(1)
+      expect(phasesFrozen.err).toContain("--phases was frozen by init")
+      expect(phasesFrozen.err).toContain("a round's phases reshape by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md")
+      expect(phasesFrozen.err).not.toContain("amend <dir> --phases")
       // The auto-numbering pair's revision hint takes the paired form
       const numbering = await runCli(["run", dir, "--auto-number"])
       expect(numbering.err).toContain("--auto-number (use --no-auto-number to turn off)")
@@ -2227,6 +2235,16 @@ describe("CLI: transfer and run --boundary (auto-core plans/0101 D1/D2)", () => 
       const runUnit = await runCli(["run", dir, "--unit", "T-001"])
       expect(runUnit.code).toBe(1)
       expect(runUnit.err).toContain("run takes no --unit")
+      // _lane refuses the retired extras like the run-shaped entry it is
+      // (0165-056/S26-04's _lane half: before 0193 D5 the hidden entry waved
+      // them through its KNOWN_FLAGS membership and ran on, the flag silently
+      // ignored — the same defect run/plan/transfer's family refuses).
+      const laneExtras = await runCli(["_lane", dir, "--unit", "T-001", "--commit-subtask"])
+      expect(laneExtras.code).toBe(1)
+      expect(laneExtras.err).toContain("--commit-subtask removed")
+      const laneRenamed = await runCli(["_lane", dir, "--unit", "T-001", "--verify-idle", "5"])
+      expect(laneRenamed.code).toBe(1)
+      expect(laneRenamed.err).toContain("--verify-idle was renamed to --idle-time")
       const transferCascade = await runCli(["transfer", dir, "--cascade"])
       expect(transferCascade.code).toBe(1)
       expect(transferCascade.err).toContain("--cascade is a close option: transfer closes nothing")
@@ -3021,6 +3039,56 @@ describe("CLI: the option policy's enumeration guard (0159)", () => {
         }
         expect(failures, `${command}: every flag outside its policy refuses with exit 1 naming it`).toEqual([])
       }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  // The hidden `_lane` column (plans/0193 D5, 0165-056/S26-04's _lane half):
+  // a run-shaped machine entry — its argv is the parent's lane launcher's
+  // own (`_lane <dir> --unit <id> [--merge <branch>]`, plus the session
+  // flags), so its policy owns exactly the vocabulary the run family shares:
+  // the globally retired flags, the frozen config keys, the retired extras
+  // and the other commands' revision pairs (brief, name/email). Each is
+  // refused with exit 1 naming it — before 0193 D5 the extras were waved
+  // through and silently ignored. The layers that are each public command's
+  // own surface (run's execution shaping, plan's routes, close's pair) are
+  // not re-enumerated here: the launcher never passes them and the shared
+  // family's vocabulary is what the hidden entry owes (the named residual
+  // of 0193 D5).
+  test("the hidden _lane refuses the shared vocabulary — retired, frozen and the other commands' revision pairs — naming each", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-enum-"))
+    try {
+      const laneConsumed = new Set(["unit", "merge", "server", "verbose", "interactive", "wait-answer", "permission", "new-session"])
+      const sharedLayers = [
+        // init's -p retirement entry is scoped to init alone (plan's -p is
+        // the live planning input), so the global retired loop skips it here
+        // and _lane does not own plan's input flags — the named residual of
+        // 0193 D5 (with the close family and run's execution shaping, the
+        // layers the hidden machine entry leaves to its launcher's own argv).
+        ...[...RETIRED_KEYS].filter((flag) => flag !== "prompt"),
+        ...["continue", "commit-subtask", "verify-idle", "verify-max"],
+        ...["brief", "brief-file", "name", "email"],
+        // The config flags read off the source (the frozen-key family the
+        // run family shares; CONFIG_FLAGS is not a parser constant the
+        // guards above derive, so its line is read the same way).
+        ...[...source.matchAll(/const CONFIG_FLAGS = \[([^\]]*)\]/g)][0]![1].match(/"([^"]+)"/g)!.map((token: string) => token.slice(1, -1)),
+      ]
+      const refusedFlags = [...new Set(sharedLayers)].filter((flag) => !laneConsumed.has(flag))
+      expect(refusedFlags.length).toBeGreaterThan(25)
+      const failures: string[] = []
+      for (let index = 0; index < refusedFlags.length; index += 12) {
+        await Promise.all(
+          refusedFlags.slice(index, index + 12).map(async (flag) => {
+            const args = ["_lane", dir, "--unit", "T-001", `--${flag}`, ...(VALUE_FLAGS.has(flag) ? ["zzz"] : [])]
+            const result = await runCli(args)
+            if (result.code !== 1 || !result.err.includes(`--${flag}`)) {
+              failures.push(`${args.slice(1).join(" ")}: exit ${result.code}, stderr: ${result.err.trim().split("\n")[0]}`)
+            }
+          }),
+        )
+      }
+      expect(failures, "_lane: every flag of the shared vocabulary refuses with exit 1 naming it").toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -4674,7 +4742,7 @@ describe("CLI: plan --force-close (auto-core plans/0053 D28)", () => {
 
 // plan --append end to end (auto-core plans/0053 §8, B6): the leftover CLI
 // loop-level flows, driven deterministically over a fake `claude` CLI on PATH
-// (test/fixtures/fake-claude.ts; OPENCODE_AUTO_AGENT=claude selects the claude
+// (the one fake at auto-core/test/fixtures/fake-claude.ts; OPENCODE_AUTO_AGENT=claude selects the claude
 // adapter, so plan's appending session runs with no provider credentials).
 // The agent-driving logic itself is auto-core's loop harness
 // (test/append-loop.test.ts); what these cases pin is the shell flow: the
@@ -4952,7 +5020,8 @@ describe("CLI: the new-project flow end to end (auto-core plans/0053 §8, C5)", 
 
 // run under the default --subtask auto, end to end over the claude adapter
 // (auto-core plans/0059 D2–D5): the fake `claude` on PATH plays the lead, its
-// streams, the wrap-up and the phase handover (test/fixtures/fake-claude.ts),
+// streams, the wrap-up and the phase handover (the one fake at
+// auto-core/test/fixtures/fake-claude.ts),
 // and records every turn with the session arguments of its process. What
 // these cases pin beyond the core's native-fake cases (test/agent-fake.test.ts
 // there) is the real adapter underneath: the lead's usage notice arrives on
@@ -5471,7 +5540,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-boot-"))
     const binDir = await mkdtemp(join(tmpdir(), "auto-cli-agent-"))
     const git = gitOf(dir)
-    await Bun.write(join(binDir, "claude"), `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "fixtures", "fake-claude.ts"))} "$@"\n`)
+    await Bun.write(join(binDir, "claude"), `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "..", "..", "auto-core", "test", "fixtures", "fake-claude.ts"))} "$@"\n`)
     await chmod(join(binDir, "claude"), 0o755)
     // The in-process parent never dispatches a session itself (every unit is
     // a lane), so its agent is a stub host; the spawned workers run the

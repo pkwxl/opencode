@@ -185,6 +185,16 @@ const CLASSIFIED: Record<string, Domain> = {
   close: "driver",
   conclusion: "driver",
   config: "driver",
+  // The one init/amend sequence (plans/0193 D4): the check-and-write order
+  // both shells' entries call with their parsed keys, I/O adapter and
+  // wording record — config-layer machinery beside config/config-fix/
+  // external-dirs, reaching git's kernel primitives over the table's
+  // runtime→kernel edge.
+  "config-op": "driver",
+  // The run banner and the phase progress line (plans/0193 D1): the one
+  // emitter family every shell's run/plan entries and the status view render
+  // through — pure line assembly over config/phases and the served surface.
+  banner: "driver",
   // Config fix: the rule table behind `fix` (plans/0052 D10).
   "config-fix": "driver",
   // The root-symlink external_directory stamp (plans/0122): the scan and
@@ -789,6 +799,14 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   "agent-env": "runtime",
   "agent-pool": "runtime",
   shell: "runtime",
+  // The one init/amend sequence (plans/0193 D4): the config layer's own
+  // seat — beside config/config-fix/external-dirs, over the allowed
+  // runtime→kernel edge for git's bootstrap and identity probes.
+  "config-op": "runtime",
+  // The run banner's emitter family (plans/0193 D1): runtime beside
+  // config/shell — pure line assembly, the same seat the status view and
+  // the shells' entries reach without a driver edge.
+  banner: "runtime",
   gitignore: "runtime",
   "agents-block": "runtime",
   clean: "runtime",

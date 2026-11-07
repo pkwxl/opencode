@@ -38,17 +38,14 @@
 // a non-permission question is auto-answered (auto-core
 // src/engine/concerns/questions.ts).
 import { resolve } from "node:path"
-import {
-  formatProjectConfig,
-  legacyModeFallback,
-  loadProjectConfig,
-  type ProjectConfig,
-} from "@opencode-ai/auto-core/config"
+import { loadProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
+import { runBannerLines } from "@opencode-ai/auto-core/banner"
 import { fixHint } from "@opencode-ai/auto-core/config-fix"
 import { runAll, runLaneWorker, type RunAllOpts } from "@opencode-ai/auto-core/loop"
+import { configRunOptions } from "@opencode-ai/auto-core/loop-preflight"
 import { log, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
-import { currentRound, formatPhases, legacyLayoutProblem, phaseIndexPath, readPhases } from "@opencode-ai/auto-core/phases"
+import { legacyLayoutProblem } from "@opencode-ai/auto-core/phases"
 import { runTransfer } from "@opencode-ai/auto-core/transfer"
 import type { Interactive } from "@opencode-ai/auto-core/control-types"
 import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseLane, parsePlan, parseSwitches, parseTransfer, parseTransport, type LanePayload, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
@@ -170,7 +167,7 @@ export async function runWorker(argv: string[]): Promise<void> {
     if (key === "config") {
       refuse(`a run request carries no config: the constitutional keys are frozen by init (.opencode/auto/config.json); revise them with opencode-auto amend <dir>, or edit that file directly`)
     }
-    if (key in CONFIG_KEYS) refuse(frozenRefusal("", `"${key}" `, CONFIG_KEYS[key]!))
+    if (key in CONFIG_KEYS) refuse(frozenRefusal("", `"${key}" `))
     if (HAND_EDITED_KEYS.has(key)) refuse(`"${key}" is a config key (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init`)
     refuse(`unknown request field "${key}" (the run request takes directory, options, switches, transport, plan, transfer and lane)`)
   }
@@ -321,18 +318,11 @@ export async function runWorker(argv: string[]): Promise<void> {
   // driver-run tests line, the config summary and, when phased, the phase
   // progress line — the log file is this service's observability surface
   // (P1e tails it), and these lines tell the reader what the run carries.
-  // AUTO-DECISION: replicated here rather than skipped — the banner is part
-  // of "a fully-formed shell run"; the texts stay byte-identical to the
-  // CLI's so a tailing client cannot tell the shells apart.
-  if (await legacyModeFallback(directory)) log(`ℹ mode taken from the legacy persisted value in .auto/config.json; run opencode-auto fix ${directory} to write the full config`)
-  if (config.testByDriver) {
-    log(
-      `⚙ tests run by the driver: sessions put scripts in test/ and write the script path to tmp/test.sh to request execution; the driver merges stdout/stderr into tmp/test.<n>.out and feeds it back to the session` +
-        (config.handoverTest ? "; on test failure with context at its cap, a handover document switches to a fresh session" : ""),
-    )
-  }
-  log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
-  if (config.phases !== "m") log(await phasesLine(directory))
+  // Rendered by the core's one emitter family (auto-core src/banner.ts,
+  // plans/0193 D1): the lines stay byte-identical to the CLI's so a tailing
+  // client cannot tell the shells apart — including 0142's code-work clause,
+  // which this shell's hand-maintained copy had drifted out of.
+  for (const line of await runBannerLines(directory, config)) log(line)
 
   // The run itself, under its own lock (acquire is runAll's — a refusal is
   // runAll's refusal, holder lines and exit 1, never worked around here),
@@ -357,13 +347,14 @@ export async function runWorker(argv: string[]): Promise<void> {
 }
 
 // The runAll options, the CLI's runOptions for this request: the config
-// init froze (loaded strictly above) plus the request's per-run options.
+// init froze (loaded strictly above; threaded by the core's one
+// configRunOptions, plans/0193 D1) plus the request's per-run options.
 // Config values never come from the request — that is the frozen-flag
 // refusal's whole point. Every config key the CLI's runOptions threads is
-// threaded here too (the plans/0100-era keys intent/treeLanes/lanes/isolate
-// included — the CLI's threading is the reference this mirrors; a dropped
-// key is a silently different run: another intent pack's prompts, another
-// execution tier, a round without its branch isolation). The interactive
+// threaded here too, by the same core home (the CLI's threading was the
+// reference this mirrored; a dropped key is a silently different run:
+// another intent pack's prompts, another execution tier, a round without
+// its branch isolation). The interactive
 // channel is the transport's implementation when the daemon attached one
 // (the P3a seam's injected shape); the request's options never carry it
 // (parseOptions refuses options.interactive — the terminal sideband has no
@@ -379,30 +370,12 @@ export async function runWorker(argv: string[]): Promise<void> {
 // entry function is the only thing that must not be called in-process.
 export function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOptions, interactive: Interactive | undefined, plan: PlanPayload | undefined): RunAllOpts {
   return {
-    agent: config.agent,
+    ...configRunOptions(config, mode),
     server: options.server,
     verbose: options.verbose,
     waitAnswer: options.waitAnswer,
     waitBetween: options.waitBetween,
-    subtask: config.subtask,
-    contextLimit: config.contextLimit * 1000,
     permission: options.permission,
-    idleMs: config.idleTime * 60_000,
-    maxMs: config.idleMax > 0 ? config.idleMax * 60_000 : undefined,
-    mode,
-    intent: config.intent,
-    phases: config.phases,
-    testByDriver: config.testByDriver,
-    handoverTest: config.handoverTest,
-    autoNumber: config.autoNumber,
-    wrapup: config.wrapup,
-    acceptanceGate: config.acceptanceGate,
-    build: config.build,
-    parallel: config.parallel,
-    treeLanes: config.treeLanes,
-    lanes: config.lanes,
-    scanExempt: config.scanExempt,
-    isolate: config.isolate,
     newSession: options.newSession,
     dryrun: options.dryrun,
     maxSessions: options.maxSessions,
@@ -414,16 +387,8 @@ export function runOptions(config: ProjectConfig, mode: ModeSpec, options: RunOp
   }
 }
 
-// The phase progress line of the banner (the CLI's phasesLine, byte-identical;
-// its missing-index hint names the CLI's plan — the working plan surface
-// today, since this shell's own plan route arrives with P1d).
-async function phasesLine(directory: string): Promise<string> {
-  const round = await currentRound(directory)
-  try {
-    const state = await readPhases(directory)
-    if (!state) return `⚠ phase index (${phaseIndexPath(round)}) is missing; run opencode-auto plan to establish the round`
-    return `phases${round > 1 ? ` (round ${round})` : ""}: ${formatPhases(state)}`
-  } catch (error) {
-    return `⚠ phase index (${phaseIndexPath(round)}) is invalid: ${error instanceof Error ? error.message : String(error)}`
-  }
-}
+// The phase progress line of the banner lives in the core now (auto-core
+// src/banner.ts phasesLine, plans/0193 D1) — this shell's local copy is
+// deleted; the missing-index remedy it renders is phased-aware (transfer for
+// a phased project) and names this shell's served surface through the
+// profile, never a subcommand this binary refuses.

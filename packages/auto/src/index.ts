@@ -1,27 +1,22 @@
 #!/usr/bin/env bun
 import { stat } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { BRIEF_FILE } from "@opencode-ai/auto-core/brief"
 import { checkCleanTree } from "@opencode-ai/auto-core/clean"
 import { confirm } from "@opencode-ai/auto-core/confirm"
 import {
-  CONFIG_DEFAULTS,
   CONFIG_FILE,
   PARALLEL_LEVELS,
+  configKeyRevision,
+  type ParallelLevel,
   formatProjectConfig,
   isolateProblem,
   legacyModeFallback,
-  loadOverwriteBaseline,
   loadProjectConfig,
-  mergeProjectConfig,
-  saveProjectConfig,
   scanExemptProblem,
   splitGlobList,
   type ProjectConfig,
-  type RetiredKey,
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
-import { applyExternalAllows, externalAllowsStatus } from "@opencode-ai/auto-core/external-dirs"
 import { applySync, formatSyncPlan, planSync, syncWritesAnything } from "@opencode-ai/auto-core/sync"
 import { releaseCheck } from "@opencode-ai/auto-core/release"
 import { PROVENANCE_FILE } from "@opencode-ai/auto-core/provenance"
@@ -33,10 +28,10 @@ import { landUnit } from "@opencode-ai/auto-core/land"
 import { forkTask, removeFork } from "@opencode-ai/auto-core/fork"
 import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
-import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
-import { bootstrapRepository, commitIdentityProblem, writeLocalIdentity } from "@opencode-ai/auto-core/git"
-import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { runAll, runLaneWorker, type RunAllOpts } from "@opencode-ai/auto-core/loop"
+import { configRunOptions } from "@opencode-ai/auto-core/loop-preflight"
+import { runBannerLines } from "@opencode-ai/auto-core/banner"
+import { runConfigSequence } from "@opencode-ai/auto-core/config-op"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { describeModels, formatModels } from "@opencode-ai/auto-core/models-describe"
 import { probeModels } from "@opencode-ai/auto-core/agent-pool"
@@ -44,27 +39,15 @@ import { planPrelude } from "@opencode-ai/auto-core/plan"
 import { runTransfer } from "@opencode-ai/auto-core/transfer"
 import type { PlanInput } from "@opencode-ai/auto-core/plan-input"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
-import {
-  currentRound,
-  formatPhases,
-  legacyLayoutProblem,
-  parsePhases,
-  phaseIndexPath,
-  plannedPhaseUnits,
-  readPhases,
-  type PhaseState,
-} from "@opencode-ai/auto-core/phases"
+import { legacyLayoutProblem, parsePhases } from "@opencode-ai/auto-core/phases"
 import { loadPhaseTypes } from "@opencode-ai/auto-core/phases/custom"
 import { PRESET_FORM, phasesProblem, type PhaseTypeEntry } from "@opencode-ai/auto-core/phases/registry"
 import { renderStatus } from "@opencode-ai/auto-core/status"
 import { roundDirName } from "@opencode-ai/auto-core/docpaths"
 import { SUBTASK_MODES, type PermissionMode, type SubtaskMode } from "@opencode-ai/auto-core/opts"
 import { loadIntents, planningInputScaffold } from "@opencode-ai/auto-core/intent/load"
-import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle, type IntentBundle } from "@opencode-ai/auto-core/bundle"
+import { parseIntentBundle, resolveIntentBundle, type IntentBundle } from "@opencode-ai/auto-core/bundle"
 import { shellProfile } from "@opencode-ai/auto-core/shell"
-import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
-import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
-import templateAgent from "@opencode-ai/auto-core/templates/.opencode/agent/auto.md" with { type: "file" }
 
 const args = process.argv.slice(2)
 const command = args[0]
@@ -1042,7 +1025,7 @@ const strictOptionRefusal =
     // not be waved through here either — the command's own refusals take it.
     if (typeof RETIRED_FLAGS[key] === "string") return undefined
     if (CONFIG_FLAGS.includes(key))
-      return `${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${amendHint(key)}, or edit that file directly; ${command} takes no config options`
+      return `${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${amendHint(key)}${configKeyRevision(key).file ? ", or edit that file directly" : ""}; ${command} takes no config options`
     if (key === "prompt" || key === "file")
       return `${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option (the planning input: opencode-auto plan <dir> -p <text> | --file <path>); ${command} takes no planning input`
     const similar = similarOptions(key)
@@ -1360,6 +1343,11 @@ if (command === "_lane") {
     console.error("_lane requires --unit <task id> (the unit this lane worker runs); it is the entry the parent run's lane launcher invokes")
     process.exit(1)
   }
+  // The retired extras and frozen config flags are refused here too
+  // (0165-056/S26-04's _lane half): _lane is a run-shaped entry sharing the
+  // option vocabulary, and a silently ignored retired flag on it is the same
+  // defect run/plan/transfer's refusal family already refuses.
+  refuseFrozenFlags("_lane")
   const merge = flags.get("merge")
   const session = parseSessionFlags()
   startRunLog(directory, session)
@@ -1847,12 +1835,12 @@ if (command === "remove-fork") {
 }
 
 // The amend hint of one config flag: how a person changes a key init froze.
-// Shared by run/plan's frozen-flag refusal and close's whitelist, so the hint
-// for a key is written once.
+// Shared by run/plan's frozen-flag refusal and close's whitelist — rendered
+// by the core's one revision table (configKeyRevision, plans/0193 D2), so
+// the hint for a key is written once for every shell (phases teaches the
+// roadmap line, not the amend flag 0137 retired).
 function amendHint(key: string): string {
-  if (key === "auto-number" || key === "no-auto-number") return "opencode-auto amend <dir> --auto-number (use --no-auto-number to turn off)"
-  if (key === "wrapup" || key === "no-wrapup") return "opencode-auto amend <dir> --wrapup (use --no-wrapup to turn off)"
-  return `opencode-auto amend <dir> ${key === "mode" ? "-m" : `--${key}`} <value>`
+  return configKeyRevision(key).clause
 }
 
 // A boolean flag's on-state: present and not explicitly false. Shared by the
@@ -1965,7 +1953,7 @@ function exitWithResult(result: { lines: string[]; type: string }, ok: string, r
 // the config file. The watchdog keys were renamed from --verify-idle/
 // --verify-max to --idle-time/--idle-max (now governing the test-script
 // watchdog); the old names get their own rename notice.
-function refuseFrozenFlags(command: "run" | "plan" | "transfer") {
+function refuseFrozenFlags(command: "run" | "plan" | "transfer" | "_lane") {
   for (const key of ["verify-idle", "verify-max"]) {
     if (flags.has(key)) {
       const renamed = key === "verify-idle" ? "idle-time" : "idle-max"
@@ -1975,7 +1963,8 @@ function refuseFrozenFlags(command: "run" | "plan" | "transfer") {
   }
   for (const key of CONFIG_FLAGS) {
     if (flags.has(key)) {
-      console.error(`${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${amendHint(key)}, or edit that file directly`)
+      const revision = configKeyRevision(key)
+      console.error(`${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${revision.clause}${revision.file ? ", or edit that file directly" : ""}`)
       process.exit(1)
     }
   }
@@ -2162,57 +2151,29 @@ async function loadRunConfig(directory: string): Promise<{ config: ProjectConfig
 }
 
 // The banner of run and plan: the legacy-mode note, the driver-run tests line,
-// the config summary and, when phased, the phase progress line.
+// the config summary and, when phased, the phase progress line — the core's
+// one emitter family (auto-core src/banner.ts, plans/0193 D1), rendered here
+// through the log sink.
 async function logRunBanner(directory: string, config: ProjectConfig) {
-  if (await legacyModeFallback(directory)) log(`ℹ mode taken from the legacy persisted value in .auto/config.json; run opencode-auto fix ${directory} to write the full config`)
-  if (config.testByDriver) {
-    log(
-      `⚙ tests run by the driver: sessions put scripts in test/ and write the script path to tmp/test.sh to request execution; the driver merges stdout/stderr into tmp/test.<n>.out and feeds it back to the session; the channel serves code-work phases (elsewhere a session runs such a check itself, never through tmp/test.sh)` +
-        (config.handoverTest ? "; on test failure with context at its cap, a handover document switches to a fresh session" : ""),
-    )
-  }
-  log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
-  // The phase progress line (B.2, sharing phasesLine with status; ✓ = done,
-  // ▶ = current, the rest = not started); carries a round annotation when
-  // rounds continue (the greatest docs/R-NN round number > 1). A missing or
-  // invalid phase index only warns here — runAll's phase routing exits 1 as an
-  // environment error.
-  if (config.phases !== "m") log(await phasesLine(directory))
+  for (const line of await runBannerLines(directory, config)) log(line)
 }
 
 // The runAll options run and plan share (auto-core plans/0053 D14): the config
-// init froze plus this run's session flags. run adds --wait-between, --dryrun
+// init froze (threaded by the core's one configRunOptions, plans/0193 D1)
+// plus this run's session flags. run adds --wait-between, --dryrun
 // and --max-sessions; plan adds its stop condition and planning input.
 function runOptions(config: ProjectConfig, mode: ModeSpec, session: SessionFlags): RunAllOpts {
   return {
     // The coding agent, context budget etc. come from the config file (written
     // by init); OPENCODE_AUTO_AGENT still overrides the agent.
-    agent: config.agent,
+    ...configRunOptions(config, mode),
     server: flags.get("server"),
     // interactive implies the verbose log level (the watch/change-file
     // monitoring runs as usual and writes to the log).
     verbose: session.verbose || session.interactive,
     waitAnswer: session.waitAnswer,
-    subtask: config.subtask,
-    contextLimit: config.contextLimit * 1000,
     permission: session.permission,
     interactive: session.interactive,
-    idleMs: config.idleTime * 60_000,
-    maxMs: config.idleMax > 0 ? config.idleMax * 60_000 : undefined,
-    mode,
-    intent: config.intent,
-    phases: config.phases,
-    testByDriver: config.testByDriver,
-    handoverTest: config.handoverTest,
-    autoNumber: config.autoNumber,
-    wrapup: config.wrapup,
-    acceptanceGate: config.acceptanceGate,
-    build: config.build,
-    parallel: config.parallel,
-    treeLanes: config.treeLanes,
-    lanes: config.lanes,
-    scanExempt: config.scanExempt,
-    isolate: config.isolate,
     newSession: session.newSession,
   }
 }
@@ -2665,365 +2626,82 @@ if (command === "init" || command === "amend") {
   // droppers and the explicit keys are read back here.
   const briefSeed = await parseBriefSeed()
   const { explicit, agent, parallel, scanExempt, isolate, treeLanes } = parseConfigFlags(directory)
-  // The one watershed between full overwrite and per-key revision: the default
-  // takes the builtin defaults table as its baseline (keys not given fall back
-  // to the defaults), while the amend command takes the existing on-disk
-  // config as its baseline (keys not given keep their values).
-  //
-  // An amend loads strictly, since it would carry a retired key over. A full
-  // overwrite discards them anyway, so its baseline read tolerates them and
-  // names each one before the overwrite (plans/0052 D4) — otherwise a stored
-  // `commit: false` or `source` would block the very re-init that clears it.
-  // From P2 the strict failure names `fix` when a rule repairs it (D4, D11).
+  // The sequence itself is the core's one home (runConfigSequence,
+  // auto-core src/config-op.ts, plans/0193 D4): this shell parses its flags
+  // (parseConfigFlags above) and renders the outcome — the checks, their
+  // order and the writes are shared with every shell, so a core rule cannot
+  // exist here unmirrored. The one watershed between full overwrite and
+  // per-key revision lives there too: the default takes the builtin defaults
+  // table as its baseline, the amend command the existing on-disk config
+  // (an amend loads strictly, since it would carry a retired key over; a
+  // full overwrite's baseline read tolerates them and names each one before
+  // the overwrite, plans/0052 D4).
   const amend = amendCommand
-  let existing: ProjectConfig
-  let discarded: RetiredKey[] = []
-  try {
-    if (amend) existing = await loadProjectConfig(directory)
-    else ({ config: existing, retired: discarded } = await loadOverwriteBaseline(directory))
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error))
-    const hint = await fixHint(directory)
-    if (hint) console.error(hint)
-    process.exit(1)
-  }
-  // acceptanceGate/build (plans/0049 G9) have no flag, so they are only ever
-  // hand-edited: a full-overwrite init keeps them rather than silently erasing them.
-  // AUTO-DECISION: scanExempt is not kept here — it has its flag
-  // (--scan-exempt), so it follows the stateless overwrite like parallel; a
-  // single key is changed with amend. isolate (plans/0074) has its flag too
-  // (--isolate) and follows the same rule.
-  const handEdited = { acceptanceGate: existing.acceptanceGate, build: existing.build }
-  const base: ProjectConfig = amend ? existing : { ...CONFIG_DEFAULTS, ...handEdited }
-  // handoverTest requires testByDriver: when either is explicit, the check
-  // judges this run's effective values (an ungiven --test-by-driver falls back
-  // to the existing config value); an amend turning test-by-driver off while
-  // keeping a stored handoverTest=true is caught here too.
-  {
-    const effectiveTestByDriver = explicit.testByDriver ?? base.testByDriver
-    const effectiveHandoverTest = explicit.handoverTest ?? base.handoverTest
-    if (effectiveHandoverTest && !effectiveTestByDriver) {
-      console.error(
-        `${explicit.handoverTest !== undefined ? "--handover-test" : "the existing handoverTest"} requires --test-by-driver: ` +
-          "test handover only makes sense when tests run via the driver. To fix: give --test-by-driver as well (or --handover-test false), e.g. opencode-auto amend <dir> --test-by-driver --handover-test; or edit .opencode/auto/config.json directly",
-      )
-      process.exit(1)
-    }
-  }
-  // The phase index (the current round's docs/R-NN/phases.md plus each phase
-  // directory's todo.md/done.md, M3.3) is a derived state carrier; an invalid
-  // one is an environment error with exit 1 (the message points a person at
-  // the fix). The completed phases' type sequence (index order, replacing the
-  // preset letter string since M3.6): when non-empty, an explicit --phases
-  // change must satisfy the prefix guard. (`continue` used to re-check the
-  // previous round's completeness here, run the round-close checks and
-  // establish the next round; that subcommand retired, and plan's prelude owns
-  // the whole route.)
-  const liveRound = await currentRound(directory)
-  let phaseState: PhaseState | undefined
-  try {
-    phaseState = await readPhases(directory, liveRound)
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error))
-    process.exit(1)
-  }
-  // -m/--mode parsing (the reduced init-side form): precedence is explicit
-  // value > baseline value (the defaults under a full overwrite, the existing
-  // config under the amend command); an unregistered name is a usage error
-  // (the message lists the currently supported modes).
-  const modeName = flags.get("mode") ?? base.mode
-  const modes = loadModeTable(directory)
-  if (!modes[modeName]) {
-    console.error(`--mode must be a registered mode (currently supported: ${Object.keys(modes).join(", ")}); defaults to migrate`)
-    process.exit(1)
-  }
-  const config = mergeProjectConfig(base, { ...explicit, mode: modeName })
-  // The bundle's stamps (plans/0079 §3) fill only what the person did not
-  // give explicitly — a flag always wins over the manifest. The bundle's
-  // phases value goes through the prefix guard below like any other, and its
-  // mode stamp re-checks against the loaded mode table (a bundle's own mode
-  // file is only on disk after materialization, so its name checks here
-  // against the manifest's word; the file itself was parsed with the bundle).
-  if (bundle) {
-    if (explicit.phases === undefined) config.phases = bundle.phases
-    if (!flags.has("mode") && bundle.mode !== undefined) config.mode = bundle.mode
-    if (!flags.has("subtask") && bundle.stamps.subtask !== undefined) config.subtask = bundle.stamps.subtask
-    if (!flags.has("parallel") && bundle.stamps.parallel !== undefined) config.parallel = bundle.stamps.parallel
-    if (!flags.has("wrapup") && !flags.has("no-wrapup") && bundle.stamps.wrapup !== undefined) config.wrapup = bundle.stamps.wrapup
-    config.intent = bundle.name
-    if (bundle.mode !== undefined && !modes[bundle.mode] && !bundle.files.mode) {
-      console.error(`--intent ${intentFlag}: the bundle's manifest mode "${bundle.mode}" is not a registered mode (currently supported: ${Object.keys(modes).join(", ")})`)
-      process.exit(1)
-    }
-  }
-  // --intent's pack-existence check (plans/0079 §2), judged on the merged
-  // value: the name must be a pack the loader resolves in this directory
-  // (built-in plus .opencode/auto/intents/). A parsed bundle satisfies itself
-  // — its pack materializes before the config write below — so the check
-  // skips it.
-  if (config.intent !== undefined && config.intent !== bundle?.name && !loadIntents(directory)[config.intent]) {
-    const packs = loadIntents(directory)
-    console.error(`--intent must be a loaded intent pack (currently available: ${Object.keys(packs).sort().join(", ")}); defaults to the built-in default pack`)
-    process.exit(1)
-  }
-  // --parallel none / --scan-exempt none / --isolate none / --agent opencode
-  // / --tree-lanes off drop their keys (an amend would otherwise keep the old
-  // value).
-  if (parallel === "none") delete config.parallel
-  if (scanExempt === "none") delete config.scanExempt
-  if (isolate === "none") delete config.isolate
-  if (agent === "opencode") delete config.agent
-  if (treeLanes === "off") delete config.treeLanes
-  // The read-only prefix guard, one per command (plans/0053 D31–D32): init
-  // and amend no longer re-sync the index, so the guard only keeps the config
-  // reconcilable with the current round. plannedPhaseUnits is the sync's check
-  // half: a value that would drop a completed phase or a directory holding
-  // work could never be re-synced, so it is refused before any write, while a
-  // mid-round value that keeps the completed phases is allowed and shows up
-  // as a drift for plan to reconcile. Skipped when the current round is
-  // complete — the value then applies to the next round plan establishes,
-  // what continue offered (0052 §4.1 addition 3). It judges this run's
-  // effective value (config.phases), so a no-flag overwrite that would reset
-  // a staged project to "m" is caught here too.
-  // AUTO-DECISION (one guard): the shells' completed-types prefix check was removed — plannedPhaseUnits is the single guard, refusing every value it refused (a completed phase survives only when its directory matches positionally, the same prefix; a hand-edited index whose done phases are not an index prefix is allowed now: the directories still match, and the sync judges directories).
-  const roundComplete = !!phaseState && phaseState.phases.every((unit) => phaseState.done.has(unit.id))
-  if (!roundComplete) {
-    try {
-      // A bundle's phase types are not on disk until materialization, so the
-      // guard sees the bundle's parsed entries beside the loaded ones
-      // (plans/0079 §3: the stamped value must reconcile against the types
-      // the bundle will materialize, not the ones that predate it).
-      await plannedPhaseUnits(directory, liveRound, config.phases, bundle ? [...loadPhaseTypes(directory), ...bundle.types] : undefined)
-    } catch (error) {
-      console.error(
-        `${error instanceof Error ? error.message : String(error)}. ` +
-          "A mid-round phases change must keep the current round's completed phases and the phase directories that hold work; " +
-          "once the current round is complete, any value applies to the next round plan establishes",
-      )
-      process.exit(1)
-    }
-  }
-  // Boundary-scoped --phases retired on amend (plans/0137, retiring the
-  // 0101 D6 hold and the 0114 D3 coverage refusal with it): the roadmap line
-  // is the one reshape channel — covered or uncovered alike — and the config
-  // key never changes after init. The refusal at the flag's parse site names
-  // the line channel. init keeps the prefix guard alone: its full overwrite
-  // is the birth choice, never a reshape.
-  // The prompt library and intent packs: load the target directory's
-  // .opencode/auto/prompts/ and .opencode/auto/intents/ overrides (a failed
-  // protocol check exits right there); init renders no prompts, but loading
-  // early surfaces override problems at init time already. The pack load
-  // validates through the loader itself (the render facts build per render
-  // call holds no module state).
-  try {
-    usePromptLibrary(directory)
-    loadIntents(directory)
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error))
-    process.exit(1)
-  }
-  // Commit capability prerequisite (plain init only; the amend command is
-  // not covered — it touches an already-working project): the
-  // unified commit is the completion condition, so a repository whose git
-  // cannot commit (no user.name / user.email, nothing to fall back to) is
-  // refused before any write.
-  // The git bootstrap (plans/0073, ruled 2026-10-04): in a directory inside
-  // no git work tree, init first creates the repository itself — with the
-  // person's init.defaultBranch when set, `-b main` as the fallback — and
-  // prints it loudly (the driver's record and rollback need it; the loud
-  // print is the disclosure, there is deliberately no --no-git escape hatch).
-  // It runs here, before the identity probe and before ensureInitGitignore
-  // below, joining the everything-before-first-write check phase: a refusal
-  // after it still leaves no config written, and the empty repository it
-  // leaves behind is `rm -rf .git` away from undone. In-repo init is
-  // unchanged (the bootstrap is a no-op there).
-  if (command === "init") {
-    const bootstrap = await bootstrapRepository(directory)
-    if (bootstrap.type === "failed") {
-      console.error(
-        `cannot initialize a git repository in ${directory}: ${bootstrap.error}. ` +
-          "The driver commits after every session (the unified commit is the completion condition), so init requires one; " +
-          "create the repository yourself (git init) and re-run, or fix the underlying git problem",
-      )
-      process.exit(1)
-    }
-    if (bootstrap.type === "created") {
-      console.log(`✓ initialized git repository (branch ${bootstrap.branch}) in ${directory} — the driver's record and rollback need it`)
-    }
-    const problem = await commitIdentityProblem(directory)
-    if (problem) {
-      // Identity resolution order (plans/0073 §2.2): a resolving
-      // global/`GIT_*` identity (judged exactly as commitIdentityProblem
-      // judges) → proceed, nothing written — the passing probe is this
-      // branch's guard; the --name/--email pair → written as repository-local
-      // config in the repository at the target root (never --global; the
-      // tool never edits the person's global config); neither → refuse with
-      // today's message extended by the new-flags hint. The
-      // opencode-auto@local fallback (git.ts identityArgs) deliberately does
-      // NOT apply here — it covers only nested repositories the person
-      // brought in; the target root's history is the audit trail and keeps
-      // an attributable identity.
-      if (identityName !== undefined && identityEmail !== undefined) {
-        const error = await writeLocalIdentity(directory, { name: identityName, email: identityEmail })
-        if (error) {
-          console.error(`cannot write the repository-local commit identity in ${directory}: ${error}`)
-          process.exit(1)
-        }
-        console.log("✓ commit identity written as repository-local config (user.name/user.email from --name/--email; never --global)")
-      } else {
-        console.error(
-          `git cannot commit in ${directory}: ${problem}. The driver commits after every session, so init requires a repository that can commit; ` +
-            `configure an identity first, e.g. git config --global user.name <name> and git config --global user.email <email> ` +
-            `(drop --global to configure this repository only), or pass --name <name> --email <email> to have init write the repository-local identity`,
-        )
+  await runConfigSequence({
+    kind: amend ? "amend" : "init",
+    dir: directory,
+    keys: {
+      explicit,
+      mode: flags.get("mode"),
+      // The dropper spellings ride as carriers (the positive list values are
+      // already inside `explicit`); the raw flag strings are parse-validated
+      // unions, narrowed here for the sequence's ConfigOpKeys.
+      agent: agent as "opencode" | "claude" | undefined,
+      ...(parallel !== undefined ? { parallel: parallel as "none" | ParallelLevel } : {}),
+      ...(treeLanes !== undefined ? { treeLanes: treeLanes as "off" | "auto" | "on" } : {}),
+      ...(scanExempt === "none" ? { scanExempt: [] } : {}),
+      ...(isolate === "none" ? { isolate: [] } : {}),
+    },
+    io: {
+      line: (text) => console.log(text),
+      refuse: (lines) => {
+        for (const refusalLine of lines) console.error(refusalLine)
         process.exit(1)
-      }
-    }
-  }
-  for (const item of discarded) console.log(`⚠ full overwrite drops the retired key ${item.key} = ${JSON.stringify(item.value)}: ${item.why}`)
-  // The mistouch gates: they bite only when "a config already exists and this
-  // run is a full overwrite" — a fresh directory has nothing to overwrite, and
-  // the amend command discards no existing key. Both gates must precede the
-  // first write (saveProjectConfig); the existing e2e invariant "the directory
-  // is empty until every flag check passes" depends on it. Intercept first,
-  // ask second — a person must not answer y only to then hit an error.
-  const force = flags.has("force")
-  const overwriting = !amendCommand && !force && (await Bun.file(join(directory, ".opencode", "auto", "config.json")).exists())
-  if (overwriting) {
-    // ① Worktree cleanliness: init overwrites a config already on disk, and
-    //    git is the person's only undo. It applies without a TTY too — what a
-    //    non-TTY skips is the confirmation, never this gate.
-    const dirty = await checkCleanTree(directory, "init full overwrite")
-    if (dirty) {
-      console.error(dirty)
-      process.exit(1)
-    }
-    // ② Interactive confirmation: a non-TTY passes straight through (decided
-    //    inside confirm).
-    const ok = await confirm(
-      "found an existing config .opencode/auto/config.json; init will fully overwrite it with these parameters (keys not given fall back to defaults; to change individual keys instead, use opencode-auto amend). continue? [y/N] ",
-    )
-    if (!ok) {
-      console.log("cancelled; nothing was changed")
-      process.exit(0)
-    }
-  }
-  // The bundle's files join the write phase here (plans/0079 §3): every
-  // check — the parse, the stamps, the prefix guard, the gates — has passed,
-  // so the materialization lands with the config that names it. Re-running
-  // init --intent re-materializes the same bytes (no drift copy exists).
-  if (bundle) {
-    const written = await materializeIntentBundle(directory, bundle).catch((error: unknown) => {
-      console.error(`--intent ${intentFlag}: materializing the bundle into ${directory} failed: ${error instanceof Error ? error.message : String(error)}`)
-      process.exit(1)
-    })
-    console.log(`✓ intent bundle "${bundle.name}" materialized (${written.join(", ")})`)
-  }
-  try {
-    await saveProjectConfig(directory, config)
-  } catch (error) {
-    console.error(`failed to write .opencode/auto/config.json: ${error instanceof Error ? error.message : String(error)}`)
-    process.exit(1)
-  }
-  console.log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
-  // The `type: "file"` imports are embedded into the compiled output, keeping
-  // the standalone binary self-sufficient. Tasks are not written here (PLAN.md
-  // retired, M3.4): round and phase directories come from plan's
-  // round-establishment route, and task units from a planning session or a
-  // person. amend writes only what renders from the config
-  // (the contract); opencode.json may hold a person's edits and is init's and
-  // fix's — with the one additive exception of plans/0122: both may insert
-  // exactly the root-symlink external_directory allow entries, nothing else.
-  const templates: Record<string, string> = amendCommand
-    ? { ".opencode/agent/auto.md": templateAgent }
-    : { "opencode.json": templateConfig, ".opencode/agent/auto.md": templateAgent }
-  for (const [file, source] of Object.entries(templates)) {
-    const target = resolve(directory, file)
-    const raw = await Bun.file(source).text()
-    // The agent contract renders conditionally on config.testByDriver.
-    const content = file === "opencode.json" ? raw : renderText(raw, { testByDriver: config.testByDriver })
-    const existing = await Bun.file(target).text().catch(() => undefined)
-    if (existing !== undefined && (existing === content || file !== ".opencode/agent/auto.md")) {
-      console.log(`already exists, skipped: ${file}`)
-      continue
-    }
-    await Bun.write(target, content)
-    console.log(existing === undefined ? `created: ${file}` : `replaced (differed from the template): ${file}`)
-  }
-  // The root-symlink read-only stamps (plans/0122, the composite since
-  // plans/0147): init sets them up whether it just created opencode.json or
-  // found a person's file — one additive insert of exactly the stamp entries
-  // (the external_directory allow beside its edit-layer deny, the template's
-  // knowledge boundary beneath both), the person's rules kept (theirs always
-  // win the evaluation tie). No root symlinks writes nothing (the
-  // byte-identical floor); a file that cannot hold the entries is a warning
-  // here and a fix finding there — init never fails on it.
-  if (!amendCommand) {
-    const allows = await externalAllowsStatus(directory)
-    if (allows.status === "needs-stamp") {
-      await applyExternalAllows(directory)
-      console.log(`stamped: opencode.json the root-symlink read-only stamps (external_directory allow + edit deny) for ${[...new Set(allows.missing.map((key) => key.replace(/^edit:/, "")))].join(", ")}`)
-    } else if (allows.status === "malformed") {
-      console.log("⚠ opencode.json cannot hold the root-symlink external_directory allows (malformed or a flat action); fix reports the detail")
-    }
-  }
-  // The project brief write (plans/0081 D11; init's seed half retired by
-  // auto-core plans/0133 D9 — the analysis flow owns the start, its approved
-  // `## Project brief` proposal the first brief a project gets): amend's
-  // revision channel alone — the text verbatim; a bare re-init never touches
-  // an existing brief (a generated, approved brief survives re-init, §7 A5).
-  if (briefSeed !== undefined) {
-    const existed = await Bun.file(join(directory, BRIEF_FILE)).exists()
-    await Bun.write(join(directory, BRIEF_FILE), `${briefSeed.trimEnd()}\n`)
-    console.log(
-      existed
-        ? `replaced: ${BRIEF_FILE} (the brief, verbatim)`
-        : `created: ${BRIEF_FILE} (the person's manual word, verbatim — the next approved proposal replaces the whole file; every planning session reads it)`,
-    )
-  }
-  // Idempotently sync the opencode-auto block of AGENTS.md: render it from the
-  // current config and compare with the file's existing standard block —
-  // append when missing, replace the whole block when it differs, and clean
-  // out legacy/stray named marker blocks unconditionally.
-  const ensured = await ensurePointer(directory, { testByDriver: config.testByDriver })
-  console.log(
-    ensured.block === "inserted"
-      ? "appended: AGENTS.md opencode-auto block"
-      : ensured.block === "replaced"
-        ? "refreshed: AGENTS.md opencode-auto block (differed from the current config render)"
-        : "already exists, skipped: AGENTS.md opencode-auto block (up to date)",
-  )
-  if (ensured.legacyRemoved) console.log(`cleaned: removed ${ensured.legacyRemoved} legacy/stray opencode-auto marker block(s) from AGENTS.md`)
-  // Plain init writes the full ignore set in one pass (the driver workdir, the
-  // local-only files and every nested git repository in the tree — see
-  // auto-core/gitignore.ts); the amend command never touches it. The file
-  // itself and opencode.json are committed project surfaces (plans/0138): the
-  // closing line teaches the person to commit them with the rest.
-  if (command === "init") {
-    const appended = await ensureInitGitignore(directory)
-    if (appended.length) console.log(`updated: .gitignore now ignores ${appended.join(", ")} (driver workdir, local-only files and nested git repositories; the file itself and opencode.json are committed project surfaces — commit them with the config layer)`)
-  }
-
-  if (amendCommand) {
-    const given = CONFIG_FLAGS.filter((key) => flags.has(key)).map((key) => (key === "mode" ? "-m" : `--${key}`))
-    console.log(`✓ amended (${given.join(" ")}); the other keys are unchanged. Review the change and commit it`)
-    process.exit(0)
-  }
-
-  // init's closing line (plans/0053 D31, re-keyed by auto-core plans/0101 D4):
-  // the rounds' opening command — transfer on a phased project (the dispatch
-  // half being plan's, every advance is transfer's), plan in m mode (which
-  // transfer refuses) — init points at it and writes nothing under docs/
-  // itself.
-  // AUTO-RESOLVE: the design pins one line — "next: <bin> plan <dir> (establishes round R-01 and stops at the round-start gate)"; print it verbatim on an overwrite init whose round is already established? -> no: the parenthetical is dropped there (it would state a falsehood over an existing round; both states keep an advancing-command line, which is what the acceptance asks of fresh and overwrite init alike).
-  // AUTO-DECISION (dead -p path): the shared block's promptText handling (the per-round brief write of `continue`'s -p and its non-empty check) was deleted rather than kept for a future caller — no command reaching this block accepts -p anymore (init's is a scoped retired flag, the amend command refuses it, `continue` itself is retired ahead of every flag), so the branch was unreachable.
-  // Since plans/0084 the fresh-project pointer names the assisted analysis (the advancing command opens it, OPENCODE_AUTO_ANALYSIS=off aside).
-  const opener = config.phases === "m" ? `opencode-auto plan ${directory}` : `opencode-auto transfer ${directory}`
-  console.log(
-    phaseState
-      ? `next: ${opener}`
-      : `next: ${opener} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round ${roundDirName(liveRound)} opens on its release)`,
-  )
+      },
+      // The mistouch gates in this shell's mechanics: -f skips both; the
+      // clean-tree check applies without a TTY too (what a non-TTY skips is
+      // the confirmation, never this gate); the cancel branch exits 0 having
+      // changed nothing.
+      gates: async () => {
+        if (flags.has("force")) return undefined
+        const dirty = await checkCleanTree(directory, "init full overwrite")
+        if (dirty) return [dirty]
+        const ok = await confirm(
+          "found an existing config .opencode/auto/config.json; init will fully overwrite it with these parameters (keys not given fall back to defaults; to change individual keys instead, use opencode-auto amend). continue? [y/N] ",
+        )
+        if (!ok) {
+          console.log("cancelled; nothing was changed")
+          process.exit(0)
+        }
+        return undefined
+      },
+    },
+    wording: {
+      modeKey: "--mode",
+      handoverKey: "--handover-test",
+      handoverTestKey: "--test-by-driver",
+      handoverRemedy: "give --test-by-driver as well (or --handover-test false), e.g. opencode-auto amend <dir> --test-by-driver --handover-test",
+      intentKey: "--intent",
+      intentTail: "",
+      identityPairRemedy: ", or pass --name <name> --email <email> to have init write the repository-local identity",
+      amendGiven: CONFIG_FLAGS.filter((key) => flags.has(key)).map((key) => (key === "mode" ? "-m" : `--${key}`)).join(" "),
+      // init's closing line (plans/0053 D31, re-keyed by plans/0101 D4): the
+      // rounds' opening command — transfer on a phased project (the dispatch
+      // half being plan's, every advance is transfer's), plan in m mode —
+      // with the fresh-project pointer naming the assisted analysis
+      // (plans/0084; the parenthetical is dropped over an established round,
+      // where it would state a falsehood).
+      initClosing: (phased, established, round) => {
+        const opener = `opencode-auto ${phased ? "transfer" : "plan"} ${directory}`
+        return established
+          ? `next: ${opener}`
+          : `next: ${opener} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round ${roundDirName(round)} opens on its release)`
+      },
+    },
+    ...(bundle ? { bundle, bundleIntent: intentFlag } : {}),
+    ...(briefSeed !== undefined ? { briefSeed } : {}),
+    ...(command === "init" && identityName !== undefined && identityEmail !== undefined ? { identity: { name: identityName, email: identityEmail } } : {}),
+  })
   process.exit(0)
 }
 
@@ -3258,19 +2936,9 @@ if (command === "release") {
   process.exit(0)
 }
 
-// The phase progress line (shared by run's banner and status): the current
-// round's phase index → P01-analysis✓ P02-design▶ …; a missing or invalid
-// index only yields a warning line and never blocks the caller.
-async function phasesLine(directory: string): Promise<string> {
-  const round = await currentRound(directory)
-  try {
-    const state = await readPhases(directory)
-    if (!state) return `⚠ phase index (${phaseIndexPath(round)}) is missing; run opencode-auto plan to establish the round`
-    return `phases${round > 1 ? ` (round ${round})` : ""}: ${formatPhases(state)}`
-  } catch (error) {
-    return `⚠ phase index (${phaseIndexPath(round)}) is invalid: ${error instanceof Error ? error.message : String(error)}`
-  }
-}
+// The phase progress line lives in the core now (src/banner.ts phasesLine,
+// plans/0193 D1) — this shell's local copy is deleted; the banner and the
+// status view share the one renderer.
 
 if (command === "status") {
   // The config summary, then the current round's read-only overview tree

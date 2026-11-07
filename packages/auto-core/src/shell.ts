@@ -88,6 +88,29 @@ export type ShellProfile = {
   // variables the child should see (the declared shared/per-lane cache
   // paths); absent on every dispatch that is not tier 1.
   laneLauncher?: (worktree: string, unit: string, instruction?: LaneMergeInstruction, env?: Record<string, string>) => LaneWorker
+  // The person-facing surface names of this shell's task-running, planning
+  // and advancing channels, as the core's served stop lines render them
+  // (plans/0193 D3): a service shell whose runs and planning are HTTP
+  // operations — not `<bin> run` / `<bin> plan` subcommands — supplies its
+  // own renderers so no served line teaches a command its binary refuses.
+  // Per-channel partial: a channel left absent renders the default CLI
+  // subcommand shape (`<bin> run <dir>` etc.) — the general shell's exact
+  // wording, and the right shape for any channel a shell keeps as a real
+  // subcommand. `dir` is the target directory when the line names one (a
+  // renderer may fold it into its own addressing); `flags` is the CLI
+  // grammar tail a teaching carries (`-p <text> | --file <path>` and kin) —
+  // the CLI's grammar, not the renderer's: a renderer without that grammar
+  // restates or drops it.
+  surface?: Partial<ShellSurface>
+}
+
+// One served channel's renderer (see ShellProfile.surface). A call without
+// arguments names the channel bare (`opencode-auto plan`) — the shape a
+// remedy like "run X to establish the round" embeds.
+export type ShellSurface = {
+  run: (dir?: string, flags?: string) => string
+  plan: (dir?: string, flags?: string) => string
+  transfer: (dir?: string, flags?: string) => string
 }
 
 export type AgentProfile = {
@@ -118,6 +141,24 @@ export function setShellProfile(part: Partial<ShellProfile>): void {
 
 export function shellProfile(): ShellProfile {
   return profile
+}
+
+// The served-surface renderers in force: the profile's own channels merged
+// over the default CLI subcommand shapes built on the profile's bin (plans/
+// 0193 D3) — a shell overrides only the channels that are not subcommands of
+// its binary. The defaults render exactly the general shell's historical
+// wording — `<bin> run <dir>`, the bare channel name without a directory,
+// the flags tail verbatim — so an absent surface (or channel) changes
+// nothing.
+export function surfaceOf(): ShellSurface {
+  const bin = profile.bin
+  const render = (command: string) => (dir?: string, flags?: string) => `${bin} ${command}${dir !== undefined ? ` ${dir}` : ""}${flags !== undefined ? ` ${flags}` : ""}`
+  return {
+    run: render("run"),
+    plan: render("plan"),
+    transfer: render("transfer"),
+    ...profile.surface,
+  }
 }
 
 // An agent adapter a shell registers (plans/0055 §8.8): the host factory that

@@ -11,6 +11,7 @@
 // Pure library code: no process state, no env writes (the worker applies the
 // parsed switches to its own environment; the daemon only passes them on).
 import type { PermissionMode } from "@opencode-ai/auto-core/opts"
+import { CONFIG_KEY_SPELLINGS, configKeyRevision } from "@opencode-ai/auto-core/config"
 import { RETIRED_SWITCHES, SWITCH_ENV } from "@opencode-ai/auto-core/switches"
 
 // A usage error in the run request. The worker turns it into its stderr
@@ -66,41 +67,16 @@ export type RunOptions = {
 // The constitutional config keys (the CLI's CONFIG_FLAGS plus the two
 // hand-edited-only keys): frozen by init into .opencode/auto/config.json,
 // revised by amend, never set on a run. Both the config-file spelling and
-// the CLI's flag spelling are recognized, each mapping to its revision hint
-// (the CLI's amendHint shapes).
-// AUTO-DECISION (refusal wording): the frozen-key refusal names the CLI's
-// `opencode-auto amend` because that is today's revision surface — the
-// server's own REST config ops arrive with P1d (T-089) and can take the
-// hint over then; the CLI stays the escape hatch beside the daemon either
-// way (plans/0067 §三 item 5).
-export const CONFIG_KEYS: Record<string, string> = {
-  mode: "-m <value>",
-  agent: "--agent <value>",
-  contextLimit: "--context-limit <value>",
-  "context-limit": "--context-limit <value>",
-  subtask: "--subtask <value>",
-  idleTime: "--idle-time <value>",
-  "idle-time": "--idle-time <value>",
-  idleMax: "--idle-max <value>",
-  "idle-max": "--idle-max <value>",
-  testByDriver: "--test-by-driver",
-  "test-by-driver": "--test-by-driver",
-  handoverTest: "--handover-test",
-  "handover-test": "--handover-test",
-  autoNumber: "--auto-number (use --no-auto-number to turn off)",
-  "auto-number": "--auto-number (use --no-auto-number to turn off)",
-  "no-auto-number": "--no-auto-number (use --auto-number to turn on)",
-  wrapup: "--wrapup (use --no-wrapup to turn off)",
-  "no-wrapup": "--no-wrapup (use --wrapup to turn on)",
-  phases: "--phases <value>",
-  parallel: "--parallel <value>",
-  intent: "--intent <value>",
-  treeLanes: "--tree-lanes <value>",
-  "tree-lanes": "--tree-lanes <value>",
-  isolate: "--isolate <value>",
-  scanExempt: "--scan-exempt <value>",
-  "scan-exempt": "--scan-exempt <value>",
-}
+// the CLI's flag spelling are recognized; the revision hint of each renders
+// from the core's one table (auto-core src/config.ts configKeyRevision,
+// plans/0193 D2 — this shell's mirror of the CLI's amendHint shapes drifted
+// by lockstep misses, phases teaching the amend flag 0137 retired).
+// AUTO-DECISION (refusal wording, re-read by plans/0193 D2): the frozen-key
+// refusal names the CLI's `opencode-auto amend` because that is a real
+// revision surface beside the daemon (the shell's own amend operation being
+// the other — the request grammar speaks the flag tails as field spellings);
+// plans/0067 §三 item 5's "can take the hint over then" remainder stands.
+export const CONFIG_KEYS: Record<string, string> = Object.fromEntries(CONFIG_KEY_SPELLINGS.map((key) => [key, configKeyRevision(key).clause]))
 // Keys no flag reaches (plans/0049 G9; the tier-1 lane knobs beside
 // --tree-lanes the same class, plans/0096 D9): the refusal names the file
 // alone.
@@ -119,9 +95,12 @@ export const KNOWN_SWITCHES = new Set([...Object.values(SWITCH_ENV), ...Object.k
 
 // The frozen-key refusal, the API-side equivalent of the CLI's
 // refuseFrozenFlags line (packages/auto test/e2e.test.ts pins its shape):
-// "was frozen by init", the config file, the amend revision hint.
-export function frozenRefusal(where: string, key: string, hint: string): string {
-  return `${where}${key} was frozen by init (.opencode/auto/config.json). To change: opencode-auto amend <dir> ${hint}, or edit that file directly`
+// "was frozen by init", the config file, the revision clause from the core's
+// one table (the file-edit offer only where it is a real remedy — phases
+// teaches the roadmap line alone).
+export function frozenRefusal(where: string, key: string): string {
+  const revision = configKeyRevision(key.trim())
+  return `${where}${key} was frozen by init (.opencode/auto/config.json). To change: ${revision.clause}${revision.file ? ", or edit that file directly" : ""}`
 }
 
 function fail(message: string): never {
@@ -144,7 +123,7 @@ export function parseOptions(raw: unknown): RunOptions {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("options must be an object holding the run's per-run options (verbose, waitAnswer, waitBetween, permission, newSession, dryrun, maxSessions, server, repair, stopAfter, boundary)")
   const given = raw as Record<string, unknown>
   for (const key of Object.keys(given)) {
-    if (key in CONFIG_KEYS) fail(frozenRefusal("options.", key, CONFIG_KEYS[key]!))
+    if (key in CONFIG_KEYS) fail(frozenRefusal("options.", key))
     if (HAND_EDITED_KEYS.has(key)) fail(`options.${key} is a config key with no flag (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init`)
     if (key === "interactive") {
       fail(

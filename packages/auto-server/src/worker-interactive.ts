@@ -285,6 +285,20 @@ export function wsInteractive(config: TransportConfig): Interactive {
       live = true
       send({ type: "session", session: id, ...(agent !== undefined ? { agent } : {}) })
     },
+    detach() {
+      // The between-turns state (auto-core plans/0181 D1 — the same seam the
+      // core's own sideband and every transport implements): no session
+      // runs, so a free line typed on the bridge may not start one; the
+      // reconnect frame below re-binds nothing until the next dispatch's
+      // attach. (This transport's detach was missed in 0181's own lockstep —
+      // the core grew the Interactive.detach field and the runtime
+      // attempt.ts finally called it, but this object never carried it: a
+      // TypeError at every dispatch's end and a still-bound idle session
+      // before that; found by 0193's verification, the same mirror-drift
+      // family the step rules.)
+      sessionID = undefined
+      sessionAgent = undefined
+    },
     async question(promptText, minutes) {
       if (closed) return undefined
       const id = `q${++counter}`

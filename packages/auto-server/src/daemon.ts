@@ -585,7 +585,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       if (key === "lane") {
         return json(400, { error: 'a run request carries no "lane": the lane surface is this shell\'s own lane launcher (a worker self-spawned per lane dispatch of a wide parent run — the machine shape of the CLI\'s hidden _lane entry); start a wide run with options.maxSessions instead' })
       }
-      if (key in CONFIG_KEYS) return json(400, { error: frozenRefusal("", `"${key}" `, CONFIG_KEYS[key]!) })
+      if (key in CONFIG_KEYS) return json(400, { error: frozenRefusal("", `"${key}" `) })
       if (HAND_EDITED_KEYS.has(key)) {
         return json(400, { error: `"${key}" is a config key (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init` })
       }

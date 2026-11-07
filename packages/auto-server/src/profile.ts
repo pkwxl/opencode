@@ -51,12 +51,25 @@ const laneLauncher: NonNullable<ShellProfile["laneLauncher"]> = (worktree, unit,
 //   default launcher's `process.argv[1]` re-invocation cannot answer on this
 //   shell (its hidden entry is `worker '<json>'`, not `_lane`), so the
 //   override is the shell's own obligation, not an optimization.
+// - surface (plans/0193 D3): this binary's `run` and `plan` are HTTP
+//   operations of the daemon, not subcommands — `opencode-auto-server run
+//   <dir>` answers with the usage refusal — so the core's teachings name the
+//   operations with their routes. `transfer <dir>` IS a subcommand here (a
+//   thin self-spawn of the same worker, plans/0160 D4), so it keeps the
+//   default `<bin> transfer <dir>` shape (the channel left absent). The
+//   CLI-grammar tails (`-p <text> | --file <path>` and kin) are dropped: the
+//   plan operation carries its planning input as the request's
+//   "input"/"append" fields, and a daemon client never spells a flag.
 export const SERVER_PROFILE: Partial<ShellProfile> = {
   program: "opencode-auto-server",
   bin: "opencode-auto-server",
   agentRecovery: "startup",
   auditLog: true,
   laneLauncher,
+  surface: {
+    run: () => "the run operation (POST /runs)",
+    plan: () => "the plan operation (POST /projects/<p>/plan)",
+  },
 }
 
 // Sets the profile (idempotent, like setShellProfile itself). Called first at

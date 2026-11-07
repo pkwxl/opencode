@@ -28,7 +28,7 @@
 //     live run of this daemon (a real worker over the fake `claude`).
 import { describe, expect, test } from "bun:test"
 import { realpathSync } from "node:fs"
-import { mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rename, rm, symlink } from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
@@ -236,6 +236,49 @@ describe("the lifecycle operations (P1d)", () => {
     })
   })
 
+  test("the shared sequence's git halves run on this shell too: 0073's bootstrap, 0122/0147's root-symlink stamps, 0138's ignore-set closing line (plans/0193 D4)", async () => {
+    await withOps(async (h) => {
+      // The bootstrap (0073 / 0165-056's S29-04): a registered target inside
+      // no work tree is bootstrapped by the operation itself — the CLI's own
+      // ruling, no --no-git escape. Pre-fix the operation answered 200 on a
+      // plain directory (no repository), and every run after it completed
+      // with no commit anywhere — no unified commit, no rollback anchor.
+      const plain = await mkdtemp(join(tmpdir(), "auto-ops-nogit-"))
+      const plainName = h.register(plain)
+      const gitEnv = { GIT_AUTHOR_NAME: "ops e2e", GIT_AUTHOR_EMAIL: "ops@auto-server.test", GIT_COMMITTER_NAME: "ops e2e", GIT_COMMITTER_EMAIL: "ops@auto-server.test" }
+      const held = { ...process.env }
+      Object.assign(process.env, gitEnv)
+      try {
+        const bootstrapped = await h.call("POST", `/projects/${plainName}/init`, h.config, { config: { phases: "m" } })
+        expect(bootstrapped.status).toBe(200)
+        expect(has(bootstrapped.body, "initialized git repository")).toBe(true)
+        expect(await Bun.file(join(plain, ".git", "HEAD")).exists()).toBe(true)
+      } finally {
+        for (const key of Object.keys(gitEnv)) delete process.env[key]
+        Object.assign(process.env, held)
+        await rm(plain, { recursive: true, force: true })
+      }
+      // The stamps (0122/0147 / S30-02): a root symlink to a reference —
+      // init stamps the allow + the edit deny exactly as the CLI's (pre-fix
+      // the two shells' init outputs differed and sessions could not read
+      // the reference until someone ran fix).
+      const dir = await gitBlank("auto-ops-stamps-")
+      const corpus = await mkdtemp(join(tmpdir(), "auto-ops-corpus-"))
+      await symlink(corpus, join(dir, "linux"))
+      const name = h.register(dir)
+      const stamped = await h.call("POST", `/projects/${name}/init`, h.config, {})
+      expect(stamped.status).toBe(200)
+      expect(has(stamped.body, "stamped: opencode.json the root-symlink read-only stamps")).toBe(true)
+      const permission = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()).permission
+      expect(permission.external_directory[`${realpathSync(corpus)}/**`]).toBe("allow")
+      // 0138's committed-surfaces closing line on this shell too (the
+      // lockstep miss the mirror dropped).
+      expect(has(stamped.body, "the file itself and opencode.json are committed project surfaces — commit them with the config layer")).toBe(true)
+      await rm(dir, { recursive: true, force: true })
+      await rm(corpus, { recursive: true, force: true })
+    })
+  })
+
   test("the confirm / clean-tree split: two separate fields, each flipping only its own gate", async () => {
     await withOps(async (h) => {
       const dir = await phasedProject("auto-ops-gates-", "am")
@@ -281,9 +324,25 @@ describe("the lifecycle operations (P1d)", () => {
       expect(answer.status).toBe(200)
       expect(has(answer.body, "full overwrite drops the retired key commit")).toBe(true)
       expect(JSON.parse(await Bun.file(join(dir, CONFIG_FILE)).text()).commit).toBeUndefined()
-      // the guard: P01 done, a phases value that would drop it is refused before any write
+      // the retirement: config.phases on amend is refused before any value
+      // validation (plans/0193 D4 / 0165-056/S30-01 — the CLI's own 0137
+      // ruling, no longer bypassable through the API; pre-fix this request
+      // reached the prefix guard, the reshape channel live on amend). A
+      // retired key's value is never judged: an invalid value meets the
+      // same retirement refusal, not the value-validation error.
       await phaseDone(dir, "P01-analysis")
-      const guard = await h.call("POST", `/projects/${name}/amend`, h.config, { config: { phases: "m" } })
+      const retired = await h.call("POST", `/projects/${name}/amend`, h.config, { config: { phases: "m" } })
+      expect(retired.status).toBe(400)
+      expect(String(retired.body.error)).toContain("config.phases is retired on amend")
+      expect(String(retired.body.error)).toContain("- R-NN <phases> — <goal>` line in docs/analysis.md")
+      const retiredBad = await h.call("POST", `/projects/${name}/amend`, h.config, { config: { phases: "not-a-preset" } })
+      expect(retiredBad.status).toBe(400)
+      expect(String(retiredBad.body.error)).toContain("config.phases is retired on amend")
+      expect(String(retiredBad.body.error)).not.toContain("config.phases is invalid")
+      // the guard: P01 done, a phases value that would drop it is refused
+      // before any write — through init, the one command whose phases key is
+      // live (the stateless full overwrite)
+      const guard = await h.call("POST", `/projects/${name}/init`, h.config, { config: { phases: "m" } })
       expect(guard.status).toBe(409)
       expect(String(guard.body.error)).toContain("mid-round phases change must keep the current round's completed phases")
       // the config keeps the value the earlier overwrite wrote ("m" — the stateless
@@ -555,13 +614,26 @@ describe("the lifecycle operations (P1d)", () => {
       const listed = await h.call("POST", `/projects/${manualName}/plan`, h.control)
       expect(listed.status).toBe(200)
       expect(has(listed.body, "lists 1 task(s) (1 pending)")).toBe(true)
+      // The served surface (plans/0193 D3 / 0165-056's S30-04): the next-act
+      // line names this shell's true channels — the daemon's run and plan
+      // operations — never `opencode-auto-server run <dir>`, the subcommand
+      // this binary refuses with its usage error.
+      expect(has(listed.body, "the run operation (POST /runs)")).toBe(true)
+      expect(has(listed.body, "the plan operation (POST /projects/<p>/plan)")).toBe(true)
+      expect(has(listed.body, "opencode-auto-server run")).toBe(false)
       await rm(join(manual, "docs", "R-01", "P01-implement", "tasks.md"))
       const empty = await h.call("POST", `/projects/${manualName}/plan`, h.control)
       expect(empty.status).toBe(200)
       expect(has(empty.body, "no tasks listed")).toBe(true)
-      // the drift re-sync (row 3): a mid-round phases change surfaces as a drift plan reconciles
-      const amended = await h.call("POST", `/projects/${name}/amend`, h.config, { config: { phases: "adm" } })
-      expect(amended.status).toBe(200)
+      // the drift re-sync (row 3): a mid-round phases reshape rides its one
+      // channel — the released roadmap line (0137; the amend key is retired,
+      // plans/0193 D4) — and surfaces as a drift plan reconciles
+      await Bun.write(
+        join(dir, "docs", "analysis.md"),
+        "# Project analysis\n\nClarified: yes\n\n## Roadmap\n\n- R-01 adm — widen the round with a design phase\n",
+      )
+      await gitOf(dir)("add", "-A")
+      await gitOf(dir)("commit", "-qm", "reshape R-01 by its roadmap line")
       const resynced = await h.call("POST", `/projects/${name}/plan`, h.control)
       expect(resynced.status).toBe(200)
       expect(has(resynced.body, "phase index of round R-01 re-synced")).toBe(true)

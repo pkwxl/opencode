@@ -12,6 +12,7 @@
 // parent run holds lanes (a killed parent's leftovers show here too, which
 // is the recovery story's first line).
 import { currentPhase, currentRound, phaseGateProblems, phaseGates, phaseIndexPath, phaseLabel, readPhases } from "./phases"
+import { phasesLine } from "./banner"
 import { ANALYSIS_DOC, roundDirName } from "./docpaths"
 import { provenanceComparison } from "./bundle"
 import { awaitingFormulation } from "./formulate"
@@ -91,11 +92,10 @@ export async function renderStatus(dir: string): Promise<string[]> {
   // The rounds' opening command (plans/0053 D31, re-keyed by plans/0101 D4):
   // phased projects advance with transfer, m mode keeps plan (transfer
   // refuses m mode) — the pointer names whichever the config's phases value
-  // runs.
+  // runs. The warning rides the one shared phases line (plans/0193 D1): the
+  // same renderer the run banner prints, through the served surface.
   if (!state) {
-    const { bin } = shellProfile()
-    const phased = (await loadProjectConfig(dir).catch(() => undefined))?.phases !== "m"
-    return [...provenance, `⚠ phase index ${phaseIndexPath(round)} is missing; run ${bin} ${phased ? "transfer" : "plan"} to establish the round`]
+    return [...provenance, await phasesLine(dir)]
   }
   // The in-flight lanes section (plans/0068 D13, S4): first, like the shell's
   // live-lock line — the fact a watcher polls for. Registry order, each lane

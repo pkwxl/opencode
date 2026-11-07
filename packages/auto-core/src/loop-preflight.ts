@@ -61,6 +61,7 @@ import { phaseType, REQUIRED_TYPE, resolvePhases, type PhaseTypeEntry } from "./
 import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
 import type { PlanInput } from "./plan-input"
+import type { ProjectConfig } from "./config"
 import { promptFacts } from "./prompt-facts"
 import type { PromptFacts } from "./prompt"
 import { CONTRACT_AGENT, type PermissionMode, type SubtaskMode } from "./opts"
@@ -263,6 +264,37 @@ export type RunAllOpts = {
   // only a conflict repair's re-dispatch: the parent's current main branch
   // the lane merges into its branch before running the unit.
   lane?: { unit: string; merge?: string }
+}
+
+// The config-threading half of a shell's runAll options (plans/0193 D1): every
+// constitutional key the config freezes, mapped into RunAllOpts the one way —
+// one home for the threading both shells' `runOptions` builders mirrored (the
+// plans/0160 absorb's own words: "a dropped key is a silently different run").
+// The per-run halves (session flags vs request options, the transport's
+// interactive channel, a plan payload's stop/input/append, run's widths) stay
+// each shell's — they spread this object and add theirs.
+export function configRunOptions(config: ProjectConfig, mode: ModeSpec): RunAllOpts {
+  return {
+    agent: config.agent,
+    subtask: config.subtask,
+    contextLimit: config.contextLimit * 1000,
+    idleMs: config.idleTime * 60_000,
+    maxMs: config.idleMax > 0 ? config.idleMax * 60_000 : undefined,
+    mode,
+    intent: config.intent,
+    phases: config.phases,
+    testByDriver: config.testByDriver,
+    handoverTest: config.handoverTest,
+    autoNumber: config.autoNumber,
+    wrapup: config.wrapup,
+    acceptanceGate: config.acceptanceGate,
+    build: config.build,
+    parallel: config.parallel,
+    treeLanes: config.treeLanes,
+    lanes: config.lanes,
+    scanExempt: config.scanExempt,
+    isolate: config.isolate,
+  }
 }
 
 // the preflight section: produces the agentName, the run's services and the

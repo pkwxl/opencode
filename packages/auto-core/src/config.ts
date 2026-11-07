@@ -311,6 +311,75 @@ export function formatProjectConfig(config: ProjectConfig): string {
   )
 }
 
+// The frozen-key revision hints — the To-change clause of a constitutional
+// key's refusal, one table both shells render from (plans/0193 D2; before it
+// the CLI's amendHint and the service shell's CONFIG_KEYS mirrored each other
+// and drifted: phases taught `amend --phases`, the command 0137 retired).
+// Each flag-shaped key maps to its amend revision tail; both key spellings
+// (file and flag) map to the same tail. The clause names the CLI's `amend`
+// command in every shell — both shells' standing shape (plans/0067 §三 item
+// 5's remainder re-read by 0193: the CLI stays the named escape hatch beside
+// any daemon; a service shell's own revision surface is its operation, the
+// flag tail spelling its request field). phases maps to the roadmap teaching
+// instead: 0137 retired the amend flag, and the config key never changes
+// after init — the file edit the other keys' clause offers would bypass the
+// reshape ruling, so phases carries no such offer.
+export type ConfigKeyRevision = {
+  // The To-change clause rendered after "To change: ".
+  clause: string
+  // Whether ", or edit .opencode/auto/config.json directly" applies (every
+  // key but phases — see above).
+  file: boolean
+}
+
+const AMEND_COMMAND = "opencode-auto amend <dir>"
+
+const CONFIG_KEY_HINTS: Record<string, string> = {
+  mode: "-m <value>",
+  agent: "--agent <value>",
+  contextLimit: "--context-limit <value>",
+  "context-limit": "--context-limit <value>",
+  subtask: "--subtask <value>",
+  idleTime: "--idle-time <value>",
+  "idle-time": "--idle-time <value>",
+  idleMax: "--idle-max <value>",
+  "idle-max": "--idle-max <value>",
+  testByDriver: "--test-by-driver",
+  "test-by-driver": "--test-by-driver",
+  handoverTest: "--handover-test",
+  "handover-test": "--handover-test",
+  autoNumber: "--auto-number (use --no-auto-number to turn off)",
+  "auto-number": "--auto-number (use --no-auto-number to turn off)",
+  "no-auto-number": "--auto-number (use --no-auto-number to turn off)",
+  wrapup: "--wrapup (use --no-wrapup to turn off)",
+  "no-wrapup": "--wrapup (use --no-wrapup to turn off)",
+  parallel: "--parallel <value>",
+  intent: "--intent <value>",
+  treeLanes: "--tree-lanes <value>",
+  "tree-lanes": "--tree-lanes <value>",
+  isolate: "--isolate <value>",
+  scanExempt: "--scan-exempt <value>",
+  "scan-exempt": "--scan-exempt <value>",
+}
+
+// The phases revision clause (0137's own teaching, restated as a refusal's
+// remedy): the roadmap line is the one reshape channel.
+const PHASES_REVISION =
+  "nothing on amend — a round's phases reshape by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md " +
+  "(the config key is init-stamped machinery, chosen at init alone; the single-phase mode fixed at birth)"
+
+export function configKeyRevision(key: string): ConfigKeyRevision {
+  if (key === "phases") return { clause: PHASES_REVISION, file: false }
+  const tail = CONFIG_KEY_HINTS[key]
+  return { clause: `${AMEND_COMMAND} ${tail ?? `--${key} <value>`}`, file: true }
+}
+
+// Every spelling a frozen-key refusal recognizes (the file spellings and the
+// CLI's flag spellings of the same keys — a run request or command line may
+// carry either; a shell's key table is this list, its values the rendered
+// clauses).
+export const CONFIG_KEY_SPELLINGS: readonly string[] = [...Object.keys(CONFIG_KEY_HINTS), "phases"]
+
 // Value ranges match the CLI-side parse*; unknown keys are ignored (forward
 // compatibility), missing keys fall back to the defaults.
 export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {

@@ -95,6 +95,11 @@ export const REPO_LANE: readonly string[] = [
   // over real git repositories — worktrees, landing merges — so the repo
   // lane by the manifest's runtime classification.
   "test/loop-isolation.test.ts",
+  "test/banner.test.ts",
+  // The one init/amend sequence's engine suite (plans/0193 D4): real git
+  // repositories — the bootstrap, the identity probe, the stamps — so the
+  // repo lane by the manifest's runtime classification.
+  "test/config-op.test.ts",
   "test/loop-preflight.test.ts",
   "test/models-describe.test.ts",
   "test/plan-input.test.ts",

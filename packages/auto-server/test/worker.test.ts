@@ -1,7 +1,7 @@
 // The worker entry end to end (T-087, P1b of the headless service evolution,
 // auto-core plans/0067): the entry runs as a subprocess — stdin closed, the
 // way a daemon-spawned child is — over a fixture project with the fake
-// `claude` on PATH (test/fixtures/fake-claude.ts, the packages/auto B6/C5
+// `claude` on PATH (the one fake at auto-core/test/fixtures/fake-claude.ts, the B6/C5
 // fixture convention: no provider credentials, the ambient OPENCODE_AUTO_*
 // layer scrubbed so the subprocess's switches are exactly what the request
 // carries). What these cases pin is the shell flow around the core, not the
@@ -93,6 +93,28 @@ describe("worker: a fixture run is a fully-formed shell run, observable on disk"
     }
   }, 120_000)
 
+  test("the run banner carries 0142's full code-work clause — the one banner, byte-identical to the CLI's (plans/0193 D1)", async () => {
+    // S29-08's first half: this shell's hand-maintained banner copy had
+    // drifted out of the clause ("the channel serves code-work phases
+    // (elsewhere a session runs such a check itself, never through
+    // tmp/test.sh)") — a tailing client reading the audit log could not
+    // learn the channel's boundary. The shared emitter renders it now.
+    const dir = await fixtureProject("auto-server-banner-", { testByDriver: true, handoverTest: true })
+    const agent = await fakeAgent()
+    try {
+      const run = await runWorker({ directory: dir, switches: { OPENCODE_AUTO_AGENT: "claude" } }, agent.env)
+      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
+      const logs = (await readdir(join(dir, ".auto", "logs"))).filter((name) => /^run-.*\.log$/.test(name))
+      const text = await Bun.file(join(dir, ".auto", "logs", logs[0]!)).text()
+      expect(text).toContain("⚙ tests run by the driver")
+      expect(text).toContain("the channel serves code-work phases (elsewhere a session runs such a check itself, never through tmp/test.sh)")
+      expect(text).toContain("; on test failure with context at its cap, a handover document switches to a fresh session")
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   test("runAll's own exit code propagates verbatim: a directory without the agent contract stops with exit 1 after the log started", async () => {
     // An empty directory passes every gate before the contract check; the
     // missing contract is preflight's exit 1 — runAll's code, not the
@@ -147,6 +169,15 @@ describe("worker: the run request's usage vocabulary", () => {
         expect(run.err).toContain("was frozen by init")
         expect(run.err).toContain(hint)
       }
+      // phases is frozen with the roadmap-line remedy, never the amend
+      // command 0137 retired (plans/0193 D2 / 0165-056's S29-07 server half:
+      // the mirrored table taught `--phases <value>`, one round trip away
+      // from its own retirement refusal).
+      const phasesFrozen = await runWorker({ directory: dir, options: { phases: "am" } })
+      expect(phasesFrozen.code).toBe(1)
+      expect(phasesFrozen.err).toContain("phases was frozen by init")
+      expect(phasesFrozen.err).toContain("a round's phases reshape by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md")
+      expect(phasesFrozen.err).not.toContain("--phases <value>")
       const lanes = await runWorker({ directory: dir, options: { lanes: { treeBudgetMB: 512 } } })
       expect(lanes.code).toBe(1)
       expect(lanes.err).toContain("lanes")

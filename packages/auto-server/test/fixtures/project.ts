@@ -36,7 +36,7 @@ export function scrubbedEnv(): Record<string, string | undefined> {
 // fake's own FAKE_CLAUDE_* knobs).
 export async function fakeAgent(extra: Record<string, string> = {}) {
   const binDir = await mkdtemp(join(tmpdir(), "auto-server-agent-"))
-  await Bun.write(join(binDir, "claude"), `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "fake-claude.ts"))} "$@"\n`)
+  await Bun.write(join(binDir, "claude"), `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "..", "..", "..", "auto-core", "test", "fixtures", "fake-claude.ts"))} "$@"\n`)
   await chmod(join(binDir, "claude"), 0o755)
   return { env: { PATH: `${binDir}:${process.env.PATH ?? ""}`, ...extra }, done: () => rm(binDir, { recursive: true, force: true }) }
 }

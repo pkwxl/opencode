@@ -94,7 +94,8 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Agent-plane formatters → `src/format.ts` (0069)
 - Cross-interruption cumulative stats and the task-usage ledger → `src/stats.ts` + `src/stats-schema.ts` + `src/conclusion.ts` + `src/loop-progress.ts` (0019; 0055; 0152)
 - Question policy and proxy-answer audit (OPENCODE_AUTO_ASK) → `src/resolve.ts` + `templates/prompts/_partials.md` + `src/opts.ts` + `src/engine/concerns/questions.ts` + `src/prompt-facts.ts` (0020; 0081; 0157)
-- Shell profile → `src/shell.ts`
+- Shell profile (the served-surface renderers `surface`/`surfaceOf` among its fields) → `src/shell.ts`
+- The shared shell-seam surfaces (the run banner and phases line, the frozen-key revision table, the init/amend sequence `runConfigSequence`, the `configRunOptions` threading, the one test fake) → `src/banner.ts` + `src/config.ts`/`src/config-op.ts` + `src/loop-preflight.ts` + `test/fixtures/fake-claude.ts` (0193)
 - AGENTS.md block (the driver's only content in the target's AGENTS.md, read-only during run) → `src/agents-block.ts` + `src/protect.ts` + `src/loop-preflight.ts` (0054; 0158)
 - Stable references and round directories (docs/R-NN) → `src/docpaths.ts` (0010)
 - Module split and dependency direction (lower layers never import runner; testrun never imports the session-driving layer) → 0024 §D.2; enforced by `test/import-direction.test.ts` — a new cross-module import may need a conscious table edit there

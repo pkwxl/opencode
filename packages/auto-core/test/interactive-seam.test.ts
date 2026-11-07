@@ -9,7 +9,8 @@
 // worker-to-daemon bridging would be scraping the sideband's text, which the
 // direction draft forbids; P3b's transport injects through exactly this
 // seam). Cases, end to end through runAll:
-//   - over the fake `claude` CLI (test/fixtures/fake-claude.ts, the fixture
+//   - over the fake `claude` CLI (test/fixtures/fake-claude.ts — the one
+//     fake of the fixture family, plans/0193 D6, the fixture
 //     family's copy): a two-task run with --wait-between pauses between the
 //     tasks through the injected implementation; the answer continues the
 //     run; the loop's finally closes the implementation;

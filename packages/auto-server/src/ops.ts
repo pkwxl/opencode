@@ -53,26 +53,20 @@ import { join } from "node:path"
 import { checkCleanTree } from "@opencode-ai/auto-core/clean"
 import { confirm, type ConfirmIO } from "@opencode-ai/auto-core/confirm"
 import {
-  CONFIG_DEFAULTS,
   CONFIG_FILE,
   PARALLEL_LEVELS,
   formatProjectConfig,
   isolateProblem,
   legacyModeFallback,
-  loadOverwriteBaseline,
   loadProjectConfig,
-  mergeProjectConfig,
-  saveProjectConfig,
   scanExemptProblem,
   type ParallelLevel,
   type ProjectConfig,
-  type RetiredKey,
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix, renderAgentContract } from "@opencode-ai/auto-core/config-fix"
+import { runConfigSequence } from "@opencode-ai/auto-core/config-op"
 import { probeModels } from "@opencode-ai/auto-core/agent-pool"
 import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
-import { commitIdentityProblem } from "@opencode-ai/auto-core/git"
-import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { acquireRunLock, liveRunLock, lockLines, type LockState } from "@opencode-ai/auto-core/lock"
 import { loadModes } from "@opencode-ai/auto-core/mode"
 import { describeModels, formatModels } from "@opencode-ai/auto-core/models-describe"
@@ -83,16 +77,11 @@ import {
   legacyLayoutProblem,
   parsePhases,
   plannedPhaseUnits,
-  readPhases,
-  type PhaseState,
 } from "@opencode-ai/auto-core/phases"
 import { loadPhaseTypes } from "@opencode-ai/auto-core/phases/custom"
 import { phasesProblem, PRESET_FORM } from "@opencode-ai/auto-core/phases/registry"
-import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
 import { roundDirName } from "@opencode-ai/auto-core/docpaths"
 import { SUBTASK_MODES } from "@opencode-ai/auto-core/opts"
-import { loadIntents } from "@opencode-ai/auto-core/intent/load"
-import { usePromptLibrary } from "@opencode-ai/auto-core/template"
 import type { RegisteredProject, Scope } from "./store"
 import { RequestError, type PlanPayload, type TransferPayload } from "./request"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
@@ -506,6 +495,15 @@ function parseConfigKeys(dir: string, raw: unknown): ConfigKeys {
   }
 }
 
+// A gate outcome thrown past the config sequence (the engine's gates hook
+// returns lines or throws; this shell's gates are structured HTTP answers —
+// 409 cleanTree / 428 confirm — returned verbatim by runConfigOp's catch).
+class GateOutcome extends Error {
+  constructor(readonly outcome: OpOutcome) {
+    super("gate outcome")
+  }
+}
+
 // The shared body of init and amend (the CLI's one shared block): every
 // check before the first write (plans/0052 D7), the read-only prefix guard
 // (plannedPhaseUnits — shell-contract §E.7), then the writes the CLI makes.
@@ -530,6 +528,18 @@ async function runConfigOp(kind: "init" | "amend", request: OpRequest): Promise<
     }
     return bad(`unknown ${kind} field "${key}" (the ${kind} request takes "config"${amend ? "" : ', "confirm" and "cleanTree"'})`)
   }
+  // config.phases on amend is refused before any value validation (0137 on
+  // every shell, plans/0193 D4 / 0165-056/S30-01: the CLI's flag parse
+  // refuses first; the API's shape phase does — a retired key's value is
+  // never judged, the roadmap line being the one reshape channel). The core
+  // sequence carries the same refusal as the belt beneath both shells.
+  if (amend && typeof body?.config === "object" && body.config !== null && !Array.isArray(body.config) && "phases" in body.config) {
+    return bad(
+      "config.phases is retired on amend: a round's phases reshape by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md " +
+        "(an uncovered round becomes covered the moment its line exists; the next transfer re-derives the unstarted tail) — " +
+        "the config key is init-stamped machinery, chosen at init alone (the single-phase mode fixed at birth)",
+    )
+  }
   // AUTO-DECISION (check order): request-shape errors answer before any
   // target read (an API's validation precedes resource state; the CLI
   // interleaves them because its flags parse at argv time).
@@ -551,7 +561,7 @@ async function runConfigOp(kind: "init" | "amend", request: OpRequest): Promise<
     keys.isolate === undefined
   ) {
     return bad(
-      `name at least one key to change in "config" (for example: {"config":{"phases":"amt"}}); to refresh the agent contract and the AGENTS.md block without changing a key, run the fix operation (${route(project, "fix")})`,
+      `name at least one key to change in "config" (for example: {"config":{"contextLimit":128}}; the phases key is init-stamped machinery no amend revises — a round reshapes by its roadmap line); to refresh the agent contract and the AGENTS.md block without changing a key, run the fix operation (${route(project, "fix")})`,
     )
   }
   // An old-layout project is a usage error before anything is read or
@@ -571,213 +581,89 @@ async function runConfigOp(kind: "init" | "amend", request: OpRequest): Promise<
     ])
   }
 
-  let existing: ProjectConfig
-  let discarded: RetiredKey[] = []
-  try {
-    if (amend) existing = await loadProjectConfig(dir)
-    else ({ config: existing, retired: discarded } = await loadOverwriteBaseline(dir))
-  } catch (error) {
-    const lines = [textOf(error)]
-    const hint = await fixHint(dir)
-    if (hint) lines.push(hint)
-    return refused(1, lines)
-  }
-  // acceptanceGate/build (plans/0049 G9) have no flag, so a full-overwrite
-  // init keeps them rather than silently erasing them; scanExempt has its
-  // key and follows the stateless overwrite (the CLI's own AUTO-DECISION).
-  const handEdited = { acceptanceGate: existing.acceptanceGate, build: existing.build }
-  const base: ProjectConfig = amend ? existing : { ...CONFIG_DEFAULTS, ...handEdited }
-  // handoverTest requires testByDriver: judged on this run's effective values
-  // (an amend turning test-by-driver off while keeping a stored
-  // handoverTest=true is caught here too).
-  const effectiveTestByDriver = keys.explicit.testByDriver ?? base.testByDriver
-  const effectiveHandoverTest = keys.explicit.handoverTest ?? base.handoverTest
-  if (effectiveHandoverTest && !effectiveTestByDriver) {
-    return refused(1, [
-      `${keys.explicit.handoverTest !== undefined ? "config.handoverTest" : "the existing handoverTest"} requires config.testByDriver: true — test handover only makes sense when tests run via the driver. ` +
-        `To fix: send both ({"config":{"testByDriver":true,"handoverTest":true}}), or handoverTest false; or edit ${CONFIG_FILE} directly`,
-    ])
-  }
-  const liveRound = await currentRound(dir)
-  let phaseState: PhaseState | undefined
-  try {
-    phaseState = await readPhases(dir, liveRound)
-  } catch (error) {
-    return refused(1, [textOf(error)])
-  }
-  const modeName = keys.mode ?? base.mode
-  let modes: Record<string, unknown>
-  try {
-    modes = loadModes(dir)
-  } catch (error) {
-    return refused(1, [textOf(error)])
-  }
-  if (!modes[modeName]) {
-    return refused(1, [`config.mode must be a registered mode (currently supported: ${Object.keys(modes).join(", ")}); defaults to migrate`])
-  }
-  // The positive agent value rides the merge like any explicit key; only the
-  // dropper spelling ("opencode", the default) is kept separate and deletes
-  // below. AUTO-DECISION (T-098's e2e found the gap): an init/amend request
-  // with agent: "claude" used to be validated and then silently dropped —
-  // the parse kept it only for the dropper branch, so the frozen config
-  // said "agent opencode" while the caller asked for claude. The close-out
-  // e2e drives init over the API with agent: "claude"; the value now lands.
-  // The carried list keys ride the merge whole when non-empty; the mode and
-  // the agent's positive value ride it the same way (the droppers below
-  // delete instead).
-  const config = mergeProjectConfig(base, {
-    ...keys.explicit,
-    mode: modeName,
-    ...(keys.agent === "claude" ? { agent: keys.agent } : {}),
-    ...(keys.scanExempt?.length ? { scanExempt: keys.scanExempt } : {}),
-    ...(keys.isolate?.length ? { isolate: keys.isolate } : {}),
-  })
-  // The key droppers: an amend would otherwise keep the old value.
-  if (keys.agent === "opencode") delete config.agent
-  if (keys.parallel === "none") delete config.parallel
-  if (keys.treeLanes === "off") delete config.treeLanes
-  if (keys.scanExempt !== undefined && !keys.scanExempt.length) delete config.scanExempt
-  if (keys.isolate !== undefined && !keys.isolate.length) delete config.isolate
-  // The read-only prefix guard, one per command (plans/0053 D31–D32):
-  // plannedPhaseUnits is the sync's check half — a value that would drop a
-  // completed phase or a directory holding work could never be re-synced, so
-  // it is refused before any write, while a mid-round value that keeps the
-  // completed phases is allowed and surfaces as a drift for plan to
-  // reconcile. Skipped when the current round is complete (the value then
-  // applies to the next round the plan operation establishes).
-  const roundComplete = !!phaseState && phaseState.phases.every((unit) => phaseState.done.has(unit.id))
-  if (!roundComplete) {
-    try {
-      await plannedPhaseUnits(dir, liveRound, config.phases)
-    } catch (error) {
-      return refused(1, [
-        `${textOf(error)}. A mid-round phases change must keep the current round's completed phases and the phase directories that hold work; once the current round is complete, any value applies to the next round plan establishes`,
-      ])
+  // The sequence itself is the core's one home (runConfigSequence,
+  // auto-core src/config-op.ts, plans/0193 D4): this shell parses its request
+  // and maps the outcome — the checks, their order and the writes are shared
+  // with the CLI, so a core rule cannot exist here unmirrored (the mirror's
+  // misses were 0165-056's whole family: no git bootstrap, no
+  // external-directory stamps, the gitignore line without 0138's
+  // committed-surfaces teaching).
+  const lines: string[] = []
+  // The closing line's round number, read before the sequence's own
+  // identical read (both precede every write, so the values agree).
+  const round = await currentRound(dir)
+  class SequenceRefusal extends Error {
+    constructor(readonly refusalLines: string[]) {
+      super(refusalLines.join("\n"))
     }
   }
-  // The prompt library and intent packs: init renders no prompts, but loading
-  // surfaces override problems at init time already (the CLI's own order) —
-  // and the loaded packs are the intent key's existence check (the CLI's own
-  // --intent check on the merged value; a name nothing loads is a key every
-  // run would silently ignore — exactly the drift the frozen-key design
-  // exists to prevent).
-  let packs: Record<string, unknown>
+  let finalConfig: ProjectConfig
   try {
-    usePromptLibrary(dir)
-    packs = loadIntents(dir)
+    finalConfig = await runConfigSequence({
+      kind,
+      dir,
+      keys: {
+        explicit: keys.explicit,
+        ...(keys.mode !== undefined ? { mode: keys.mode } : {}),
+        ...(keys.agent !== undefined ? { agent: keys.agent } : {}),
+        ...(keys.parallel !== undefined ? { parallel: keys.parallel } : {}),
+        ...(keys.treeLanes !== undefined ? { treeLanes: keys.treeLanes } : {}),
+        ...(keys.scanExempt !== undefined ? { scanExempt: keys.scanExempt } : {}),
+        ...(keys.isolate !== undefined ? { isolate: keys.isolate } : {}),
+      },
+      io: {
+        line: (text) => {
+          lines.push(text)
+        },
+        refuse: (refusalLines) => {
+          throw new SequenceRefusal(refusalLines)
+        },
+        // The two-field gate pair in this shell's mechanics (each field its
+        // own answer; the structured 409/428 outcomes throw past the engine
+        // and return verbatim).
+        gates: async (context) => {
+          const gate = await gates(
+            project,
+            body,
+            "init full overwrite",
+            `found an existing config ${CONFIG_FILE}; this init will fully overwrite it with these parameters (keys not given fall back to defaults; to change individual keys instead, use the amend operation (${route(project, "amend")})). continue? [y/N] `,
+            () => ({ config: formatProjectConfig(context.config), warnings: context.warnings }),
+          )
+          if (gate) throw new GateOutcome(gate)
+          return undefined
+        },
+      },
+      wording: {
+        modeKey: "config.mode",
+        handoverKey: "config.handoverTest",
+        handoverTestKey: "config.testByDriver: true",
+        handoverRemedy: 'send both ({"config":{"testByDriver":true,"handoverTest":true}}), or handoverTest false',
+        intentKey: "config.intent",
+        intentTail: ". Materializing an intent bundle into the target is the CLI's init --intent — the API revises the key only",
+        identityPairRemedy: "",
+        amendGiven: [
+          ...Object.keys(keys.explicit),
+          ...(keys.mode !== undefined ? ["mode"] : []),
+          ...(keys.agent !== undefined ? ["agent"] : []),
+          ...(keys.parallel === "none" ? ["parallel"] : []),
+          ...(keys.treeLanes === "off" ? ["treeLanes"] : []),
+          ...(keys.scanExempt !== undefined ? ["scanExempt"] : []),
+          ...(keys.isolate !== undefined ? ["isolate"] : []),
+        ].join(", "),
+        initClosing: (phased: boolean, established: boolean) => {
+          const opener = phased ? `the transfer operation (${route(project, "transfer")})` : `the plan operation (${route(project, "plan")})`
+          return established
+            ? `next: ${opener}`
+            : `next: ${opener} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round ${roundDirName(round)} opens on its release — never a project brief: the analysis flow owns the start)`
+        },
+      },
+    })
   } catch (error) {
-    return refused(1, [textOf(error)])
+    if (error instanceof SequenceRefusal) return refused(1, error.refusalLines)
+    if (error instanceof GateOutcome) return error.outcome
+    throw error
   }
-  if (config.intent !== undefined && !packs[config.intent]) {
-    return refused(1, [
-      `config.intent must be a loaded intent pack (currently available: ${Object.keys(packs).sort().join(", ")}); defaults to the built-in default pack. Materializing an intent bundle into the target is the CLI's init --intent — the API revises the key only`,
-    ])
-  }
-  // Commit capability prerequisite (plain init only; amend touches an
-  // already-working project): the unified commit is the completion
-  // condition, so a repository whose git cannot commit is refused before any
-  // write.
-  if (!amend) {
-    const problem = await commitIdentityProblem(dir)
-    if (problem) {
-      return refused(1, [
-        `git cannot commit in ${dir}: ${problem}. The driver commits after every session, so init requires a repository that can commit; configure an identity first, e.g. git config --global user.name <name> and git config --global user.email <email> (drop --global to configure this repository only)`,
-      ])
-    }
-  }
-  const warnings = discarded.map((item) => `⚠ full overwrite drops the retired key ${item.key} = ${JSON.stringify(item.value)}: ${item.why}`)
-  // The mistouch gates (plain init overwriting an existing config only — a
-  // fresh directory has nothing to overwrite, and amend discards no key):
-  // clean-tree first, then the confirmation, each with its own field.
-  if (!amend && (await Bun.file(join(dir, CONFIG_FILE)).exists())) {
-    const gate = await gates(
-      project,
-      body,
-      "init full overwrite",
-      `found an existing config ${CONFIG_FILE}; this init will fully overwrite it with these parameters (keys not given fall back to defaults; to change individual keys instead, use the amend operation ${route(project, "amend")}). continue? [y/N] `,
-      () => ({ config: formatProjectConfig(config), warnings }),
-    )
-    if (gate) return gate
-  }
-  try {
-    await saveProjectConfig(dir, config)
-  } catch (error) {
-    return refused(1, [`failed to write ${CONFIG_FILE}: ${textOf(error)}`])
-  }
-  const lines = [...warnings, `⚙ project config (${CONFIG_FILE}): ${formatProjectConfig(config)}`]
-  // opencode.json may hold a person's edits and is init's alone (amend writes
-  // only what renders from the config): skipped whenever it exists, like the
-  // CLI. The agent contract renders through the core's own renderer
-  // (renderAgentContract — the same function runAll's integrity check
-  // compares against), so the write and the check cannot drift apart.
-  if (!amend) {
-    const target = join(dir, "opencode.json")
-    if (await Bun.file(target).exists()) lines.push("already exists, skipped: opencode.json")
-    else {
-      await Bun.write(target, await Bun.file(templateConfig).text())
-      lines.push("created: opencode.json")
-    }
-  }
-  const contract = await renderAgentContract(config.testByDriver)
-  const contractPath = join(dir, CONTRACT_FILE)
-  const current = await Bun.file(contractPath).text().catch(() => undefined)
-  if (current === contract) lines.push(`already exists, skipped: ${CONTRACT_FILE}`)
-  else {
-    await Bun.write(contractPath, contract)
-    lines.push(current === undefined ? `created: ${CONTRACT_FILE}` : `replaced (differed from the template): ${CONTRACT_FILE}`)
-  }
-  // The project brief is NOT written (plans/0133 D9 retired the seed
-  // channel): the analysis flow owns the start — the survey phase's closing
-  // task proposes a `## Project brief` section, the person's Clarified: yes
-  // approves it, and the driver installs that section verbatim. The CLI's
-  // init teaches the same story; a person's rare manual override is the
-  // CLI's `amend --brief`.
-  // The AGENTS.md block, idempotently synced from the current config.
-  const ensured = await ensurePointer(dir, { testByDriver: config.testByDriver })
-  lines.push(
-    ensured.block === "inserted"
-      ? "appended: AGENTS.md opencode-auto block"
-      : ensured.block === "replaced"
-        ? "refreshed: AGENTS.md opencode-auto block (differed from the current config render)"
-        : "already exists, skipped: AGENTS.md opencode-auto block (up to date)",
-  )
-  if (ensured.legacyRemoved) lines.push(`cleaned: removed ${ensured.legacyRemoved} legacy/stray opencode-auto marker block(s) from AGENTS.md`)
-  // Plain init writes the full ignore set in one pass; amend never touches it.
-  if (!amend) {
-    const appended = await ensureInitGitignore(dir)
-    if (appended.length) lines.push(`updated: .gitignore now ignores ${appended.join(", ")} (driver workdir, local-only files and nested git repositories)`)
-  }
-  if (amend) {
-    // Exactly the keys the request touched: the explicit positives, the
-    // mode/agent carriers, and every dropper spelling (a positive value
-    // that rode explicit is named by its own key — never both).
-    const given = [
-      ...Object.keys(keys.explicit),
-      ...(keys.mode !== undefined ? ["mode"] : []),
-      ...(keys.agent !== undefined ? ["agent"] : []),
-      ...(keys.parallel === "none" ? ["parallel"] : []),
-      ...(keys.treeLanes === "off" ? ["treeLanes"] : []),
-      ...(keys.scanExempt !== undefined ? ["scanExempt"] : []),
-      ...(keys.isolate !== undefined ? ["isolate"] : []),
-    ]
-    lines.push(`✓ amended (${given.join(", ")}); the other keys are unchanged. Review the change and commit it`)
-    return ok(lines, { config: formatProjectConfig(config) })
-  }
-  // init's closing line (plans/0053 D31, re-keyed by plans/0101 D4): the
-  // rounds' opening command — transfer on a phased project (the dispatch
-  // half being plan's, every advance is transfer's), the plan operation in
-  // m mode (which transfer refuses) — and since plans/0084 the
-  // fresh-project pointer names the assisted analysis: the advancing
-  // command opens it, the person and their agent fill docs/analysis.md,
-  // and the round opens on its release (init writes no brief and nothing
-  // under docs/ — the analysis flow owns the start, plans/0133 D9).
-  const opener = config.phases === "m" ? `the plan operation (${route(project, "plan")})` : `the transfer operation (${route(project, "transfer")})`
-  lines.push(
-    phaseState
-      ? `next: ${opener}`
-      : `next: ${opener} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round ${roundDirName(liveRound)} opens on its release — never a project brief: the analysis flow owns the start)`,
-  )
-  return ok(lines, { config: formatProjectConfig(config) })
+  return ok(lines, { config: formatProjectConfig(finalConfig) })
 }
 
 // fix (plans/0052 D10/D11): the rule table of auto-core/config-fix.ts. The

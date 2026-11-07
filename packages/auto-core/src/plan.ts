@@ -60,7 +60,7 @@ import { isolateRound } from "./git-land"
 import { installRoundBrief, renderRoundBrief, roundBriefText } from "./round-brief"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
 import { openStep, peekProgress } from "./resume"
-import { shellProfile } from "./shell"
+import { shellProfile, surfaceOf } from "./shell"
 import { autoSwitches } from "./switches"
 import { executeBlockageChoices, executionLines } from "./blockage-execute"
 import { addTask } from "./task-add"
@@ -164,6 +164,7 @@ export async function planPrelude(dir: string, opts: {
   const legacy = await legacyLayoutProblem(dir)
   if (legacy) return stop(1, [legacy])
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   const manual = opts.phases === "m"
   // --append without input is a usage error (D23): appending adds the tasks
   // planned from the input. The shell checks this before the lock; this
@@ -180,13 +181,13 @@ export async function planPrelude(dir: string, opts: {
     if (opts.input || opts.append) {
       return stop(1, [
         `--new-task adds the task you name with no session; it takes no planning input and no --append — ` +
-          `pass only the title (${bin} plan ${dir} --new-task "<title>"), or plan from an input instead (${bin} plan ${dir} --append -p <text> | --file <path>)`,
+          `pass only the title (${surface.plan(dir, "--new-task \"<title>\"")}), or plan from an input instead (${surface.plan(dir, "--append -p <text> | --file <path>")})`,
       ])
     }
   }
   if (opts.append && !opts.input) {
     return stop(1, [
-      `--append requires a planning input: pass one with ${bin} plan ${dir} -p <text> | --file <path> — appending adds the tasks planned from the input to the current phase`,
+      `--append requires a planning input: pass one with ${surface.plan(dir, "-p <text> | --file <path>")} — appending adds the tasks planned from the input to the current phase`,
     ])
   }
   // The work-order routes (rows 12–13, plans/0076): the shell checks the
@@ -195,12 +196,12 @@ export async function planPrelude(dir: string, opts: {
   // one route runs, and neither plans from an input nor adds a task.
   if (opts.export !== undefined && opts.adopt !== undefined) {
     return stop(1, [
-      `--export and --adopt are mutually exclusive: --export renders a ready unit's work order for a standalone session, --adopt closes one out — run them one at a time (${bin} plan ${dir} --export <task id>, then --adopt <task id> after the session)`,
+      `--export and --adopt are mutually exclusive: --export renders a ready unit's work order for a standalone session, --adopt closes one out — run them one at a time (${surface.plan(dir, "--export <task id>")}, then --adopt <task id> after the session)`,
     ])
   }
   if ((opts.export !== undefined || opts.adopt !== undefined) && (opts.input || opts.append || opts.newTask !== undefined)) {
     return stop(1, [
-      `--export / --adopt take only a task id: no planning input (a session never plans under them), no --append, no --new-task — pass the flag alone (${bin} plan ${dir} --export <task id> | --adopt <task id>)`,
+      `--export / --adopt take only a task id: no planning input (a session never plans under them), no --append, no --new-task — pass the flag alone (${surface.plan(dir, "--export <task id> | --adopt <task id>")})`,
     ])
   }
   // The assisted-preparation backstop (plans/0084): --round and --phase are
@@ -209,12 +210,12 @@ export async function planPrelude(dir: string, opts: {
   // route logic — the work-order backstop's pattern.
   if (opts.round && opts.phase) {
     return stop(1, [
-      `--round and --phase are mutually exclusive: --round prepares the round brief of the round at hand, --phase the planning input of the next phase to plan — run them one at a time (${bin} plan ${dir} --round | --phase)`,
+      `--round and --phase are mutually exclusive: --round prepares the round brief of the round at hand, --phase the planning input of the next phase to plan — run them one at a time (${surface.plan(dir, "--round | --phase")})`,
     ])
   }
   if ((opts.round || opts.phase) && (opts.input || opts.append || opts.newTask !== undefined || opts.export !== undefined || opts.adopt !== undefined)) {
     return stop(1, [
-      `--round / --phase take no other option: no planning input, no --append, no --new-task, no --export / --adopt — pass the flag alone (${bin} plan ${dir} --round | --phase)`,
+      `--round / --phase take no other option: no planning input, no --append, no --new-task, no --export / --adopt — pass the flag alone (${surface.plan(dir, "--round | --phase")})`,
     ])
   }
   const round = await currentRound(dir)
@@ -251,22 +252,22 @@ export async function planPrelude(dir: string, opts: {
     // at the analysis instead of an establishment.
     if (opts.input) {
       return stop(1, [
-        `no round exists yet: the project analysis comes first — run ${bin} plan ${dir} without input, work with your agent on ${ANALYSIS_DOC} (the guidance is in AGENTS.md), release it with \`${CLARIFIED_MARK}\` and commit; round R-01 opens on the re-run and takes the input`,
+        `no round exists yet: the project analysis comes first — run ${surface.plan(dir)} without input, work with your agent on ${ANALYSIS_DOC} (the guidance is in AGENTS.md), release it with \`${CLARIFIED_MARK}\` and commit; round R-01 opens on the re-run and takes the input`,
       ])
     }
     if (opts.newTask !== undefined) {
       return stop(1, [
-        `no round exists yet: the project analysis comes first — run ${bin} plan ${dir} without --new-task; round R-01 opens on its release, and the task lands in it`,
+        `no round exists yet: the project analysis comes first — run ${surface.plan(dir)} without --new-task; round R-01 opens on its release, and the task lands in it`,
       ])
     }
     if (opts.export !== undefined || opts.adopt !== undefined) {
       return stop(1, [
-        `no round exists yet: the project analysis comes first — run ${bin} plan ${dir} without --export / --adopt; round R-01 opens on its release, and the work order lands in it`,
+        `no round exists yet: the project analysis comes first — run ${surface.plan(dir)} without --export / --adopt; round R-01 opens on its release, and the work order lands in it`,
       ])
     }
     if (opts.phase) {
       return stop(1, [
-        `no phase exists yet: the project analysis comes first — run ${bin} plan ${dir}, work with your agent on ${ANALYSIS_DOC} (the guidance is in AGENTS.md), release it with \`${CLARIFIED_MARK}\`, and round R-01 opens`,
+        `no phase exists yet: the project analysis comes first — run ${surface.plan(dir)}, work with your agent on ${ANALYSIS_DOC} (the guidance is in AGENTS.md), release it with \`${CLARIFIED_MARK}\`, and round R-01 opens`,
       ])
     }
     // The walkthrough itself is shared with transfer's projectStart
@@ -287,17 +288,17 @@ export async function planPrelude(dir: string, opts: {
   if (!(await Bun.file(join(dir, phaseIndexPath(round))).exists())) {
     if (opts.input) {
       return stop(1, [
-        `round ${roundDirName(round)} is not established yet: run ${bin} plan ${dir} without input to establish it, commit the setup, then pass the input.`,
+        `round ${roundDirName(round)} is not established yet: run ${surface.plan(dir)} without input to establish it, commit the setup, then pass the input.`,
       ])
     }
     if (opts.newTask !== undefined) {
       return stop(1, [
-        `round ${roundDirName(round)} is not established yet: run ${bin} plan ${dir} without --new-task to establish it, commit the setup, then add the task again.`,
+        `round ${roundDirName(round)} is not established yet: run ${surface.plan(dir)} without --new-task to establish it, commit the setup, then add the task again.`,
       ])
     }
     if (opts.export !== undefined || opts.adopt !== undefined) {
       return stop(1, [
-        `round ${roundDirName(round)} is not established yet: run ${bin} plan ${dir} without --export / --adopt to establish it, commit the setup, then take the work order again.`,
+        `round ${roundDirName(round)} is not established yet: run ${surface.plan(dir)} without --export / --adopt to establish it, commit the setup, then take the work order again.`,
       ])
     }
     const lines: string[] = []
@@ -318,26 +319,26 @@ export async function planPrelude(dir: string, opts: {
   if (route.type === "complete") {
     if (!manual) {
       return stop(1, [
-        `round ${roundDirName(round)} is complete and no plan task awaits dispatch: the round close and the next round's opening are transfer's; run: ${bin} transfer ${dir}`,
+        `round ${roundDirName(round)} is complete and no plan task awaits dispatch: the round close and the next round's opening are transfer's; run: ${surface.transfer(dir)}`,
       ])
     }
     const next = roundDirName(round + 1)
     if (opts.input) {
       return stop(1, [
         `round ${roundDirName(round)} is complete and round ${next} is not established yet: ` +
-          `run ${bin} plan ${dir} without input to establish it, commit the setup, then pass the input.`,
+          `run ${surface.plan(dir)} without input to establish it, commit the setup, then pass the input.`,
       ])
     }
     if (opts.newTask !== undefined) {
       return stop(1, [
         `round ${roundDirName(round)} is complete and round ${next} is not established yet: ` +
-          `run ${bin} plan ${dir} without --new-task to establish it, commit the setup, then add the task again.`,
+          `run ${surface.plan(dir)} without --new-task to establish it, commit the setup, then add the task again.`,
       ])
     }
     if (opts.export !== undefined || opts.adopt !== undefined) {
       return stop(1, [
         `round ${roundDirName(round)} is complete and round ${next} is not established yet: ` +
-          `run ${bin} plan ${dir} without --export / --adopt to establish it, commit the setup, then take the work order again.`,
+          `run ${surface.plan(dir)} without --export / --adopt to establish it, commit the setup, then take the work order again.`,
       ])
     }
     const close = await roundCloseProblems(dir, round, { build: opts.build, scanExempt: opts.scanExempt })
@@ -358,7 +359,7 @@ export async function planPrelude(dir: string, opts: {
   // never dead-ends.
   {
     const executed = await executeBlockageChoices(dir, round)
-    if (executed.type === "reblocked" && !executed.stale) return stop(2, [`⏸ remediation re-blocked: ${executed.reason}`, `next: resolve what it names, then re-run: ${bin} plan ${dir}`])
+    if (executed.type === "reblocked" && !executed.stale) return stop(2, [`⏸ remediation re-blocked: ${executed.reason}`, `next: resolve what it names, then re-run: ${surface.plan(dir)}`])
     for (const line of executionLines(executed)) log(line)
   }
   // Row 3 (plans/0053 D34): the phase index drifted from the phases value in
@@ -442,7 +443,7 @@ export async function planPrelude(dir: string, opts: {
     // The continue pointer follows the boundary grammar (plans/0101 D4):
     // phased continues with transfer (the construct reads the filled brief
     // and stops for review), m mode with plan as before.
-    const next = manual ? `${bin} plan ${dir}` : `${bin} transfer ${dir}`
+    const next = manual ? `${surface.plan(dir)}` : `${surface.transfer(dir)}`
     return stop(0, [
       filled
         ? `ℹ the round brief ${roundBriefPath(round)} is filled; revise it with your agent if the round's goals moved (this state's guidance is in AGENTS.md), then continue: ${next}`
@@ -464,9 +465,9 @@ export async function planPrelude(dir: string, opts: {
       return stop(1, [
         manual
           ? `the single phase already lists tasks; --phase prepares a planning input for a phase with none — ` +
-            `add tasks with ${bin} plan ${dir} --append -p <text> | --file <path>, or list them by hand in ${taskIndexPath(route.phase)}`
+            `add tasks with ${surface.plan(dir, "--append -p <text> | --file <path>")}, or list them by hand in ${taskIndexPath(route.phase)}`
           : `${phaseRefText(route.phase)} is past planning; --phase prepares the planning input of a phase still to plan — ` +
-            `add tasks to a planned phase with ${bin} plan ${dir} --append -p <text> | --file <path>`,
+            `add tasks to a planned phase with ${surface.plan(dir, "--append -p <text> | --file <path>")}`,
       ])
     }
     let target: { phase: PhaseUnit; listed: boolean } | undefined
@@ -498,11 +499,11 @@ export async function planPrelude(dir: string, opts: {
       `ℹ prepare the planning input of ${phaseRefText(target.phase)}: ${inputPath}`,
       existing?.trim()
         ? `an input exists there already — revise it with your agent (this state's guidance is in AGENTS.md)`
-        : `work with your agent on it (this state's guidance and the scaffold are in AGENTS.md); a template also prints with ${bin} plan ${dir} --scaffold`,
+        : `work with your agent on it (this state's guidance and the scaffold are in AGENTS.md); a template also prints with ${surface.plan(dir, "--scaffold")}`,
       // The consumption pointer follows the boundary grammar (plans/0101
       // D4): phased constructs through transfer (the review stop between
       // construction and dispatch), m mode plans as before.
-      `when the file holds your intent, run: ${manual ? `${bin} plan ${dir} — the planning session consumes it as written` : `${bin} transfer ${dir} — its construct reads it as written and stops for review`}`,
+      `when the file holds your intent, run: ${manual ? `${surface.plan(dir)} — the planning session consumes it as written` : `${surface.transfer(dir)} — its construct reads it as written and stops for review`}`,
     ])
   }
   // Row 11 (--new-task): add one task the person names, with no session, to
@@ -579,11 +580,11 @@ export async function planPrelude(dir: string, opts: {
     if (route.type === "plan" || route.type === "handover") {
       return stop(1, [
         route.type === "plan"
-          ? `nothing is constructed for ${phaseRefText(route.phase)} yet — transfer constructs its plan task and stops for your review; run: ${bin} transfer ${dir}` +
+          ? `nothing is constructed for ${phaseRefText(route.phase)} yet — transfer constructs its plan task and stops for your review; run: ${surface.transfer(dir)}` +
             (opts.input
-              ? ` (the planning input's home is ${planInputPath(route.phase)} — write it there, or prepare it with ${bin} plan ${dir} --phase, commit, and the construct reads it)`
+              ? ` (the planning input's home is ${planInputPath(route.phase)} — write it there, or prepare it with ${surface.plan(dir, "--phase")}, commit, and the construct reads it)`
               : "")
-          : `${phaseRefText(route.phase)} is at its boundary — the handover distillation, the phase close and the next plan task's construction are transfer's; run: ${bin} transfer ${dir}` +
+          : `${phaseRefText(route.phase)} is at its boundary — the handover distillation, the phase close and the next plan task's construction are transfer's; run: ${surface.transfer(dir)}` +
             (opts.input ? ` (a planning input for the next phase belongs in its plan-input.md, after the advance)` : ""),
       ])
     }
@@ -594,8 +595,8 @@ export async function planPrelude(dir: string, opts: {
     if (awaitingFormulation(route.plan.tasks, route.phase) === undefined) {
       const pending = route.plan.tasks.filter((task) => task.status !== "done").length
       return stop(1, [
-        `no reviewed plan task awaits dispatch: ${phaseRefText(route.phase)} holds ${pending} pending task(s) — execute work for ${bin} run ${dir}; ` +
-          `the boundary and the next plan task are transfer's (${bin} transfer ${dir})` +
+        `no reviewed plan task awaits dispatch: ${phaseRefText(route.phase)} holds ${pending} pending task(s) — execute work for ${surface.run(dir)}; ` +
+          `the boundary and the next plan task are transfer's (${surface.transfer(dir)})` +
           (opts.input ? `; a planning input adds tasks with --append, it never dispatches` : ""),
       ])
     }
@@ -673,6 +674,7 @@ const midPipelineLine = (id: string): string => `${id} is mid-pipeline (its resu
 // as when the start began.
 async function previousRoundClose(dir: string, round: number, gate: { build?: string; scanExempt?: string[] }): Promise<{ type: "pass"; lines: string[] } | PlanStop> {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   let state: PhaseState | undefined
   try {
     state = await readPhases(dir, round)
@@ -684,7 +686,7 @@ async function previousRoundClose(dir: string, round: number, gate: { build?: st
     return stop(1, [
       `${join("docs", roundDirName(round + 1))}/ exists without its phase index, but round ${roundDirName(round)} is not complete ` +
         `(${state ? `pending: ${state.phases.filter((unit) => !state.done.has(unit.id)).map(phaseLabel).join(", ")}` : `${phaseIndexPath(round)} is missing`}); ` +
-        `finish it with ${bin} run ${dir}, or remove the empty round directory`,
+        `finish it with ${surface.run(dir)}, or remove the empty round directory`,
     ])
   }
   const close = await roundCloseProblems(dir, round, { build: gate.build, scanExempt: gate.scanExempt })
@@ -717,9 +719,10 @@ export function driftPairs(drift: PhaseTailDrift): string {
 // D5).
 function resyncLine(dir: string, drift: PhaseTailDrift, from: string): string {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return (
     `✓ phase index of round ${roundDirName(drift.round)} re-synced to ${from} (${driftPairs(drift)}); ` +
-    `review ${phaseIndexPath(drift.round)}, commit, then re-run: ${bin} plan ${dir}`
+    `review ${phaseIndexPath(drift.round)}, commit, then re-run: ${surface.plan(dir)}`
   )
 }
 
@@ -730,9 +733,10 @@ function resyncLine(dir: string, drift: PhaseTailDrift, from: string): string {
 // change is committed.
 function driftRefusal(dir: string, drift: PhaseTailDrift, from: string, flag: string, action: string): string {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return (
     `the phase index of round ${roundDirName(drift.round)} differs from ${from}: ` +
-    `run ${bin} plan ${dir} without ${flag} to re-sync it, commit the change, then ${action}.`
+    `run ${surface.plan(dir)} without ${flag} to re-sync it, commit the change, then ${action}.`
   )
 }
 
@@ -744,10 +748,11 @@ function driftRefusal(dir: string, drift: PhaseTailDrift, from: string, flag: st
 // channel's own resumption after it.
 function openStepRefusal(dir: string, open: { step: string; unit: string }, tail: string): string {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   const name = open.step === "phase-plan" ? "phase planning" : open.step === "phase-append" ? "task appending" : "phase handover"
   return (
     `the ${name} step of ${open.unit} was interrupted and is not closed out; ` +
-    `finish it first (run: ${bin} plan ${dir}), then ${tail}`
+    `finish it first (run: ${surface.plan(dir)}), then ${tail}`
   )
 }
 
@@ -755,9 +760,10 @@ function openStepRefusal(dir: string, open: { step: string; unit: string }, tail
 // route distills knowledge instead of planning tasks).
 function taskLessPhaseLine(dir: string, phase: PhaseUnit): string {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return (
     `${phaseRefText(phase)} holds no tasks (its type, ${phase.type}, distills knowledge instead); ` +
-    `--new-task adds a task to a phase that runs them — advance through it with ${bin} run ${dir}`
+    `--new-task adds a task to a phase that runs them — advance through it with ${surface.run(dir)}`
   )
 }
 
@@ -765,12 +771,13 @@ function taskLessPhaseLine(dir: string, phase: PhaseUnit): string {
 // document is deliberately minimal, so the review line names it.
 function addedLines(dir: string, added: { id: string; index: string; handoverRemoved?: string }): string[] {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return [
     `✓ task ${added.id} added to ${added.index} (no session: --new-task writes it directly)`,
     ...(added.handoverRemoved !== undefined
       ? [`✓ stale handover removed: ${added.handoverRemoved} (the phase is distilled again after the task)`]
       : []),
-    `next: review it (sharpen the Goal / Scope / Acceptance of docs/${added.id}/todo.md if needed), then run: ${bin} run ${dir}`,
+    `next: review it (sharpen the Goal / Scope / Acceptance of docs/${added.id}/todo.md if needed), then run: ${surface.run(dir)}`,
   ]
 }
 
@@ -852,6 +859,7 @@ export async function establishRoundSetup(
 // sign, rework through an append, or close without the gate — as commands.
 export async function gateStopLines(directory: string, phase: PhaseUnit, problems: readonly string[], acceptance: string | undefined): Promise<string[]> {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   const awaiting = problems.every((problem) => problem.startsWith("clarification:"))
   const waiting = problems.every((problem) => problem.startsWith("acceptance:"))
   const lines = [`⏸ phase ${phaseTitle(phase)} ${awaiting ? "awaits your clarification" : waiting ? "awaits acceptance" : "is held by its gate"}:`]
@@ -882,14 +890,14 @@ export async function gateStopLines(directory: string, phase: PhaseUnit, problem
     // before constructing (started phases untouched; a round the roadmap
     // does not cover becomes covered the moment its line exists).
     lines.push(
-      `  to reshape the round from the findings: move or add its \`${phase.round} <phases> — <goal>\` line in ${ANALYSIS_DOC} — the round's unstarted phases re-derive when ${bin} transfer ${directory} next constructs (the line is the round's phase authority; the config phases value is init-stamped machinery, never the reshape channel)`,
+      `  to reshape the round from the findings: move or add its \`${phase.round} <phases> — <goal>\` line in ${ANALYSIS_DOC} — the round's unstarted phases re-derive when ${surface.transfer(directory)} next constructs (the line is the round's phase authority; the config phases value is init-stamped machinery, never the reshape channel)`,
     )
   }
   if (acceptance) {
     lines.push(`  to accept: review ${handover} and ${acceptance}, add the line \`${ACCEPTED_MARK}\` to ${acceptance}, commit, re-run`)
   }
   lines.push(
-    `  to rework: ${acceptance ? `write your notes in ${acceptance}, ` : ""}append fix tasks with ${bin} plan ${directory} --append -p <text> ` +
+    `  to rework: ${acceptance ? `write your notes in ${acceptance}, ` : ""}append fix tasks with ${surface.plan(directory, "--append -p <text>")} ` +
       `(the stale handover is removed and distilled again after them)`,
   )
   lines.push(`  to close the phase without its gate: ${bin} close ${phaseKey(phase).id} ${directory} --reason <text>`)
@@ -908,17 +916,18 @@ export async function gateStopLines(directory: string, phase: PhaseUnit, problem
 // bytes.
 export async function phaseBoundaryLines(directory: string, phase: PhaseUnit): Promise<string[]> {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   const state = await readPhases(directory).catch(() => undefined)
   const last = state?.phases.at(-1)?.id === phase.id
   if (state?.done.has(phase.id)) {
     return [
       `✓ phase boundary: ${phaseTitle(phase)} complete and closed — the handover was distilled and the phase committed (an interrupted advance's re-entry finished it, plans/0101 D1)`,
-      `next: ${bin} transfer ${directory} — it constructs the next phase's plan task for your review${last ? " and closes the round (stopping with its close for your review)" : ""}`,
+      `next: ${surface.transfer(directory)} — it constructs the next phase's plan task for your review${last ? " and closes the round (stopping with its close for your review)" : ""}`,
     ]
   }
   return [
     `✓ phase boundary: ${phaseTitle(phase)} complete at a clean phase end — every unit closed, the lanes landed; run executes the planned work of the current phase and stops here (plans/0101 D1)`,
-    `next: ${bin} transfer ${directory} — it distills the handover, closes the phase${last ? " and the round (stopping with its close for your review)" : ""}, ` +
+    `next: ${surface.transfer(directory)} — it distills the handover, closes the phase${last ? " and the round (stopping with its close for your review)" : ""}, ` +
       `and constructs the next phase's plan task for your review`,
   ]
 }
@@ -928,9 +937,10 @@ export async function phaseBoundaryLines(directory: string, phase: PhaseUnit): P
 // work is run's, the boundary follows its completion.
 export function nothingToAdvanceLine(directory: string, phase: PhaseUnit, pending: number): string {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return (
     `⏸ nothing to advance: ${phaseRefText(phase)} still holds ${pending} pending task(s) — ` +
-    `execute them first: ${bin} run ${directory}; the boundary follows their completion`
+    `execute them first: ${surface.run(directory)}; the boundary follows their completion`
   )
 }
 
@@ -940,10 +950,11 @@ export function nothingToAdvanceLine(directory: string, phase: PhaseUnit, pendin
 // channel, never a silent config round.
 export function roadmapExhaustedLines(directory: string, round: number): string[] {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return [
     `✓ round ${roundDirName(round)} is closed, and the roadmap of ${ANALYSIS_DOC} holds no line for round ${roundDirName(round + 1)} — the planned work of the roadmap is done`,
     `next: extend ## Roadmap of ${ANALYSIS_DOC} with the next round's line (\`- ${roundDirName(round + 1)} <phases> — <goal>\`, its phases value the round establishes under), ` +
-      `commit, then re-run: ${bin} transfer ${directory}`,
+      `commit, then re-run: ${surface.transfer(directory)}`,
   ]
 }
 
@@ -966,6 +977,7 @@ export function establishStopLines(
   next: string,
 ): { code: number; lines: string[] } {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   const name = roundDirName(round)
   if (setup.type === "dirty") {
     return {
@@ -978,10 +990,10 @@ export function establishStopLines(
     }
   }
   if (setup.type === "failed") {
-    return { code: 1, lines: [`branch isolation failed, nothing was written: ${setup.error}; fix the repository and re-run: ${bin} ${command} ${dir}`] }
+    return { code: 1, lines: [`branch isolation failed, nothing was written: ${setup.error}; fix the repository and re-run: ${command === "plan" ? surface.plan(dir) : surface.transfer(dir)}`] }
   }
   if (setup.type === "invalid") {
-    return { code: 1, lines: [`⏸ ${setup.problem}; fix the roadmap line (or the phase types it names), then re-run: ${bin} ${command} ${dir}`] }
+    return { code: 1, lines: [`⏸ ${setup.problem}; fix the roadmap line (or the phase types it names), then re-run: ${command === "plan" ? surface.plan(dir) : surface.transfer(dir)}`] }
   }
   if (setup.type === "error") {
     return { code: 1, lines: [`round establishment failed: ${setup.error}`] }
@@ -1015,31 +1027,34 @@ type AnalysisGateOutcome = { type: "stop"; code: number; lines: string[] } | { t
 // The just-opened stop: the stub written, the walkthrough, the release.
 export function analysisOpenedLines(dir: string, command: "plan" | "transfer"): string[] {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return [
     `✓ the project analysis is open: ${ANALYSIS_DOC} written (a stub with section hints)`,
     `next: work with your coding agent on ${ANALYSIS_DOC} — the analysis, the goals, one \`Fork:\` line per open decision, the project-brief proposal and the multi-round roadmap; this state's guidance is in AGENTS.md`,
-    `then release it: ${bin} clarify ${dir} writes the \`${CLARIFIED_MARK}\` line and commits it (or add the line and commit yourself), and re-run: ${bin} ${command} ${dir} — the approved brief is installed and round R-01 opens`,
+    `then release it: ${bin} clarify ${dir} writes the \`${CLARIFIED_MARK}\` line and commits it (or add the line and commit yourself), and re-run: ${command === "plan" ? surface.plan(dir) : surface.transfer(dir)} — the approved brief is installed and round R-01 opens`,
   ]
 }
 
 // The grammar-problems hold: what holds the release, and the fix channel.
 export function analysisHeldLines(dir: string, command: "plan" | "transfer", problems: readonly string[]): string[] {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return [
     `⏸ ${ANALYSIS_DOC} has problems that hold its release:`,
     ...problems.map((problem) => `  ${problem}`),
-    `fix them with your agent (this state's guidance is in AGENTS.md), commit, then re-run: ${bin} ${command} ${dir}`,
+    `fix them with your agent (this state's guidance is in AGENTS.md), commit, then re-run: ${command === "plan" ? surface.plan(dir) : surface.transfer(dir)}`,
   ]
 }
 
 // The awaits-you shape: the review, the forks, the release line.
 export function analysisAwaitingLines(dir: string, command: "plan" | "transfer", forks: number): string[] {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return [
     `⏸ the project analysis awaits you: review ${ANALYSIS_DOC}` +
       (forks > 0 ? `, resolve its ${forks} open Fork: line(s) (append your answers beside them)` : "") +
       `, then release it — ${bin} clarify ${dir} writes the \`${CLARIFIED_MARK}\` line and commits it (or add the line and commit yourself)`,
-    `then re-run: ${bin} ${command} ${dir} — the approved \`## Project brief\` proposal is installed and round R-01 opens`,
+    `then re-run: ${command === "plan" ? surface.plan(dir) : surface.transfer(dir)} — the approved \`## Project brief\` proposal is installed and round R-01 opens`,
   ]
 }
 
@@ -1101,10 +1116,11 @@ export async function analysisGate(
 // arm closes round-1 to open round, its roundOpen arm round to round+1.
 export function roundCloseRefusalLines(dir: string, closed: number, open: number, close: RoundClose, command: "plan" | "transfer"): string[] {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return [
     `⏸ round ${roundDirName(closed)} does not pass its round-close checks, so round ${roundDirName(open)} cannot open yet`,
     ...roundCloseLines(close, command),
-    `next: fix them, commit, then re-run: ${bin} ${command} ${dir}`,
+    `next: fix them, commit, then re-run: ${command === "plan" ? surface.plan(dir) : surface.transfer(dir)}`,
   ]
 }
 
@@ -1175,6 +1191,7 @@ export async function applyTailDrift(
 // guidance (the assisted half of this gate).
 async function establish(dir: string, round: number, opts: { phases: string; isolate?: string[]; testByDriver?: boolean }, before: string[]): Promise<PlanPrelude> {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   const setup = await establishRoundSetup(dir, round, opts)
   const ok = setup.type === "ok" ? setup : undefined
   // The round-brief proposal channel (plans/0115 D3): m mode installs at
@@ -1188,7 +1205,7 @@ async function establish(dir: string, round: number, opts: { phases: string; iso
     if (proposal !== undefined) {
       const done = await installRoundBrief(dir, round, ANALYSIS_DOC, proposal, commitTree)
       before = [...before, ...done.lines]
-      proposalNext = `next: the round brief is your released proposal, installed and committed — plan the round with: ${bin} plan ${dir} -p <text> | --file <path>`
+      proposalNext = `next: the round brief is your released proposal, installed and committed — plan the round with: ${surface.plan(dir, "-p <text> | --file <path>")}`
     } else {
       // A released near-miss heading naming this round (plans/0158 D3): the
       // drafted-looking subsection never installs, so the round-start gate
@@ -1208,7 +1225,7 @@ async function establish(dir: string, round: number, opts: { phases: string; iso
     ok
       ? (proposalNext ??
         `next (round-start gate): review the setup and commit it; then list tasks in ${taskIndexPath(ok.units[0]!)} by hand, ` +
-          `or run: ${bin} plan ${dir} -p <text> | --file <path>`)
+          `or run: ${surface.plan(dir, "-p <text> | --file <path>")}`)
       : "",
   )
   return stop(lines.code, [...before, ...lines.lines])
@@ -1247,16 +1264,17 @@ export const phaseRefText = (phase: PhaseUnit): string => `${qualifiedPhase(phas
 // index), or close units that will not run.
 export function executeNotice(dir: string, route: Extract<PhaseRoute<Plan>, { type: "execute" | "handover" }>, manual: boolean): string[] {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   const total = route.plan.tasks.length
   const pending = route.plan.tasks.filter((task) => task.status !== "done").length
   // In m mode input on a non-empty index is an append already (D23), so the
   // pointer is plan's plain input form.
   if (manual) {
-    return [`ℹ ${route.plan.index} lists ${total} task(s) (${pending} pending); next: ${bin} run ${dir}, or add tasks with ${bin} plan ${dir} -p <text> | --file <path>`]
+    return [`ℹ ${route.plan.index} lists ${total} task(s) (${pending} pending); next: ${surface.run(dir)}, or add tasks with ${surface.plan(dir, "-p <text> | --file <path>")}`]
   }
   return [
-    `ℹ ${phaseRefText(route.phase)} is planned (${pending} of ${total} tasks pending); next: ${bin} run ${dir} ` +
-      `— or add tasks with ${bin} plan ${dir} --append -p <text>, or close units with ${bin} close <ref>`,
+    `ℹ ${phaseRefText(route.phase)} is planned (${pending} of ${total} tasks pending); next: ${surface.run(dir)} ` +
+      `— or add tasks with ${surface.plan(dir, "--append -p <text>")}, or close units with ${bin} close <ref>`,
   ]
 }
 
@@ -1270,9 +1288,10 @@ export function executeNotice(dir: string, route: Extract<PhaseRoute<Plan>, { ty
 // is transfer's, one line naming the advance command.
 function transferStartLine(dir: string): string {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return (
     `no plan task awaits dispatch and no round is established: the project start — the analysis, the round establishment, ` +
-    `the first plan task's construction — is transfer's; run: ${bin} transfer ${dir}`
+    `the first plan task's construction — is transfer's; run: ${surface.transfer(dir)}`
   )
 }
 
@@ -1283,9 +1302,10 @@ function transferStartLine(dir: string): string {
 // target) where the text belongs.
 function inputInvalidatedLine(dir: string, phase: PhaseUnit): string {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return (
     `the planning input changes what the reviewed plan task rendered — an input that changes after construction invalidates the todo: ` +
-    `write it into ${planInputPath(phase)} (or prepare it with ${bin} plan ${dir} --phase), commit, and re-run: ${bin} transfer ${dir} — ` +
+    `write it into ${planInputPath(phase)} (or prepare it with ${surface.plan(dir, "--phase")}), commit, and re-run: ${surface.transfer(dir)} — ` +
     `its idempotent reconstruct absorbs the input and stops for review again (the same text re-passed dispatches as-is)`
   )
 }
@@ -1300,18 +1320,20 @@ function inputInvalidatedLine(dir: string, phase: PhaseUnit): string {
 // verbatim ahead of the construct.
 function stubRoundLines(dir: string, round: number): string[] {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   return [
     `⏸ the round brief ${roundBriefPath(round)} is still the untouched stub: no planning session dispatches against an empty round brief`,
-    `next: fill it in (## Goal, ## Acceptance criteria, ## Release criteria — ${bin} plan ${dir} --round points the AGENTS.md guidance at it), commit, ` +
-      `then re-run: ${bin} transfer ${dir} — its idempotent reconstruct absorbs the filled brief and stops for review again; ` +
-      `or draft it as a \`### ${roundDirName(round)}\` proposal under \`## Round briefs\` of ${ANALYSIS_DOC}, commit — the next ${bin} transfer ${dir} installs it verbatim`,
+    `next: fill it in (## Goal, ## Acceptance criteria, ## Release criteria — ${surface.plan(dir, "--round")} points the AGENTS.md guidance at it), commit, ` +
+      `then re-run: ${surface.transfer(dir)} — its idempotent reconstruct absorbs the filled brief and stops for review again; ` +
+      `or draft it as a \`### ${roundDirName(round)}\` proposal under \`## Round briefs\` of ${ANALYSIS_DOC}, commit — the next ${surface.transfer(dir)} installs it verbatim`,
   ]
 }
 
 // m mode with nothing listed and no input (plans/0053 D15).
 export function emptyIndexNotice(dir: string, index: string): string[] {
   const { bin } = shellProfile()
-  return [`ℹ no tasks listed in ${index} yet: list them there by hand (docs/T-NNN/todo.md per task), or run: ${bin} plan ${dir} -p <text> | --file <path>`]
+  const surface = surfaceOf()
+  return [`ℹ no tasks listed in ${index} yet: list them there by hand (docs/T-NNN/todo.md per task), or run: ${surface.plan(dir, "-p <text> | --file <path>")}`]
 }
 
 // A planning step that just ran under plan's stop condition (plans/0053 D6,
@@ -1320,10 +1342,11 @@ export function emptyIndexNotice(dir: string, index: string): string[] {
 // hand and its tasks close the same way, so its line stays plain).
 export function plannedLines(dir: string, phase: PhaseUnit, ids: readonly string[], manual: boolean): string[] {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   const index = taskIndexPath(phase)
   const next = manual
-    ? `next: review them, then run: ${bin} run ${dir}`
-    : `next: review them (edit, close, or plan --append), then run: ${bin} run ${dir}`
+    ? `next: review them, then run: ${surface.run(dir)}`
+    : `next: review them (edit, close, or plan --append), then run: ${surface.run(dir)}`
   if (manual) {
     const span = ids.length > 1 ? `${ids[0]}…${ids[ids.length - 1]}` : (ids[0] ?? "")
     return [`✓ planned ${ids.length} task(s) (${span}) into ${index}`, next]
@@ -1335,5 +1358,6 @@ export function plannedLines(dir: string, phase: PhaseUnit, ids: readonly string
 // filled in yet, so the next round opens on the next plan.
 export function roundCompleteNext(dir: string, round: number): string {
   const { bin } = shellProfile()
-  return `next: fill in ## Close of ${roundBriefPath(round)}, commit, then run ${bin} plan ${dir} to open round ${roundDirName(round + 1)}`
+  const surface = surfaceOf()
+  return `next: fill in ## Close of ${roundBriefPath(round)}, commit, then run ${surface.plan(dir)} to open round ${roundDirName(round + 1)}`
 }
