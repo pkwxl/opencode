@@ -85,9 +85,18 @@ function format(args: unknown[]): string {
 }
 
 // File lines get timestamps per the verbose-or-audit record level
-// (written straight through by writeSync).
+// (written straight through by writeSync). A failed write is silenced — the
+// journal's and the stats module's own rule (the record must never throw
+// into a turn; plans/0187 D3): a full disk or an I/O error on the log
+// volume degrades to the console line already printed, never a rejection
+// riding a probe verdict's fx.log into the spine's emission chain.
 function record(text: string) {
-  if (fd !== undefined) writeSync(fd, stamp(text, verbose || audit) + "\n")
+  if (fd === undefined) return
+  try {
+    writeSync(fd, stamp(text, verbose || audit) + "\n")
+  } catch {
+    // silenced by design
+  }
 }
 
 function stamp(text: string, on: boolean): string {

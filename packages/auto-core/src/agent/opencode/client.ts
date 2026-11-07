@@ -17,6 +17,8 @@ import { mapEvent, mapMessage } from "./events"
 
 // opencode persists sessions, forks at a message anchor, accepts prompts into
 // a live session, and measures context per message in the event stream.
+// The server's event connections pulse a heartbeat every 10 seconds
+// (plans/0187 D1's measured cadence) — the liveness probe's stream leg.
 export const OPENCODE_CAPABILITIES: AgentCapabilities = {
   resume: true,
   fork: "message",
@@ -26,6 +28,7 @@ export const OPENCODE_CAPABILITIES: AgentCapabilities = {
   permission: true,
   history: true,
   usage: "events",
+  heartbeat: 10_000,
 }
 
 // opencode's error type names (session.error `name`; watch folds the name into

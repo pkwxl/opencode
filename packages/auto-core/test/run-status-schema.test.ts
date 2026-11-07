@@ -86,7 +86,9 @@ function ratchetProblems(shipped: readonly string[], actual: readonly string[]):
 type Exact<T, U> = [T] extends [U] ? ([U] extends [T] ? true : never) : never
 
 const RUN_EVENT_TYPES = ["turn-start", "input", "fx", "fx-result", "fx-reject", "settle"] as const satisfies readonly RunEvent["type"][]
-const AGENT_EVENT_TYPES = ["part", "message", "question", "permission", "error", "retry", "limit", "idle"] as const satisfies readonly AgentEvent["type"][]
+// The heartbeat joined the union by plans/0187 D1 (the transport's own
+// pulse, naming no session) — the lockstep this list exists to force.
+const AGENT_EVENT_TYPES = ["part", "message", "question", "permission", "error", "retry", "limit", "idle", "heartbeat"] as const satisfies readonly AgentEvent["type"][]
 
 // The lists are exactly their unions (a drifted seam fails the typecheck).
 const _runEventListed: Exact<RunEvent["type"], (typeof RUN_EVENT_TYPES)[number]> = true

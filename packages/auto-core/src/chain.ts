@@ -196,7 +196,13 @@ export type WindowWait = { until: number; model: string; tier: Tier; opens: stri
 // forkLead: forkBase is auto's lead (ForkBaseInfo.lead), so a retry that
 // re-seeds from it forks it the same way the stream's first session did.
 // AUTO-DECISION: the lead flag rides the chain beside forkBase (the transient-error retry re-seeds from chain.forkBase alone; without the flag the cap/2 guard would turn that retry into a new session sent the delta prompt, which assumes the lead's context)
-export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; wall?: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; forkLead?: boolean; pending?: string; role?: ModelRole; model?: string; modelEntry?: string; modelStep?: number; agent?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
+// probe: this chain is a recovery probe's one-off dispatch (probeChain's
+// mark, plans/0187 D5) — a construction field, never persisted and never
+// written through the transitions: attempt reads it to keep the probe's
+// throwaway session off the interactive sideband (a free line typed during
+// the probe's seconds-long dispatch would otherwise go to it, logged "→
+// sent" as if the task received it).
+export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; wall?: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; forkLead?: boolean; pending?: string; role?: ModelRole; model?: string; modelEntry?: string; modelStep?: number; agent?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline; probe?: boolean }
 
 // The body of the session that just ended with a retryable error (id + end
 // usage). The chain state at that moment was already restored to the

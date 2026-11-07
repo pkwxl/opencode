@@ -12,6 +12,7 @@
 // | session.error (with session and error)  | error                        |
 // | session.status retry                    | retry (no id)                |
 // | session.status idle, session.idle       | idle (twice per turn)        |
+// | server.heartbeat (untyped on the wire)  | heartbeat (no session)       |
 // | everything else (incl. status busy)     | dropped                      |
 //
 // Both retry signals become one event: the driver treats them alike (merge
@@ -27,7 +28,17 @@
 import type { Event, Message, Part } from "@opencode-ai/sdk/v2"
 import type { AgentError, AgentEvent, AgentMessage, AgentPart, LimitScope } from "../types"
 
-export function mapEvent(event: Event, now = Date.now()): AgentEvent | undefined {
+// The wire pulse the typed SDK union omits: the server emits
+// `server.heartbeat` on every /event connection every 10 seconds (the
+// instance event handler's Stream.tick, measured — plans/0187 D1). It is
+// part of the transport, not the API surface, so the generated Event union
+// carries no member for it; the mapping accepts it beside the union and
+// normalizes it to the vocabulary's own heartbeat kind (no session — the
+// pulse belongs to the connection).
+export type WirePulse = { type: "server.heartbeat"; properties?: unknown }
+
+export function mapEvent(event: Event | WirePulse, now = Date.now()): AgentEvent | undefined {
+  if (event.type === "server.heartbeat") return { type: "heartbeat", session: "" }
   switch (event.type) {
     case "message.part.updated": {
       const part = event.properties.part

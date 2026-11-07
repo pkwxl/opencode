@@ -15,9 +15,11 @@
 // scenarios, byte-pinned through watch's real install).
 import { describe, expect, test } from "bun:test"
 import type { AgentEvent } from "../src/agent/types"
-import type { ErrorClass, ErrorInfo } from "../src/chain"
+import { classifySessionError, type ErrorClass, type ErrorInfo } from "../src/chain"
 import type { Advice, TurnInput, TurnState } from "../src/engine/contract"
+import { failureConcern } from "../src/engine/concerns/failure"
 import { makeStepUpConcern, type StepUpDeps } from "../src/engine/concerns/step-up"
+import { OPENCODE_ERROR_PATTERNS } from "../src/agent/opencode/client"
 import type { ModelEntry } from "../src/models-schema"
 import { services } from "../src/services"
 import type { SteerContext } from "../src/model-step"
@@ -254,6 +256,62 @@ describe("the stepUp concern (error and retry: the late step-up)", () => {
     const contextless = setup({ classify: () => "overflow" })
     await expect(contextless.drive({ kind: "event", event: ev.error(SESSION, { message: "overflow" }) as AgentEvent }, contextless.failureView(OVERFLOW))).resolves.toBe("consumed")
     expect(contextless.fx.calls).toEqual([])
+  })
+
+  // Plans/0187 D2 — the trigger is the event's own error, classified through
+  // errorInfoOf's fold. The finding's own repro shape (a real classifier and
+  // the real failure concern folding beside): the failure slice's merged
+  // message still holds the overflow text when the later failures arrive,
+  // and reading it stepped the session again — the event's own error steps
+  // once per overflow occurrence and nothing else.
+  test("an overflow then an unrelated 500 steps once (the merged record still reads overflow; the 500's own error does not)", async () => {
+    const classify = (info: ErrorInfo): ErrorClass => classifySessionError(info, OPENCODE_ERROR_PATTERNS)
+    const twoWide = steerContext({ entry: entry({ wider: ["prov/wide", "prov/wider"] }) })
+    const { concern, ctx, own, fx, drive, failureView } = setup({ steerContext: twoWide, classify })
+    const failure = failureConcern
+    const record = failure.initial(ctx)
+    const foldFx = fakeTurnFx()
+    const overflow = ev.error(SESSION, { name: "ContextOverflowError", message: "prompt exceeds the window" }) as AgentEvent
+    await failure.handle({ kind: "event", event: overflow }, record, viewOver({}), foldFx, ctx)
+    await expect(drive({ kind: "event", event: overflow }, failureView(record.info))).resolves.toBe("consumed")
+    expect(own.step).toBe(1)
+    // The 500 arrives; the failure cell folds it onto the overflow's text —
+    // the merged message still classifies overflow, the trigger must not.
+    const serverError = ev.error(SESSION, { name: "APIError", message: "Internal server error", statusCode: 500 }) as AgentEvent
+    await failure.handle({ kind: "event", event: serverError }, record, viewOver({}), foldFx, ctx)
+    expect(classify(record.info!)).toBe("overflow")
+    await expect(drive({ kind: "event", event: serverError }, failureView(record.info))).resolves.toBe("consumed")
+    expect(own.step).toBe(1)
+    expect(own.model).toBe("prov/wide")
+    expect(fx.lines).toHaveLength(1)
+  })
+
+  test("a message-less retry after the overflow steps nothing (its own error carries no overflow)", async () => {
+    const classify = (info: ErrorInfo): ErrorClass => classifySessionError(info, OPENCODE_ERROR_PATTERNS)
+    const twoWide = steerContext({ entry: entry({ wider: ["prov/wide", "prov/wider"] }) })
+    const { concern, ctx, own, drive, failureView } = setup({ steerContext: twoWide, classify })
+    const failure = failureConcern
+    const record = failure.initial(ctx)
+    const foldFx = fakeTurnFx()
+    const overflow = ev.error(SESSION, { name: "ContextOverflowError", message: "prompt exceeds the window" }) as AgentEvent
+    await failure.handle({ kind: "event", event: overflow }, record, viewOver({}), foldFx, ctx)
+    await drive({ kind: "event", event: overflow }, failureView(record.info))
+    expect(own.step).toBe(1)
+    // The retry keeps the merged message (no message of its own) — still
+    // overflow there; its own error is empty and steps nothing.
+    const retry = { type: "retry", session: SESSION, id: "r1", attempt: 2, error: {} } as AgentEvent
+    await failure.handle({ kind: "event", event: retry }, record, viewOver({}), foldFx, ctx)
+    expect(classify(record.info!)).toBe("overflow")
+    await expect(drive({ kind: "event", event: retry }, failureView(record.info))).resolves.toBe("pass")
+    expect(own.step).toBe(1)
+  })
+
+  test("a retry whose own error is overflow still steps (the retry surface's designed shape)", async () => {
+    const classify = (info: ErrorInfo): ErrorClass => classifySessionError(info, OPENCODE_ERROR_PATTERNS)
+    const { ctx, own, drive, failureView } = setup({ steerContext: steerContext(), classify })
+    const retry = { type: "retry", session: SESSION, id: "r1", attempt: 1, error: { name: "ContextOverflowError", message: "the request overflowed before compaction" } } as AgentEvent
+    await expect(drive({ kind: "event", event: retry }, failureView())).resolves.toBe("pass")
+    expect(own.reached).toEqual({ step: 1, model: "prov/wide" })
   })
 })
 

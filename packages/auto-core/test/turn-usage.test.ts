@@ -137,14 +137,27 @@ describe("the usage concern (message: the hard wall)", () => {
     expect(fx.steers).toEqual(["[DRIVER] wall hint: write the handover document"])
   })
 
-  test("the wall steer's failed dispatch settles blocked with the fixed question, the hint still recorded as sent", async () => {
-    const { own, fx, measure } = setup({ steer: usageSteer() })
+  test("the wall steer's failed dispatch gates nothing (plans/0187 D4): the retry line teaches, the hint re-arms and the row passes on; a later measurement lands it", async () => {
+    const { own, measure } = setup({ steer: usageSteer() })
     const failing = fakeTurnFx({ steerOk: false, limits: LIMITS })
-    await expect(measure(80_000, MODEL, failing)).resolves.toEqual({
-      settle: { kind: "blocked", question: "steer dispatch failed (handover hint); cannot continue the session, see the log." },
-    })
+    await expect(measure(80_000, MODEL, failing)).resolves.toBe("pass")
+    expect(own.hinted).toBe(false)
+    expect(failing.lines).toEqual([
+      "⚠ context used 80.0k tokens reached the wall 80.0k; inserting the handover hint",
+      "⚠ the handover hint will be retried at the next measurement point",
+    ])
+    expect(failing.steers).toHaveLength(1)
+    // The re-arm: a second failed attempt also gates nothing (bounded by the
+    // session's own progress — one attempt per measurement point)…
+    const failingAgain = fakeTurnFx({ steerOk: false, limits: LIMITS })
+    await expect(measure(85_000, MODEL, failingAgain)).resolves.toBe("pass")
+    expect(own.hinted).toBe(false)
+    expect(failingAgain.steers).toHaveLength(1)
+    // …and a later successful measurement lands the hint, owning its point.
+    const ok = fakeTurnFx({ steerOk: true, limits: LIMITS })
+    await expect(measure(88_000, MODEL, ok)).resolves.toBe("consumed")
     expect(own.hinted).toBe(true)
-    expect(fx.calls).toEqual([])
+    expect(ok.steers).toEqual(["[DRIVER] wall hint: write the handover document"])
   })
 
   test("the wall fires only once: a later measurement past the wall sends nothing again and passes the row on", async () => {
@@ -204,14 +217,21 @@ describe("the usage concern (message: the milestone notices)", () => {
     expect(fx.steers).toHaveLength(1)
   })
 
-  test("the notice steer's failed dispatch settles blocked with the fixed question", async () => {
+  test("the notice steer's failed dispatch gates nothing (plans/0187 D4): the band spent by its attempt, the row passes on, the next band still fires", async () => {
     const { own, fx, measure } = setup({ steer: usageSteer() })
     const failing = fakeTurnFx({ steerOk: false, limits: LIMITS })
-    await expect(measure(45_000, MODEL, failing)).resolves.toEqual({
-      settle: { kind: "blocked", question: "steer dispatch failed (usage notice); cannot continue the session, see the log." },
-    })
+    await expect(measure(45_000, MODEL, failing)).resolves.toBe("pass")
     expect(own.hinted).toBe(false)
-    expect(fx.calls).toEqual([])
+    expect(failing.steers).toEqual(["note-info used=45.0k pct=56 wall=80.0k"])
+    expect([...own.notes]).toEqual([0.5])
+    // The band is spent by its attempt: a later measurement in it sends
+    // nothing (the setup's own dispatching-fine fx); the next band still
+    // fires.
+    await expect(measure(50_000, MODEL)).resolves.toBe("pass")
+    expect(fx.steers).toEqual([])
+    await expect(measure(70_000, MODEL)).resolves.toBe("pass")
+    expect(fx.steers).toEqual(["note-winddown used=70.0k pct=88 wall=80.0k"])
+    expect(failing.steers).toHaveLength(1)
   })
 
   test("below every band a measurement sends nothing", async () => {

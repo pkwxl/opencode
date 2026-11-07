@@ -4,18 +4,21 @@
 // probeSession call are the sources' (src/engine/sources.ts); the verdict
 // arrives here as the synthetic probe input, handled even while an fx call
 // is in flight (the row is declared concurrent): a successful probe resets
-// the count, a failure inside an announced silence waits for the end the
-// agent named, and two consecutive failures judge the connection half-open
-// and settle the turn interrupted. An announced silence (the agent
-// honouring a retry wait longer than its silence budget) opens a quiet
-// window the probe respects and any model output closes. A step-finish
-// ending on reason length means the reply was truncated — not a natural
-// finish — so an idle on such a turn steers a short continuation (capped),
-// keeping the session and every token of its context. The settle
-// procedure's liveness step (plans/0061 §4.4 rule 5) is this concern's
-// finalize: the interrupted close-out, aborting the orphan turn and
-// extending the failure record with the transport message, before the
-// recovery concern's final classification reads it.
+// the count — a verdict whose stream leg (plans/0187 D1) found the turn's
+// own stream silent counts as a failure instead, the server answering on
+// the fresh connection while the connection the turn rides is dead — a
+// failure inside an announced silence waits for the end the agent named,
+// and two consecutive failures judge the connection half-open and settle
+// the turn interrupted. An announced silence (the agent honouring a retry
+// wait longer than its silence budget) opens a quiet window the probe
+// respects and any model output closes. A step-finish ending on reason
+// length means the reply was truncated — not a natural finish — so an idle
+// on such a turn steers a short continuation (capped), keeping the session
+// and every token of its context. The settle procedure's liveness step
+// (plans/0061 §4.4 rule 5) is this concern's finalize: the interrupted
+// close-out, aborting the orphan turn and extending the failure record with
+// the transport message, before the recovery concern's final classification
+// reads it.
 import type { ErrorInfo } from "../../chain"
 import { formatDuration } from "../../log"
 import type { Advice, Concern, TurnState } from "../contract"
@@ -61,18 +64,29 @@ export const makeLivenessConcern = (deps: LivenessDeps): Concern<"liveness"> => 
   initial: (): TurnState["liveness"] => ({ probeFailures: 0, halfOpen: false, lengthContinued: 0 }),
   handle: async (input, own, view, fx, ctx): Promise<Advice> => {
     // The probe row (concurrent): the verdict is handled even while an fx
-    // call is in flight — the audit restricts a synthetic handler to its
-    // own slice's writes and log/vlog, and the verdict's time read is the
-    // input's `at` stamp (the source stamped it at emission). A successful
-    // probe resets the count; PROBE_MAX_FAILURES consecutive failures judge
-    // half-open and settle the turn, which the close-out returns as a
-    // retryable session error (classified transient, riding the existing
-    // retry ladder and failover ring; a new connection forks onward). The
-    // halfOpen guard is the old callback's early return: a verdict landing
-    // after the judgment changes nothing more.
+    // call is in flight — the audit restricts a synthetic handler to its own
+    // slice's writes and log/vlog, and the verdict's time read is the
+    // input's `at` stamp (the source stamped it at emission). A verdict
+    // passes when the fresh connection answered and the stream leg (where
+    // assessed, plans/0187 D1) saw a delivery: a successful probe with
+    // `streamAlive` unset (no pulse capability, or an interval too narrow)
+    // resets the count exactly as before — the floor. A failure of either
+    // leg counts: the connection's own failure, or a stream silent for the
+    // interval while the server answers on the fresh connection (a live
+    // stream beats unconditionally, so that silence is the half-open shape
+    // 0026 §1.3 measured). The announced-silence exemption covers both legs
+    // alike — the conservative reading: never judge inside a wait the agent
+    // named, even though the beats are server ticks, not agent output.
+    // PROBE_MAX_FAILURES consecutive failures judge half-open and settle the
+    // turn, which the close-out returns as a retryable session error
+    // (classified transient, riding the existing retry ladder and failover
+    // ring; a new connection forks onward). The halfOpen guard is the old
+    // callback's early return: a verdict landing after the judgment changes
+    // nothing more.
     if (input.kind === "probe") {
       if (own.halfOpen) return "consumed"
-      if (input.ok) {
+      const silentStream = input.ok && input.streamAlive === false
+      if (input.ok && !silentStream) {
         own.probeFailures = 0
       } else if (own.quietUntil !== undefined && input.at < own.quietUntil) {
         // The agent announced this silence (§4.2): the verdict waits for the
@@ -80,9 +94,14 @@ export const makeLivenessConcern = (deps: LivenessDeps): Concern<"liveness"> => 
         fx.log(`⚠ connectivity probe failed (session ${ctx.sessionID}) inside the agent's announced wait; not counted before ${new Date(own.quietUntil).toISOString()}`)
       } else {
         own.probeFailures += 1
-        fx.log(`⚠ connectivity probe failure ${own.probeFailures}/${PROBE_MAX_FAILURES} (session ${ctx.sessionID}); connection suspected half-open`)
+        fx.log(
+          silentStream
+            ? `⚠ event stream silent for a probe interval (session ${ctx.sessionID}); the server answers on a fresh connection — the turn's own stream suspected half-open (${own.probeFailures}/${PROBE_MAX_FAILURES})`
+            : `⚠ connectivity probe failure ${own.probeFailures}/${PROBE_MAX_FAILURES} (session ${ctx.sessionID}); connection suspected half-open`,
+        )
         if (own.probeFailures >= PROBE_MAX_FAILURES) {
           own.halfOpen = true
+          if (silentStream) own.streamSilent = true
           return { settle: { kind: "interrupted" } }
         }
       }
@@ -188,7 +207,9 @@ export const makeLivenessConcern = (deps: LivenessDeps): Concern<"liveness"> => 
     if (settle.kind !== "interrupted") return
     await fx.abort()
     const msg = own.halfOpen
-      ? `connectivity probe failed ${PROBE_MAX_FAILURES} consecutive times; connection judged half-open (server unresponsive or network down, half-open network timeout)`
+      ? own.streamSilent
+        ? `connectivity probe failed ${PROBE_MAX_FAILURES} consecutive times; the turn's event stream judged half-open (no event and no heartbeat within the probe interval while the server answers on a new connection; network timeout)`
+        : `connectivity probe failed ${PROBE_MAX_FAILURES} consecutive times; connection judged half-open (server unresponsive or network down, half-open network timeout)`
       : "event stream interrupted (no session-end event received; suspected server failure or network down)"
     deps.extended.error = view.failure.error ? `${view.failure.error}\n${msg}` : msg
     deps.extended.info = own.halfOpen

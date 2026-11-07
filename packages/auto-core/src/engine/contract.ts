@@ -33,7 +33,11 @@ import type { UsageSource } from "../usage"
 export type TurnInput =
   | { kind: "event"; event: AgentEvent } // external
   | { kind: "stream-end" } // external: exhausted without an idle
-  | { kind: "probe"; ok: boolean; at: number } // synthetic: liveness probe verdict
+  // synthetic: liveness probe verdict. `ok` is the fresh connection's answer
+  // (0026 D3); `streamAlive` (plans/0187 D1) is the turn's own stream's leg —
+  // undefined = not assessed (no pulse capability, or an interval too narrow),
+  // which the liveness cell reads as alive.
+  | { kind: "probe"; ok: boolean; streamAlive?: boolean; at: number }
   | { kind: "answer"; answer: ClassifierAnswer | undefined } // synthetic: the classifier's reply
 
 // The arbitration table's row keys (plans/0061 §4.5): an `event` input
@@ -73,10 +77,12 @@ export type TurnState = {
   // retrying, and the final classification at close-out.
   recovery: { answer?: ClassifierAnswer; asked?: Promise<ClassifierAnswer | undefined>; raised?: ErrorClass; final?: { cls: ErrorClass; classified: boolean } }
   // The liveness probe's counters and the truncation-continuation criterion:
-  // consecutive probe failures, the half-open judgment, the announced
-  // silence's end (no failure counted before it), the last step-finish
-  // reason and the consecutive-truncation count.
-  liveness: { probeFailures: number; halfOpen: boolean; quietUntil?: number; lastFinish?: string; lengthContinued: number }
+  // consecutive probe failures, the half-open judgment (streamSilent naming
+  // which leg judged — the fresh connection's failure or the turn's own
+  // stream's silence, plans/0187 D1 — for the close-out's message), the
+  // announced silence's end (no failure counted before it), the last
+  // step-finish reason and the consecutive-truncation count.
+  liveness: { probeFailures: number; halfOpen: boolean; streamSilent?: boolean; quietUntil?: number; lastFinish?: string; lengthContinued: number }
   // The measurement-point figures: context percentage, used tokens and the
   // model's window; the effective wall of the last measurement, the spent
   // handover hint and the spent usage-notice bands.

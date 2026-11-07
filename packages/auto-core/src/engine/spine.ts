@@ -117,6 +117,11 @@ export const TURN_ARBITRATION: Arbitration = {
     { concern: "liveness" },
   ],
   "stream-end": [],
+  // The transport's pulse (plans/0187 D1) dispatches to nothing: the pulse
+  // wrapper at the watch seam consumes the kind before the spine, and its
+  // empty session skips every session filter besides. The row exists so the
+  // table's key set stays the event vocabulary's whole type set.
+  heartbeat: [],
   probe: [{ concern: "liveness", concurrent: true }],
   answer: [{ concern: "recovery", concurrent: true }],
 }
@@ -355,23 +360,48 @@ export async function runTurn(args: {
   // precludes the raise: an error settle aborted inline in its handler, an
   // interrupted one in the liveness finalize, a blocked one in the questions
   // handler, and a natural one implies model output (the failure slice is no
-  // longer retrying, the raise's own condition).
+  // longer retrying, the raise's own condition). The blocked settles of the
+  // idle rows (the test protocol, the length continuation) settle at idle,
+  // with nothing running server-side — no abort owed; the mid-turn steer
+  // failures of the usage concern gate nothing since plans/0187 D4, so the
+  // enumeration is complete: no settle exists that leaves a running turn
+  // beside an un-aborted blocked exit.
   let held: Settle | undefined
   let finished = false
+  // A rejection inside a synthetic handler (plans/0187 D3): recorded here,
+  // tripped as a held interrupt (the mechanism that ends the wrapper — the
+  // settle itself is never observed) and re-thrown from runTurn after the
+  // loop, never left on the chain. A bare `emissions.then(…)` chained every
+  // later emission onto the rejection without running it — one failed log
+  // write in a probe verdict silently disabled the turn's synthetic inputs
+  // (each later link an unhandled rejection on stderr) while the run
+  // continued, the half-open judgment it was built for never firing.
+  let thrown: { error: unknown } | undefined
   let trip!: () => void
   const tripped = new Promise<void>((resolve) => (trip = resolve))
   let emissions: Promise<unknown> = Promise.resolve()
   const emit = (input: TurnInput): void => {
     if (finished) return
     // Serialized among emissions, never queued behind the external input.
-    // An audit throw here rejects the chain — an unhandled rejection, as
-    // loud as the programming error it is.
+    // The row's own rejection is isolated inside the link: the first one
+    // wins the channel (the turn is ending), later ones are dropped, and
+    // the chain itself never rejects.
     emissions = emissions.then(async () => {
       if (finished) return
-      const outcome = await runRow(input, "synthetic")
-      if (outcome !== undefined && outcome !== "consumed" && held === undefined) {
-        held = outcome
-        trip()
+      try {
+        const outcome = await runRow(input, "synthetic")
+        if (outcome !== undefined && outcome !== "consumed" && held === undefined) {
+          held = outcome
+          trip()
+        }
+      } catch (error) {
+        if (thrown === undefined) {
+          thrown = { error }
+          if (held === undefined) {
+            held = { kind: "interrupted" }
+            trip()
+          }
+        }
       }
     })
   }
@@ -416,6 +446,13 @@ export async function runTurn(args: {
       break
     }
   }
+  // A synthetic handler's rejection ends the turn as a driver fault
+  // (plans/0187 D3): the held interrupt above was only the mechanism that
+  // ended the wrapper — the throw itself wins, re-thrown here through the
+  // external path's own exception channel (an external handler's throw
+  // propagates out of runTurn at once; the caller classifies it — 0185 D1),
+  // and no finalize runs, exactly as on that path.
+  if (thrown !== undefined) throw thrown.error
   // Which settle stands. An early settle from an external input's handling
   // (blocked, or the error of a pattern verdict) is fixed the moment its
   // handler returns it — today's inline snapshot exits, which no late raise

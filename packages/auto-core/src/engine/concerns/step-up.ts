@@ -10,10 +10,10 @@
 // row's cell observes the armed claim at the first step-finish on the
 // wider id: a large cacheRead confirms it, a whole-prefix cacheWrite
 // contradicts it — the warning line once per entry. An overflow class
-// below the top step (the error and retry rows' cells, reading the failure
-// record the failure concern accumulated) means the agent compacted before
-// the step-up steer could land: the late step-up records the next step
-// with no steer, and the compacted session carries on under it.
+// below the top step (the error and retry rows' cells, judging the event's
+// own error — plans/0187 D2) means the agent compacted before the step-up
+// steer could land: the late step-up records the next step with no steer,
+// and the compacted session carries on under it.
 //
 // The slice's step moves one-way, up only; `model` is the id every steer
 // names (the reached step's id, so a late steer cannot drop the session
@@ -25,6 +25,7 @@ import { renderStepUp } from "../../prompt"
 import { promptFacts } from "../../prompt-facts"
 import { formatTokens } from "../../format"
 import { liveUsage } from "../../usage"
+import { errorInfoOf } from "./failure"
 import type { Advice, Concern, TurnContext, TurnFx, TurnState } from "../contract"
 
 // The step-up itself, at the measurement point that crossed the current
@@ -152,23 +153,27 @@ export const makeStepUpConcern = (deps: StepUpDeps): Concern<"stepUp"> => ({
       }
       return "consumed"
     }
-    // The error row's stepUp cell (the row's last). The failure concern's
-    // cell before it accumulated the error into the info; this cell only
-    // reads the folded record. Late step-up (§4.5, §7): an overflow below
-    // the top step means the agent compacted before the step-up steer could
-    // land — record the next step and go on observing (the compacted
-    // session continues).
+    // The error row's stepUp cell (the row's last). Late step-up (§4.5, §7):
+    // an overflow below the top step means the agent compacted before the
+    // step-up steer could land — record the next step and go on observing
+    // (the compacted session continues). The trigger is the event's own
+    // error (errorInfoOf's fold, plans/0187 D2), never the failure slice's
+    // accumulated record: the record keeps every earlier error's text, so
+    // classifying it re-read one overflow for the rest of the turn and an
+    // unrelated 500 stepped again — one overflow occurrence steps once.
     if (input.event.type === "error") {
-      if (ctx.classify(view.failure.info ?? {}) === "overflow") await stepLate(fx, own, ctx)
+      if (ctx.classify(errorInfoOf(input.event.error)) === "overflow") await stepLate(fx, own, ctx)
       return "consumed"
     }
     // The retry row's stepUp cell: the same overflow read from the retry
-    // surface (the agent retried the request that overflowed before
-    // compacting); the late step-up applies here exactly as at the
-    // session-error row above.
-    // AUTO-DECISION: the read is the patterns' own classification, not a verdict channelled from the recovery cell (the consult's verdict is overflow exactly when the patterns' read is — an answer never raises to overflow, the reply's class union has none — so re-deriving the pattern read needs no channel and no second consult).
+    // surface — the event's own error, the same fold and the same
+    // one-step-per-occurrence rule (the agent retried the request that
+    // overflowed before compacting; a message-less retry carries no overflow
+    // of its own and steps nothing); the late step-up applies here exactly
+    // as at the session-error row above.
+    // AUTO-DECISION: the read is the patterns' own classification over the event's own error, not a verdict channelled from the recovery cell (the consult's verdict is overflow exactly when the patterns' read is — an answer never raises to overflow, the reply's class union has none — so re-deriving the pattern read needs no channel and no second consult).
     if (input.event.type === "retry") {
-      if (ctx.classify(view.failure.info ?? {}) === "overflow") await stepLate(fx, own, ctx)
+      if (ctx.classify(errorInfoOf(input.event.error)) === "overflow") await stepLate(fx, own, ctx)
       // The liveness and transcript cells follow with the announced silence
       // and the deduplicated retry vlog.
       return "pass"

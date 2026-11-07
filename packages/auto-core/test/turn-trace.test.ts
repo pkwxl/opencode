@@ -647,27 +647,29 @@ const scenarios: TurnScenario[] = [
     },
   },
 
-  // The steer-dispatch-failed blocked exit at the hard wall (the fixed
-  // handover-hint question text): the wall measurement logs the ⚠ steer
-  // dispatch failed line and settles blocked, the bands spent and the
-  // hint marked sent in the snapshot.
+  // The steer-dispatch-failed exit at the hard wall, re-blessed by 0187 D4:
+  // the wall measurement logs the ⚠ steer dispatch failed line and the
+  // retry teaching line — the failed hint gates nothing (no abort, no
+  // blocked settle; `hinted` unset, the hint re-arming) — and the session's
+  // turn goes on to its idle, settling naturally.
   {
     id: "message-wall-steer-failed",
     kinds: ["message", "part", "idle"],
     agent: { fail: { promptAsync: undefined } },
     run: async (h) =>
-      watch(h.agent.client, "s", h.script([ev.message("s", "m1", 80_000)]), h.opts, usageSteer()),
+      watch(h.agent.client, "s", h.script([ev.message("s", "m1", 80_000), ev.idle("s")]), h.opts, usageSteer()),
   },
 
-  // The steer-dispatch-failed blocked exit at a usage notice (the fixed
-  // usage-notice question text): the 0.5-band measurement logs the ⚠
-  // steer dispatch failed line and settles blocked; no hint was sent.
+  // The steer-dispatch-failed exit at a usage notice, re-blessed by 0187 D4:
+  // the 0.5-band measurement logs the ⚠ steer dispatch failed line and gates
+  // nothing (the band spent by its attempt, no hint sent, no settle), the
+  // turn settling naturally at the following idle.
   {
     id: "message-usage-notice-steer-failed",
     kinds: ["message", "part", "idle"],
     agent: { fail: { promptAsync: undefined } },
     run: async (h) =>
-      watch(h.agent.client, "s", h.script([ev.message("s", "m1", 45_000)]), h.opts, usageSteer()),
+      watch(h.agent.client, "s", h.script([ev.message("s", "m1", 45_000), ev.idle("s")]), h.opts, usageSteer()),
   },
 
   // —— The `question` row (plans/0061 §4.5) ——
@@ -1521,6 +1523,45 @@ const scenarios: TurnScenario[] = [
     },
   },
 
+  // `probe` row, the stream-silent half-open (plans/0187 D1, 0165-030's pin
+  // of 0026 §1.3's own shape): the server answers every probe on the fresh
+  // connection (the get succeeds) while the turn's own stream delivered
+  // nothing for the interval — under the pulse capability (a 10 s beat) and
+  // a 30 s probe interval, two consecutive silent-stream verdicts judge the
+  // stream half-open: the two ⚠ event-stream-silent lines, the trip past
+  // the held stream, the interrupted close-out with the stream-silent
+  // message (classified transient on its network/timeout wording), the
+  // abort. The heartbeats a live connection would deliver never arrive —
+  // the stream holds from the start of the wait.
+  {
+    id: "probe-stream-silent-half-open",
+    kinds: ["message", "part", "probe"],
+    agent: { capabilities: { heartbeat: 10_000 } },
+    opts: { idleMs: 30_000 },
+    pins: [
+      {
+        race: "held-settle-vs-external",
+        how: "the stream's next event sits behind a hold the scenario releases only after watch() returned, so inner.next() is pending when the stream-silent verdict trips the race — the settle is the only arm that can resolve",
+      },
+    ],
+    run: async (h) => {
+      const held = h.gate()
+      const done = watch(
+        h.agent.client,
+        "s",
+        h.script([ev.message("s", "m1", 1000), ev.text("s", "t1", "work in flight"), { hold: held.promise }, ev.idle("s")]),
+        h.opts,
+      )
+      await until(() => h.agent.argsOf("contextLimits").length >= 1, "the first measurement")
+      await flush()
+      await fireProbe(h.clock) // stream silent 1/2 (the get succeeds; the pulse is a whole interval stale)
+      await fireProbe(h.clock) // stream silent 2/2: half-open — trip() preempts the held event wait
+      const result = await done
+      held.release()
+      return result
+    },
+  },
+
   // `probe` row, the named scenario (the plan's must-have): a probe verdict
   // while a human answer is pending. The loop body awaits the gated human
   // reply inside askHuman when the scenario fires the queued probe timer —
@@ -2025,8 +2066,12 @@ const ROSTER: Record<InputKind, Record<string, readonly string[]>> = {
   "stream-end": {
     spine: ["stream-end-interrupted"],
   },
+  // The transport's pulse never fires a cell (the empty row, plans/0187 D1):
+  // the pulse wrapper consumes the kind before the spine, so no trace can
+  // name it — the empty map is the honest entry.
+  heartbeat: {},
   probe: {
-    liveness: ["probe-failure-then-recovered", "probe-half-open-trip", "probe-during-question-wait", "probe-quiet-window-exempted"],
+    liveness: ["probe-failure-then-recovered", "probe-half-open-trip", "probe-stream-silent-half-open", "probe-during-question-wait", "probe-quiet-window-exempted"],
   },
   answer: {
     recovery: [

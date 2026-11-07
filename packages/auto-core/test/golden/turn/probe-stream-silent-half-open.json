@@ -1,0 +1,54 @@
+{
+  "calls": [
+    {
+      "name": "contextLimits",
+      "args": []
+    },
+    {
+      "name": "get",
+      "args": [
+        "s"
+      ]
+    },
+    {
+      "name": "get",
+      "args": [
+        "s"
+      ]
+    },
+    {
+      "name": "abort",
+      "args": [
+        "s"
+      ]
+    }
+  ],
+  "lines": [
+    "  context: 1000/100.0k tokens (1%)",
+    "work in flight",
+    "⚠ event stream silent for a probe interval (session s); the server answers on a fresh connection — the turn's own stream suspected half-open (1/2)",
+    "⚠ event stream silent for a probe interval (session s); the server answers on a fresh connection — the turn's own stream suspected half-open (2/2)"
+  ],
+  "watch": {
+    "lastText": "work in flight",
+    "pct": 1,
+    "used": 1000,
+    "limit": 100000,
+    "usage": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "cost": 0,
+      "steps": 0
+    },
+    "resolves": [],
+    "error": "connectivity probe failed 2 consecutive times; the turn's event stream judged half-open (no event and no heartbeat within the probe interval while the server answers on a new connection; network timeout)",
+    "testHandover": false,
+    "errorInfo": {
+      "message": "connectivity probe failed 2 consecutive times; the turn's event stream judged half-open (no event and no heartbeat within the probe interval while the server answers on a new connection; network timeout)"
+    },
+    "errorClass": "transient"
+  }
+}

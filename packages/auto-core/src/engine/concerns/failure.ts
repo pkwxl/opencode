@@ -50,6 +50,26 @@ function withWording(e: AgentError, now: number): AgentError {
 
 const LIMIT_KEYS = ["resetAt", "scope", "retryAfterMs", "limitReason"] as const
 
+// One error's own classification shape — the fold the error cell applies per
+// event: the error name worked into the message (the classifier keys some
+// classes on it, opencode's ContextOverflowError say) and the structured
+// fields carried. Exported for the stepUp cells' late step-up (plans/0187
+// D2): its trigger classifies the event's own error through this fold, never
+// the slice's accumulated record — one overflow occurrence steps once, and a
+// later unrelated failure of the same turn (a 500, a message-less retry)
+// steps nothing while the old overflow text still sits in the record.
+export function errorInfoOf(e: AgentError): ErrorInfo {
+  const errName = e.name ?? ""
+  const detail = e.message ?? errName
+  const message = detail.toLowerCase().includes(errName.toLowerCase()) ? detail : `${errName} ${detail}`
+  return {
+    message,
+    ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
+    ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
+    ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
+  }
+}
+
 export const failureConcern: Concern<"failure"> = {
   name: "failure",
   initial: (): TurnState["failure"] => ({ error: "", retrying: false }),
@@ -90,19 +110,17 @@ export const failureConcern: Concern<"failure"> = {
       // (Watch gained errorInfo?, as retryable? did before it — the same kind
       // of precedent). **No control-flow change** — this path never settles
       // early for a failover; it only lets the existing error paths carry the
-      // classification up and downstream. The error name (APIError/
-      // ProviderAuthError/ContextOverflowError/…) is folded into message so
-      // the classifier can recognize the name-keyed classes like overflow/auth
-      // (design D.1; the name table is supplied by the adapter).
-      const classifyMsg = detail.toLowerCase().includes(errName.toLowerCase()) ? detail : `${errName} ${detail}`
+      // classification up and downstream. The per-event fold (the name worked
+      // into the message so the classifier can recognize the name-keyed
+      // classes — design D.1, the name table supplied by the adapter) is
+      // errorInfoOf, the one home of the fold.
+      const info = errorInfoOf(e)
       const prev = own.info
       own.info = withLimit(
         {
           ...(prev ?? {}),
-          message: prev?.message ? `${prev.message}\n${classifyMsg}` : classifyMsg,
-          ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
-          ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
-          ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
+          ...info,
+          message: prev?.message ? `${prev.message}\n${info.message}` : info.message,
           // The agent's turn failed: it stopped retrying (plans/0057 §4.1).
           terminal: true,
         },

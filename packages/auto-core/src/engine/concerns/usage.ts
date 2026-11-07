@@ -15,8 +15,19 @@
 // same jump spent with it. Notices do not suppress the step-up check: the
 // row passes on, and the notice-then-step-up pair at one measurement point
 // is the plan's ruled exception to the one-steer-per-quiet-point rule (F4)
-// — the audit's quiet point is idle-only. A failed steer dispatch settles
-// the turn blocked at either steer.
+// — the audit's quiet point is idle-only. A failed steer dispatch gates
+// nothing (plans/0187 D4, the stuck hint's rule — "an attempt to help,
+// not a gate"): the fx's steer already logged the failure, the session's
+// turn keeps running, and neither settle nor abort follows. The wall hint
+// re-arms — `hinted` is set only after a successful dispatch, so a
+// momentary failure re-attempts at the next measurement point (one attempt
+// per completed assistant message, bounded by the session's own progress),
+// and a persistently dead dispatch path degrades to the overflow machinery
+// the wall was always backed by (the retry ladder's fork, 0185 D3's wall
+// shape). A failed notice spends its band (a missed notice is no defect —
+// 0130's informational); the row passes on to the stepUp cell in either
+// failure, the session that keeps working stepping up exactly as the
+// success path's later measurements do.
 import { formatTokens } from "../../format"
 import { fillUsageNote, steerWall, type Steer } from "../../testrun"
 import { steerDue } from "../../usage"
@@ -52,11 +63,21 @@ export const usageConcern: Concern<"usage"> = {
       if (!own.hinted && steerDue(ctx.client.capabilities.usage, now, wall)) {
         // The hard wall supersedes the notice bands (a jump may cross both):
         // one steer, and the bands count as spent.
-        own.hinted = true
-        for (const note of steer.notes) own.notes.add(note.at)
         fx.log(`⚠ context used ${formatTokens(own.used)} tokens reached the wall ${formatTokens(wall)}; inserting the handover hint`)
         const ok = await fx.steer(steer.text)
-        if (!ok) return { settle: { kind: "blocked", question: "steer dispatch failed (handover hint); cannot continue the session, see the log." } }
+        if (!ok) {
+          // Not a gate (plans/0187 D4): the dispatch failure is already
+          // logged by the fx's steer; the hint re-arms (`hinted` unset — a
+          // momentary failure re-attempts at the next measurement point),
+          // and a persistently dead dispatch path degrades to the overflow
+          // machinery. The row passes on: the session keeps working, and a
+          // step-up at this measurement is the same continuation the
+          // success path's later measurements take.
+          fx.log(`⚠ the handover hint will be retried at the next measurement point`)
+          return "pass"
+        }
+        own.hinted = true
+        for (const note of steer.notes) own.notes.add(note.at)
         // The handover hint owns this measurement point: the session is being
         // wound down by the project's cap, so a step-up steer in the same
         // breath would only confuse it. A session that keeps working past the
@@ -77,7 +98,14 @@ export const usageConcern: Concern<"usage"> = {
         for (const note of steer.notes) if (note.at <= fire.at) own.notes.add(note.at)
         fx.log(`• context used ${formatTokens(own.used)} tokens (${Math.round((own.used / wall) * 100)}% of the wall ${formatTokens(wall)}); steering a usage notice`)
         const ok = await fx.steer(fillUsageNote(fire.text, now, wall))
-        if (!ok) return { settle: { kind: "blocked", question: "steer dispatch failed (usage notice); cannot continue the session, see the log." } }
+        if (!ok) {
+          // Not a gate (plans/0187 D4, the stuck hint's rule): the notice is
+          // informational (0130), the failure already logged by the fx's
+          // steer, the band spent by its attempt — the next band still
+          // fires. The row passes on to the step-up cell as every notice
+          // measurement does.
+          return "pass"
+        }
       }
     }
     // The measurement happened and the wall did not own it: the row passes

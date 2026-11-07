@@ -14,6 +14,7 @@
 // client) are pinned by the incident suite's I1 and the trace goldens.
 import { describe, expect, test } from "bun:test"
 import type { AgentClient, AgentEvent, AgentRetryPolicy } from "../src/agent/types"
+import { classifySessionError } from "../src/chain"
 import type { Advice, Settle, TurnInput, TurnState } from "../src/engine/contract"
 import { makeLivenessConcern, type LivenessDeps } from "../src/engine/concerns/liveness"
 import { fakeTurnFx, turnContext, viewOver } from "./fixtures/turn"
@@ -50,7 +51,7 @@ const setup = (over: { policy?: AgentRetryPolicy; client?: AgentClient } = {}) =
   return { concern, ctx, own, deps, fx, drive, finalize }
 }
 
-const probeInput = (ok: boolean, at: number): TurnInput => ({ kind: "probe", ok, at })
+const probeInput = (ok: boolean, at: number, streamAlive?: boolean): TurnInput => ({ kind: "probe", ok, ...(streamAlive !== undefined ? { streamAlive } : {}), at })
 const retryInput = (next?: number, over: { attempt?: number } = {}): TurnInput => ({
   kind: "event",
   event: {
@@ -122,6 +123,50 @@ describe("the liveness concern (probe: the verdicts of the concurrent row)", () 
     pastTheEnd.own.probeFailures = 1
     await expect(pastTheEnd.drive(probeInput(false, 10_001))).resolves.toEqual({ settle: { kind: "interrupted" } })
     expect(pastTheEnd.own.probeFailures).toBe(2)
+  })
+
+  // Plans/0187 D1 — the probe's stream leg: the server answers on the fresh
+  // connection while the turn's own stream has been silent for the interval
+  // (0026 §1.3's measured half-open shape; a live stream beats unconditionally
+  // under the pulse capability, so that silence is a dead connection).
+  test("an ok verdict with a silent stream counts toward the threshold with the stream-naming line", async () => {
+    const { own, fx, drive } = setup()
+    await expect(drive(probeInput(true, 0, false))).resolves.toBe("consumed")
+    expect(own.probeFailures).toBe(1)
+    expect(fx.lines).toEqual([`⚠ event stream silent for a probe interval (session ${SESSION}); the server answers on a fresh connection — the turn's own stream suspected half-open (1/2)`])
+  })
+
+  test("two consecutive silent-stream verdicts judge half-open: the settle, the streamSilent flavor, and the finalize's stream message classifying transient", async () => {
+    const { own, deps, drive, finalize } = setup()
+    await drive(probeInput(true, 0, false))
+    await expect(drive(probeInput(true, 0, false))).resolves.toEqual({ settle: { kind: "interrupted" } })
+    expect(own.halfOpen).toBe(true)
+    expect(own.streamSilent).toBe(true)
+    const out = await finalize({ kind: "interrupted" }, failureView())
+    expect(out.calls).toEqual(["abort"])
+    expect(deps.extended.info).toEqual({
+      message:
+        "connectivity probe failed 2 consecutive times; the turn's event stream judged half-open (no event and no heartbeat within the probe interval while the server answers on a new connection; network timeout)",
+    })
+    expect(classifySessionError(deps.extended.info!)).toBe("transient")
+  })
+
+  test("the floor: an ok verdict without the stream leg (no pulse capability, or a narrow interval) resets exactly as before", async () => {
+    const { own, fx, drive } = setup()
+    own.probeFailures = 1
+    await expect(drive(probeInput(true, 0))).resolves.toBe("consumed")
+    expect(own.probeFailures).toBe(0)
+    expect(fx.calls).toEqual([])
+  })
+
+  test("the quiet-window exemption covers the stream leg: a silent stream inside the agent's announced wait is not counted", async () => {
+    const { own, fx, drive } = setup()
+    own.quietUntil = 10_000
+    await expect(drive(probeInput(true, 5_000, false))).resolves.toBe("consumed")
+    expect(own.probeFailures).toBe(0)
+    expect(fx.lines).toEqual([
+      `⚠ connectivity probe failed (session ${SESSION}) inside the agent's announced wait; not counted before 1970-01-01T00:00:10.000Z`,
+    ])
   })
 })
 

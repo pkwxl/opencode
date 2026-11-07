@@ -568,6 +568,34 @@ describe("test-handover ending: the frozen session's task is complete, dropped a
     }
   })
 
+  test("a recovery probe's dispatch attaches nothing: the throwaway probe session never owns the sideband (plans/0187 D5, 0165-010's deferred half)", async () => {
+    // Dispatch 1 fails fatally → the wait-and-probe loop's probe session
+    // (ses_new_2, the Service availability probe prompt) → recovery
+    // re-dispatch (a fork) succeeds. Pre-fix every dispatch attached,
+    // including the probe's — a free line typed in its seconds-long run
+    // went to the throwaway session logged "→ sent".
+    const attachIds: string[] = []
+    const sideband: Interactive = {
+      attach: (id: string) => attachIds.push(id),
+      detach: () => {},
+      question: async () => undefined,
+      close: () => {},
+    }
+    const { client, calls } = retryClient(["error-fatal", "ok", "ok"])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "prompt text", { interactive: sideband }, chain, undefined, undefined, NO_WAIT)
+    expect(result.type).toBe("idle")
+    // The probe round ran as its own session, and its prompt was the probe
+    // payload…
+    expect(calls.creates).toBeGreaterThanOrEqual(2)
+    const probePrompt = calls.prompts.find((p) => JSON.stringify(p.parts).includes("Service availability probe"))
+    expect(probePrompt).toBeDefined()
+    // …and that session never attached the sideband: the attach calls name
+    // only the task's own dispatches.
+    expect(attachIds).not.toContain(probePrompt!.sessionID)
+    expect(attachIds.length).toBeGreaterThanOrEqual(1)
+  })
+
   // ---- nextSession's claim: "write on dispatch + revert on failure" (2026-09-17, virtio T-005 field incident) ----
 
   test("the continuation session dies at 0 tokens (pure error stub): withdraws the nextSession claim, the recovery anchor stays on the last contentful session", async () => {

@@ -295,8 +295,14 @@ export async function attempt(
   // Interactive bypass: human input goes to this session from here on (wrap-up
   // and other bypass sessions override it the same way); the sideband
   // resolves the client per session from the chain's agent (§8.1). The
-  // attach agent is the pick's entry profile.
-  opts.interactive?.attach(sessionID, pickAgent)
+  // attach agent is the pick's entry profile. A recovery probe's dispatch
+  // (the chain's `probe` mark, plans/0187 D5) attaches nothing: its session
+  // is a throwaway the recovery never reuses, and a free line typed during
+  // its seconds-long run would land there logged "→ sent" as if the task
+  // received it — between the probe's dispatches the sideband stays
+  // detached (0181 D1's between-turns rule), the line answered as
+  // discarded.
+  if (chain.probe !== true) opts.interactive?.attach(sessionID, pickAgent)
   // Test-handover interruption recovery (§I): the continuation session opened
   // after the handover close-out is claimed here — when it is itself
   // interrupted, the next run forks from it to pick the context back up. The

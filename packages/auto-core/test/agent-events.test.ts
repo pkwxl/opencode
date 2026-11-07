@@ -5,6 +5,8 @@
 import { describe, expect, test } from "bun:test"
 import type { Event } from "@opencode-ai/sdk/v2"
 import { limitFields, mapEvent, mapMessage } from "../src/agent/opencode/events"
+import { OPENCODE_CAPABILITIES } from "../src/agent/opencode/client"
+import { CLAUDE_CAPABILITIES } from "../src/agent/claude/client"
 import type { AgentClient, AgentEvent } from "../src/agent/types"
 
 // Fixtures are cast from plain objects: only the fields the mapping reads matter.
@@ -220,6 +222,18 @@ describe("opencode event mapping", () => {
     expect(mapEvent(ev({ id: "e", type: "session.idle", properties: { sessionID: "s1" } }))).toEqual({ type: "idle", session: "s1" })
     expect(mapEvent(ev({ id: "e", type: "session.status", properties: { sessionID: "s1", status: { type: "busy" } } }))).toBeUndefined()
     expect(mapEvent(ev({ id: "e", type: "server.connected", properties: {} }))).toBeUndefined()
+  })
+
+  // Plans/0187 D1: the server's 10-second /event pulse (untyped on the wire
+  // — the generated Event union omits it) normalizes to the vocabulary's own
+  // heartbeat kind, naming no session; the capability declares the cadence
+  // the liveness probe's stream leg reads.
+  test("server.heartbeat maps to the transport's pulse event, naming no session; the opencode capability declares its cadence", () => {
+    expect(mapEvent({ type: "server.heartbeat", properties: {} })).toEqual({ type: "heartbeat", session: "" })
+    expect(OPENCODE_CAPABILITIES.heartbeat).toBe(10_000)
+    // The session-filtered consumers skip it by its empty session, and the
+    // claude adapter declares no pulse (the P10 floor).
+    expect(CLAUDE_CAPABILITIES.heartbeat).toBeUndefined()
   })
 })
 

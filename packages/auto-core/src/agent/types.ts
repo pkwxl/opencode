@@ -37,7 +37,12 @@
 // same amendment grew in S3 (0057 §5): AgentError's limit fields (retryAfterMs,
 // resetAt, scope, limitReason) — what the provider or the agent stated about
 // the limit behind a failure — and the `limit` event, the agent's view of the
-// provider's usage windows on healthy turns too.
+// provider's usage windows on healthy turns too. The liveness probe's stream
+// leg (plans/0187 D1) amended it an eighth time, consciously: the `heartbeat`
+// event — the transport's own pulse, naming no session — and
+// AgentCapabilities.heartbeat, the pulse interval an adapter's stream
+// promises; the driver's probe reads the pulse's arrival to judge the turn's
+// own stream, not only the server.
 
 // Every call resolves; none rejects. A failure the agent reports and a
 // transport failure (network error, timeout, abort via signal) both arrive as
@@ -197,7 +202,9 @@ export type AgentMessage = {
 
 // The unified event vocabulary. Every event names its session; a
 // subscription carries all sessions of the client and consumers filter.
-// Adapters drop whatever has no counterpart here.
+// The one exception is the heartbeat — the transport's own pulse, naming no
+// session (its empty `session` skips every session filter). Adapters drop
+// whatever has no counterpart here.
 export type AgentEvent =
   // A turn piece was created or updated.
   | { type: "part"; session: string; part: AgentPart }
@@ -225,6 +232,15 @@ export type AgentEvent =
   // consumers settle once and ignore further idles until the session shows
   // other activity. A stream that ends without idle is a transport loss.
   | { type: "idle"; session: string }
+  // The transport's own pulse on the event stream (opencode: the server's
+  // 10-second heartbeat on every /event connection), belonging to no session
+  // — the empty `session` is the type's own statement of that (plans/0187
+  // D1, the vocabulary's eighth amendment): it proves the connection
+  // delivers, nothing more, so the liveness probe's stream leg reads its
+  // arrival at the watch seam (src/engine/sources.ts's pulse wrapper, which
+  // consumes the kind there) and every session-filtered consumer skips it.
+  // Adapters without a pulse (the capability below absent) never emit it.
+  | { type: "heartbeat"; session: "" }
 
 // Where token usage comes from (MA.2 defines each tier's behavior matrix for
 // reuse / steer / test handover / failover window; plan open question 5):
@@ -259,6 +275,13 @@ export type AgentCapabilities = {
   // anchors for handover forks).
   history: boolean
   usage: UsageTier
+  // The event stream carries a transport pulse (the heartbeat event) at
+  // least this often, in ms — the liveness probe's stream leg (plans/0187
+  // D1): a turn whose stream delivered nothing for a probe interval while
+  // the server answers on a fresh connection is half-open, the shape 0026
+  // §1.3 measured. Absent = no pulse: the probe judges by the fresh
+  // connection alone (0026 D3's original shape, byte-identical).
+  heartbeat?: number
 }
 
 export type PromptInput = {

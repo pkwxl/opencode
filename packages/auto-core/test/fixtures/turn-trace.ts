@@ -109,6 +109,10 @@ export type InputKind =
   | "retry"
   | "idle"
   | "stream-end"
+  // The transport's pulse (plans/0187 D1) dispatches to nothing — the pulse
+  // wrapper at the watch seam consumes the kind — so no trace ever fires it;
+  // the kind exists to keep this union the table's own key set.
+  | "heartbeat"
   | "probe"
   | "answer"
 

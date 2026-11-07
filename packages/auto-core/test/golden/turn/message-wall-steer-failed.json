@@ -17,7 +17,8 @@
   "lines": [
     "  context: 80.0k/100.0k tokens (80%)",
     "⚠ context used 80.0k tokens reached the wall 80.0k; inserting the handover hint",
-    "⚠ steer dispatch failed: promptAsync failed"
+    "⚠ steer dispatch failed: promptAsync failed",
+    "⚠ the handover hint will be retried at the next measurement point"
   ],
   "watch": {
     "lastText": "",
@@ -34,11 +35,8 @@
       "steps": 0
     },
     "resolves": [],
-    "hinted": true,
     "wall": 80000,
-    "blocked": {
-      "type": "blocked",
-      "question": "steer dispatch failed (handover hint); cannot continue the session, see the log."
-    }
+    "error": "",
+    "testHandover": false
   }
 }

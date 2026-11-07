@@ -35,9 +35,7 @@
     },
     "resolves": [],
     "wall": 80000,
-    "blocked": {
-      "type": "blocked",
-      "question": "steer dispatch failed (usage notice); cannot continue the session, see the log."
-    }
+    "error": "",
+    "testHandover": false
   }
 }

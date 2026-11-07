@@ -30,7 +30,7 @@ import { usageConcern } from "./engine/concerns/usage"
 import { windowsConcern } from "./engine/concerns/windows"
 import { makeTurnFx } from "./engine/fx"
 import { settleToWatch } from "./engine/result"
-import { makeTurnSources } from "./engine/sources"
+import { makeTurnSources, pulseWrapper } from "./engine/sources"
 import { runTurn, type ConcernRoster } from "./engine/spine"
 import type { SteerContext } from "./model-step"
 import type { Opts } from "./opts"
@@ -133,7 +133,12 @@ export async function watch(
   // it below — the fx is built before the spine creates the slices, and the
   // concern's initial parks the slice it builds in the cell.
   const stepUpLive: { slice?: TurnState["stepUp"] } = {}
-  const sources = makeTurnSources(ctx)
+  // The pulse observer (plans/0187 D1): the turn's stream wrapped so every
+  // delivery stamps the pulse the probe's stream leg reads (the heartbeat
+  // events consumed there — the sources' file owns the machinery). Built
+  // before the sources so the tick can read it from the first interval.
+  const pulsed = pulseWrapper(stream, () => svcs.clock.now())
+  const sources = makeTurnSources(ctx, pulsed.pulse)
   const fx = makeTurnFx({ ctx, steerModel: () => stepUpLive.slice?.model, onModel, onLimit })
   // The settle procedure's channel for the interrupted close-out's failure
   // record (the liveness concern's finalize writes the extension here, the
@@ -147,6 +152,6 @@ export async function watch(
     makeStepUpConcern({ live: stepUpLive }),
     makeTestConcern({ blockedExtra }),
   )
-  const { settle, view } = await runTurn({ ctx, stream, concerns, fx, attach: sources.attach })
+  const { settle, view } = await runTurn({ ctx, stream: pulsed.stream, concerns, fx, attach: sources.attach })
   return settleToWatch(settle, view, { extended, blockedExtra }, ctx)
 }

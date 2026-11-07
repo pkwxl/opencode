@@ -1226,9 +1226,11 @@ export function windowWake(facts: RouteFacts, wait: WindowWait): { sleep: number
 
 // The chain of one recovery probe: a fresh one-off view that carries the
 // role only — no phase, no progress record, the real chain's recovery
-// point untouched (the probe's own dispatch selects the probed model).
+// point untouched (the probe's own dispatch selects the probed model). The
+// `probe` mark (plans/0187 D5) keeps the dispatch's throwaway session off
+// the interactive sideband: attempt reads it and attaches nothing.
 export function probeChain(chain: SessionChain): SessionChain {
-  return { pct: 100, used: 0, at: 0, role: roleOf(chain) }
+  return { pct: 100, used: 0, at: 0, role: roleOf(chain), probe: true }
 }
 
 // The agent whose fork-base record a forking chain reads and writes

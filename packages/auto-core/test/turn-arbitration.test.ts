@@ -25,7 +25,7 @@ import { ev, fakeAgent } from "./fixtures/agent"
 
 const SESSION = "ses_1"
 
-const INPUT_KINDS = ["limit", "part", "message", "question", "permission", "error", "retry", "idle", "stream-end", "probe", "answer"] as const
+const INPUT_KINDS = ["limit", "part", "message", "question", "permission", "error", "retry", "idle", "stream-end", "heartbeat", "probe", "answer"] as const
 
 // The barest legal turn context: the fake concerns below read none of it (the
 // spine itself reads only sessionID and source.observe).
@@ -131,9 +131,10 @@ describe("the arbitration table", () => {
     expect([...placed].sort()).toEqual([...SLICE_KEYS].sort())
   })
 
-  test("the synthetic-input rows are the concurrent ones: liveness for probes, recovery for answers", () => {
+  test("the synthetic-input rows are the concurrent ones: liveness for probes, recovery for answers; the transport pulse dispatches to nothing (plans/0187 D1)", () => {
     expect(TURN_ARBITRATION.probe).toEqual([{ concern: "liveness", concurrent: true }])
     expect(TURN_ARBITRATION.answer).toEqual([{ concern: "recovery", concurrent: true }])
+    expect(TURN_ARBITRATION.heartbeat).toEqual([])
   })
 })
 
@@ -380,6 +381,53 @@ describe("the emission boundary (plans/0157 D6)", () => {
     // Nothing lands late either.
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(answerRan).toBe(false)
+  })
+})
+
+describe("the emission chain's rejection isolation (plans/0187 D3)", () => {
+  test("a throw inside a synthetic handler ends the turn as runTurn's own rejection (the external path's driver-fault channel) — never a poisoned chain", async () => {
+    // The finding's shape: fx.log's writeSync failing with EIO inside the
+    // probe cell's verdict — one throw, with the turn's stream still live.
+    // Pre-fix the chain rejected: every later emission re-rejected
+    // unhandled without running, the probe silently disabled, and the turn
+    // settled as if nothing had happened.
+    const boom = new Error("EIO: i/o error, write")
+    let probeRuns = 0
+    let answerRuns = 0
+    let unhandled = false
+    const onUnhandled = (): void => {
+      unhandled = true
+    }
+    process.on("unhandledRejection", onUnhandled)
+    let emit: ((input: TurnInput) => void) | undefined
+    const concerns = roster({
+      liveness: async (input) => {
+        if (input.kind !== "probe") return "pass"
+        probeRuns += 1
+        throw boom
+      },
+      recovery: async (input) => {
+        if (input.kind !== "answer") return "pass"
+        answerRuns += 1
+        return "consumed"
+      },
+    })
+    const attach: TurnSources = (theEmit) => {
+      emit = theEmit
+      theEmit({ kind: "probe", ok: false, at: 0 })
+    }
+    try {
+      await expect(turn(concerns, { attach })).rejects.toBe(boom)
+      // A late emission after the turn ended is dropped at accept time —
+      // the chain itself never rejects and nothing burns unhandled.
+      emit?.({ kind: "answer", answer: undefined })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    } finally {
+      process.off("unhandledRejection", onUnhandled)
+    }
+    expect(probeRuns).toBe(1)
+    expect(answerRuns).toBe(0)
+    expect(unhandled).toBe(false)
   })
 })
 
