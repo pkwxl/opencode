@@ -7,6 +7,7 @@ import { ensurePointer } from "../src/agents-block"
 import { appendToSection, briefProposal, projectBriefText } from "../src/brief"
 import { CONFIG_DEFAULTS, loadProjectConfig, saveConfigRecord } from "../src/config"
 import { applyFix, fixHint, formatFixPlan, planFix, renderAgentContract, type FixPlan } from "../src/config-fix"
+import { freshRepo, git } from "./fixtures/runner"
 
 const CONFIG = ".opencode/auto/config.json"
 const BRIEF = ".opencode/auto/brief.md"
@@ -469,5 +470,68 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     expect(await fixHint(dir)).toBe(`fix: opencode-auto fix ${dir}`)
     await saveConfigRecord(dir, { ...CONFIG_DEFAULTS, contextLimit: 0 })
     expect(await fixHint(dir)).toBeUndefined()
+  })
+})
+
+// —— The sealed wall's stamp skip (plans/0189 D3, 0165-038c) ——
+//
+// A root symlink resolving under (or over) a recorded wall target is a
+// reopen: fix never stamps the external_directory allow that would beat the
+// wall's front deny under last-match-wins — the manual finding names the
+// reopen, and the edit-layer denies still stamp (defense-in-depth). Over a
+// real git repository: the wall commit's record is what fix reads.
+
+describe("fix's root-symlink stamps past a sealed wall (plans/0189 D3)", () => {
+  test("a corpus-subtree door reports the reopen and stamps no allow; the wall-less floor still stamps it", async () => {
+    const dir = await freshRepo()
+    const corpus = await mkdtemp(join(tmpdir(), "auto-fix-wall-corpus-"))
+    try {
+      await mkdir(join(corpus, "sub"), { recursive: true })
+      await Bun.write(join(dir, ".gitignore"), ".auto/\ntmp/\nopencode.json\n")
+      await mkdir(join(dir, ".opencode/auto/phases"), { recursive: true })
+      await Bun.write(
+        join(dir, ".opencode/auto/phases/spec-read.md"),
+        ["# Spec read", "", "Wall: seal linux", "", "## plan duties", "", "Read the reference.", "", "<!-- auto: eof -->", ""].join("\n"),
+      )
+      await seedInit(dir)
+      // The wall's record: a hand-crafted wall commit (the record grammar
+      // is the contract) and the sealed config it leaves behind.
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "the spec room, door standing")
+      await git(dir, "commit", "--allow-empty", "-qm", "PLAN wall close Spec read", "-m", "Auto-Stage: wall", "-m", `Wall-door: linux -> ${corpus}`)
+      await Bun.write(
+        join(dir, "opencode.json"),
+        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "deny" } } }, null, 2) + "\n",
+      )
+      // The reopen: a new door into the sealed corpus's subtree.
+      await symlink(join(corpus, "sub"), join(dir, "ref"))
+      const sealed = await planFix(dir)
+      expect(manual(sealed).map((finding) => finding.problem)).toContain(
+        `a root symlink resolves to ${join(corpus, "sub")}, under (or over) the sealed reference wall's recorded target — a reopen the wall's boundary checks block; remove the symlink (fix does not stamp allows past a sealed wall)`,
+      )
+      // The allow is never listed as missing; the edit-layer denies still are.
+      const incomplete = fixable(sealed).map((finding) => finding.problem).join("\n")
+      expect(incomplete).not.toContain(`(${join(corpus, "sub")}/**,`)
+      expect(incomplete).toContain(`edit ${join(corpus, "sub")}/**`)
+      await applyFix(sealed)
+      const written = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
+      expect(written.permission.external_directory[join(corpus, "sub") + "/**"]).toBeUndefined()
+      expect(written.permission.edit[join(corpus, "sub") + "/**"]).toBe("deny")
+
+      // The wall-less floor: a project that declares no wall (the type file
+      // gone) stamps the same door's allow exactly as before (P10).
+      await rm(join(dir, ".opencode/auto/phases/spec-read.md"))
+      await Bun.write(
+        join(dir, "opencode.json"),
+        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow" } } }, null, 2) + "\n",
+      )
+      const floor = await planFix(dir)
+      expect(fixable(floor).map((finding) => finding.problem).join("\n")).toContain(`(${join(corpus, "sub")}/**,`)
+      await applyFix(floor)
+      expect((JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any).permission.external_directory[join(corpus, "sub") + "/**"]).toBe("allow")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(corpus, { recursive: true, force: true })
+    }
   })
 })

@@ -53,7 +53,8 @@ import {
   retiredGitignoreEntries,
 } from "./gitignore"
 import { ANALYSIS_DOC, roundDirName } from "./docpaths"
-import { applyExternalAllows, applyKnowledgeBoundary, externalDirectoryEntries, knowledgeBoundaryMissing, missingExternalDirectoryAllows, missingReadOnlyEditDenies, OPENCODE_CONFIG_FILE, readOnlyEditEntriesFor, rootSymlinkRealPaths, staleExternalDirectoryAllows, stampExternalDirectories, stampReadOnlyEdits } from "./external-dirs"
+import { applyExternalAllows, applyKnowledgeBoundary, externalDirectoryEntries, knowledgeBoundaryMissing, missingExternalDirectoryAllows, missingReadOnlyEditDenies, OPENCODE_CONFIG_FILE, pathsOverlap, readOnlyEditEntriesFor, rootSymlinkRealPaths, staleExternalDirectoryAllows, stampExternalDirectories, stampReadOnlyEdits } from "./external-dirs"
+import { findWallCommit, wallDeclared } from "./wall"
 import { provenanceFindings } from "./provenance"
 import { currentRound } from "./phases"
 import { supersedingPhases } from "./roadmap"
@@ -267,11 +268,16 @@ export async function planFix(dir: string): Promise<FixPlan> {
   // The template write carries the boundary (plans/0147) and the read-only
   // symlink stamps (plans/0122 + 0147 D2), so one pass sets a fresh file up
   // completely; the file itself stays the template byte-for-byte when no
-  // symlinks exist.
+  // symlinks exist. The sealed wall's recorded targets (plans/0189 D3): the
+  // allow layer never stamps a real path under or over one — a reopened
+  // room stays shut (the edit-layer denies still stamp; defense-in-depth).
+  const wallTargets = wallDeclared(dir) ? ((await findWallCommit(dir))?.doors.map((door) => door.target) ?? []) : []
+  const stampableAllows = (realPaths: readonly string[]): readonly string[] =>
+    wallTargets.length ? realPaths.filter((real) => !wallTargets.some((target) => pathsOverlap(real, target))) : realPaths
   const stampedTemplate = async () => {
     const text = await Bun.file(templateConfig).text()
     const realPaths = await rootSymlinkRealPaths(dir)
-    let next = stampExternalDirectories(text, externalDirectoryEntries(realPaths))
+    let next = stampExternalDirectories(text, externalDirectoryEntries(stampableAllows(realPaths)))
     if (next !== undefined) next = stampReadOnlyEdits(next, await readOnlyEditEntriesFor(dir))
     return next ?? text
   }
@@ -298,10 +304,22 @@ export async function planFix(dir: string): Promise<FixPlan> {
     // either layer are fixable (the write re-derives from disk at apply
     // time — idempotent); a stale allow or a file that cannot hold
     // per-pattern entries is manual (never guess, never delete person
-    // content).
+    // content). A root symlink resolving under or over a recorded wall
+    // target is a reopen (plans/0189 D3): its allow is never stamped — it
+    // would land after the boundary's catch-all deny and beat the wall's
+    // front deny under last-match-wins, re-opening the room through a new
+    // door — and the manual finding names the reopen instead.
     const realPaths = await rootSymlinkRealPaths(dir)
+    const stampable = stampableAllows(realPaths)
+    for (const reopened of realPaths.filter((real) => !stampable.includes(real))) {
+      findings.push({
+        class: "manual",
+        path: OPENCODE_CONFIG_FILE,
+        problem: `a root symlink resolves to ${reopened}, under (or over) the sealed reference wall's recorded target — a reopen the wall's boundary checks block; remove the symlink (fix does not stamp allows past a sealed wall)`,
+      })
+    }
     if (realPaths.length) {
-      const missing = missingExternalDirectoryAllows(text, externalDirectoryEntries(realPaths))
+      const missing = missingExternalDirectoryAllows(text, externalDirectoryEntries(stampable))
       const editMissing = missingReadOnlyEditDenies(text, await readOnlyEditEntriesFor(dir))
       if (missing === undefined || editMissing === undefined) {
         findings.push({
@@ -311,7 +329,7 @@ export async function planFix(dir: string): Promise<FixPlan> {
         })
       } else if (missing.length || editMissing.length) {
         const named = [...missing, ...editMissing.map((key) => `edit ${key}`)]
-        fixable(OPENCODE_CONFIG_FILE, `the root-symlink stamps are incomplete (${named.join(", ")})`, "insert the root-symlink allow(s) and their read-only edit deny(s)", () => applyExternalAllows(dir))
+        fixable(OPENCODE_CONFIG_FILE, `the root-symlink stamps are incomplete (${named.join(", ")})`, "insert the root-symlink allow(s) and their read-only edit deny(s)", () => applyExternalAllows(dir, wallTargets))
       }
       for (const key of (await staleExternalDirectoryAllows(text, realPaths)) ?? []) {
         findings.push({

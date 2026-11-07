@@ -900,10 +900,22 @@ export async function gateStopLines(directory: string, phase: PhaseUnit, problem
 // boundaryStopLines, verbatim): the phase's planned work is done at a clean
 // end, and everything after is transfer's — the stop names the command, and
 // the round close too when the phase just finished was the round's last.
+// The phase-closed variant (plans/0189 D1, 0165-008): a phase already closed
+// on disk — a handover an interrupted advance's re-entry finished (0101 D1)
+// — stops with the truth: the distillation and the close are done, and
+// transfer's next act is the construction. Derived from the phase's done
+// state, so the loop's stop and the person-proxy brief render the same
+// bytes.
 export async function phaseBoundaryLines(directory: string, phase: PhaseUnit): Promise<string[]> {
   const { bin } = shellProfile()
   const state = await readPhases(directory).catch(() => undefined)
   const last = state?.phases.at(-1)?.id === phase.id
+  if (state?.done.has(phase.id)) {
+    return [
+      `✓ phase boundary: ${phaseTitle(phase)} complete and closed — the handover was distilled and the phase committed (an interrupted advance's re-entry finished it, plans/0101 D1)`,
+      `next: ${bin} transfer ${directory} — it constructs the next phase's plan task for your review${last ? " and closes the round (stopping with its close for your review)" : ""}`,
+    ]
+  }
   return [
     `✓ phase boundary: ${phaseTitle(phase)} complete at a clean phase end — every unit closed, the lanes landed; run executes the planned work of the current phase and stops here (plans/0101 D1)`,
     `next: ${bin} transfer ${directory} — it distills the handover, closes the phase${last ? " and the round (stopping with its close for your review)" : ""}, ` +

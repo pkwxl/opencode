@@ -11,12 +11,13 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { commitTree } from "../src/git"
 import { establishRound, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
 import { loadPhaseTypes, parsePhaseTypeFile } from "../src/phases/custom"
 import { renderTaskIndex } from "../src/tasks"
 import { findWallCommit, sealedChannelCheck, wallBoundary, wallPrecheckFindings, wallSealingPhase, type WallCtx } from "../src/wall"
+import { admission } from "./helpers/perm-oracle"
 import { captureRun } from "./fixtures/capture"
 import { freshRepo, git } from "./fixtures/runner"
 import { taskDoc } from "./fixtures/loop"
@@ -146,7 +147,7 @@ describe("the close (D2): predicate, recorded target, idempotency, reopening, th
     config.permission.external_directory[`${join(corpus, "..")}/**`] = "allow"
     await Bun.write(join(dir, "opencode.json"), JSON.stringify(config, null, 2) + "\n")
     const blocked = await wallBoundary(ctx, phase)
-    expect(blocked.join("\n")).toContain("person-authored external_directory allow")
+    expect(blocked.join("\n")).toContain("person-authored external_directory entry")
     expect(blocked.join("\n")).toContain(`${join(corpus, "..")}/**`)
     // Nothing mutated: the door still stands, no wall commit.
     expect(existsSync(join(dir, "linux"))).toBe(true)
@@ -240,11 +241,13 @@ describe("the close (D2): predicate, recorded target, idempotency, reopening, th
     await git(dir, "commit", "-qm", "person removes the vendor door, its stamp standing")
     expect(await wallBoundary(ctx, phase)).toEqual([])
     // Both targets recorded — the surviving door by name, the removed one
-    // recovered under the placeholder — and both stamps retired to denies.
+    // recovered under its PROVEN name (plans/0189 D2: git's last
+    // add/modify of the door names it — the pre-0189 "(removed)"
+    // placeholder is history) — and both stamps retired to denies.
     const record = (await findWallCommit(dir))!
     expect(record.doors).toEqual([
       { name: "linux", target: corpus },
-      { name: "(removed)", target: vendor },
+      { name: "vendor", target: vendor },
     ])
     expect((await opencode(dir)).permission.external_directory).toEqual({ [`${corpus}/**`]: "deny", [`${vendor}/**`]: "deny" })
     // The wall commit's tracked diff is the surviving door's removal alone.
@@ -302,12 +305,21 @@ describe("the close (D2): predicate, recorded target, idempotency, reopening, th
     expect((await findWallCommit(dir))!.doors).toEqual([{ name: "linux", target: corpus }])
   })
 
-  test("a plain run never closes the wall — the close rides the person's advance path alone", async () => {
-    const { dir, phase } = await wallProject()
+  test("a plain-run handover holds at a due seal, naming transfer — the close rides the person's advance path alone (plans/0189 D1, 0165-008)", async () => {
+    const { dir, corpus, phase } = await wallProject()
+    // A plain run's context: no stop condition — the handover paths that
+    // once crossed the seal silently (--boundary flow, the interrupted
+    // handover's re-entry) hold instead of skipping the wall.
     const runCtx: WallCtx = { directory: dir, git: { commitTree }, opts: {} }
-    expect(await wallBoundary(runCtx, phase)).toEqual([])
+    const held = await wallBoundary(runCtx, phase)
+    expect(held.length).toBeGreaterThan(0)
+    expect(held.join("\n")).toContain("due to close")
+    expect(held.join("\n")).toContain("only the person's advance closes it")
+    expect(held.join("\n")).toContain("transfer")
+    // Nothing mutated: the door stands, no wall commit, no retirement.
     expect(existsSync(join(dir, "linux"))).toBe(true)
     expect(await findWallCommit(dir)).toBeUndefined()
+    expect((await opencode(dir)).permission.external_directory[`${corpus}/**`]).toBe("allow")
   })
 
   test("the undeclared floor as behavior: no Wall: field anywhere — no machinery, the door stands, nothing written", async () => {
@@ -330,6 +342,159 @@ describe("the close (D2): predicate, recorded target, idempotency, reopening, th
     expect(existsSync(join(dir, "linux"))).toBe(true)
     expect(await findWallCommit(dir)).toBeUndefined()
     expect((await opencode(dir)).permission.external_directory[`${corpus}/**`]).toBe("allow")
+  })
+})
+
+// The proven recovery and the closed predicate's every channel (plans/0189):
+// the sweep that once adopted the template's /tmp allowance and person
+// allows, the reachability door half, the evaluated coverage, and the
+// failed commit's true remedies — the admission oracle agrees wherever an
+// admission judgment is asserted.
+describe("the proven recovery (plans/0189 D2, 0165-037): only targets git can name", () => {
+  test("a templated project (the 0147 boundary live) with its door removed closes cleanly — the /tmp allowance is never adopted as the reference", async () => {
+    const { dir, corpus, phase, ctx } = await wallProject()
+    rmSync(join(dir, "linux"))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "person removes the door by hand")
+    // The template's own file: the boundary pair with the corpus stamp.
+    await Bun.write(
+      join(dir, "opencode.json"),
+      JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "allow" } } }, null, 2) + "\n",
+    )
+    expect(await wallBoundary(ctx, phase)).toEqual([])
+    const record = (await findWallCommit(dir))!
+    expect(record.doors).toEqual([{ name: "linux", target: corpus }])
+    // The boundary's own keys survive the close untouched.
+    const config = await opencode(dir)
+    expect(config.permission.external_directory["/tmp/**"]).toBe("allow")
+    expect(config.permission.external_directory["/**"]).toBe("deny")
+    expect(config.permission.external_directory[`${corpus}/**`]).toBe("deny")
+  })
+
+  test("a person-authored allow on an unrelated existing path is never swept into a door: untouched, unrecorded", async () => {
+    const { dir, corpus, phase, ctx } = await wallProject()
+    rmSync(join(dir, "linux"))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "person removes the door by hand")
+    const personDir = mkdtempSync(join(homedir(), "auto-wall-person-"))
+    made.push(personDir)
+    await Bun.write(
+      join(dir, "opencode.json"),
+      JSON.stringify({ permission: { external_directory: { [`${corpus}/**`]: "allow", [`${personDir}/**`]: "allow" } } }, null, 2) + "\n",
+    )
+    expect(await wallBoundary(ctx, phase)).toEqual([])
+    const record = (await findWallCommit(dir))!
+    expect(record.doors).toEqual([{ name: "linux", target: corpus }])
+    // The person's entry stands exactly as they wrote it.
+    expect((await opencode(dir)).permission.external_directory[`${personDir}/**`]).toBe("allow")
+    expect((await opencode(dir)).permission.external_directory[`${corpus}/**`]).toBe("deny")
+  })
+})
+
+describe("the closed predicate's every channel (plans/0189 D3, 0165-038/149)", () => {
+  test("a door re-created under another name or path — tracked at any depth — is a reopen finding, however committed", async () => {
+    const { dir, corpus, phase, ctx } = await wallProject()
+    expect(await wallBoundary(ctx, phase)).toEqual([])
+    // A session's `ln -s`, swept into a tracked commit by the unified
+    // commit: the shape the name-based predicate never saw.
+    symlinkSync(corpus, join(dir, "reference"))
+    mkdirSync(join(dir, "docs/ref"), { recursive: true })
+    symlinkSync(corpus, join(dir, "docs/ref/k"))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "a session's links, unified-committed")
+    const pre = await wallPrecheckFindings(dir)
+    expect(pre.join("\n")).toContain("reference")
+    expect(pre.join("\n")).toContain("docs/ref/k")
+    expect(pre.join("\n")).toContain("at the recorded target")
+    const boundary = await wallBoundary(ctx, phase)
+    expect(boundary.length).toBeGreaterThan(0)
+    // The removals restore the closed derivation.
+    rmSync(join(dir, "reference"))
+    rmSync(join(dir, "docs/ref/k"))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "the reopens removed")
+    expect(await wallPrecheckFindings(dir)).toEqual([])
+  })
+
+  test("an ancestor symlink over the recorded target reopens the wall; a dangling re-created door counts by what it points at (plans/0189 D3/D5, 0165-149)", async () => {
+    const { dir, corpus, phase, ctx } = await wallProject()
+    expect(await wallBoundary(ctx, phase)).toEqual([])
+    // Over: a link to the corpus's parent — reads through it reach the
+    // corpus lexically in-tree.
+    symlinkSync(dirname(corpus), join(dir, "up"))
+    const over = await wallPrecheckFindings(dir)
+    expect(over.join("\n")).toContain("up")
+    expect(over.join("\n")).toContain("over the recorded target")
+    rmSync(join(dir, "up"))
+    expect(await wallPrecheckFindings(dir)).toEqual([])
+    // Dangling: the re-created door points at a corpus child that does not
+    // exist YET (another machine, a lazy mount) — stat once followed the
+    // link and read closed; the pointer counts now.
+    symlinkSync(join(corpus, "later"), join(dir, "linux"))
+    const dangling = await wallPrecheckFindings(dir)
+    expect(dangling.join("\n")).toContain("present again")
+    rmSync(join(dir, "linux"))
+    expect(await wallPrecheckFindings(dir)).toEqual([])
+  })
+
+  test("the evaluated coverage: a person catch-all, a subtree allow and an ask at the slot all read open — and the oracle agrees (0165-038)", async () => {
+    const { dir, corpus, phase, ctx } = await wallProject()
+    expect(await wallBoundary(ctx, phase)).toEqual([])
+    const raw = await Bun.file(join(dir, "opencode.json")).text()
+    const edit = async (external: Record<string, string>) => {
+      const parsed = JSON.parse(raw) as any
+      parsed.permission.external_directory = external
+      await Bun.write(join(dir, "opencode.json"), JSON.stringify(parsed, null, 2) + "\n")
+    }
+    // A person catch-all allow landing last beats the seal's front deny.
+    await edit({ "/**": "deny", [`${corpus}/**`]: "deny", "*": "allow" })
+    const catchAll = await wallPrecheckFindings(dir)
+    expect(catchAll.join("\n")).toContain("person-authored external_directory entry *")
+    expect(admission(JSON.stringify({ permission: { external_directory: { "/**": "deny", [`${corpus}/**`]: "deny", "*": "allow" } } }), "external_directory", `${corpus}/*`)).not.toBe("deny")
+    // A subtree allow (the shape fix once stamped past the seal).
+    await edit({ "/**": "deny", [`${corpus}/**`]: "deny", [`${corpus}/sub/**`]: "allow" })
+    const subtree = await wallPrecheckFindings(dir)
+    expect(subtree.join("\n")).toContain(`${corpus}/sub/**`)
+    expect(admission(JSON.stringify({ permission: { external_directory: { "/**": "deny", [`${corpus}/**`]: "deny", [`${corpus}/sub/**`]: "allow" } } }), "external_directory", `${corpus}/sub/*`)).not.toBe("deny")
+    // Even the wall's own deny deleted: no live entry answers at all.
+    await edit({ "/elsewhere/**": "deny" })
+    const gone = await wallPrecheckFindings(dir)
+    expect(gone.join("\n")).toContain("standing deny is gone")
+    // An ask at the exact stamp slot: the driver's own bytes, re-asserted
+    // by the finish (0155 D3's override) — the boundary passes with the
+    // retirement line.
+    await edit({ "/**": "deny", [`${corpus}/**`]: "ask" })
+    const out = await captureRun(async () => {
+      expect(await wallBoundary(ctx, phase)).toEqual([])
+      return 0
+    })
+    expect(out.lines.join("\n")).toContain("finishing the interrupted wall retirement")
+    expect((await opencode(dir)).permission.external_directory[`${corpus}/**`]).toBe("deny")
+  })
+
+  test("the failed wall commit teaches the re-run, and the re-run lands the record: the stamp-slot deny names the interrupted close (plans/0189 D2/D5, 0165-149)", async () => {
+    const { dir, corpus, phase } = await wallProject()
+    // The failing commit: the real retirement and door removal ran first.
+    const failing: WallCtx = { directory: dir, git: { commitTree: async () => ({ ok: false, failures: [{ rel: "linux", error: "boom" }] }) }, opts: { stopBefore: "formulate" } }
+    const blocked = await wallBoundary(failing, phase)
+    expect(blocked.join("\n")).toContain("the wall commit failed")
+    expect(blocked.join("\n")).toContain("re-run the same command")
+    expect(blocked.join("\n")).toContain("Auto-Stage: wall")
+    expect(blocked.join("\n")).toContain(`Wall-door: linux -> ${corpus}`)
+    // The interrupted state on disk: door gone, stamp slot denied, no record.
+    expect(existsSync(join(dir, "linux"))).toBe(false)
+    expect((await opencode(dir)).permission.external_directory[`${corpus}/**`]).toBe("deny")
+    expect(await findWallCommit(dir)).toBeUndefined()
+    // The re-run IS the remedy: the close re-derives the state and the
+    // record commit lands — carrying the door removal, which is the wall
+    // commit's own tracked half.
+    const retry: WallCtx = { directory: dir, git: { commitTree }, opts: { stopBefore: "formulate" } }
+    expect(await wallBoundary(retry, phase)).toEqual([])
+    const record = (await findWallCommit(dir))!
+    expect(record.doors).toEqual([{ name: "linux", target: corpus }])
+    const show = await git(dir, "show", "--name-status", "--format=", record.sha)
+    expect(show.trim()).toBe("D\tlinux")
+    expect(await wallPrecheckFindings(dir)).toEqual([])
   })
 })
 

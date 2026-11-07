@@ -284,15 +284,24 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       return 2
     }
   }
-  // The sealed reference wall (plans/0132 D2): the wall's one boundary
-  // entry — post-wall the closed predicate re-derived (a reopen, a covering
-  // entry, the sealed channel asserted, the admission's hard-identifier
-  // class), pre-wall under the person's advance path (stopBefore
-  // "formulate" — transfer) with the seal threshold met, the three-step
-  // close itself (the admission scan → the wall commit; the transition
-  // commit below is step 3). A block holds the phase on its handover route
-  // exactly like a gate: nothing is renamed, the next advance re-derives.
-  {
+  // The phase gates, read-only, AHEAD of the wall (plans/0189 D4 over
+  // 0132 D2, 0165-076): on a sealing phase that also carries a gate, the
+  // person's acceptance holds BEFORE the seal — a gate hold leaves nothing
+  // committed, nothing frozen and the door standing, so the rework a
+  // rejection asks for stays lawful instead of colliding with the
+  // sealed-channel invariant. completePhase's own re-check below stays the
+  // single choke point (its problems run the repair round and the gate
+  // stop); this pre-check only keeps the seal off a held phase.
+  if ((await phaseGateProblems(directory, phase, gates)).length === 0) {
+    // The sealed reference wall (plans/0132 D2): the wall's one boundary
+    // entry — post-wall the closed predicate re-derived (a reopen, a
+    // covering entry, the sealed channel asserted, the admission's
+    // hard-identifier class), pre-wall under the person's advance path
+    // (stopBefore "formulate" — transfer) with the seal threshold met, the
+    // three-step close itself (the admission scan → the wall commit; the
+    // transition commit below is step 3). A block holds the phase on its
+    // handover route exactly like a gate: nothing is renamed, the next
+    // advance re-derives.
     const wallLines = await wallBoundary(ctx, phase)
     if (wallLines.length) {
       for (const line of wallLines) log(line)

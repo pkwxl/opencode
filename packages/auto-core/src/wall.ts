@@ -21,7 +21,18 @@
 //       the wall, the door a convenience. The driver retires only the
 //       allows it stamped itself (0122's exact bytes); a person-authored
 //       covering entry is a blocking finding that names the entry, and the
-//       close stamps a standing deny on the recorded target;
+//       close stamps a standing deny on the recorded target.
+//       Plans/0189 amends the enactment shape on four points: the close
+//       still rides the person's advance path alone, and every OTHER
+//       handover path whose phase meets the seal threshold HOLDS there,
+//       naming transfer (D1 — the 0132×0101 meeting: flow and the plain-run
+//       re-entry once closed the phase with the door open, silently); the
+//       interrupted-close recovery adopts only targets git can prove were
+//       doors, never a live allow's base (D2); the predicate reads every
+//       re-admission channel — any in-tree symlink resolving (or, dangling,
+//       pointing) under or over a recorded target, and the coverage
+//       evaluated with opencode's own semantics (D3); a sealing phase's
+//       gates are checked read-only ahead of the wall (D4, loop-phase).
 //   D3  the admission instrument is 0121's divergence lane (a regression-cost
 //       row), run fresh over the tree about to go clean — private
 //       identifiers are hard findings and block; post-wall the same class
@@ -46,10 +57,10 @@
 // claim — workflow enforcement and detection, never resistance. "Enforced /
 // found / disposed, never the proven absence of transliteration" (0121's
 // phrasing, inherited).
-import { rm, stat } from "node:fs/promises"
-import { join, relative } from "node:path"
+import { readdir, realpath, readlink, rm, stat } from "node:fs/promises"
+import { dirname, join, relative, resolve, sep } from "node:path"
 import { taskDir } from "./docpaths"
-import { allowBase, boundaryAllowedTargets, coveringAllowKeys, externalDirectoryLive, isBoundaryKey, OPENCODE_CONFIG_FILE, rootSymlinkDoors, stampKey, stampWallClosure } from "./external-dirs"
+import { admittingCoverage, boundaryAllowedTargets, externalDirectoryLive, isBoundaryKey, OPENCODE_CONFIG_FILE, pathsOverlap, rootSymlinkDoors, stampKey, stampWallClosure } from "./external-dirs"
 import { firstLine, git, scriptGuardSnapshot, type GitOps, driverStage } from "./git"
 import { allowWrite, protectAdditional, reprotect } from "./protect"
 import { loadPhaseTypes } from "./phases/custom"
@@ -58,6 +69,7 @@ import { unitArtifactSpecs } from "./phases/registry"
 import { parseTestLanes } from "./intent/test-lanes"
 import { log } from "./log"
 import { promptFacts } from "./prompt-facts"
+import { shellProfile } from "./shell"
 import {
   commitPendingReceipts,
   newestGreenReceipt,
@@ -70,9 +82,11 @@ import { loadPlan } from "./tasks"
 
 // One recorded door of the wall commit: the symlink's name and the resolved
 // real path it admitted. The name "(removed)" marks a target recovered from
-// a driver-stamped allow after the door itself was gone (the person's
-// hand-removal, an interrupted close) — no door name exists to re-create, so
-// the door-presence half of the predicate skips it; the allow half does not.
+// a driver-stamped allow by pre-0189 closes (which knew no door name to
+// re-create); since plans/0189 D2 the recovery derives the name from git and
+// new records carry the real one — the door half of the closed predicate
+// reads resolutions against the recorded targets, so both spellings guard
+// identically.
 export type WallDoor = { name: string; target: string }
 
 // The wall commit's record (plans/0132 D2/D4): the newest commit carrying
@@ -84,7 +98,6 @@ export type WallDoor = { name: string; target: string }
 export type WallRecord = { sha: string; doors: WallDoor[]; sealed: string[] }
 
 const WALL_STAGE_LINE = "Auto-Stage: wall"
-const RECOVERED_DOOR = "(removed)"
 
 // What the boundary and the close need from the run's context — LoopCtx
 // satisfies it structurally (RunAllOpts carries the lane timings and the
@@ -179,34 +192,79 @@ async function opencodeText(dir: string): Promise<string | undefined> {
   return await Bun.file(join(dir, OPENCODE_CONFIG_FILE)).text().catch(() => undefined)
 }
 
-// The re-created doors of a record: a recorded door name present on disk
-// again (any entry — the symlink need not resolve anywhere for the door to
-// read as back). A reopen, never a normal post-wall state: the wall commit's
-// deletion is in history, so the person (or whatever wrote it) re-created
-// it deliberately.
-async function recreatedDoors(dir: string, record: WallRecord): Promise<WallDoor[]> {
-  const back: WallDoor[] = []
-  for (const door of record.doors) {
-    if (door.name === RECOVERED_DOOR) continue
-    if (await stat(join(dir, door.name)).then(() => true, () => false)) back.push(door)
+// —— The door half of the closed predicate (plans/0189 D3) ——
+//
+// The wall is open when any symlink in the tree re-admits a recorded
+// target: tracked at any depth (git ls-files' mode-120000 set — the
+// deliverable's own trees, P1: a session's `ln -s` reaches it through the
+// unified commit) plus every top-level entry on disk (tracked or not — a
+// hand re-create at the door's canonical place). A link counts by what it
+// POINTS AT: its resolution when it resolves, or its text resolved
+// lexically when it dangles (plans/0189 D5 — a door re-created toward a
+// corpus mounted later reads open now, not when the mount arrives), under
+// or over a recorded target (an ancestor symlink re-admits as surely as a
+// door inside it: reads through `<ancestor>/<tail>/…` stay lexically
+// in-tree). Deeper untracked symlinks stay the clean gates' and the
+// admission scan's (dirt at every unit start, tracked through any commit).
+async function trackedSymlinkPaths(dir: string): Promise<string[]> {
+  const got = await git(dir, ["ls-files", "-s"])
+  if (got.code !== 0) return []
+  const out: string[] = []
+  for (const line of got.out.split("\n")) {
+    const tab = line.indexOf("\t")
+    if (tab < 0 || !line.startsWith("120000 ")) continue
+    out.push(line.slice(tab + 1))
   }
-  return back
+  return out
 }
 
-// The live allow entries covering the recorded targets, split by hand: the
-// exact stamp keys (0122's bytes, re-derivable — the driver's own, to
-// retire), the knowledge boundary's canonical keys (plans/0147 — the
-// driver's own too, re-derivable from the template, never retired), and
-// everything else (a person-authored entry — the driver never removes the
-// person's words; the person removes their own line).
-function coveringEntries(text: string, targets: readonly string[]): { stamps: string[]; person: string[] } {
-  const keys = coveringAllowKeys(text, targets)
-  const live = externalDirectoryLive(text)
-  const stamps = new Set(targets.map(stampKey))
-  return {
-    stamps: keys.filter((key) => stamps.has(key)),
-    person: keys.filter((key) => !stamps.has(key) && !isBoundaryKey(live ?? {}, key)),
+// What one symlink points at: its resolution when the target exists, else
+// the link text resolved against the link's directory — the dangling door's
+// named destination, read now instead of when the mount arrives.
+async function symlinkResolution(full: string): Promise<string | undefined> {
+  const real = await realpath(full).catch(() => undefined)
+  if (real !== undefined) return real
+  const text = await readlink(full).catch(() => undefined)
+  return text === undefined ? undefined : resolve(dirname(full), text)
+}
+
+async function reachableDoors(dir: string, record: WallRecord): Promise<{ path: string; resolved: string; target: string }[]> {
+  if (!record.doors.length) return []
+  const paths = new Set(await trackedSymlinkPaths(dir))
+  for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (entry.isSymbolicLink()) paths.add(entry.name)
   }
+  const open: { path: string; resolved: string; target: string }[] = []
+  for (const path of paths) {
+    const resolved = await symlinkResolution(join(dir, path))
+    if (resolved === undefined) continue
+    const door = record.doors.find((named) => pathsOverlap(resolved, named.target))
+    if (door !== undefined) open.push({ path, resolved, target: door.target })
+  }
+  return open
+}
+
+// —— The allow half of the closed predicate (D2, evaluated since 0189 D3) ——
+//
+// The lexical `<path>/**` prefix scan is retired: coverage is judged with
+// opencode's own semantics (admittingCoverage, oracle-pinned), and the
+// winners split by hand — the exact stamp key is the driver's own slot
+// (0122's bytes, re-derivable — the interrupted retirement to finish; an
+// `ask` there is re-denied per 0155 D3), the knowledge boundary's canonical
+// keys are never the person's (plans/0147), and every other winning entry is
+// a person's (the driver never removes the person's words).
+function openFindingsOf(text: string, targets: readonly string[]): { stamps: { target: string; key: string }[]; person: { target: string; key: string; action: string }[]; gone: string[] } {
+  const live = externalDirectoryLive(text)
+  const open = live === undefined ? [] : admittingCoverage(text, targets)
+  const stamps: { target: string; key: string }[] = []
+  const person: { target: string; key: string; action: string }[] = []
+  const gone = new Set<string>()
+  for (const finding of open) {
+    if (finding.key === undefined) gone.add(finding.target)
+    else if (finding.key === stampKey(finding.target)) stamps.push({ target: finding.target, key: finding.key })
+    else if (!isBoundaryKey(live!, finding.key)) person.push({ target: finding.target, key: finding.key, action: finding.action })
+  }
+  return { stamps, person, gone: [...gone].sort() }
 }
 
 // The retirement write (D2): retire the driver-stamped allows and stamp the
@@ -370,35 +428,125 @@ export async function wallPrecheckFindings(dir: string): Promise<string[]> {
   return await wallOpenFindings(dir, record, false)
 }
 
-// The open-wall findings of a record: re-created doors (a reopen) and
-// person-authored covering entries, each naming its remedy. finishStamps
-// adds the retirement write for the driver's own stamp keys — the
-// interrupted close's "finish the retirement", the handover's own act.
+// The open-wall findings of a record: reachable doors (a reopen, however
+// named or placed), person-authored winning entries and a gone deny (the
+// allow half, evaluated), each naming its remedy. finishStamps adds the
+// retirement write for the driver's own stamp slots — the interrupted
+// close's "finish the retirement", the handover's own act.
 async function wallOpenFindings(dir: string, record: WallRecord, finishStamps: boolean): Promise<string[]> {
   const problems: string[] = []
-  for (const door of await recreatedDoors(dir, record)) {
-    problems.push(
-      `⏸ the sealed wall derives open: the door ${door.name} that wall commit ${record.sha.slice(0, 7)} removed is present again — a reopen is a person's recorded act, never a normal post-wall state; ` +
-        `remove the door and re-run`,
-    )
+  for (const door of await reachableDoors(dir, record)) {
+    // A re-create at a recorded door's own top-level name keeps the
+    // finding's established shape (0132 D2's words); every other reachable
+    // link names the path, its resolution and its relation to the target.
+    if (!door.path.includes("/") && record.doors.some((named) => named.name === door.path)) {
+      problems.push(
+        `⏸ the sealed wall derives open: the door ${door.path} that wall commit ${record.sha.slice(0, 7)} removed is present again — a reopen is a person's recorded act, never a normal post-wall state; ` +
+          `remove the door and re-run`,
+      )
+    } else {
+      problems.push(
+        `⏸ the sealed wall derives open: the symlink ${door.path} resolves to ${door.resolved}, ` +
+          `${door.resolved === door.target ? "at" : door.resolved.startsWith(door.target + sep) ? "inside" : "over"} the recorded target ${door.target} of wall commit ${record.sha.slice(0, 7)} — a reopen is a person's recorded act, never a normal post-wall state; ` +
+          `remove the symlink and re-run`,
+      )
+    }
   }
   const text = await opencodeText(dir)
-  if (text !== undefined) {
+  if (text !== undefined && record.doors.length) {
     const targets = [...new Set(record.doors.map((door) => door.target))]
-    const { stamps, person } = coveringEntries(text, targets)
+    const { stamps, person, gone } = openFindingsOf(text, targets)
     if (person.length) {
+      const keys = [...new Set(person.map((finding) => finding.key))].sort()
+      const named = [...new Set(person.map((finding) => finding.target))].sort()
       problems.push(
-        `⏸ the sealed wall derives open: ${OPENCODE_CONFIG_FILE} carries person-authored external_directory allow(s) ${person.join(", ")} covering the recorded target(s) — ` +
-          `the driver never removes the person's own lines; remove the entr${person.length === 1 ? "y" : "ies"} and re-run`,
+        `⏸ the sealed wall derives open: ${OPENCODE_CONFIG_FILE} carries person-authored external_directory entr${keys.length === 1 ? "y" : "ies"} ${keys.join(", ")} covering the recorded target(s) ${named.join(", ")} — ` +
+          `the driver never removes the person's own lines; remove the entr${keys.length === 1 ? "y" : "ies"} and re-run`,
+      )
+    }
+    if (gone.length) {
+      problems.push(
+        `⏸ the sealed wall derives open: no live external_directory entry answers for the recorded target(s) ${gone.join(", ")} — the wall's standing deny is gone from ${OPENCODE_CONFIG_FILE}; ` +
+          `re-add the deny on the recorded target(s) and re-run`,
       )
     }
     if (finishStamps && stamps.length) {
       const write = await retireAndDeny(dir, targets)
       if (write) problems.push(`⏸ ${write}`)
-      else log(`↻ finishing the interrupted wall retirement: the driver-stamped allow(s) ${stamps.join(", ")} retired, the standing deny re-asserted`)
+      else log(`↻ finishing the interrupted wall retirement: the driver-stamped allow(s) ${[...new Set(stamps.map((finding) => finding.key))].sort().join(", ")} retired, the standing deny re-asserted`)
     }
   }
   return problems
+}
+
+// The provable recovery (plans/0189 D2 over 0155 D2): a target is
+// recoverable only where git names the door that admitted it — never from a
+// live allow's shape (the sweep once adopted the template's /tmp allowance
+// as the reference and flipped person allows into recorded doors). The
+// door's last add/modify content is the proof; the live stamp slot then
+// classifies the state: the driver's stamp standing (allow — the
+// hand-removed door; recover and retire), the retirement already run with
+// no record (deny — the failed wall commit; recover for the record alone,
+// D5), absent (nothing to recover — 0155's by-design residual, the seal
+// complete by absence).
+async function lastTrackedDoorTarget(dir: string, name: string): Promise<string | undefined> {
+  const linkTextAt = async (rev: string): Promise<string | undefined> => {
+    const tree = await git(dir, ["ls-tree", rev, "--", name])
+    if (tree.code !== 0 || !tree.out.startsWith("120000")) return undefined
+    const blob = await git(dir, ["show", `${rev}:${name}`])
+    return blob.code === 0 ? blob.out.trimEnd() : undefined
+  }
+  const head = await linkTextAt("HEAD")
+  const text =
+    head ??
+    (await (async () => {
+      // HEAD's tree no longer carries the name (the removal was committed):
+      // its last add/modify commit does — that tree holds the final symlink
+      // bytes the stamp was derived from.
+      const last = await git(dir, ["log", "--format=%H", "-n", "1", "--diff-filter=AM", "--", name])
+      if (last.code !== 0 || !last.out.trim()) return undefined
+      return await linkTextAt(last.out.trim())
+    })())
+  if (text === undefined) return undefined
+  return await realpath(resolve(dir, text)).catch(() => resolve(dir, text))
+}
+
+// The no-fill shape's candidate names: every top-level entry git ever
+// recorded as a symlink (the add/modify summary lines) — with no declared
+// fill, git's own history is the only place the removed doors are named.
+async function topLevelSymlinkNames(dir: string): Promise<string[]> {
+  const got = await git(dir, ["log", "--format=%H", "--diff-filter=AM", "--summary"])
+  if (got.code !== 0) return []
+  const names = new Set<string>()
+  for (const line of got.out.split("\n")) {
+    const hit = /(?:create mode|=>) 120000 (.+)$/.exec(line.trim())
+    if (hit && hit[1] && !hit[1].includes("/")) names.add(hit[1])
+  }
+  return [...names]
+}
+
+async function recoveredDoors(
+  dir: string,
+  declared: readonly string[],
+  present: readonly { name: string; target: string }[],
+  text: string | undefined,
+): Promise<WallDoor[]> {
+  if (text === undefined) return []
+  const live = externalDirectoryLive(text)
+  if (live === undefined) return []
+  const standing = new Set(present.map((door) => door.target))
+  const names = declared.length
+    ? declared.filter((name) => !present.some((door) => door.name === name))
+    : await topLevelSymlinkNames(dir)
+  const recovered: WallDoor[] = []
+  for (const name of names) {
+    const target = await lastTrackedDoorTarget(dir, name)
+    if (target === undefined || standing.has(target) || recovered.some((door) => door.target === target)) continue
+    const action = live[stampKey(target)]
+    if (action !== "allow" && action !== "deny") continue
+    recovered.push({ name, target })
+  }
+  return recovered
 }
 
 // The close itself (D2's steps 1–2; the transition commit is the handover
@@ -413,54 +561,38 @@ async function closeWall(ctx: WallCtx, phase: PhaseUnit, sealing: PhaseUnit): Pr
   // (2) The doors and targets. Present doors resolve their own targets —
   // the declared names among the external root symlinks, or (no fill) every
   // root symlink resolving outside the project root, 0122's own derivation.
-  // A doorless driver-stamped allow (its base exists on disk but no current
-  // root symlink resolves there — the person's hand-removal, or an
-  // interrupted close after the removal) carries the target alone: "door
-  // absent with a covering allow means finish the retirement". With several
-  // declared doors the recovery derivation runs whenever ANY of them is
-  // missing (plans/0155 D2): an all-or-nothing gate would let the surviving
-  // doors close the wall while a hand-removed door's stamped allow stayed
-  // live — orphaned by neither the person-entry split (it operates on the
-  // recorded targets) nor the retirement, the seal silently incomplete. The
-  // no-fill shape keeps its own all-or-nothing reading (no declared door
-  // means the only missing signal is no door at all).
+  // A missing door's target comes from the provable recovery alone (the
+  // driver-stamped allow it retired — "door absent with a covering stamp
+  // means finish the retirement"; with several declared doors the recovery
+  // derivation runs whenever ANY of them is missing, plans/0155 D2's scope
+  // kept: the one retirement path reaches every stamped allow).
   const declared = sealing.entry.wall!.doors
   const external = await rootSymlinkDoors(dir)
   const present = declared.length ? external.filter((door) => declared.includes(door.name)) : external
   const text = await opencodeText(dir)
-  const recovered: WallDoor[] = []
   const anyMissing = declared.length ? present.length < declared.length : !present.length
-  if (anyMissing && text !== undefined) {
-    const current = new Set(external.map((door) => door.target))
-    const live = externalDirectoryLive(text)
-    if (live !== undefined) {
-      for (const [key, action] of Object.entries(live)) {
-        if (action !== "allow") continue
-        const base = allowBase(key)
-        if (base === undefined || current.has(base)) continue
-        if (await stat(base).then(() => true, () => false)) {
-          recovered.push({ name: declared.length === 1 ? declared[0]! : RECOVERED_DOOR, target: base })
-        }
-      }
-    }
-  }
+  const recovered = anyMissing ? await recoveredDoors(dir, declared, present, text) : []
   const doors = [...present, ...recovered]
   if (!doors.length) {
     return [
       `⏸ the wall cannot close: no reference door is present${declared.length ? ` (the Wall: field names ${declared.join(", ")})` : " (the Wall: field names no door, and no root symlink resolves outside the project)"} ` +
-        `and no driver-stamped external_directory allow records a target — nothing names what the wall seals against; ` +
+        `and no provable driver-stamped external_directory allow records a target (git history names no removed door resolving at one) — nothing names what the wall seals against; ` +
         `create the door symlink the field names (pointing at the reference), or re-fill the field, and re-run`,
     ]
   }
   const targets = [...new Set(doors.map((door) => door.target))]
-  // The person-entry split, before any mutation: a covering entry that is
-  // not the driver's own stamp blocks, named.
+  // The person-entry split, before any mutation: a winning entry that is
+  // not the driver's own stamp slot blocks, named (the evaluation and the
+  // split are plans/0189 D3's — a wildcard, `~`-expanded or subtree entry
+  // that admits the reference is as much a person's words as the literal
+  // parent glob).
   if (text !== undefined) {
-    const person = coveringEntries(text, targets).person
+    const person = openFindingsOf(text, targets).person
     if (person.length) {
+      const keys = [...new Set(person.map((finding) => finding.key))].sort()
       return [
-        `⏸ the wall cannot close: ${OPENCODE_CONFIG_FILE} carries person-authored external_directory allow(s) ${person.join(", ")} covering the reference target(s) — ` +
-          `the driver retires only the allows it stamped itself; remove the person-authored entr${person.length === 1 ? "y" : "ies"} and re-run`,
+        `⏸ the wall cannot close: ${OPENCODE_CONFIG_FILE} carries person-authored external_directory entr${keys.length === 1 ? "y" : "ies"} ${keys.join(", ")} covering the reference target(s) — ` +
+          `the driver retires only the allows it stamped itself; remove the person-authored entr${keys.length === 1 ? "y" : "ies"} and re-run`,
       ]
     }
     // The knowledge-boundary interplay (plans/0147 D3): a reference inside
@@ -504,9 +636,19 @@ async function closeWall(ctx: WallCtx, phase: PhaseUnit, sealing: PhaseUnit): Pr
     present.length ? present.map((door) => door.name) : undefined,
   )
   if (!settled.ok) {
+    // Plans/0189 D5: the re-run IS the remedy — the recovery recognizes the
+    // stamp-slot deny as the retirement already run (D2) and this same
+    // close lands the record commit (empty when nothing tracked remains).
+    // The hand alternative must carry the record lines verbatim, or the
+    // closed predicate never reads it (a bare hand commit has no
+    // `Auto-Stage: wall` line to find).
     return [
       `⏸ the wall commit failed (${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}) — ` +
-        `the retirement and the door removal are already on disk; commit the state by hand and re-run (the closed predicate reads the record from the commit)`,
+        `the retirement and the door removal are already on disk; re-run the same command: the close re-derives the interrupted state and lands the record commit (empty when nothing tracked remains). ` +
+        `A hand commit must carry the record lines verbatim for the closed predicate to read it:`,
+      `  git add -A && git commit -m "PLAN wall close ${phaseTitle(sealing)}" -m "Auto-Stage: wall" -m "The sealed reference wall closed at ${phaseTitle(sealing)}."`,
+      ...doors.map((door) => `  Wall-door: ${door.name} -> ${door.target}`),
+      ...sealed.map((path) => `  Wall-sealed: ${path}`),
     ]
   }
   log(
@@ -526,9 +668,10 @@ async function closeWall(ctx: WallCtx, phase: PhaseUnit, sealing: PhaseUnit): Pr
 // then — post-wall — the boundary check (the closed predicate re-derived:
 // reopen findings, the person-entry findings, the interrupted retirement
 // finished, the sealed channel asserted, the admission's hard-identifier
-// class run for this phase close), or — pre-wall under the person's
-// advance path with the threshold met — the close itself. Returns the
-// blocking lines (empty = proceed); the close's own ✓ lines log themselves.
+// class run for this phase close), or — pre-wall with the seal threshold
+// met — the close itself under the person's advance path, and a HOLD on
+// every other handover path (plans/0189 D1). Returns the blocking lines
+// (empty = proceed); the close's own ✓ lines log themselves.
 export async function wallBoundary(ctx: WallCtx, phase: PhaseUnit): Promise<string[]> {
   if (ctx.opts.dryrun) return []
   const dir = ctx.directory
@@ -540,12 +683,21 @@ export async function wallBoundary(ctx: WallCtx, phase: PhaseUnit): Promise<stri
     problems.push(...(await wallAdmission(ctx, phase)))
     return problems
   }
-  // Pre-wall: the close rides the person's advance path only — transfer's
-  // stopBefore "formulate"; a plain run (or --boundary flow) never closes
-  // the wall, its handover only carries the checks above (which need a
-  // record; pre-wall there is nothing to check).
-  if (ctx.opts.stopBefore !== "formulate") return []
+  // Pre-wall, the seal threshold met: the close rides the person's advance
+  // path alone — transfer's stopBefore "formulate". Every other handover
+  // path (a plain run's re-entry of an interrupted handover, --boundary
+  // flow, a stop condition's own crossing) holds at the seal instead of
+  // skipping it silently (plans/0189 D1, 0165-008): the phase stays on its
+  // handover route with the distillation this crossing produced kept and
+  // committed (transfer's re-entry skips straight to the wall), and one
+  // line names the command that seals.
   const sealing = await wallSealingPhase(dir, phase)
   if (sealing === undefined) return []
+  if (ctx.opts.stopBefore !== "formulate") {
+    return [
+      `⏸ the sealed reference wall is due to close at ${phaseTitle(sealing)}'s handover, and only the person's advance closes it — run: ${shellProfile().bin} transfer ${dir}; ` +
+        `this handover path does not seal: the phase stays on its handover route, nothing was renamed`,
+    ]
+  }
   return await closeWall(ctx, phase, sealing)
 }

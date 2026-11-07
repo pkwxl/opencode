@@ -52,6 +52,7 @@
 // `/**` are not catch-alls there) and otherwise at its front — again with
 // every person key that follows still winning.
 import { chmod, readdir, realpath, stat, writeFile } from "node:fs/promises"
+import { homedir } from "node:os"
 import { join, relative, sep } from "node:path"
 import { git } from "./git"
 
@@ -375,13 +376,19 @@ export async function externalAllowsStatus(dir: string): Promise<
 // D3, the edit-layer denies in every ask form) when either layer changes
 // anything (chmod 0644 first when the file is read-only — the
 // saveProjectConfig precedent). Idempotent; a no-op on the floor states.
-export async function applyExternalAllows(dir: string): Promise<boolean> {
+// `skipTargets` (plans/0189 D3): recorded wall targets — a root symlink
+// resolving under or over one is a reopen, and its allow is never stamped
+// (the edit-layer denies still are: harmless defense-in-depth over a
+// reference that stays reference). Passed by fix, which owns the wall
+// knowledge; init needs none (a fresh project has no record).
+export async function applyExternalAllows(dir: string, skipTargets: readonly string[] = []): Promise<boolean> {
   const realPaths = await rootSymlinkRealPaths(dir)
   if (!realPaths.length) return false
   const file = join(dir, OPENCODE_CONFIG_FILE)
   const text = await Bun.file(file).text().catch(() => undefined)
   if (text === undefined) return false
-  let next = stampExternalDirectories(text, externalDirectoryEntries(realPaths))
+  const stampable = skipTargets.length ? realPaths.filter((real) => !skipTargets.some((target) => pathsOverlap(real, target))) : realPaths
+  let next = stampable.length ? stampExternalDirectories(text, externalDirectoryEntries(stampable)) : text
   if (next === undefined) return false
   next = stampReadOnlyEdits(next, await readOnlyEditEntriesFor(dir))
   if (next === undefined || next === text) return false
@@ -531,15 +538,81 @@ export function allowCovers(key: string, path: string): boolean {
   return base !== undefined && (path === base || path.startsWith(base + sep))
 }
 
-// The live allow entries covering any of the targets (sorted, deduped).
-export function coveringAllowKeys(text: string, targets: readonly string[]): string[] {
-  const live = externalDirectoryLive(text)
-  if (live === undefined) return []
-  return [...new Set(Object.keys(live).filter((key) => live[key] === "allow" && targets.some((target) => allowCovers(key, target))))].sort()
+// Whether two paths name the same tree, one beneath the other, or one over
+// the other (plans/0189 D3): a symlink resolving OVER a recorded wall target
+// (an ancestor of it) re-admits the target as surely as one resolving inside
+// it — reads through `<ancestor>/<target-tail>/…` reach it lexically
+// in-tree. The wall's door relation and fix's stamp skip share this one
+// predicate.
+export function pathsOverlap(a: string, b: string): boolean {
+  return a === b || a.startsWith(b + sep) || b.startsWith(a + sep)
 }
 
 // The driver-stamp key for one target (0122's exact bytes).
 export const stampKey = (target: string): string => `${target}/**`
+
+// —— The wall's coverage question, evaluated with opencode's own semantics
+// (plans/0189 D3) ——
+//
+// opencode answers a read of an out-of-tree path by asserting
+// external_directory with the absolute `<dirname>/*` glob, judged by findLast
+// over the section's rules in file key order, `~`/`$HOME` expanded at load,
+// the unmatched default ask. The closed predicate's allow half must answer
+// the same question the same way: a recorded target is OPEN when any ask
+// beneath it answers other than deny. The asks are derived from the section
+// itself — `<target>/*` (which every catch-all and ancestor key matches)
+// plus each live key's scope ask (the key minus its trailing wildcards,
+// `*`-capped) wherever it names a path beneath the target, which is what
+// carries the segment-specific keys (`<target>/sub/**`) no flat probe
+// reaches. The matcher is 0188's mirror, the expansion opencode's own
+// (test/helpers/perm-oracle.ts pins both against the imported matcher).
+
+function expandPattern(pattern: string): string {
+  if (pattern.startsWith("~/")) return homedir() + pattern.slice(1)
+  if (pattern === "~") return homedir()
+  if (pattern.startsWith("$HOME/")) return homedir() + pattern.slice(5)
+  if (pattern.startsWith("$HOME")) return homedir() + pattern.slice(5)
+  return pattern
+}
+
+function scopeAskOf(expandedKey: string): string {
+  return expandedKey.replace(/[\*\?]+$/, "") + "*"
+}
+
+// One decisive open finding over the recorded targets: `target` and the
+// first `ask` beneath it whose last matching rule answers other than deny;
+// `key` names the winning entry (undefined = NOTHING matched the ask — even
+// the wall's standing deny is gone from the section), `action` the answer
+// (a person "ask" counts open — P12's conservative direction: an attended
+// click admits).
+export type CoveringOpen = { target: string; ask: string; key?: string; action: "allow" | "ask" }
+
+export function admittingCoverage(text: string, targets: readonly string[]): CoveringOpen[] {
+  const live = externalDirectoryLive(text)
+  if (live === undefined || !targets.length) return []
+  const entries = Object.entries(live)
+  const open: CoveringOpen[] = []
+  for (const target of targets) {
+    const asks = [`${target}/*`]
+    for (const [key] of entries) {
+      const ask = scopeAskOf(expandPattern(key))
+      if (ask.startsWith(target + sep) && !asks.includes(ask)) asks.push(ask)
+    }
+    for (const ask of asks) {
+      let winner: { key: string; action: string } | undefined
+      for (const [key, action] of entries) if (opencodeMatch(ask, expandPattern(key))) winner = { key, action }
+      if (winner === undefined) {
+        open.push({ target, ask, action: "ask" })
+        break
+      }
+      if (winner.action !== "deny") {
+        open.push({ target, ask, key: winner.key, action: winner.action === "allow" ? "allow" : "ask" })
+        break
+      }
+    }
+  }
+  return open
+}
 
 // The wall's write to opencode.json (plans/0132 D2): retire the driver's own
 // stamps — remove exactly the stamp keys of the targets — and stamp a

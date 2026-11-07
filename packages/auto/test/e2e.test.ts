@@ -6401,7 +6401,7 @@ describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
       await Bun.write(join(dir, "opencode.json"), JSON.stringify(withPerson, null, 2) + "\n")
       const personBlock = await agent.run(["transfer", dir])
       expect(personBlock.code).toBe(2)
-      expect(personBlock.out).toContain("person-authored external_directory allow")
+      expect(personBlock.out).toContain("person-authored external_directory entry")
       expect(personBlock.out).toContain(`${dirname(corpus)}/**`)
       delete withPerson.permission.external_directory[`${dirname(corpus)}/**`]
       await Bun.write(join(dir, "opencode.json"), JSON.stringify(withPerson, null, 2) + "\n")
