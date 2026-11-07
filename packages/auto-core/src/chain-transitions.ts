@@ -183,11 +183,13 @@ function moveOnFork(chain: SessionChain, forked: string, source: ForkSource, not
 }
 
 // The blank-session fallback of every fork path (a failed fork, or a chain
-// with no session context to inherit at all): no context travels, so the
-// usage counters reset and the note is the worktree-check form — a session
-// that inherited nothing must be told to check the disk state before going
-// on, or it redoes half-finished work. `pending` needs no write: every
-// caller arrives with it already consumed by the dispatch that just failed.
+// with no session context to inherit at all): no context travels, the
+// percentage resets (a blank session starts unburdened) while `used` — the
+// cumulative figure the ◉ lines and the /exit keeper read — is kept
+// deliberately, and the note is the worktree-check form — a session that
+// inherited nothing must be told to check the disk state before going on, or
+// it redoes half-finished work. `pending` needs no write: every caller
+// arrives with it already consumed by the dispatch that just failed.
 export function toBlankSession(chain: SessionChain, note: string): void {
   chain.id = undefined
   chain.pct = 100

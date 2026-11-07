@@ -404,3 +404,22 @@ describe("probeSession (the liveness probe's body)", () => {
   })
 })
 
+
+describe("askHuman's closed-input truth (plans/0186 D1, 0165-116)", () => {
+  test("no timeout and a closed stdin returns undefined instead of waiting forever — the channel's own answer is that no human is there", async () => {
+    // A child process with an ignored stdin (the no-terminal shapes: a
+    // script, nohup, the person-proxy session's shell tool): readline's
+    // question promise never settles there, so the old wait hung the run on
+    // the first ask with every later ask queued behind the dead one.
+    const script =
+      `import { askHuman } from ${JSON.stringify(join(import.meta.dir, "../src/session-api.ts"))}\n` +
+      `const answer = await askHuman(undefined, "closed-stdin test")\n` +
+      `console.log("ANSWER:" + JSON.stringify({ answer: answer ?? null }))`
+    const child = Bun.spawn(["bun", "-e", script], { stdin: "ignore", stdout: "pipe", stderr: "inherit" })
+    const out = await new Response(child.stdout).text()
+    expect(await child.exited).toBe(0)
+    // The marker (readline's prompt shares the stream with no newline, so
+    // the marker is mid-line).
+    expect(JSON.parse(out.slice(out.indexOf("ANSWER:") + "ANSWER:".length).trim())).toEqual({ answer: null })
+  }, 15_000)
+})

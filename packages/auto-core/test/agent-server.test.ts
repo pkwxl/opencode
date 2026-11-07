@@ -79,6 +79,33 @@ describe("manage", () => {
     expect(await client.get("ses_x")).toEqual({ ok: true, value: { id: "http://127.0.0.1:2" } })
   })
 
+  test("concurrent restarts join the one in flight instead of double-spawning (plans/0186 D2, 0165-117)", async () => {
+    // The finding's repro shape: two lanes' network-failure retries land in
+    // the same window (a correlated blip); without the join each caller
+    // close-and-spawns, the loser's instance live and unreferenced.
+    const first = fakeServer("http://127.0.0.1:1")
+    let spawns = 0
+    const handle = await manage(dir, undefined, {
+      log,
+      spawn: async () => {
+        spawns++
+        const n = spawns
+        if (n === 2) await new Promise((resolve) => setTimeout(resolve, 50))
+        return n === 1 ? first.server : fakeServer(`http://127.0.0.1:${n}`).server
+      },
+    })
+    try {
+      const [a, b] = await Promise.all([handle.restart("lane A network failure"), handle.restart("lane B network failure")])
+      expect(a).toBe(true)
+      expect(b).toBe(true)
+      // The initial spawn plus ONE restart — not three instances.
+      expect(spawns).toBe(2)
+      expect(handle.url).toBe("http://127.0.0.1:2")
+    } finally {
+      handle.close()
+    }
+  })
+
   test("syncContext: an AGENTS.md update triggers a restart; no update, no restart", async () => {
     await writeFile(join(dir, "AGENTS.md"), "v1\n")
     const first = fakeServer("http://127.0.0.1:1")

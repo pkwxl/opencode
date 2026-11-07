@@ -349,6 +349,13 @@ export async function askHuman(
   try {
     if (interactive) return (await interactive.question(promptText, minutes)) || undefined
     const stdinAsk = async (): Promise<string | undefined> => {
+      // A closed input channel must not wait forever (plans/0186 D1,
+      // 0165-116): minutes === undefined has no timeout to fall back on, and
+      // a run driven without a terminal (a script, nohup, the person-proxy
+      // session's shell tool) would hang on the first ask with every later
+      // ask queued behind the dead one. A channel already closed resolves
+      // undefined at once; the close event resolves the no-timeout wait.
+      if (minutes === undefined && !process.stdin.readable) return undefined
       const rl = createInterface({ input: process.stdin, output: process.stdout })
       // In raw mode ^C does not raise the process-level SIGINT; readline
       // intercepts it. Forward it to the process-level handler so two consecutive
@@ -358,7 +365,16 @@ export async function askHuman(
       try {
         const answer =
           minutes === undefined
-            ? await rl.question(promptText)
+            ? await new Promise<string | undefined>((resolve) => {
+                // readline's question promise never settles on a closed
+                // interface (an empty pipe's EOF), so the close event races
+                // it — the channel's own answer is "no human is there".
+                rl.on("close", () => resolve(undefined))
+                rl.question(promptText).then(
+                  (text) => resolve(text),
+                  () => resolve(undefined),
+                )
+              })
             : await Promise.race([
                 rl.question(promptText),
                 new Promise<undefined>((resolve) => {

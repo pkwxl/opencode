@@ -2339,12 +2339,12 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
   // grants no permission events but keeps readable history, so the base's
   // usage rebuild works on both), registered as shell adapters and run
   // through a real pool over a registry loaded from JSON.
-  async function baseFleet(registryText: string = FLEET_ROUTE): Promise<BaseFleet> {
+  async function baseFleet(registryText: string = FLEET_ROUTE, bTurn?: TurnScript): Promise<BaseFleet> {
     const dir = await mkdtemp(join(tmpdir(), "auto-fork-base-"))
     const goneA: string[] = []
     const goneB: string[] = []
     const a = fakeAgent({ capabilities: { question: false, permission: false }, limits: { "prov/a": 100_000 }, gone: goneA })
-    const b = fakeAgent({ limits: { "other/b": 100_000 }, gone: goneB })
+    const b = fakeAgent({ limits: { "other/b": 100_000 }, gone: goneB, ...(bTurn ? { turn: bTurn } : {}) })
     registerAgentAdapter("fake-a", { host: fakeAgentHost(a).factory, capabilities: { ...FULL_CAPABILITIES, question: false, permission: false } })
     registerAgentAdapter("fake-b", { host: fakeAgentHost(b).factory, capabilities: FULL_CAPABILITIES })
     // Offset the two fakes' id counters so a test can tell the two agents'
@@ -2420,6 +2420,36 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
       await teardown(fleet)
     }
   })
+
+  test("the digest rebuild runs under the caller's switches snapshot — an injected zero-wait ladder rides a retryable failure, not the ambient parse (plans/0186 D3, 0165-196)", async () => {
+    let failures = 0
+    const fleet = await baseFleet(FLEET_ROUTE, (ctx) => {
+      if (failures < 2) {
+        failures++
+        return [ev.error(ctx.session, { name: "Error", message: "stream disconnected" }), ev.idle(ctx.session)]
+      }
+      return undefined
+    })
+    try {
+      const opts: Opts = { routing: fleet.facts, server: fleet.pool, dir: fleet.dir }
+      // The ambient parse (what the dropped snapshot fell to) waits 90
+      // minutes before the retry; the injected snapshot waits zero.
+      process.env.OPENCODE_AUTO_RETRY_WAITS = "0,90"
+      setSwitchModelRegistry(undefined)
+      const ZERO = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0" })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, agent: "a" }
+      const base = await ensureForkBase(fleet.pool, fleet.plan, fleet.task, opts, chain, ZERO)
+      expect(base).toMatchObject({ agent: "b" })
+      // Two failed dispatches, the third succeeds — the differential sits in
+      // the SECOND retry's wait (the ambient parse's 90 minutes): all three
+      // on the base's agent, instantly.
+      expect(fleet.b.prompts).toHaveLength(3)
+    } finally {
+      delete process.env.OPENCODE_AUTO_RETRY_WAITS
+      setSwitchModelRegistry(undefined)
+      await teardown(fleet)
+    }
+  }, 10_000)
 
   test("a second agent gets its own base lazily, and the other agents' entries stay untouched", async () => {
     const fleet = await baseFleet(FLEET_TIERS)

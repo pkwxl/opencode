@@ -169,6 +169,12 @@ export async function manage(
   }
   let server = external ? await connect(external, directory) : await spawn(directory, await inputs())
   let agents = await agentsFingerprint(directory)
+  // One in-flight restart (plans/0186 D2, 0165-117): a caller arriving while
+  // a restart runs joins it instead of spawning beside it — under doc lanes a
+  // correlated network blip puts two lanes' restartServer retries in the same
+  // window, and two spawns over one project store leak a server (live,
+  // unreferenced, holding its port) for the rest of the run.
+  let restarting: Promise<boolean> | undefined
   // Proxy SDK client always targeting the active server — after a restart
   // swaps the instance, existing references point at the new server
   // automatically.
@@ -203,11 +209,22 @@ export async function manage(
         log(`⚠ ${reason}; but an external server (${displayUrl(external)}) is being reused and is not managed by this tool, keeping the current instance`)
         return false
       }
-      log(`↻ ${reason}`)
-      server.close()
-      server = await spawn(directory, await inputs())
-      agents = await agentsFingerprint(directory)
-      return true
+      if (restarting !== undefined) {
+        log(`↻ ${reason} (joining the restart already in flight)`)
+        return restarting
+      }
+      restarting = (async () => {
+        log(`↻ ${reason}`)
+        server.close()
+        server = await spawn(directory, await inputs())
+        agents = await agentsFingerprint(directory)
+        return true
+      })()
+      try {
+        return await restarting
+      } finally {
+        restarting = undefined
+      }
     },
     close: () => server.close(),
   }

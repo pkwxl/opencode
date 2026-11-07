@@ -52,8 +52,10 @@ import { strictResumeActive } from "./unit-commit"
 // base session to keep forking, no longer unconditionally rebuilding from
 // context.md; only a stale one (storage cleanup) is rebuilt through a one-off
 // chain (subject `T-NNN ctxbase …`, carries no phase, writes no progress
-// record; the turn is verified to leave no worktree changes, commitTree
-// naturally commits nothing) — the prefix is deterministic = the full digest
+// record; the turn is a reading prompt and is expected to change nothing, but
+// no check enforces that — an agent that edits files there surfaces at the
+// next unit's clean gate as leftover dirt, the person's to judge) — the
+// prefix is deterministic = the full digest
 // text, provider-cache friendly. Once established, the base session is only
 // forked, never dispatched again, the prefix stays the full digest text, and
 // reuse introduces no drift. Fallback chain: persistent digest base alive and
@@ -122,7 +124,12 @@ export async function ensureForkBase(
       // fails over) on the subtask tier's list for the current phase type,
       // the picked entry's variant and base step included.
       const base: SessionChain = { pct: 100, used: 0, at: 0, subject, role: "subtask" }
-      const result = await runSession(client, task, renderContextBase(promptFacts(opts), task, digest), opts, base)
+      // The caller's switches snapshot threads through (plans/0186 D3,
+      // 0165-196): the rebuild is a session dispatch like any other, and
+      // dropping the snapshot ran it under the environment's re-parse — a
+      // test injecting switches into runTask got the ambient minute-scale
+      // ladder over the injected one.
+      const result = await runSession(client, task, renderContextBase(promptFacts(opts), task, digest), opts, base, undefined, undefined, switches)
       if (result.type === "idle" && base.id) {
         // The record names the agent the base session truly lives on (the
         // dispatch inside picked it; §8.2) — the subtask route's first usable
@@ -561,9 +568,9 @@ async function pauseForExit(run: SessionRun): Promise<never> {
 // real chain's recovery point untouched) but copies the real chain's
 // model/role — what is probed is exactly the model the run will continue on
 // after recovery; quota is metered per model/account, so probing another
-// model says nothing. A probe session failing on its own (stream
-// subscription dropped, etc.) likewise counts as not recovered: keep
-// waiting.
+// model says nothing. A probe session failing on its own (a transport throw
+// — the contract-violating shape — or a returned error, see the probe catch
+// below) likewise counts as not recovered: keep waiting.
 // Under a registry (§6.3) the probe dispatches through selection like any
 // other: the probe candidate is the first one inside its window, ignoring
 // the down marks, so its mark is cleared for the probe and re-marked when
@@ -635,6 +642,15 @@ async function awaitRecovery(run: SessionRun, why: string, causeIn?: WaitCause):
       ping = await attempt(run.client, task, PROBE_PROMPT, opts, probe, undefined, undefined, switches)
     } catch (error) {
       if (error instanceof AgentStartError) throw error
+      // A probe that throws keeps waiting (plans/0069 §2.4's ruled posture —
+      // the S5 incident's transport-failure shape, compensated per model),
+      // deliberately unlike the task-dispatch catch above (plans/0185 D1: a
+      // throw out of attempt there is a driver fault and stops the run): the
+      // agent contract rules rejects out (0037 D2), so what lands here is a
+      // contract-violating transport throw or driver code — the probe's one
+      // tiny prompt, re-run each interval, is the bounded cost of riding the
+      // wait out rather than the person's terminal; a measured incident of a
+      // deterministic throw cycling this loop re-opens the question.
       if (probed !== undefined) run.router.markModelDown(probed)
       if (probedProvider !== undefined) run.router.markCurrentKeyDown(probedProvider, run.clock.now() + UNSTATED_KEY_HOLD_MS)
       // The probe-failure compensation counter (plans/0069 §2.4): one per
