@@ -529,9 +529,10 @@ describe("daemon: concurrent projects, width, and the confinement launcher (plan
           expect(failed.state).toBe("failed")
           expect(failed.code).toBe(1)
           // A completing run through the launcher: the watcher still flips
-          // starting → running (under a launcher it is the lock's presence,
-          // not the holder pid's match with the wrapper), and the run's own
-          // exit 0 is the record's.
+          // starting → running (under a launcher it is the lock's freshness
+          // — the holder's started at or past the run's spawn instant,
+          // plans/0197 D6 — not the holder pid's match with the wrapper),
+          // and the run's own exit 0 is the record's.
           const run = await h.request("POST", "/runs", h.control, { project: basename(dir), switches: { OPENCODE_AUTO_AGENT: "claude" } })
           expect(run.status).toBe(202)
           const id = ((await run.json()) as RunView).id
@@ -555,6 +556,48 @@ describe("daemon: concurrent projects, width, and the confinement launcher (plan
       await rm(scratch, { recursive: true, force: true })
     }
   }, 300_000)
+
+  test("under a launcher, a stale lock does not flip the run to running: the flip needs the lock's freshness (plans/0197 D6)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-launch-stale-"))
+    const scratch = await mkdtemp(join(tmpdir(), "auto-server-launch-stale-scratch-"))
+    // A launcher that holds the worker back for two seconds: the window in
+    // which the only lock in the directory is the stale one this test
+    // plants (the pre-fix watcher flipped on its mere presence — 0165-219).
+    const script = join(scratch, "launch.sh")
+    await Bun.write(script, ["sleep 2", "shift 2", 'exec "$@"', ""].join("\n"))
+    try {
+      await withHarness(async (h) => {
+        // A stale lock from a minute ago: a crashed run's leftover (its pid
+        // is gone, its started predates this spawn).
+        const dead = Bun.spawn(["sleep", "0"])
+        await dead.exited
+        await mkdir(join(dir, ".auto"), { recursive: true })
+        await Bun.write(
+          join(dir, ".auto", "run.lock"),
+          `${JSON.stringify({ pid: dead.pid, host: hostname(), command: "run", started: new Date(Date.now() - 60_000).toISOString() })}\n`,
+        )
+        const started = await h.request("POST", "/runs", h.control, { project: basename(dir) })
+        expect(started.status).toBe(202)
+        const id = ((await started.json()) as RunView).id
+        // Inside the launcher's sleep the only lock present is the stale
+        // one: the state must stay `starting` (the freshness floor).
+        const deadline = Date.now() + 1_500
+        while (Date.now() < deadline) {
+          const run = (await (await h.request("GET", `/runs/${id}`, h.read)).json()) as RunView
+          expect(run.state).toBe("starting")
+          await Bun.sleep(100)
+        }
+        // The real worker's own lock (fresh) then flips it, and the empty
+        // directory's preflight settles the run failed (exit 1).
+        const done = await untilTerminal(h, h.read, id)
+        expect(done.state).toBe("failed")
+        expect(done.code).toBe(1)
+      }, [dir], script)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(scratch, { recursive: true, force: true })
+    }
+  }, 60_000)
 })
 
 describe("daemon: lock conflicts (the lock is the arbiter, CLI and daemon alike)", () => {
@@ -714,9 +757,42 @@ describe("daemon CLI: the whitelist and token management", () => {
     }
   })
 
+  test("the unnamed token fallback is the first free token-N, never a collided name (plans/0197 D3)", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "auto-server-fallback-"))
+    try {
+      const store = new DaemonStore(dataDir)
+      // The floor: an unnamed issue on an empty store is token-1, the next
+      // token-2 (the base both the old length-based number and the first-
+      // free derivation agree on).
+      expect(store.issueToken("read").stored.name).toBe("token-1")
+      expect(store.issueToken("read").stored.name).toBe("token-2")
+      // A revoke frees the slot: the next unnamed issue takes token-1
+      // again. The length-based number computed token-2 (length 1 + 1) and
+      // the issue was refused "already exists" — a confusing refusal
+      // answering an act the operator could not know was wrong.
+      store.revokeToken("token-1")
+      expect(store.issueToken("read").stored.name).toBe("token-1")
+      // A user-named token occupies its slot by name too: with token-1,
+      // token-2 and a named token-4 stored, the first free is token-3 (the
+      // length-based number computed token-4 and collided).
+      store.issueToken("read", "token-4")
+      expect(store.issueToken("read").stored.name).toBe("token-3")
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
   test("serve refuses bad flags; unknown commands keep the usage refusal", async () => {
     expect((await runCli(["serve", "--port", "abc"])).code).toBe(1)
     expect((await runCli(["serve", "--nope"])).code).toBe(1)
+    // The port is bounded at the flag (plans/0197 D5): an out-of-range
+    // value is a usage refusal naming the range — never Bun.serve's own
+    // throw past the flag loop.
+    for (const bad of ["65536", "99999"]) {
+      const port = await runCli(["serve", "--port", bad])
+      expect(port.code, port.out).toBe(1)
+      expect(port.err).toContain("--port takes the TCP port to listen on: an integer 0..65535")
+    }
     const unknown = await runCli(["daemon"])
     expect(unknown.code).toBe(1)
     expect(unknown.err).toContain("usage:")

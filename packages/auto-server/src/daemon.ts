@@ -176,7 +176,9 @@ export type DaemonOptions = {
   // (a child of a confined process is inside it). Under a launcher the
   // recorded pid is the wrapper's and the lock's holder pid names a process
   // in the launcher's own namespace, so the starting→running watcher flips
-  // on the lock's presence alone.
+  // on the lock's freshness alone (the holder's started at or past the
+  // run's spawn instant — plans/0197 D6; a stale lock left by a crashed
+  // run does not flip it).
   launch?: string
 }
 
@@ -364,15 +366,17 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     }
   }
 
-  const watch = (run: RunRecord): void => {
+  const watch = (run: RunRecord, spawnAt: string): void => {
     const proc = run.proc!
     // starting → running when the worker takes .auto/run.lock (the holder
     // names its pid; the lock file is atomic, so a partial read never
     // happens — a read that fails simply hasn't happened yet). Under a
     // confinement launcher the holder's pid names a process inside the
     // launcher's own namespace, never the wrapper pid recorded here, so the
-    // flip is the lock's presence — the run is observable either way through
-    // its exit.
+    // flip is the lock's freshness (plans/0197 D6): the holder's `started`
+    // at or past this spawn's instant — a stale lock a crashed run left
+    // behind does not flip it, and the run stays `starting`, observable
+    // either way through its exit.
     run.watcher = setInterval(() => {
       if (run.state !== "starting") {
         clearInterval(run.watcher!)
@@ -381,7 +385,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       }
       try {
         const holder = JSON.parse(readFileSync(join(run.directory, ".auto", "run.lock"), "utf8"))
-        if (options.launch || holder?.pid === proc.pid) run.state = "running"
+        if (options.launch ? typeof holder?.started === "string" && holder.started >= spawnAt : holder?.pid === proc.pid) run.state = "running"
       } catch {
         // No lock yet (or the run refused before taking it).
       }
@@ -418,6 +422,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // through to it, so environment-referenced values — key references by
     // name — resolve from the daemon's own environment), execs the command,
     // and its exit code is the run's.
+    // The spawn instant, captured immediately before the spawn: a strict
+    // lower bound on everything the child (or its launcher chain) does, so
+    // the watcher's freshness floor (above) accepts this run's lock and no
+    // earlier one.
+    const spawnAt = new Date().toISOString()
     const proc = Bun.spawn(options.launch ? ["bash", options.launch, project.directory, "--", ...argv] : argv, {
       cwd: spawnCwd,
       env,
@@ -427,7 +436,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     })
     run.pid = proc.pid
     run.proc = proc
-    watch(run)
+    watch(run, spawnAt)
   }
 
   // Register and spawn one run — the tail POST /runs and the plan and
@@ -796,13 +805,18 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // nothing else. Auth precedes the upgrade (a refusal is the plain JSON
     // status, the same family as every route above).
     if (segments[0] === "runs" && segments.length === 3 && method === "GET" && (segments[2] === "worker" || segments[2] === "interactive")) {
-      const run = findRun(segments[1]!)
-      if (!run) return json(404, { error: `no run ${segments[1]} (runs are identified by the id POST /runs returned)` })
-      // Auth precedes the websocket check (the refusals are the same plain
-      // JSON statuses every route above answers, so a probe or a misrouted
-      // client learns its fate without a handshake).
-      const hub = hubs.get(run.id)!
+      // Auth precedes the run lookup on both WebSocket routes (the order
+      // every route above keeps — the credential is the gate, never a hint;
+      // plans/0197 D4): an unauthenticated probe learns nothing about which
+      // run ids exist. The interactive side checks the operator token first
+      // (a known token still learns 404 — existence is not secret to the
+      // authenticated); the worker side's credential IS the run's per-run
+      // secret, so an unknown run id answers the same 401 as a wrong secret
+      // — nothing named exists to compare against, and the two cases are
+      // not told apart.
       if (segments[2] === "worker") {
+        const run = findRun(segments[1]!)
+        const hub = run === undefined ? undefined : hubs.get(run.id)
         // The worker bridge's per-run secret, compared timing-safely over
         // digests (the token store's own pattern, src/store.ts): the
         // comparison stays off the raw secret and off byte-length
@@ -811,38 +825,41 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         // loopback posture (single machine, 127.0.0.1 bind by default),
         // noted here, not redesigned.
         const presented = url.searchParams.get("token") ?? ""
-        const presentedDigest = createHash("sha256").update(presented).digest()
-        const secretDigest = createHash("sha256").update(hub.secret).digest()
-        if (!timingSafeEqual(presentedDigest, secretDigest)) {
+        if (
+          run === undefined ||
+          hub === undefined ||
+          !timingSafeEqual(createHash("sha256").update(presented).digest(), createHash("sha256").update(hub.secret).digest())
+        ) {
           return json(401, { error: "unknown run secret: the worker bridge authenticates with the per-run secret the run's spawn payload carried" })
-        }
-      } else {
-        const auth = scopesForSocket(request, url)
-        if (auth.scopes === undefined) return json(auth.status, auth.body)
-        if (!auth.scopes.includes("answer") && !auth.scopes.includes("control")) {
-          return json(403, { error: `the interactive surface requires the "answer" or "control" scope ("answer" guards questions, "control" guards run control); this token carries: ${auth.scopes.join(", ")}` })
-        }
-        // A wide run carries no channel (plans/0162): the transport skip at
-        // spawn time is the rule, and this endpoint answers it plainly
-        // instead of upgrading into a socket nothing will ever speak on —
-        // the question semantics such a run takes are the run's own, not a
-        // channel's.
-        if (run.request.options.maxSessions >= 2) {
-          return json(409, {
-            error: `run ${run.id} carries no interactive channel: it runs at width ${run.request.options.maxSessions} (concurrent lanes), and one channel cannot serve concurrent sessions — the CLI's own rule. Its questions take the run's own degradation path (a permission question blocks the run with exit 2)`,
-            run: view(run),
-          })
         }
         if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
           return json(400, { error: `this route is a WebSocket endpoint: upgrade to websocket and speak the interactive transport protocol v${PROTOCOL_VERSION} (see docs/daemon.md)` })
         }
-        if (server.upgrade(request, { data: { kind: "client", run: run.id, scopes: auth.scopes } satisfies SocketData })) return new Response(null)
+        if (server.upgrade(request, { data: { kind: "worker", run: run.id } satisfies SocketData })) return new Response(null)
         return json(400, { error: "the websocket upgrade failed" })
+      }
+      const auth = scopesForSocket(request, url)
+      if (auth.scopes === undefined) return json(auth.status, auth.body)
+      if (!auth.scopes.includes("answer") && !auth.scopes.includes("control")) {
+        return json(403, { error: `the interactive surface requires the "answer" or "control" scope ("answer" guards questions, "control" guards run control); this token carries: ${auth.scopes.join(", ")}` })
+      }
+      const run = findRun(segments[1]!)
+      if (!run) return json(404, { error: `no run ${segments[1]} (runs are identified by the id POST /runs returned)` })
+      // A wide run carries no channel (plans/0162): the transport skip at
+      // spawn time is the rule, and this endpoint answers it plainly
+      // instead of upgrading into a socket nothing will ever speak on —
+      // the question semantics such a run takes are the run's own, not a
+      // channel's.
+      if (run.request.options.maxSessions >= 2) {
+        return json(409, {
+          error: `run ${run.id} carries no interactive channel: it runs at width ${run.request.options.maxSessions} (concurrent lanes), and one channel cannot serve concurrent sessions — the CLI's own rule. Its questions take the run's own degradation path (a permission question blocks the run with exit 2)`,
+          run: view(run),
+        })
       }
       if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
         return json(400, { error: `this route is a WebSocket endpoint: upgrade to websocket and speak the interactive transport protocol v${PROTOCOL_VERSION} (see docs/daemon.md)` })
       }
-      if (server.upgrade(request, { data: { kind: "worker", run: run.id } satisfies SocketData })) return new Response(null)
+      if (server.upgrade(request, { data: { kind: "client", run: run.id, scopes: auth.scopes } satisfies SocketData })) return new Response(null)
       return json(400, { error: "the websocket upgrade failed" })
     }
     // The P1e observability surface plus the P2b structured events channel:

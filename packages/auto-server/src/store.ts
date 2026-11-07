@@ -178,8 +178,15 @@ export class DaemonStore {
     }
     const scopes = SCOPES.filter((scope) => wanted.includes(scope))
     const tokens = this.listTokens()
-    const fallback = `token-${tokens.length + 1}`
-    const label = name?.trim() || fallback
+    // The unnamed fallback is the first free token-N, derived from the
+    // store's current set — a length-based number collides with a surviving
+    // name after a revoke (issue token-1, token-2, revoke token-1 → length+1
+    // computes token-2 and the issue is refused; plans/0197 D3). The check
+    // is by name, both directions: a user-named "token-5" occupies slot 5.
+    const taken = new Set(tokens.map((token) => token.name))
+    let n = 1
+    while (taken.has(`token-${n}`)) n++
+    const label = name?.trim() || `token-${n}`
     if (tokens.some((token) => token.name === label)) throw new StoreError(`a token named "${label}" already exists (revoke it first, or issue under a new name)`)
     const stored: StoredToken = { name: label, hash: "", scopes: [...scopes], created: new Date().toISOString() }
     const token = freshToken()

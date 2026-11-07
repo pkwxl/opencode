@@ -9,8 +9,10 @@
 //     interactive scopes at the door (403 names answer/control), a
 //     non-websocket request gets the plain 400;
 //   - the worker bridge authenticates with the per-run secret the spawn
-//     payload carried (401 for anything else) and only for a run this
-//     daemon knows (404 otherwise);
+//     payload carried (401 for anything else — an unknown run id the same
+//     401: auth precedes run-id existence on both WebSocket routes, the
+//     order every other route keeps, plans/0197 D4; the interactive side
+//     still answers an authenticated 404 for a run this daemon never had);
 //   - an authenticated client's hello answers hello with the run's registry
 //     state.
 // The run under test is a real spawned worker over an empty directory (it
@@ -92,9 +94,16 @@ describe("the daemon's interactive endpoints: auth, scopes and the registry", ()
       // The query-string token form is the browser's route in.
       const query = await fetch(`${h.daemon.url}${base}?token=${h.control}`)
       expect(query.status).toBe(400)
-      // An unknown run is 404 for both roles, auth or not.
-      expect((await h.request("GET", "/runs/run-999999/interactive", h.answer)).status).toBe(404)
-      expect((await h.request("GET", "/runs/run-999999/worker")).status).toBe(404)
+      // An unknown run answers nothing without a credential first
+      // (plans/0197 D4 — auth precedes run-id existence on both WebSocket
+      // routes, the order every other route keeps): the interactive side
+      // authenticates the operator token and still answers 404 to a known
+      // one, and the worker side's credential IS the run's secret, so an
+      // unknown id answers the same 401 as a wrong secret.
+      expect((await h.request("GET", "/runs/run-999999/interactive")).status).toBe(401)
+      expect((await fetch(`${h.daemon.url}/runs/run-999999/interactive?token=${h.answer}`)).status).toBe(404)
+      expect((await fetch(`${h.daemon.url}/runs/run-999999/worker?token=oar_wrong`)).status).toBe(401)
+      expect((await fetch(`${h.daemon.url}/runs/run-999999/worker`)).status).toBe(401)
     })
   }, 90_000)
 

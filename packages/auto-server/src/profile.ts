@@ -39,10 +39,12 @@ const laneLauncher: NonNullable<ShellProfile["laneLauncher"]> = (worktree, unit,
 // AUTO-DECISION (profile fields):
 // - program/bin "opencode-auto-server": the core's "re-run <program>" and
 //   "<bin> <subcommand>" message patterns name this binary.
-// - agentRecovery "startup": the server ships no interactive `fix` command —
-//   its config-fix routes arrive with the REST lifecycle surface — so the
-//   core's recovery hints must not name one; "startup" points at re-running
-//   the shell itself.
+// - agentRecovery "startup": the core's recovery hints for a missing agent
+//   contract must name a remedy this binary actually serves — `fix` is an
+//   operation here (POST /projects/<project>/fix), not a subcommand, so the
+//   "init" value's `run <bin> fix <dir>` hint shape would teach a command
+//   this shell refuses; "startup" keeps the hint off the false subcommand
+//   shape, pointing at re-running the shell itself.
 // - auditLog true: the service is unattended, so the run log always records
 //   in full regardless of options — the log file is the audit trail.
 // - configDir keeps the default "opencode-auto": the operator model registry

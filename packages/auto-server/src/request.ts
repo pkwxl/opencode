@@ -113,11 +113,13 @@ export function runOptionDefaults(): RunOptions {
 
 // The run request's options: strict allowlist, values validated like the
 // CLI's parse* helpers. A config key in any spelling gets the frozen
-// refusal; interactive gets its own refusal — a worker has no terminal to
-// host the resident input line, and the interactive transport (io-injected
-// Interactive over WebSocket) arrives with P3 (plans/0067 §四, T-093/T-094);
-// accepting it here would be a silent no-op or a hang, so it is a usage
-// error pointing at the CLI until that unit lands.
+// refusal; interactive gets its own refusal — the interactive transport
+// (io-injected Interactive over WebSocket, plans/0067 §四) landed with P3:
+// the daemon attaches it to every width-1 run it spawns and never accepts
+// it as a client field (parseTransport's daemon-written rule), so a request
+// naming it is a usage error pointed at where interactivity actually lives
+// (plans/0197 D1 — the old text taught the CLI's -i while every served
+// width-1 run already carried the transport).
 export function parseOptions(raw: unknown): RunOptions {
   if (raw === undefined) return runOptionDefaults()
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) fail("options must be an object holding the run's per-run options (verbose, waitAnswer, waitBetween, permission, newSession, dryrun, maxSessions, server, repair, stopAfter, boundary)")
@@ -127,8 +129,9 @@ export function parseOptions(raw: unknown): RunOptions {
     if (HAND_EDITED_KEYS.has(key)) fail(`options.${key} is a config key with no flag (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init`)
     if (key === "interactive") {
       fail(
-        `options.interactive is refused: a worker has no terminal (its stdin is closed), so the resident input line cannot live here — ` +
-          `interactive input arrives with the WebSocket transport of the later units (P3); until then drive interactive runs with opencode-auto run <dir> -i`,
+        `options.interactive is refused: the interactive transport is the daemon's own attachment, never a per-run option — ` +
+          `every width-1 run it spawns (POST /runs) already carries one (questions and /exit, /failback over the WebSocket endpoint /runs/<id>/interactive), ` +
+          `and a wide run (options.maxSessions ≥ 2) takes no channel at all (the core's one-channel rule), so there is nothing to request`,
       )
     }
     if (!OPTION_KEYS.has(key)) {

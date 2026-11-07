@@ -210,7 +210,11 @@ describe("worker: the run request's usage vocabulary", () => {
         ["missing directory", { options: {} }, /requires "directory"/],
         ["unknown request field", { directory: dir, run: true }, /unknown request field "run"/],
         ["unknown option", { directory: dir, options: { wait: 1 } }, /options\.wait is not a run option/],
-        ["interactive", { directory: dir, options: { interactive: true } }, /options\.interactive is refused/],
+        // The refreshed teaching (plans/0197 D1): interactivity is the
+        // daemon's own attachment, never a per-run option — the old text
+        // sent the caller to the CLI's -i for a transport every served
+        // width-1 run already carries.
+        ["interactive", { directory: dir, options: { interactive: true } }, /options\.interactive is refused: the interactive transport is the daemon's own attachment, never a per-run option/],
         ["bad permission", { directory: dir, options: { permission: "yolo" } }, /options\.permission takes/],
         ["waitAnswer out of range", { directory: dir, options: { waitAnswer: 90 } }, /options\.waitAnswer takes an integer 0\.\.60/],
         ["maxSessions not an integer", { directory: dir, options: { maxSessions: 1.5 } }, /options\.maxSessions takes a positive integer/],

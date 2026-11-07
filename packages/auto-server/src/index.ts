@@ -386,8 +386,12 @@ if (command === "serve") {
     const flag = rest[at]
     const value = rest[at + 1]
     if (flag === "--port") {
-      if (value === undefined || !/^\d+$/.test(value)) refuse("--port takes the TCP port to listen on (an integer; 0 picks a free one)")
-      port = Number(value)
+      // 0..65535, refused at the flag instead of Bun.serve's throw: an
+      // out-of-range port is a usage error and the refusal names the range
+      // (plans/0197 D5); 0 keeps its documented meaning (pick a free one).
+      const given = value === undefined || !/^\d+$/.test(value) ? undefined : Number(value)
+      if (given === undefined || given > 65535) refuse("--port takes the TCP port to listen on: an integer 0..65535 (0 picks a free one)")
+      port = given
       at++
     } else if (flag === "--host") {
       if (value === undefined || value.startsWith("--")) refuse("--host takes the address to bind (default 127.0.0.1 — v1 is single-machine)")

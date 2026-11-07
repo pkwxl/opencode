@@ -514,6 +514,12 @@ error frame and a close):
 | `GET /runs/<id>/interactive`   | an operator token with the `answer` **or** `control` scope (the `Authorization` header, or `?token=` — a browser WebSocket cannot set headers) | the client socket: the question channel and the control channel, multiplexed. **Not offered to a wide run** (plans/0162): a `maxSessions ≥ 2` run carries no transport at all — the endpoint answers **409** naming the one-channel rule, and such a run's questions take the stdin-closed degradation path |
 | `GET /runs/<id>/worker`        | the per-run secret the daemon wrote into the worker's spawn payload | the run's own bridge — the worker entry's injected `Interactive` implementation (`src/worker-interactive.ts`) connects back here through the P3a seam (`RunAllOpts.interactive`) |
 
+Auth precedes run-id existence on both endpoints (the order every route
+keeps — plans/0197 D4): the client endpoint checks the operator token
+before the run lookup (a known token still learns a run id does not exist,
+404), and an unknown run id on the worker endpoint answers the same 401 as
+a wrong secret — no unauthenticated run-id enumeration on either door.
+
 Frames (JSON, one per message; `v` on every one):
 
 - **question channel** (`answer` scope): the worker's `question {id, text,
@@ -830,9 +836,11 @@ invocation alone). Lane children need no launcher of their own: they are
 children of a confined worker, inside its confinement already.
 
 Under a launcher: the run's recorded pid is the wrapper's; the
-`starting → running` watcher flips on the lock file's *presence* (the
-holder's pid names a process inside the launcher's own namespace, never the
-wrapper pid); `DELETE /runs/<id>` signals the wrapper — what a kill means
+`starting → running` watcher flips on the lock file's *freshness* — the
+holder's `started` at or past the run's spawn instant, so a stale lock a
+crashed run left behind does not flip it (the holder's pid names a process
+inside the launcher's own namespace, never the wrapper pid, so freshness is
+the substitute test; plans/0197 D6); `DELETE /runs/<id>` signals the wrapper — what a kill means
 is the launcher's own (a container launcher's run may outlive its wrapper;
 the lock arbitrates any successor and the core's interruption recovery
 heals the directory on the next run); and the daemon's environment is what
