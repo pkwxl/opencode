@@ -175,6 +175,18 @@ export async function manage(
   // window, and two spawns over one project store leak a server (live,
   // unreferenced, holding its port) for the rest of the run.
   let restarting: Promise<boolean> | undefined
+  // The host's close, safe against its own restart (plans/0219 D3,
+  // 0165-135): close and restart were unserialized, so a close landing while
+  // a restart's spawn was in flight closed the already-closed old instance
+  // and the fresh one landed in `server` unclosed — live, unreferenced,
+  // holding its port and ring keys until machine reboot. The flag makes the
+  // close's claim ("nothing spawns after me") structural the way the agent
+  // pool's own closed guard does for its starts: a restart arriving after
+  // close refuses before spawning, and an in-flight restart's spawn is
+  // drained the moment it resolves (never assigned). Serial-driver floor:
+  // close with no restart in flight is one flag write beside today's single
+  // server.close().
+  let closed = false
   // Proxy SDK client always targeting the active server — after a restart
   // swaps the instance, existing references point at the new server
   // automatically.
@@ -203,7 +215,9 @@ export async function manage(
     },
     // Kill the currently spawned server and start a new instance with the
     // current spawn inputs (including the config replaced by setConfig); with
-    // an external server reuse, restarting is impossible and returns false.
+    // an external server reuse, restarting is impossible and returns false —
+    // as it does on a closed host (plans/0219 D3): nothing restarts after
+    // the run's close.
     async restart(reason) {
       if (external) {
         log(`⚠ ${reason}; but an external server (${displayUrl(external)}) is being reused and is not managed by this tool, keeping the current instance`)
@@ -213,10 +227,23 @@ export async function manage(
         log(`↻ ${reason} (joining the restart already in flight)`)
         return restarting
       }
+      if (closed) {
+        log(`⚠ ${reason}; but the host is already closed — no server restarts after close`)
+        return false
+      }
       restarting = (async () => {
         log(`↻ ${reason}`)
         server.close()
-        server = await spawn(directory, await inputs())
+        const spawned = await spawn(directory, await inputs())
+        if (closed) {
+          // The host closed while this restart was in flight (plans/0219 D3):
+          // the fresh instance would be live and unreferenced — shut it down
+          // at once, never assigning it.
+          spawned.close()
+          log(`⚠ the host closed while a restart was in flight; the freshly spawned opencode server was shut down`)
+          return false
+        }
+        server = spawned
         agents = await agentsFingerprint(directory)
         return true
       })()
@@ -226,7 +253,10 @@ export async function manage(
         restarting = undefined
       }
     },
-    close: () => server.close(),
+    close: () => {
+      closed = true
+      server.close()
+    },
   }
   return handle
 }

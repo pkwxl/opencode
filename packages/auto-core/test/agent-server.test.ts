@@ -107,6 +107,92 @@ describe("manage", () => {
     }
   })
 
+  test("close during an in-flight restart drains the freshly spawned server instead of orphaning it (plans/0219 D3, 0165-135)", async () => {
+    // The finding's interleaving: close() lands while the restart's spawn is
+    // in flight — the pre-fix host assigns the fresh instance after close
+    // already ran, and nothing ever closes it (live, unreferenced, holding
+    // its port and ring keys until machine reboot). A gate inside the
+    // restart's spawn holds it open until close has landed.
+    const first = fakeServer("http://127.0.0.1:1")
+    const fresh = fakeServer("http://127.0.0.1:2")
+    const lines: string[] = []
+    let openGate: (() => void) | undefined
+    let spawnReached!: () => void
+    const reached = new Promise<void>((resolve) => (spawnReached = resolve))
+    let spawns = 0
+    const handle = await manage(dir, undefined, {
+      log: (line: string) => lines.push(line),
+      spawn: async () => {
+        spawns++
+        if (spawns === 1) return first.server
+        spawnReached()
+        await new Promise<void>((resolve) => (openGate = resolve))
+        return fresh.server
+      },
+    })
+    const restarting = handle.restart("network failure")
+    // close lands while the spawn is in flight (the gate holds it open).
+    await reached
+    handle.close()
+    openGate!()
+    expect(await restarting).toBe(false)
+    // The fresh instance was drained exactly once — never assigned, never
+    // orphaned — and the host's url never moved to it.
+    expect(fresh.closed).toBe(1)
+    expect(handle.url).toBe("http://127.0.0.1:1")
+    expect(lines).toContain("⚠ the host closed while a restart was in flight; the freshly spawned opencode server was shut down")
+  })
+
+  test("a joiner of a drained restart shares its false (0186 D2's join over 0219 D3's close)", async () => {
+    const first = fakeServer("http://127.0.0.1:1")
+    const fresh = fakeServer("http://127.0.0.1:2")
+    let openGate: (() => void) | undefined
+    let spawnReached!: () => void
+    const reached = new Promise<void>((resolve) => (spawnReached = resolve))
+    let spawns = 0
+    const handle = await manage(dir, undefined, {
+      log,
+      spawn: async () => {
+        spawns++
+        if (spawns === 1) return first.server
+        spawnReached()
+        await new Promise<void>((resolve) => (openGate = resolve))
+        return fresh.server
+      },
+    })
+    const a = handle.restart("lane A network failure")
+    const b = handle.restart("lane B network failure")
+    await reached
+    handle.close()
+    openGate!()
+    expect(await a).toBe(false)
+    expect(await b).toBe(false)
+    // The initial spawn plus the one in-flight restart, drained once.
+    expect(spawns).toBe(2)
+    expect(fresh.closed).toBe(1)
+    expect(handle.url).toBe("http://127.0.0.1:1")
+  })
+
+  test("a restart after close refuses before spawning (plans/0219 D3)", async () => {
+    const first = fakeServer("http://127.0.0.1:1")
+    const lines: string[] = []
+    let spawns = 0
+    const handle = await manage(dir, undefined, {
+      log: (line: string) => lines.push(line),
+      spawn: async () => {
+        spawns++
+        return first.server
+      },
+    })
+    handle.close()
+    expect(first.closed).toBe(1)
+    expect(await handle.restart("late rotation")).toBe(false)
+    // The initial spawn alone — the late restart spawned nothing.
+    expect(spawns).toBe(1)
+    expect(handle.url).toBe("http://127.0.0.1:1")
+    expect(lines).toContain("⚠ late rotation; but the host is already closed — no server restarts after close")
+  })
+
   test("syncContext: an AGENTS.md update triggers a restart; no update, no restart", async () => {
     await writeFile(join(dir, "AGENTS.md"), "v1\n")
     const first = fakeServer("http://127.0.0.1:1")

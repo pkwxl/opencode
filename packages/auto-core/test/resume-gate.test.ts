@@ -305,6 +305,50 @@ describe("recoveryLadder (the shared reuse/rollback/fresh decision)", () => {
     })
   })
 
+  test("strict: a recorded model blocked only by its window is eligible-with-wait — the alive session is reused, not rolled back (plans/0219 D2, 0165-129)", async () => {
+    // The finding's scene: the run died in the last minutes of the recorded
+    // model's `only` window; at the re-run instant (12:00 UTC, the window
+    // opens 18:00) the model is outside its window but reopens at a known
+    // instant — a schedule is not evidence of death, so the accumulated
+    // context is kept (P20) instead of a stash-and-redo rollback.
+    const { parseWindow } = await import("../src/model-window")
+    const parsed = parseWindow("18:00-24:00")
+    if ("error" in parsed) throw new Error(parsed.error)
+    const models = [
+      { name: "w", layer: "operator" as const, agent: "opencode", model: "prov/w", only: [parsed.window] },
+    ]
+    const routing = {
+      registry: {
+        layers: [{ name: "operator", path: "/unused/models.json" }],
+        tz: "UTC",
+        agents: new Map([["opencode", { name: "opencode", layer: "operator" as const, adapter: "opencode" }]]),
+        models: new Map(models.map((item) => [item.name, item])),
+        tiers: { deep: { tier: "deep" as const, names: ["w"], layer: "operator" as const }, simple: { tier: "simple" as const, names: [], layer: "operator" as const } },
+        routes: new Map(),
+        unused: [],
+      },
+      agentFilter: "opencode",
+      filterSource: undefined,
+      defaultAgent: "opencode",
+      runAgent: "opencode",
+      router: (await import("../src/services")).services().router,
+      clock: { now: () => Date.parse("2026-09-25T12:00:00Z") },
+    }
+    const verdict = await recoveryLadder(
+      record({ model: "w", agent: "opencode", baseline: [] }),
+      // Strict without the describe-level model override: an override replaces
+      // the candidate list whole (§9), so the registry's "w" must be the list.
+      run({ opts: { routing } as unknown as Opts, switches: parseSwitches({ [SWITCH_ENV.strictResume]: "on" }), strict: true, probe: healthy }),
+    )
+    expect(verdict).toEqual({
+      kind: "reuse",
+      session: "ses_old",
+      usage: { used: 5000, pct: 8, limit: 60_000, errorStub: false },
+      model: "w",
+      agent: "opencode",
+    })
+  })
+
   test("strict: an error-stub session → rollback with the finer error-stub rung (the step caller's strict branch previously folded it into not-reusable)", async () => {
     const verdict = await recoveryLadder(record({ model: "kimi/k2", baseline: [] }), run({ switches: STRICT, strict: true, probe: stub }))
     expect(verdict).toEqual({ kind: "rollback", why: "the original session only took an error and produced nothing real" })

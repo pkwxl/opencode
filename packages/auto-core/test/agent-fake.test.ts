@@ -2199,8 +2199,10 @@ describe("usage windows (plans/0057 §5.2)", () => {
 // Sessions bound to their agent (plans/0055 §8.2, §8.3): the persisted
 // records carry the agent profile their session lives on, and on resume a
 // recorded session is used only if its agent is this run's and its recorded
-// model is usable now — otherwise it is a dead session, and the resume takes
-// the existing path of a new session with the resume note.
+// model is usable now — or, since plans/0219 D2, curable by its own schedule
+// (blocked only by its window and opening at a known instant) — otherwise it
+// is a dead session, and the resume takes the existing path of a new session
+// with the resume note.
 // Strict resume's default flipped to on (2026-10, ruling P-1 of
 // plans/0070): these binding verdicts are branch-independent, and the
 // records here are not git-backed (no unit baseline), so the cases pin the
@@ -2255,15 +2257,16 @@ describe("session-agent binding (plans/0055 §8.2, §8.3)", () => {
     })
   }
 
-  test("a session whose agent's model is not usable now is dead: the step is redone in a new session", async () => {
+  test("a session whose recorded model is not usable now is dead: the step is redone in a new session (0219 D2 re-pointed the old window shape — a window-only block is eligible-with-wait, the dead arm keeps the gone-model shape)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-bind-dead-"))
     const lines: string[] = []
     const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
       lines.push(args.map(String).join(" "))
     })
     try {
-      // w is outside its only window at the record's clock.
-      await seededRecord(dir, { agent: "opencode", model: "w" })
+      // "gone" names no entry of the registry's lists — a stale record of a
+      // removed entry, a true dead verdict (the shapes 0219 D2 keeps).
+      await seededRecord(dir, { agent: "opencode", model: "gone" })
       const agent = make()
       let resetCalled = false
       const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => (resetCalled = true)), LOOSE)
@@ -2275,10 +2278,40 @@ describe("session-agent binding (plans/0055 §8.2, §8.3)", () => {
       expect(agent.prompts).toHaveLength(1)
       expect(agent.prompts[0]!.session).not.toBe("ses_old")
       expect(agent.argsOf("fork")).toEqual([])
-      // The new session dispatches on a usable candidate, not the recorded w.
+      // The new session dispatches on a usable candidate, not the recorded one.
       expect(agent.prompts[0]!.model).toBe("prov/b")
-      expect(lines.some((line) => line.includes("the recorded session's model w is not usable now") && line.includes("redoing this step in a new session"))).toBe(true)
+      expect(lines.some((line) => line.includes("the recorded session's model gone is not usable now") && line.includes("redoing this step in a new session"))).toBe(true)
       // The record the new dispatch writes names the run's agent.
+      expect((await recallProgress(dir, "PLAN"))?.agent).toBe("opencode")
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a recorded model blocked only by its window is eligible-with-wait: the session is resumed, the dispatch failing over to the usable candidate (plans/0219 D2, 0165-129)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-bind-window-"))
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      // w is outside its only window at the record's clock, but it reopens at
+      // 18:00 — a schedule, not evidence of death: the alive session's
+      // context is kept (P20), and its next dispatch takes the first
+      // candidate usable now (the failover to b), §6.2's own law.
+      await seededRecord(dir, { agent: "opencode", model: "w" })
+      const agent = make()
+      let resetCalled = false
+      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => (resetCalled = true)), LOOSE)
+      expect(value).toBe(4)
+      expect(resetCalled).toBe(false)
+      expect(agent.prompts).toHaveLength(1)
+      expect(agent.prompts[0]!.session).toBe("ses_old")
+      expect(agent.prompts[0]!.text).toContain("You are continuing in the original, interrupted session")
+      // The reused session's dispatch fails over to the usable candidate.
+      expect(agent.prompts[0]!.model).toBe("prov/b")
+      expect(lines.some((line) => line.includes("not usable now"))).toBe(false)
       expect((await recallProgress(dir, "PLAN"))?.agent).toBe("opencode")
     } finally {
       printed.mockRestore()

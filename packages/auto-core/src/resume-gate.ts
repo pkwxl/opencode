@@ -179,9 +179,12 @@ export async function recoveryLadder(record: Progress, run: LadderRun): Promise<
   const legacyRecord = run.strict && record.baseline === undefined
   // §8.3 (plans/0055 §8.2): the dead-session verdict — a recorded session is
   // resumed only if its agent is one this run can dispatch on and its recorded
-  // model is usable now; otherwise it is dead and the ladder redoes the unit
-  // (under strict resume, the rollback path). Returns the reason for the log
-  // line; undefined = no verdict (a record that names nothing to check).
+  // model is usable now, or curable by its own schedule (plans/0219 D2:
+  // blocked only by its window and opening at a known instant — the session
+  // is kept and its next dispatch waits or fails over); otherwise it is dead
+  // and the ladder redoes the unit (under strict resume, the rollback path).
+  // Returns the reason for the log line; undefined = no verdict (a record
+  // that names nothing to check).
   const dead = deadSessionWhy(run.opts, run.switches, record, run.role)
   // The candidate gate: everything that bars the probe itself — an already
   // summarized record (a graceful exit's summary is never reused), the
@@ -228,10 +231,14 @@ export async function recoveryLadder(record: Progress, run: LadderRun): Promise<
         why: `foreign commits since the recorded baseline adopted as the current state (${drift.foreign.join("; ")}); the interrupted session's context is stale`,
       }
     }
-    // §10 item 11 (plans/0055): the recorded model is judged by eligibility —
-    // a window change that only moves the fresh pick does not roll a unit
-    // back; a model marked down, outside its windows, excluded by the agent
-    // filter or gone from the registry is not.
+    // §10 item 11 (plans/0055, its letter completed by plans/0219 D2): the
+    // recorded model is judged by eligibility — a window change that only
+    // moves the fresh pick does not roll a unit back, and a model blocked
+    // only by its window (opening at a known instant) is eligible-with-wait:
+    // the session's context is kept, its next dispatch waiting for the
+    // opening or failing over per §6.2's own law; a model marked down,
+    // outside a window that never reopens, excluded by the agent filter or
+    // gone from the registry is not.
     // AUTO-DECISION: both callers used to compute resumeModelNow beside this
     // check and never read it (the pre-item-11 equality check's leftover);
     // the merge drops the dead computation instead of carrying it into the

@@ -216,10 +216,20 @@ export function degradeAgents(agents: FleetAgent[], switches: Switches, opts: De
   // run's phases include a code-producing type (the derived fact opts.codeWork,
   // absent = may run) — over non-code phases the channel never steers, so a
   // steer-less agent is no obstacle. The condition threads the derived fact;
-  // the config keys keep their constitutional on/off meaning.
+  // the config keys keep their constitutional on/off meaning. The remedy
+  // teaches the per-key amend (plans/0219 D1, 0165-128), both keys at once —
+  // amend refuses --test-by-driver false alone while handover-test stays on —
+  // and, under a registry that names the forcing agent, the fleet alternative
+  // (0055 §8.5: choosing a fleet without the weak agent); a re-init would
+  // reset every other constitutional key with it, so it is never the remedy
+  // for one key.
+  const fleetTail =
+    labelNotes && weakSteer
+      ? `; or point the run at an agent that takes messages mid-turn (OPENCODE_AUTO_AGENT=opencode, or the config's agent key) and keep --test-by-driver`
+      : ""
   const error =
     opts.testByDriver && opts.codeWork !== false && !opts.dryrun && !caps.steer
-      ? `--test-by-driver needs an agent that takes messages into a live session (the driver feeds test results back that way); this agent cannot${labelNotes && weakSteer ? ` (${weakSteer.label})` : ""}. Re-init the project without --test-by-driver.`
+      ? `--test-by-driver needs an agent that takes messages into a live session (the driver feeds test results back that way); this agent cannot${labelNotes && weakSteer ? ` (${weakSteer.label})` : ""}. Turn both keys off per key: opencode-auto amend <dir> --test-by-driver false --handover-test false${fleetTail}`
       : undefined
   return {
     switches: patch,

@@ -336,6 +336,29 @@ export function recoveryAt(ctx: SelectContext, call: SelectCall): { at: number; 
   return soonest
 }
 
+// The window-curability of one named candidate (plans/0219 D2, 0165-129): the
+// instant the candidate becomes usable again, when the window is its ONLY
+// fault — the candidate still in the call's list, passing the agent filter,
+// holding `key` (the continuation branch's own identity), not marked down, its
+// ring not spent, its known window not below the cap, and its window opening
+// at a known instant (nextOpening). The strict-resume eligibility asks this so
+// a recorded model blocked only by its schedule is not declared dead (P20: a
+// scheduled, self-curing condition with a known instant is waited out with the
+// session's context kept, never rolled back); undefined = no such cure (usable
+// now, gone from the list, filtered, down, ring-spent, sub-cap, or a window
+// that never reopens — the shapes the dead verdict keeps). Computed here
+// beside faultsOf so the four faults keep their one home; the wait branch's
+// own candidate admission (`!outside || down || ring || small`) is the same
+// predicate read candidate-by-candidate.
+export function windowCurableAt(ctx: SelectContext, call: SelectCall, key: string): number | undefined {
+  const candidate = candidatesOf(ctx, call).candidates.find((item) => passesFilter(ctx, item) && holds(item, key))
+  if (candidate === undefined) return undefined
+  const [outside, down, ring, small] = faultsOf(ctx, call, candidate)
+  if (!outside || down || ring || small) return undefined
+  if (candidate.kind !== "entry") return undefined
+  return nextOpening([candidate.entry], ctx.registry.tz, call.now)
+}
+
 // §6.2 rule 1 as the one shared rule (D12, plans/0069 §2.2, which found
 // routing.ts re-implementing it over names): whether a model entry lives on
 // the filter's adapter — an undefined filter passes every entry. Selection's

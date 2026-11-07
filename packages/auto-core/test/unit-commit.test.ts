@@ -184,18 +184,45 @@ describe("resumeModelNow (strict-resume model check)", () => {
       expect(resumeModelEligible(opts, bare, "a", step)).toBe(true)
     })
 
-    test("not eligible: marked down, outside its windows, or gone from the registry", async () => {
+    test("a recorded model blocked only by its window is eligible-with-wait, not a dead session (plans/0219 D2, 0165-129)", async () => {
+      // The finding's scene: a run killed (or /exit-ed) while its recorded
+      // model's `only` window was open — at the re-run instant the model is
+      // outside its window, but the window reopens at a known instant: a
+      // schedule is not evidence of death, the session's context is kept
+      // (P20) and its next dispatch waits for the opening or fails over per
+      // §6.2's own law. Fresh internal names — the process-wide router's down
+      // marks survive across tests.
+      const { parseWindow } = await import("../src/model-window")
+      const parsed = parseWindow("18:00-24:00")
+      if ("error" in parsed) throw new Error(parsed.error)
+      // One candidate: the redo's own dispatch would wait for the same
+      // opening — a rollback (or a fresh session) buys nothing but a stash.
+      const alone: import("../src/opts").Opts = { routing: factsOf([entry("w", { model: "prov/w", only: [parsed.window] })]) }
+      expect(resumeModelEligible(alone, bare, "w", step)).toBe(true)
+      expect(deadSessionWhy(alone, bare, { model: "w", phase: step })).toBeUndefined()
+      // With another model usable now the session is still kept: eligibility
+      // judges the session's life, and the next dispatch's pick (the failover
+      // to "other") is §6.2's own law, unchanged.
+      const withOther: import("../src/opts").Opts = {
+        routing: factsOf([entry("w", { model: "prov/w", only: [parsed.window] }), entry("other", { model: "prov/other" })]),
+      }
+      expect(resumeModelEligible(withOther, bare, "w", step)).toBe(true)
+      expect(deadSessionWhy(withOther, bare, { model: "w", phase: step })).toBeUndefined()
+    })
+
+    test("not eligible: marked down, or gone from the registry (the shapes the dead verdict keeps — 0219 D2 re-pointed §10 item 11's old outside-its-windows arm)", async () => {
       const { parseWindow } = await import("../src/model-window")
       const parsed = parseWindow("18:00-24:00")
       if ("error" in parsed) throw new Error(parsed.error)
       const models = [entry("a", { model: "prov/a", only: [parsed.window] }), entry("b", { model: "prov/b" })]
       const opts: import("../src/opts").Opts = { routing: factsOf(models) }
-      // Outside its only window at 12:00.
-      expect(resumeModelEligible(opts, bare, "a", step)).toBe(false)
-      expect(deadSessionWhy(opts, bare, { model: "a", phase: step })).toContain("not usable now")
-      // Marked down.
+      // Marked down: failure evidence the window cannot cure — "a" is
+      // outside its window too, and the mark is what keeps it dead.
       services().router.markModelDown("b")
       expect(resumeModelEligible(opts, bare, "b", step)).toBe(false)
+      services().router.markModelDown("a")
+      expect(resumeModelEligible(opts, bare, "a", step)).toBe(false)
+      expect(deadSessionWhy(opts, bare, { model: "a", phase: step })).toContain("not usable now")
       // Gone from the registry (a stale record of a removed entry).
       expect(resumeModelEligible(opts, bare, "gone", step)).toBe(false)
       expect(deadSessionWhy(opts, bare, { model: "gone", phase: step })).toContain("not usable now")

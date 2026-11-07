@@ -54,7 +54,7 @@ import { formatWindowState, isoInZone } from "./model-window"
 import type { ModelEntry, ModelRegistry, ModelReference } from "./models-schema"
 import type { PhaseKey } from "./phases/registry"
 import type { Phase } from "./resume"
-import { candidateKey, candidatesOf, recoveryAt, select, selectContextOf, type Candidate, type DownMark, type SelectContext, type SelectCall } from "./select"
+import { candidateKey, candidatesOf, recoveryAt, select, selectContextOf, windowCurableAt, type Candidate, type DownMark, type SelectContext, type SelectCall } from "./select"
 import type { FailbackScope, ModelRole, Switches } from "./switches"
 import type { Usage } from "./stats"
 
@@ -1163,16 +1163,21 @@ export function recordedAgentOk(facts: RouteFacts, recorded: string | undefined)
   return adapter !== undefined && (facts.agentFilter === undefined || adapter === facts.agentFilter)
 }
 
-// The §10 item 11 eligibility of a strict resume: the recorded internal
-// name is judged by eligibility, not equality. Selection is asked exactly
-// as the dispatch a resumed session takes — a continuation over the
-// recorded model (§6.2 keeps the chain's model while it is usable) — and
-// the recorded model must be what it keeps. So a window change that only
-// moves the fresh pick (an earlier candidate's window reopening), a
-// reordered list or a returned primary does not roll a unit back; a model
-// that is marked down, outside its windows, excluded by the agent filter
-// or gone from the registry is not eligible. Moved from src/unit-commit.ts
-// when the branch moved here.
+// The §10 item 11 eligibility of a strict resume (its letter completed by
+// plans/0219 D2): the recorded internal name is judged by eligibility, not
+// equality. Selection is asked exactly as the dispatch a resumed session
+// takes — a continuation over the recorded model (§6.2 keeps the chain's
+// model while it is usable) — and the recorded model must be what it keeps.
+// So a window change that only moves the fresh pick (an earlier candidate's
+// window reopening), a reordered list or a returned primary does not roll a
+// unit back; and a recorded model blocked ONLY by its window — not down, not
+// ring-spent, not filtered, not below the cap, still in the call's list and
+// opening at a known instant — is eligible-with-wait (windowCurableAt): a
+// schedule is not evidence of death, and the session's accumulated context is
+// kept (P20) while its next dispatch waits for the opening or fails over per
+// §6.2's own law. A model that is marked down, outside a window that never
+// reopens, excluded by the agent filter or gone from the registry is not
+// eligible. Moved from src/unit-commit.ts when the branch moved here.
 export function resumeModelEligible(
   facts: RouteFacts,
   switches: Switches,
@@ -1182,24 +1187,32 @@ export function resumeModelEligible(
   phase?: Phase,
   role?: ModelRole,
 ): boolean {
-  const decision = select(routeContext(facts, switches, cap), {
+  const ctx = routeContext(facts, switches, cap)
+  const call = {
     role: role ?? phaseToRole(phase) ?? "bypass",
     entry: phaseKey?.entry,
     now: facts.clock.now(),
-    continuation: true,
+    continuation: true as const,
     current: recorded,
-  })
-  return decision.kind === "pick" && candidateKey(decision.candidate) === recorded
+  }
+  const decision = select(ctx, call)
+  if (decision.kind === "pick" && candidateKey(decision.candidate) === recorded) return true
+  // 0219 D2: the curability arm — the recorded model blocked only by its
+  // window, opening at a known instant.
+  return windowCurableAt(ctx, call, recorded) !== undefined
 }
 
 // The §8.3 dead-session verdict of a resume record: a recorded session is
 // resumed only if its agent is one this run can dispatch on and its
-// recorded model is usable now; otherwise the session is dead and the
-// resume takes the existing path of a new session with the resume note
-// (under strict resume, the rollback path). Returns the reason for the
-// log line; undefined = no verdict (a record that names nothing to check —
-// a non-strict record carries no model, and eligibility then has nothing
-// to judge). Moved from src/unit-commit.ts when the branch moved here.
+// recorded model is usable now — or, since plans/0219 D2, curable by its own
+// schedule (blocked only by its window and opening at a known instant: the
+// session is kept and its next dispatch waits or fails over, never a dead
+// verdict); otherwise the session is dead and the resume takes the existing
+// path of a new session with the resume note (under strict resume, the
+// rollback path). Returns the reason for the log line; undefined = no verdict
+// (a record that names nothing to check — a non-strict record carries no
+// model, and eligibility then has nothing to judge). Moved from
+// src/unit-commit.ts when the branch moved here.
 export function deadSessionWhy(
   facts: RouteFacts,
   switches: Switches,

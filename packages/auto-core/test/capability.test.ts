@@ -165,6 +165,32 @@ describe("degrade: run-start clamp", () => {
     expect(degrade(HEADLESS, parseSwitches({}), { testByDriver: true }).error).toContain("--test-by-driver")
     expect(degrade(HEADLESS, parseSwitches({}), { testByDriver: true, dryrun: true }).error).toBeUndefined()
   })
+
+  test("the clamp's error teaches the per-key amend and, under a registry, the fleet alternative — never a re-init (plans/0219 D1, 0165-128)", () => {
+    // The single-agent path: the per-key remedy, both keys at once (amend
+    // refuses --test-by-driver false alone while handover-test stays on, so
+    // the command must carry both to work as given); no fleet clause (no
+    // registry labels a forcing agent).
+    const single = degrade(HEADLESS, parseSwitches({}), { testByDriver: true }).error!
+    expect(single).toContain("Turn both keys off per key: opencode-auto amend <dir> --test-by-driver false --handover-test false")
+    expect(single).not.toContain("OPENCODE_AUTO_AGENT")
+    expect(single).not.toContain("Re-init")
+    // Under a registry the forcing agent is labeled and the fleet alternative
+    // rides beside the amend (0055 §8.5: choosing a fleet without the weak
+    // agent is how an operator keeps the key).
+    const fleet = degradeAgents(
+      [{ caps: OPENCODE_CAPABILITIES, label: "opencode (m1)" }, { caps: HEADLESS, label: "kimi (m2)" }],
+      parseSwitches({}),
+      { testByDriver: true },
+      true,
+    ).error!
+    expect(fleet).toContain("(kimi (m2))")
+    expect(fleet).toContain("Turn both keys off per key: opencode-auto amend <dir> --test-by-driver false --handover-test false")
+    expect(fleet).toContain(
+      "; or point the run at an agent that takes messages mid-turn (OPENCODE_AUTO_AGENT=opencode, or the config's agent key) and keep --test-by-driver",
+    )
+    expect(fleet).not.toContain("Re-init")
+  })
 })
 
 describe("permissionPreset: --permission for an agent without permission events", () => {

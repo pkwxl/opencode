@@ -136,19 +136,22 @@ export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | un
 
 // The §10 item 11 eligibility of a strict resume (eligibility replaces
 // equality — a window change that only moves the fresh pick does not roll a
-// unit back).
+// unit back; and since plans/0219 D2 a recorded model blocked only by its
+// window, opening at a known instant, is eligible-with-wait — a schedule is
+// not evidence of death).
 export function resumeModelEligible(opts: Opts, switches: Switches, recorded: string, phase?: Phase, role?: ModelRole): boolean {
   return eligibleOf(factsOf(opts, switches), switches, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, opts.phase, recorded, phase, role)
 }
 
 // The §8.3 dead-session verdict of a resume record: a recorded session is
 // resumed only if its agent is one this run can dispatch on and its
-// recorded model is usable now; otherwise the session is dead and the
-// resume takes the existing path of a new session with the resume note
-// (under strict resume, the rollback path). Returns the reason for the
-// log line; undefined = no verdict (a record that names nothing to check —
-// a non-strict record carries no model, and eligibility then has nothing
-// to judge).
+// recorded model is usable now — or curable by its own schedule (plans/0219
+// D2: blocked only by its window and opening at a known instant); otherwise
+// the session is dead and the resume takes the existing path of a new
+// session with the resume note (under strict resume, the rollback path).
+// Returns the reason for the log line; undefined = no verdict (a record
+// that names nothing to check — a non-strict record carries no model, and
+// eligibility then has nothing to judge).
 export function deadSessionWhy(
   opts: Opts,
   switches: Switches,
