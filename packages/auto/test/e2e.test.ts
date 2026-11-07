@@ -2698,6 +2698,38 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  // The missing-index remedy is phased-aware through the shell binary
+  // (0165-167, pinned here over 0193 D1's one emitter family): the line's
+  // only banner context is phased projects (config.phases !== "m"), exactly
+  // where plan refuses naming transfer — before 0193 D1 the shells'
+  // hand-maintained phasesLine taught plan unconditionally, so the person
+  // ran the taught command and was refused once before the right one
+  // appeared. The unstarted phased project needs no fake agent: the banner
+  // prints and run stops at the phase routing, nothing established.
+  test("the missing-index remedy is phased-aware: the phased run banner teaches transfer, m mode's status line teaches plan (0165-167)", async () => {
+    const phased = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", phased, "--phases", "dm"])).code).toBe(0)
+      const run = await runCli(["run", phased])
+      expect(run.out).toContain("⚠ phase index (docs/R-01/phases.md) is missing; run opencode-auto transfer to establish the round")
+      expect(run.out).not.toContain("run opencode-auto plan to establish the round")
+      // m mode's split (the default single-phase project): plan establishes
+      // the round, and the status view — the emitter's other caller —
+      // agrees with the banner's teaching
+      const mode = await mkdtemp(join(tmpdir(), "auto-cli-"))
+      try {
+        expect((await runCli(["init", mode])).code).toBe(0)
+        const status = await runCli(["status", mode])
+        expect(status.out).toContain("⚠ phase index (docs/R-01/phases.md) is missing; run opencode-auto plan to establish the round")
+        expect(status.out).not.toContain("run opencode-auto transfer to establish the round")
+      } finally {
+        await rm(mode, { recursive: true, force: true })
+      }
+    } finally {
+      await rm(phased, { recursive: true, force: true })
+    }
+  })
 })
 
 // `continue` retired (auto-core plans/0053 D33; the advance command since
@@ -3044,38 +3076,28 @@ describe("CLI: the option policy's enumeration guard (0159)", () => {
     }
   }, 120_000)
 
-  // The hidden `_lane` column (plans/0193 D5, 0165-056/S26-04's _lane half):
-  // a run-shaped machine entry — its argv is the parent's lane launcher's
-  // own (`_lane <dir> --unit <id> [--merge <branch>]`, plus the session
-  // flags), so its policy owns exactly the vocabulary the run family shares:
-  // the globally retired flags, the frozen config keys, the retired extras
-  // and the other commands' revision pairs (brief, name/email). Each is
-  // refused with exit 1 naming it — before 0193 D5 the extras were waved
-  // through and silently ignored. The layers that are each public command's
-  // own surface (run's execution shaping, plan's routes, close's pair) are
-  // not re-enumerated here: the launcher never passes them and the shared
-  // family's vocabulary is what the hidden entry owes (the named residual
-  // of 0193 D5).
-  test("the hidden _lane refuses the shared vocabulary — retired, frozen and the other commands' revision pairs — naming each", async () => {
+  // The hidden `_lane` column (plans/0193 D5, 0165-056/S26-04's _lane half,
+  // widened to the machine-entry allowlist by plans/0195 D4): a run-shaped
+  // machine entry — its argv is the parent's lane launcher's own (`_lane
+  // <dir> --unit <id> [--merge <branch>]`, plus the session flags its block
+  // reads through parseSessionFlags), so its policy owns exactly that
+  // grammar: every other known flag refuses with exit 1 naming it — the
+  // globally retired flags, the frozen config keys and the other commands'
+  // revision pairs by their specific notices (0193 D5; before it the
+  // retired extras were waved through and silently ignored), everything
+  // else by the allowlist line (0195 D4: run's execution shaping, plan's
+  // input pair and the close family passed the entry silently ignored —
+  // the named residual 0193 D5 left this step). Enumerating the whole
+  // derived vocabulary keeps the column fail-loud on launcher drift: a
+  // future flag joining KNOWN_FLAGS lands here automatically.
+  test("the hidden _lane refuses every flag outside its grammar — the whole vocabulary enumerated (0193 D5's shared layer widened by 0195 D4)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-enum-"))
     try {
+      // What the entry's block genuinely reads: --unit, --merge and the
+      // session flags parseSessionFlags consumes.
       const laneConsumed = new Set(["unit", "merge", "server", "verbose", "interactive", "wait-answer", "permission", "new-session"])
-      const sharedLayers = [
-        // init's -p retirement entry is scoped to init alone (plan's -p is
-        // the live planning input), so the global retired loop skips it here
-        // and _lane does not own plan's input flags — the named residual of
-        // 0193 D5 (with the close family and run's execution shaping, the
-        // layers the hidden machine entry leaves to its launcher's own argv).
-        ...[...RETIRED_KEYS].filter((flag) => flag !== "prompt"),
-        ...["continue", "commit-subtask", "verify-idle", "verify-max"],
-        ...["brief", "brief-file", "name", "email"],
-        // The config flags read off the source (the frozen-key family the
-        // run family shares; CONFIG_FLAGS is not a parser constant the
-        // guards above derive, so its line is read the same way).
-        ...[...source.matchAll(/const CONFIG_FLAGS = \[([^\]]*)\]/g)][0]![1].match(/"([^"]+)"/g)!.map((token: string) => token.slice(1, -1)),
-      ]
-      const refusedFlags = [...new Set(sharedLayers)].filter((flag) => !laneConsumed.has(flag))
-      expect(refusedFlags.length).toBeGreaterThan(25)
+      const refusedFlags = [...KNOWN_FLAGS].filter((flag) => !laneConsumed.has(flag))
+      expect(refusedFlags.length).toBeGreaterThan(60)
       const failures: string[] = []
       for (let index = 0; index < refusedFlags.length; index += 12) {
         await Promise.all(
@@ -3088,7 +3110,7 @@ describe("CLI: the option policy's enumeration guard (0159)", () => {
           }),
         )
       }
-      expect(failures, "_lane: every flag of the shared vocabulary refuses with exit 1 naming it").toEqual([])
+      expect(failures, "_lane: every flag outside the machine-entry grammar refuses with exit 1 naming it").toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -3114,6 +3136,154 @@ describe("CLI: the option policy's enumeration guard (0159)", () => {
       for (const key of keys) {
         expect(key === "frozen" || optionHelpKeys.has(key), `the ${key} options row has no OPTION_HELP paragraph`).toBe(true)
       }
+    }
+  })
+})
+
+// The parser's token-form refusals (plans/0195, the 0165 parser findings):
+// the 0159 enumeration guard above covers flag tokens per command; these
+// tests cover the token forms outside that frame — positional overflow
+// (0165-166, 0159's own deferred residual: `run dir1 dir2` ran dir1 with
+// dir2 silently swallowed), the =value form of boolean flags (0165-212:
+// the eq branch set any value and every reader is a !== "false"
+// comparison, so --verbose=flase silently meant true), the empty key
+// (0165-211: `--` parsed to "" and similarOptions's startsWith("") matched
+// every name, flooding the refusal with the whole vocabulary) — and the
+// hidden _lane's machine-entry allowlist (plans/0195 D4, ruling 0193 D5's
+// named residual: run's execution shaping, plan's input pair and the close
+// family passed the entry silently ignored). The refusals all fire in
+// argument policy, before any directory work, so most cases need no real
+// directory.
+describe("CLI: the parser's token-form refusals (0195)", () => {
+  test("extra positionals are usage errors naming the command's positional grammar — never silently ignored (0165-166)", async () => {
+    const oneDir = await runCli(["status", "/nonexistent-proj", "extra-word"])
+    expect(oneDir.code).toBe(1)
+    expect(oneDir.err).toContain('unexpected argument "extra-word"')
+    expect(oneDir.err).toContain("status takes at most one directory argument (usage: opencode-auto status [dir])")
+    // 0159's recorded scene: `plan a b --scaffold` used to plan `a` with
+    // `b` swallowed.
+    const plan = await runCli(["plan", "proj-a", "proj-b", "--scaffold"])
+    expect(plan.code).toBe(1)
+    expect(plan.err).toContain('unexpected argument "proj-b"')
+    expect(plan.err).toContain("plan takes at most one directory argument (usage: opencode-auto plan [dir])")
+    const run = await runCli(["run", "dir1", "dir2"])
+    expect(run.code).toBe(1)
+    expect(run.err).toContain('unexpected argument "dir2"')
+    // The per-command splits keep their own grammars: close <ref> [dir],
+    // fork <target> <worktree-path> [dir], remove-fork <worktree-path> [dir]
+    // — each refusal quotes the first extra word and the command's shape.
+    const close = await runCli(["close", "R-001", "d1", "d2", "--reason", "x"])
+    expect(close.code).toBe(1)
+    expect(close.err).toContain('unexpected argument "d2"')
+    expect(close.err).toContain("close takes <ref> [dir]: a unit reference, then an optional directory (usage: opencode-auto close <ref> [dir] --reason <text>)")
+    const fork = await runCli(["fork", "T-001", "wt", "d1", "d2"])
+    expect(fork.code).toBe(1)
+    expect(fork.err).toContain('unexpected argument "d2"')
+    expect(fork.err).toContain("fork takes <T-NNN | sha> <worktree-path> [dir]: the target, the worktree path, then an optional directory (usage: opencode-auto fork <T-NNN | sha> <worktree-path> [dir])")
+    const removeFork = await runCli(["remove-fork", "wt", "d1", "d2"])
+    expect(removeFork.code).toBe(1)
+    expect(removeFork.err).toContain('unexpected argument "d2"')
+    expect(removeFork.err).toContain("remove-fork takes <worktree-path> [dir]: the fork's root worktree, then an optional directory (usage: opencode-auto remove-fork <worktree-path> [dir] [--force])")
+    // The documented arity itself still passes (P10's floor): close with
+    // ref + dir reaches its own next stage, not this refusal
+    const fine = await runCli(["close", "R-001", "d1", "--reason", "x"])
+    expect(fine.err).not.toContain("unexpected argument")
+  })
+
+  test("boolean flags' =value form is validated — a typo'd value no longer silently means true (0165-212)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-bool-"))
+    try {
+      const refused = await runCli(["run", dir, "--verbose=flase"])
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain('--verbose takes true or false: "flase" is neither')
+      expect(refused.err).toContain("pass the flag bare for true, or --verbose=false for the explicit opt-out")
+      // Every command's booleans validate alike (the check sits at the
+      // parser's policy layer): close's pair and fix's --dryrun
+      const close = await runCli(["close", "R-001", dir, "--reason", "x", "--cascade=x"])
+      expect(close.code).toBe(1)
+      expect(close.err).toContain('--cascade takes true or false: "x" is neither')
+      const fix = await runCli(["fix", dir, "--dryrun=yes"])
+      expect(fix.code).toBe(1)
+      expect(fix.err).toContain('--dryrun takes true or false: "yes" is neither')
+      // A retired boolean keeps its retirement notice — the more specific
+      // remedy (the check sits after the retirement loop)
+      const amend = await runCli(["run", dir, "--amend=x"])
+      expect(amend.code).toBe(1)
+      expect(amend.err).toContain("--amend is retired")
+      expect(amend.err).not.toContain("takes true or false")
+      // The accepted forms pass untouched (P10's floor): bare, =false, and
+      // the swallowed true/false space form all reach the run banner —
+      // before the fix the typo'd form did too, silently verbose on
+      for (const argv of [["--verbose"], ["--verbose=false"], ["--verbose", "true"], ["--verbose=false", "--dryrun=false"]]) {
+        const floorRun = await runCli(["run", dir, ...argv])
+        expect(floorRun.err, argv.join(" ")).not.toContain("takes true or false")
+        expect(floorRun.out, argv.join(" ")).toContain("⚙ project config")
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the -- end-of-options token is a plain one-line unknown-option refusal — no vocabulary flood (0165-211)", async () => {
+    const refused = await runCli(["run", "some-dir", "--"])
+    expect(refused.code).toBe(1)
+    expect(refused.err).toContain("unknown option --")
+    expect(refused.err).toContain("run 'opencode-auto run --help' to see this command's usage")
+    // No did-you-mean clause at all: the empty key suggests nothing (the
+    // pre-fix refusal named ~80 flags, retired ones included)
+    expect(refused.err).not.toContain("did you mean")
+    expect(refused.err).not.toContain("--agent")
+    // The = form of the empty key answers the same way
+    const eq = await runCli(["run", "some-dir", "--=x"])
+    expect(eq.code).toBe(1)
+    expect(eq.err).toContain("unknown option --")
+    expect(eq.err).not.toContain("did you mean")
+    // The strict ladders share the fix through the same helper
+    const close = await runCli(["close", "R-001", "--"])
+    expect(close.code).toBe(1)
+    expect(close.err).toContain("-- is not a close option")
+    expect(close.err).not.toContain("did you mean")
+    // A non-empty prefix still suggests (only the empty key changed)
+    const near = await runCli(["run", "some-dir", "--verbos"])
+    expect(near.code).toBe(1)
+    expect(near.err).toContain("did you mean --verbose?")
+  })
+
+  test("the hidden _lane refuses every flag beyond its grammar — run's shaping, plan's input and the close family included (0195 D4)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-"))
+    try {
+      // The twelve flags that passed the entry silently ignored before the
+      // allowlist (plus each layer's shape: the value forms with a value,
+      // the short -p form resolving to --prompt in the refusal).
+      const cases: [string[], string][] = [
+        [["--dryrun"], "--dryrun"],
+        [["--wait-between", "5"], "--wait-between"],
+        [["--max-sessions", "2"], "--max-sessions"],
+        [["--repair", "3"], "--repair"],
+        [["--stop-after", "T-001"], "--stop-after"],
+        [["--boundary", "flow"], "--boundary"],
+        [["-p", "hi"], "--prompt"],
+        [["--file", "f"], "--file"],
+        [["--reason", "x"], "--reason"],
+        [["--cascade"], "--cascade"],
+        [["--commit-changes"], "--commit-changes"],
+        [["--stash-changes"], "--stash-changes"],
+      ]
+      for (const [argv, key] of cases) {
+        const refused = await runCli(["_lane", dir, "--unit", "T-001", ...argv])
+        expect(refused.code, argv.join(" ")).toBe(1)
+        expect(refused.err, argv.join(" ")).toContain(`${key} is not a _lane option`)
+        expect(refused.err, argv.join(" ")).toContain("the hidden lane-worker entry takes only --unit <id>, --merge <branch> and the session flags")
+        expect(refused.err, argv.join(" ")).toContain("its argv is the parent run's lane launcher's own")
+      }
+      // The floor: the launcher's own argv and the session flags the block
+      // genuinely reads pass the policy and reach the banner (the lane
+      // machinery's own next refusal follows — not this test's subject)
+      const floorLane = await runCli(["_lane", dir, "--unit", "T-001", "--merge", "auto-lane/T-001", "--verbose"])
+      expect(floorLane.err).not.toContain("is not a _lane option")
+      expect(floorLane.out).toContain("⚙ project config")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
     }
   })
 })

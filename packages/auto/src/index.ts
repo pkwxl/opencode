@@ -60,7 +60,10 @@ const positional: string[] = []
 // and --new-task (plan's alone) are value flags (they swallow the next token; the retired
 // --implement-file/--implement-prompt/--commit swallow one too, so their argument is
 // never mistaken for the directory, auto-core plans/0053 D13; init's retired
-// -p/--prompt keeps swallowing one for the same reason, plans/0053 D31);
+// -p/--prompt keeps swallowing one for the same reason, plans/0053 D31; the
+// retired watchdog extras --verify-idle/--verify-max keep the courtesy for the
+// same reason — their rename notices own the whole line, and without the
+// swallow their value would leak as a stray positional, plans/0195 D1);
 // --verbose/--interactive/--dryrun/--test-by-driver/
 // --handover-test/--new-session/--auto-number/--no-auto-number/--wrapup/
 // --no-wrapup plus --cascade/--commit-changes/--stash-changes (shared by close and plan
@@ -147,6 +150,11 @@ const VALUE_FLAGS = new Set([
   // the original branch, the derivation ladder's first rung; a value flag
   // (it swallows the branch name).
   "onto",
+  // The retired watchdog extras (plans/0195 D1): value flags by their old
+  // semantics — the swallow keeps their rename notice the one answer for
+  // `--verify-idle 10` instead of the leaked 10 becoming a stray positional.
+  "verify-idle",
+  "verify-max",
 ])
 // Repeatable value flags (plans/0074 §5.4: --isolate): each occurrence names
 // one value, so the values are collected in their own table instead of the
@@ -1003,7 +1011,13 @@ const LAND_FLAGS = new Set(["keep", "abandon", "merge", "onto"])
 // specific refusals to its command block (the frozen config flags, the
 // planning input, the run-only options). Globally retired flags are waved
 // through for their own notices below.
-const similarOptions = (key: string): string[] => [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`)
+// The empty key (`--`, `--=x`) suggests nothing (plans/0195 D3, 0165-211):
+// startsWith("") matches every name, and the did-you-mean clause would
+// flood the refusal with the whole vocabulary — the token keeps the plain
+// unknown-option answer. The end-of-options marker semantics are
+// deliberately absent (P21): no flag's value may begin with a dash today,
+// so the marker has no consumer; a future one adds it in its own change.
+const similarOptions = (key: string): string[] => (key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : [])
 
 // The strict ladder close and land share (mirroring RESET_FLAGS for
 // reset/fix): the allowed set, then close's --commit swallow trap, the
@@ -1078,6 +1092,22 @@ for (const [key, entry] of Object.entries(RETIRED_FLAGS)) {
   if (!flags.has(key)) continue
   if (typeof entry !== "string" && command !== entry.command) continue
   console.error(`--${key} ${typeof entry === "string" ? entry : entry.notice}`)
+  process.exit(1)
+}
+
+// The boolean flags' =value form is validated (plans/0195 D2, 0165-212):
+// the synopses promise [true|false] and every reader is a "!== false"
+// comparison, so before this check any other value (--verbose=flase) meant
+// true silently — the same token-spending shape 0159 closed for --probe's
+// space form. It sits after the retirement-notices loop (a retired boolean
+// like --amend=x keeps its retirement notice, the more specific remedy)
+// and before any command block reads a flag: at this point every remaining
+// key is one the command's own policy accepted, so the check validates
+// exactly the command's booleans. Bare presence, the swallowed true/false
+// space form and =true/=false pass untouched (P10's floor).
+for (const [key, value] of flags) {
+  if (!BOOLEAN_FLAGS.has(key) || value === "" || value === "true" || value === "false") continue
+  console.error(`--${key} takes true or false: "${value}" is neither (pass the flag bare for true, or --${key}=false for the explicit opt-out)`)
   process.exit(1)
 }
 
@@ -1194,6 +1224,28 @@ if (command === "remove-fork") {
     console.error(`remove-fork takes only --force (usage: opencode-auto remove-fork <worktree-path> [dir] [--force]); --${foreign[0]} is not one`)
     process.exit(1)
   }
+}
+
+// The positional arity of every command (plans/0195 D1, 0165-166, closing
+// 0159's own deferred residual): the blocks above consume and validate
+// their own leading positionals (close's ref, fork's target and worktree
+// path, remove-fork's path), the directory follows, and anything beyond
+// the command's grammar is a usage error — before this check a mistyped
+// extra word (`run dir1 dir2`, `plan proj extra`) was silently swallowed:
+// the command ran on the first positional and the rest never surfaced.
+// The arity table is every synopsis's documented grammar, not a new
+// policy: close 2, fork 3, remove-fork 2, everything else 1 (the hidden
+// _lane included — its launcher passes exactly the worktree).
+const POSITIONAL_GRAMMAR: Readonly<Record<string, string>> = {
+  close: "close takes <ref> [dir]: a unit reference, then an optional directory (usage: opencode-auto close <ref> [dir] --reason <text>)",
+  fork: "fork takes <T-NNN | sha> <worktree-path> [dir]: the target, the worktree path, then an optional directory (usage: opencode-auto fork <T-NNN | sha> <worktree-path> [dir])",
+  "remove-fork": "remove-fork takes <worktree-path> [dir]: the fork's root worktree, then an optional directory (usage: opencode-auto remove-fork <worktree-path> [dir] [--force])",
+}
+const positionalMax = command === "fork" ? 3 : command === "close" || command === "remove-fork" ? 2 : 1
+if (positional.length > positionalMax) {
+  const grammar = (command !== undefined && POSITIONAL_GRAMMAR[command]) || `${command} takes at most one directory argument (usage: opencode-auto ${command} [dir])`
+  console.error(`unexpected argument "${positional[positionalMax]!}": ${grammar}`)
+  process.exit(1)
 }
 // land's --merge is the landing-mode boolean, but --merge is also _lane's
 // value flag (the parent branch a conflict repair merges; VALUE_FLAGS holds
@@ -1348,6 +1400,11 @@ if (command === "_lane") {
   // option vocabulary, and a silently ignored retired flag on it is the same
   // defect run/plan/transfer's refusal family already refuses.
   refuseFrozenFlags("_lane")
+  // The strict machine-entry allowlist (plans/0195 D4): every known flag
+  // beyond --unit, --merge and the session flags is refused — the entry
+  // reads nothing else, so anything more is launcher drift, never a
+  // person's option.
+  refuseLaneForeignFlags()
   const merge = flags.get("merge")
   const session = parseSessionFlags()
   startRunLog(directory, session)
@@ -1904,6 +1961,34 @@ function refuseLaneValueFlags(command: "run" | "plan" | "transfer"): void {
     console.error(
       `--${key} is a value flag of the hidden _lane entry (the lane worker the parent run's launcher invokes; a person never passes it)${key === "merge" ? " — land's --merge is the landing-mode boolean (opencode-auto land <dir> --merge)" : ""}; ` +
         `${command} takes no --${key}`,
+    )
+    process.exit(1)
+  }
+}
+
+// _lane's machine-entry policy (plans/0195 D4, ruling 0193 D5's named
+// residual): the hidden entry takes exactly what its block reads — --unit,
+// --merge and the session flags parseSessionFlags consumes — and refuses
+// every other known flag with the entry's grammar. Its argv is the parent
+// run's lane launcher's own (`_lane <dir> --unit <id> [--merge <branch>]`,
+// the default launcher's exact shape, the session flags consumed not
+// ignored), so nothing legitimate is refused; what the refusal catches is
+// launcher drift — a future lanes change threading --dryrun or a close
+// flag into the spawn would surface here instead of running a real lane
+// with the word swallowed (the twelve silently-ignored flags this closes:
+// run's --wait-between/--max-sessions/--repair/--stop-after/--boundary/
+// --dryrun, plan's -p/--prompt and --file, close's --reason/--cascade/
+// --commit-changes/--stash-changes; plan's routes, land's, sync's,
+// models' and install-prompts' flags the OWNED_FLAGS ladder above already
+// refuses). It sits after refuseFrozenFlags("_lane") so the shared
+// vocabulary keeps its specific notices (0193 D5's layer, unchanged).
+function refuseLaneForeignFlags(): void {
+  const laneFlags = new Set(["unit", "merge", "server", "verbose", "interactive", "wait-answer", "permission", "new-session"])
+  for (const key of flags.keys()) {
+    if (laneFlags.has(key)) continue
+    console.error(
+      `--${key} is not a _lane option: the hidden lane-worker entry takes only --unit <id>, --merge <branch> and the session flags (--server, --verbose, --interactive, --wait-answer, --permission, --new-session) — ` +
+        `its argv is the parent run's lane launcher's own; the public commands' options belong to their own invocations`,
     )
     process.exit(1)
   }
