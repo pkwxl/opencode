@@ -50,7 +50,7 @@ opencode-auto clarify [dir]   # release the awaiting gate: write the whole-line 
 opencode-auto plan [dir] [-p "<planning input>" | --file <path>]   # dispatch the reviewed plan task: the planning session runs and stops before execution for human review (m mode: also establishes rounds, stores a planning input and appends), see "Planning and the round lifecycle (plan)"
 opencode-auto run [dir] [--boundary stop|flow]   # execute the current phase's tasks one by one and stop at its clean end — the boundary — naming transfer as the advance command (--boundary flow crosses the boundaries continuously as before; agent semantics and the context budget come from the project config; the unified commit after every session is always on)
 opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]   # close a unit (task T-NNN, phase R-NN.P<nn>, round R-NN) without delivering it — done for scheduling, the reason in a Closed: field, the close commit, undo = git revert, see "Closing units (close and plan --force-close)"
-opencode-auto land [dir] [--keep] [--abandon] [--merge]   # the person-invoked return path of branch isolation (config isolate): land each designated nested repository's round of work — its auto/R-NN branch — back onto its original branch as one commit, delete the round branch, print the landed SHA; see "Branch isolation and landing (isolate, land)"
+opencode-auto land [dir] [--keep] [--abandon] [--merge] [--onto <branch>]   # the person-invoked return path of branch isolation (config isolate): land each designated nested repository's round of work — its auto/R-NN branch — back onto its original branch as one commit, delete the round branch, print the landed SHA; see "Branch isolation and landing (isolate, land)"
 opencode-auto fork <T-NNN | sha> <worktree-path> [dir]   # build an experiment environment in a new worktree — at the state before a task first started (T-NNN, the parent of its oldest Auto-Task commit of the current corpus; a number re-issued after a restart never forks before the restart, plans/0140) or at an exact commit — to retry it in isolation; nested repositories reconstructed alongside, aligned at the recorded state; the main tree, its branches and its history never touched; takes no run lock, runs beside a live run, see "The retry fork (fork, remove-fork)"
 opencode-auto remove-fork <worktree-path> [dir] [--force]   # tear down a fork: every worktree of the fork removed and its auto-fork/* branch deleted per repository (uncommitted work blocks naming the files — `--force` discards it explicitly), freeing the path and the branch name to fork again; the tips stay recoverable via git reflog; see "The retry fork (fork, remove-fork)"
 opencode-auto reset [dir]    # de-initialize (the inverse of init): remove the config-layer artifacts init wrote and restore the worktree to the uninitialized state (the project brief .opencode/auto/brief.md is kept — an installed approved proposal or a person's `amend --brief` write; delete it by hand if you mean to)
@@ -1006,7 +1006,7 @@ A dirty designated repository at establishment blocks (exit 2) naming the reposi
 branches (`auto-lane/*`) live inside whichever branch is checked out, so lanes work unchanged on the round
 branch.
 
-`opencode-auto land [dir] [--keep] [--abandon] [--merge]` is the person-invoked **return path**: land each
+`opencode-auto land [dir] [--keep] [--abandon] [--merge] [--onto <branch>]` is the person-invoked **return path**: land each
 designated repository's round of work back onto its original branch **as one commit**, then delete the
 round branch and print the landed SHA.
 
@@ -1020,10 +1020,18 @@ round branch and print the landed SHA.
 - **`--abandon`** is the undo path, after a person-reviewed reset: it checks the original branch back out,
   deletes `auto/R-NN` (its tip printed — the work stays recoverable via `git reflog` until collection) and
   lands nothing.
+- **The original branch is derived, never guessed** (auto-core plans/0192): the establishment's own
+  checkout wrote `moving from <original> to auto/R-NN` into the repository's HEAD reflog, and land reads
+  that record — so a second ordinary branch beside the original (a `dev`, any feature branch) never
+  blocks the landing. When the record cannot answer (reflogs off or expired past the establishment, or
+  the record's branch deleted or renamed since), the floor — exactly one local branch besides the
+  driver's `auto/R-<n>`, `auto-lane/*` and `auto-fork/*` families — answers; and `--onto <branch>` names
+  the original outright, one branch name for every designated repository (composing with `--keep`,
+  `--merge` and `--abandon`). The refusals teach `--onto`, never branch surgery.
 - **Refusal is never an automated merge resolution** (exit 2, the reason naming each repository): the
   original branch moved since isolation, foreign commits (no `Auto-Stage` trailer) mixed into the round
-  branch's range, a dirty repository, or an ambiguous original branch — exactly one local branch besides
-  the driver's `auto/R-*` and `auto-lane/*` families must remain. Every refusal is checked for every
+  branch's range, a dirty repository, or an original branch no derivation could name — a record naming a
+  deleted branch blocks naming it rather than landing onto a different one. Every refusal is checked for every
   designated repository before any landing starts, so a mixed set lands nothing; settle the named problems
   and re-run — the command is re-runnable (an already-landed repository no longer holds the round branch
   and is skipped). Exit codes: `0` landed; `1` usage error; `2` blocked for human.

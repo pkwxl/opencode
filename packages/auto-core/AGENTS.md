@@ -55,7 +55,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - The release gate (clean-tree check + destination scan, read-only; the scanned range bounded by the oldest driver-or-landing commit's parent — 0173; the unreadable destination blocks, the scan inputs carrying their unreadable state — 0176) → `src/release.ts` + `src/document/process-refs.ts` + the shell's release row (0103; 0119; 0173; 0176)
 - The person-proxy brief (`driver-helper [dir]`) → `src/driver-helper.ts` + `src/plan.ts` + `src/phases.ts` + `src/round-close.ts` + the shell's row (0105; 0106; 0107; 0109)
 - Close and force-close → `src/close.ts` (0053)
-- Branch isolation and landing (config `isolate`, `land`) → `src/land.ts` + `src/git-land.ts` + the shell's land row (0073; 0074; 0155)
+- Branch isolation and landing (config `isolate`, `land`; the original branch an evidence ladder — the person's `--onto` word, the establishment's reflog record, the exclusion floor — 0192) → `src/land.ts` + `src/git-land.ts` + the shell's land row (0073; 0074; 0155; 0192)
 - The task retry fork (`fork`/`remove-fork`/`run --stop-after`) → `src/fork.ts` + `src/git.ts` + `src/git-worktree.ts` + `src/loop-task.ts` + the shell's rows (0128; 0129; 0139; 0140; 0191)
 - Standalone work orders (`plan --export`/`--adopt`) → `src/work-order.ts` + `src/plan.ts` + the shell's plan block (0076)
 - Append planning (`plan --append`) → `src/loop-plan.ts` + `src/plan.ts` (0053)

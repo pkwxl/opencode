@@ -22,21 +22,31 @@
 // person must settle — landing on a diverged original branch is a conflict
 // surface by design.
 //
-// AUTO-DECISION (stateless derivation of the original branch): nothing is
-// recorded at establishment — land derives it: among the repository's local
-// branches, the round family (auto/R-*), the lane family (auto-lane/*,
-// plans/0074 §2.4 — lane branches live inside whichever branch is checked
-// out) and the fork family (auto-fork/*, plans/0128's experiment branches)
-// are never the original, and exactly one remaining branch identifies
-// it; several candidates or none block naming them, never a guess. This
-// keeps U-L1's shipped surface (isolateRound, the establish route) untouched
-// and needs no state file an interrupted run could leave stale. The
-// isolation point is the merge base of the two branches; "the original
-// branch moved" means its tip left that point — except onto exactly a
-// previous landing's tree (a mid-round --keep land leaves the original at a
-// squash commit whose tree equals the round branch's tip at that moment,
-// recognized by tree equality among the round branch's commits), which is
-// where a re-landing continues from.
+// AUTO-DECISION (the original branch — an evidence ladder, plans/0192):
+// nothing is recorded at establishment beyond git's own side effect — the
+// isolating checkout writes `checkout: moving from <X> to auto/R-NN` into
+// HEAD's reflog — and land derives the original by asking, in order: the
+// person's --onto word (the explicit name, validated only as existence);
+// the establishment's own record (the oldest checkout onto the round branch
+// in HEAD's reflog names the branch the repository was on when isolation
+// happened — reflogIsolationSource; a record naming a branch that no longer
+// exists blocks naming it, never landing onto a different branch); and the
+// exclusion floor — among local branches, the round family (auto/R-<n>, the
+// exact grammar — a person's own auto/* branch outside it is an ordinary
+// branch like any other), the lane family (auto-lane/*, plans/0074 §2.4 —
+// lane branches live inside whichever branch is checked out) and the fork
+// family (auto-fork/*, plans/0128's experiment branches) are never the
+// original, and exactly one remaining branch identifies it. Several
+// candidates, none, or a record that cannot be answered block naming the
+// --onto remedy — never a guess, never branch surgery. This keeps U-L1's
+// shipped surface (isolateRound, the establish route) untouched and writes
+// no state an interrupted run could leave stale. The isolation point is the
+// merge base of the two branches; "the original branch moved" means its tip
+// left that point — except onto exactly a previous landing's tree (a
+// mid-round --keep land leaves the original at a squash commit whose tree
+// equals the round branch's tip at that moment, recognized by tree equality
+// among the round branch's commits), which is where a re-landing continues
+// from.
 // AUTO-DECISION (all-or-nothing refusals): every refusal condition is
 // checked for every designated repository before any repository's git state
 // is touched, so a mixed set (one landable, one refusing) lands nothing —
@@ -57,6 +67,7 @@ import {
   mergeBaseFull,
   mergeNoFf,
   mergedIntoHead,
+  reflogIsolationSource,
   revSha,
   squashOnto,
 } from "./git-land"
@@ -78,6 +89,13 @@ type LandOptions = {
   // --merge: the explicit alternative landing mode — a true merge commit
   // (git merge --no-ff) instead of the default squash-one-commit.
   merge?: boolean
+  // --onto <branch>: the person's name for the original branch — the
+  // derivation ladder's first rung (plans/0192 D2), outranking the
+  // establishment record and the exclusion floor. One branch name for every
+  // designated repository holding the round branch, composing with every
+  // mode; a repository without such a local branch is a blocked problem
+  // line listing what it holds.
+  onto?: string
 }
 
 type LandOutcome = { type: "landed" | "usage" | "blocked"; lines: string[] }
@@ -134,23 +152,58 @@ export async function landUnit(dir: string, opts: LandOptions): Promise<LandOutc
   const problems: string[] = []
   const pending: LandingRepo[] = []
   let anyBranch = false
+  // The driver's branch families are never a repository's original branch:
+  // the round family (auto/R-<n>, the exact grammar — a person's own auto/*
+  // branch outside it is an ordinary branch like any other, plans/0192), the
+  // lane family (auto-lane/*, plans/0074 §2.4) and the fork family
+  // (auto-fork/*, plans/0128).
+  const driverFamily = (name: string) => /^auto\/R-\d+$/.test(name) || name.startsWith("auto-lane/") || name.startsWith("auto-fork/")
   for (const rel of opts.isolate) {
     const root = join(dir, rel)
     if (!(await revSha(root, `refs/heads/${branch}`))) continue // nothing to land in this repository
     anyBranch = true
-    // The original branch: the one local branch that is neither of the
-    // driver's families (auto/R-* round branches, auto-lane/* lane
-    // branches, auto-fork/* experiment branches, plans/0128). Exactly one
-    // identifies it; anything else blocks.
-    const candidates = (await localBranches(root)).filter((name) => !name.startsWith("auto/") && !name.startsWith("auto-lane/") && !name.startsWith("auto-fork/"))
-    if (candidates.length !== 1) {
-      problems.push(
-        `${rel}: ${candidates.length > 1 ? `cannot tell which of ${candidates.join(", ")} is the original branch` : `no candidate original branch remains beside ${branch}`}; ` +
-          `landing needs exactly one — settle the branches manually or land by hand`,
-      )
-      continue
+    // The original branch — an evidence ladder, never a guess (plans/0192
+    // D1): the person's --onto word; else the establishment's own record
+    // (the oldest checkout onto the round branch in HEAD's reflog names the
+    // branch the repository was on when isolation happened); else the
+    // exclusion floor — exactly one local branch outside the driver
+    // families. A record naming a branch that no longer exists blocks
+    // naming it (deleted or renamed — never land onto a different branch
+    // than the record names); several-or-none candidates without a record
+    // block teaching --onto, never branch surgery.
+    const locals = await localBranches(root)
+    let original: string | undefined
+    if (opts.onto) {
+      if (!locals.includes(opts.onto)) {
+        problems.push(
+          `${rel}: --onto names ${opts.onto}, not a local branch of this repository (its local branches: ${locals.join(", ")}); name the original branch as it exists there, or land by hand`,
+        )
+        continue
+      }
+      original = opts.onto
+    } else {
+      const recorded = await reflogIsolationSource(root, branch)
+      if (recorded !== undefined && !driverFamily(recorded)) {
+        if (!locals.includes(recorded)) {
+          problems.push(
+            `${rel}: the isolation record names ${recorded} as the original branch, but no such local branch remains (deleted or renamed since isolation); ` +
+              `name the target with --onto (opencode-auto land ${dir} --onto <branch>), or land by hand`,
+          )
+          continue
+        }
+        original = recorded
+      } else {
+        const candidates = locals.filter((name) => !driverFamily(name))
+        if (candidates.length !== 1) {
+          problems.push(
+            `${rel}: ${candidates.length > 1 ? `cannot tell which of ${candidates.join(", ")} is the original branch` : `no candidate original branch remains beside ${branch}`}; ` +
+              `name it with --onto (opencode-auto land ${dir} --onto <branch>), or land by hand`,
+          )
+          continue
+        }
+        original = candidates[0]!
+      }
     }
-    const original = candidates[0]!
     const base = await mergeBaseFull(root, original, branch)
     if (base === undefined) {
       // No merge base: the two branches share no history (the round branch

@@ -1,14 +1,16 @@
 // Branch-isolation landing (plans/0074 §2.3, U-L2: the `land` command): the
 // command core landUnit — the happy path (exactly one commit on the original
 // branch, the original otherwise intact, auto/R-NN deleted, the landed SHA
-// printed), the refusal paths (a moved original branch, foreign commits
-// mixed into the round branch's range, a dirty repository, an ambiguous or
-// missing original branch — each exit-2 blocked naming the reason, with
-// nothing landed anywhere in a mixed set), the modes (--keep's mid-round
-// landing and its re-landing, --merge's merge commit, --abandon's discard),
-// and preflight's leftover report (leftoverIsolationLines). The driver's
-// round commits are made by the real commitTree, so the branch carries the
-// Auto-Stage trailers the foreign-commit check reads.
+// printed), the original-branch derivation's evidence ladder (the
+// establishment's own reflog record, the exclusion floor, the --onto
+// escape — plans/0192), the refusal paths (a moved original branch, foreign
+// commits mixed into the round branch's range, a dirty repository, an
+// original branch no derivation could name — each exit-2 blocked naming the
+// reason, with nothing landed anywhere in a mixed set), the modes (--keep's
+// mid-round landing and its re-landing, --merge's merge commit, --abandon's
+// discard), and preflight's leftover report (leftoverIsolationLines). The
+// driver's round commits are made by the real commitTree, so the branch
+// carries the Auto-Stage trailers the foreign-commit check reads.
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -22,11 +24,15 @@ const withDir = withDirFactory("auto-land-")
 
 // A nested repository under the target directory: initialized, with identity
 // and one commit, on whatever branch git's defaults give (read back by
-// branchOf — the tests never hardcode a branch name).
-async function nestedRepo(dir: string, rel = "pkg"): Promise<string> {
+// branchOf — the tests never hardcode a branch name). With reflogs off the
+// config is set before any ref update: git then never creates the reflog
+// files (an existing one keeps appending regardless of the config) — the
+// no-record floor (plans/0192), reflog expiry's shape.
+async function nestedRepo(dir: string, rel = "pkg", opts: { reflogs?: boolean } = {}): Promise<string> {
   const root = join(dir, rel)
   mkdirSync(root, { recursive: true })
   await git(root, "init", "-q")
+  if (opts.reflogs === false) await git(root, "config", "core.logAllRefUpdates", "false")
   await git(root, "config", "user.email", "t@example.com")
   await git(root, "config", "user.name", "t")
   writeFileSync(join(root, "readme.txt"), "nested\n")
@@ -276,23 +282,120 @@ describe("landUnit (plans/0074 §2.3, U-L2: the landing command core)", () => {
   )
 
   test(
-    "refusal: an ambiguous original branch (several candidates) blocks naming them; a repository with no candidate branch blocks the same way",
+    "a second ordinary branch beside the original never blocks the landing: the establishment's own reflog record names the original (plans/0192 D1)",
+    withDir(async (dir) => {
+      const pkg = await nestedRepo(dir)
+      const original = await branchOf(pkg)
+      const setup = await fullShaOf(pkg, original)
+      expect(await isolateRound(dir, ["pkg"], "auto/R-01")).toEqual({ type: "ok", isolated: ["pkg"] })
+      await driverCommit(dir, pkg, "one.txt", "one\n", 1)
+      // The finding's scene: a designated repository holding main + dev (or
+      // any feature branch) — the isolation's checkout wrote its record into
+      // HEAD's reflog, so the extra branch never makes the original
+      // ambiguous.
+      await git(pkg, "branch", "wip", original)
+      const landed = await landUnit(dir, { isolate: ["pkg"] })
+      expect(landed.type).toBe("landed")
+      expect(landed.lines[0]).toBe(`✓ pkg: landed ${await shaOf(pkg, "HEAD")} on ${original} (1 commit(s) of auto/R-01 as one); auto/R-01 deleted`)
+      expect(await branchOf(pkg)).toBe(original)
+      expect(await commitCount(pkg, original)).toBe(2)
+      expect(await fullShaOf(pkg, "HEAD~1")).toBe(setup)
+      expect(await hasBranch(pkg, "wip")).toBe(true)
+    }),
+  )
+
+  test(
+    "the floor (no reflog record): several candidates block teaching --onto, one candidate lands unchanged, none blocks the same way",
+    withDir(async (dir) => {
+      const pkg = await nestedRepo(dir, "pkg", { reflogs: false })
+      const original = await branchOf(pkg)
+      expect(await isolateRound(dir, ["pkg"], "auto/R-01")).toEqual({ type: "ok", isolated: ["pkg"] })
+      await driverCommit(dir, pkg, "one.txt", "one\n", 1)
+      await git(pkg, "branch", "wip", original)
+      const blocked = await landUnit(dir, { isolate: ["pkg"] })
+      expect(blocked.type).toBe("blocked")
+      expect(blocked.lines[1]).toBe(`  pkg: cannot tell which of ${original}, wip is the original branch; name it with --onto (opencode-auto land ${dir} --onto <branch>), or land by hand`)
+      // One candidate on the same floor: the byte-identical landing (the
+      // pre-change behavior, kept as the floor).
+      await git(pkg, "branch", "-D", "wip")
+      const landed = await landUnit(dir, { isolate: ["pkg"] })
+      expect(landed.type).toBe("landed")
+      expect(await branchOf(pkg)).toBe(original)
+      expect(await commitCount(pkg, original)).toBe(2)
+      // No candidate at all: the same teaching.
+      expect(await isolateRound(dir, ["pkg"], "auto/R-01")).toEqual({ type: "ok", isolated: ["pkg"] })
+      await git(pkg, "branch", "-D", original)
+      const none = await landUnit(dir, { isolate: ["pkg"] })
+      expect(none.type).toBe("blocked")
+      expect(none.lines[1]).toBe(`  pkg: no candidate original branch remains beside auto/R-01; name it with --onto (opencode-auto land ${dir} --onto <branch>), or land by hand`)
+    }),
+  )
+
+  test(
+    "refusal: the isolation record names a deleted original — blocked naming it, never a landing onto the surviving branch",
     withDir(async (dir) => {
       const pkg = await nestedRepo(dir)
       const original = await branchOf(pkg)
       expect(await isolateRound(dir, ["pkg"], "auto/R-01")).toEqual({ type: "ok", isolated: ["pkg"] })
       await driverCommit(dir, pkg, "one.txt", "one\n", 1)
-      await git(pkg, "branch", "wip")
+      // The person deletes the original mid-round (the repository sits on the
+      // round branch, so it is deletable) and keeps another ordinary branch
+      // at the isolation point: the record's word overrides elimination —
+      // the sole survivor is not crowned the original.
+      await git(pkg, "branch", "wip", original)
+      await git(pkg, "branch", "-D", original)
       const blocked = await landUnit(dir, { isolate: ["pkg"] })
       expect(blocked.type).toBe("blocked")
-      expect(blocked.lines[1]).toBe(`  pkg: cannot tell which of ${original}, wip is the original branch; landing needs exactly one — settle the branches manually or land by hand`)
-      // Removing the extra branch unblocks; removing the original instead
-      // leaves no candidate at all.
-      await git(pkg, "branch", "-D", "wip")
-      await git(pkg, "branch", "-D", original)
-      const none = await landUnit(dir, { isolate: ["pkg"] })
-      expect(none.type).toBe("blocked")
-      expect(none.lines[1]).toBe(`  pkg: no candidate original branch remains beside auto/R-01; landing needs exactly one — settle the branches manually or land by hand`)
+      expect(blocked.lines[1]).toBe(
+        `  pkg: the isolation record names ${original} as the original branch, but no such local branch remains (deleted or renamed since isolation); ` +
+          `name the target with --onto (opencode-auto land ${dir} --onto <branch>), or land by hand`,
+      )
+      // Nothing landed: wip untouched, the round branch kept.
+      expect(await commitCount(pkg, "wip")).toBe(1)
+      expect(await hasBranch(pkg, "auto/R-01")).toBe(true)
+    }),
+  )
+
+  test(
+    "--onto names the original outright (plans/0192 D2): the escape lands through the ambiguous floor; a name the repository does not hold blocks listing what it does",
+    withDir(async (dir) => {
+      const pkg = await nestedRepo(dir, "pkg", { reflogs: false })
+      const original = await branchOf(pkg)
+      expect(await isolateRound(dir, ["pkg"], "auto/R-01")).toEqual({ type: "ok", isolated: ["pkg"] })
+      await driverCommit(dir, pkg, "one.txt", "one\n", 1)
+      await git(pkg, "branch", "wip", original)
+      const landed = await landUnit(dir, { isolate: ["pkg"], onto: "wip" })
+      expect(landed.type).toBe("landed")
+      expect(landed.lines[0]).toBe(`✓ pkg: landed ${await shaOf(pkg, "HEAD")} on wip (1 commit(s) of auto/R-01 as one); auto/R-01 deleted`)
+      expect(await branchOf(pkg)).toBe("wip")
+      expect(await commitCount(pkg, "wip")).toBe(2)
+      expect(await hasBranch(pkg, original)).toBe(true)
+      // A name the repository does not hold: a blocked problem line listing
+      // its local branches (the repository re-isolated for the same round).
+      expect(await isolateRound(dir, ["pkg"], "auto/R-01")).toEqual({ type: "ok", isolated: ["pkg"] })
+      const wrong = await landUnit(dir, { isolate: ["pkg"], onto: "nosuch" })
+      expect(wrong.type).toBe("blocked")
+      expect(wrong.lines[1]).toBe(`  pkg: --onto names nosuch, not a local branch of this repository (its local branches: auto/R-01, ${original}, wip); name the original branch as it exists there, or land by hand`)
+    }),
+  )
+
+  test(
+    "the round-family grammar is exact (auto/R-<n>): a person's own auto/*-named original branch is landed back onto, not hidden by the family filter",
+    withDir(async (dir) => {
+      const pkg = await nestedRepo(dir)
+      const seeded = await branchOf(pkg)
+      // The person's own auto-named branch, outside the round grammar — the
+      // repository sits on it when the round is established.
+      await git(pkg, "checkout", "-q", "-b", "auto/release")
+      expect(await isolateRound(dir, ["pkg"], "auto/R-01")).toEqual({ type: "ok", isolated: ["pkg"] })
+      await driverCommit(dir, pkg, "one.txt", "one\n", 1)
+      await git(pkg, "branch", "wip", "auto/release")
+      const landed = await landUnit(dir, { isolate: ["pkg"] })
+      expect(landed.type).toBe("landed")
+      expect(await branchOf(pkg)).toBe("auto/release")
+      expect(await commitCount(pkg, "auto/release")).toBe(2)
+      expect(await hasBranch(pkg, seeded)).toBe(true)
+      expect(await hasBranch(pkg, "wip")).toBe(true)
     }),
   )
 

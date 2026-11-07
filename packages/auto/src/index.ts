@@ -160,6 +160,10 @@ const VALUE_FLAGS = new Set([
   // (the default) ends the run at each clean phase end naming transfer, flow
   // restores today's continuous crossing; run's alone.
   "boundary",
+  // --onto (auto-core plans/0192 D2): land's alone — the person's name for
+  // the original branch, the derivation ladder's first rung; a value flag
+  // (it swallows the branch name).
+  "onto",
 ])
 // Repeatable value flags (plans/0074 §5.4: --isolate): each occurrence names
 // one value, so the values are collected in their own table instead of the
@@ -417,6 +421,8 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
       "default git merge --squash (the deliverable's history gains exactly one commit; --merge takes a true merge commit instead) — deletes the round branch and prints the landed SHA. " +
       "Landing mid-round is allowed with --keep: the branch is retained and checked back out — the round simply continues on it; a later land recognizes the previous landing and folds only the new commits. " +
       "--abandon discards the round branch after a person-reviewed reset — the undo path: it checks the original branch back out, deletes auto/R-NN (its tip printed, recoverable via git reflog) and lands nothing. " +
+      "The original branch is derived, never guessed: the establishment's own reflog record names it, with exactly-one-branch-outside-the-driver-families as the floor — a second ordinary branch never blocks; " +
+      "--onto <branch> names it outright when the evidence cannot (no reflog record, an ambiguous floor, or the record's branch deleted — auto-core plans/0192). " +
       "Refusal is never an automated merge resolution: the original branch moved, foreign commits mixed into auto/R-NN's range, a dirty repository or an ambiguous original branch all block (exit 2) naming what to settle; " +
       "preflight warns about a leftover auto/R-NN of an abandoned round (recoverable state — land --abandon and plain git both address it). " +
       "The audit-trail trade-off is stated, not hidden: one commit on the deliverable, the full per-unit trail in the driven root's git. Exit codes: 0 landed; 1 usage error; 2 blocked for human",
@@ -640,7 +646,7 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     name: "land",
     summary: "land branch-isolated repositories' round of work back onto their original branches (the person-invoked return path)",
-    synopsis: "opencode-auto land [dir] [--keep] [--abandon] [--merge]",
+    synopsis: "opencode-auto land [dir] [--keep] [--abandon] [--merge] [--onto <branch>]",
     options: ["land", "run-lock"],
   },
   {
@@ -817,7 +823,10 @@ if (flags.has("help")) {
 // --export/--adopt (plans/0076, the standalone work-order routes),
 // --round/--phase (plans/0084, the assisted preparation stops), transfer's
 // --resynthesize (plans/0101 D3, the advance's construct half), land's
-// --keep/--abandon (plans/0074 §2.3, U-L2, one line for the pair), sync's
+// --keep/--abandon (plans/0074 §2.3, U-L2, one line for the pair) and
+// --onto (plans/0192, the original branch's name — a value flag, so without
+// an owned refusal `run <dir> --onto <x>` would start a full run with the
+// flag silently ignored), sync's
 // --from-bundle (plans/0100 D5, the unstamped bootstrap's overwrite
 // assertion — the flag passed the global whitelist for every command while
 // only sync consumed it, so `run <dir> --from-bundle` started a full run
@@ -879,6 +888,13 @@ const OWNED_FLAGS: ReadonlyArray<{ owner: string; keys: readonly string[]; line:
     line: (_key, command) =>
       `--keep and --abandon are land options: ${command ?? "this command"} takes neither. ` +
       `Land a round's isolation branches with opencode-auto land <dir> [--keep | --abandon]`,
+  },
+  {
+    owner: "land",
+    keys: ["onto"],
+    line: (_key, command) =>
+      `--onto is a land option (the original branch's name, the derivation ladder's first rung — auto-core plans/0192): ${command ?? "this command"} takes no --onto. ` +
+      `Land a round's isolation branches with opencode-auto land <dir> [--onto <branch>]`,
   },
   {
     owner: "sync",
@@ -982,13 +998,18 @@ const SYNC_FLAGS = new Set(["force", "dryrun", "from-bundle"])
 // config flags with the frozen-by-init notice, -p/--file with plan's input
 // notice — mirroring RESET_FLAGS for reset/fix.
 const CLOSE_FLAGS = new Set(["reason", "cascade", "commit-changes", "stash-changes"])
-// land (plans/0074 §2.3, U-L2) takes only its three: the booleans --keep
-// (retain the round branch: a mid-round landing), --abandon (discard it: the
-// undo path) and --merge (the explicit merge-commit landing mode; a boolean
-// here — _lane's --merge <branch> value flag of the same name is the hidden
-// machine surface, checked below for the swallowed-value trap). Everything
-// else is refused with a land-appropriate message, mirroring CLOSE_FLAGS.
-const LAND_FLAGS = new Set(["keep", "abandon", "merge"])
+// land (plans/0074 §2.3, U-L2; plans/0192 D2) takes only its four: the
+// booleans --keep (retain the round branch: a mid-round landing), --abandon
+// (discard it: the undo path) and --merge (the explicit merge-commit
+// landing mode; a boolean here — _lane's --merge <branch> value flag of the
+// same name is the hidden machine surface, checked below for the
+// swallowed-value trap), plus the value flag --onto <branch> (the person's
+// name for the original branch when the derivation ladder cannot answer —
+// the establishment reflog record absent or expired, the exclusion floor
+// ambiguous, or the record's branch deleted; checked below for its own
+// value shape). Everything else is refused with a land-appropriate message,
+// mirroring CLOSE_FLAGS.
+const LAND_FLAGS = new Set(["keep", "abandon", "merge", "onto"])
 // The unknown-option interception: every flag outside its command's policy
 // below is an error with exit 1, so a typo is never silently ignored. The
 // strict commands (close, land) run their own refusal ladder; the narrow
@@ -1032,7 +1053,7 @@ const closeOptionRefusal = strictOptionRefusal(
   CLOSE_FLAGS,
   "close takes only --reason <text>, --cascade, --commit-changes and --stash-changes (usage: opencode-auto close <ref> [dir] --reason <text>)",
 )
-const landOptionRefusal = strictOptionRefusal("land", LAND_FLAGS, "land takes only --keep, --abandon and --merge (usage: opencode-auto land [dir] [--keep] [--abandon] [--merge])")
+const landOptionRefusal = strictOptionRefusal("land", LAND_FLAGS, "land takes only --keep, --abandon, --merge and --onto <branch> (usage: opencode-auto land [dir] [--keep] [--abandon] [--merge] [--onto <branch>])")
 // One command's option policy: the refusal line for a flag, undefined to
 // accept it here. Models (auto-core plans/0055 §9) and install-prompts
 // (plans/0164) each read and print with one shaping option; status takes no
@@ -1708,16 +1729,21 @@ if (command === "clarify") {
   process.exit(result.type === "released" ? 0 : result.type === "error" ? 1 : 2)
 }
 
-// land (plans/0074 §2.3, U-L2, ruled 2026-10-04 §5): the person-invoked
-// return path of branch isolation — land each designated nested repository's
+// land (plans/0074 §2.3, U-L2, ruled 2026-10-04 §5; plans/0192): the
+// person-invoked return path of branch isolation — land each designated
+// nested repository's
 // round of work (its auto/R-NN branch) back onto its original branch as one
 // commit (default squash; --merge the explicit merge-commit alternative),
 // delete the round branch (--keep retains it: a mid-round landing, the branch
 // simply continues), print the landed SHA. --abandon discards the round
-// branch after a person-reviewed reset — the undo path; nothing lands.
-// Refusal is never an automated merge resolution: a moved original branch,
-// foreign commits in the round branch's range, a dirty repository or an
-// ambiguous original branch block (exit 2) naming what to settle. The
+// branch after a person-reviewed reset — the undo path; nothing lands. The
+// original branch is an evidence ladder (plans/0192): the person's --onto
+// word, the establishment's own reflog record (a second ordinary branch
+// never blocks), the exactly-one-candidate floor; the refusals teach --onto,
+// never branch surgery. Refusal is never an automated merge resolution: a
+// moved original branch, foreign commits in the round branch's range, a
+// dirty repository or an ambiguous original branch block (exit 2) naming
+// what to settle. The
 // audit-trail trade-off: one commit on the deliverable, the full per-unit
 // trail stays in the driven root's git (the 0064 record model).
 // Exit codes under the contract: 0 landed / 1 usage / 2 blocked for human.
@@ -1736,6 +1762,10 @@ if (command === "land") {
     console.error("--merge is a landing mode and --abandon lands nothing: drop one of the two")
     process.exit(1)
   }
+  if (flags.has("onto") && !flags.get("onto")) {
+    console.error(`--onto names the original branch and takes a value (the derivation ladder's first rung, auto-core plans/0192); pass it as --onto <branch>: opencode-auto land <dir> --onto <branch>`)
+    process.exit(1)
+  }
   await requireConfigFile("land", true)
   let config: ProjectConfig
   try {
@@ -1752,6 +1782,7 @@ if (command === "land") {
     keep: flagOn("keep"),
     abandon: flagOn("abandon"),
     merge: flagOn("merge"),
+    onto: flags.get("onto") || undefined,
   })
   lock.release()
   exitWithResult(landed, "landed", "usage")

@@ -88,6 +88,9 @@ export async function isolateRound(dir: string, isolate: readonly string[], bran
           return { type: "failed", error: `${rel}: ${firstLine(created.err || created.out) || `git branch exit code ${created.code}`}` }
         }
       }
+      // This checkout is the act git's HEAD reflog records — the entry land's
+      // original-branch derivation reads back (reflogIsolationSource below,
+      // plans/0192 D1); nothing is written beyond git's own side effect.
       const checkedOut = await git(root, ["checkout", branch])
       if (checkedOut.code !== 0) {
         return { type: "failed", error: `${rel}: ${firstLine(checkedOut.err || checkedOut.out) || `git checkout exit code ${checkedOut.code}`}` }
@@ -114,13 +117,40 @@ export async function isolateRound(dir: string, isolate: readonly string[], bran
 // checks ran on the isolation branch).
 
 // The repository's local branch names (refs/heads, short form). The caller
-// filters the families: the round branches (auto/R-*), the lane branches
-// (auto-lane/*, which live inside whichever branch is checked out,
-// plans/0074 §2.4) and the fork branches (auto-fork/*, plans/0128) are never
-// a repository's original branch.
+// filters the families: the round branches (auto/R-<n>, the exact grammar —
+// a person's own auto/* branch outside it is an ordinary branch like any
+// other, plans/0192), the lane branches (auto-lane/*, which live inside
+// whichever branch is checked out, plans/0074 §2.4) and the fork branches
+// (auto-fork/*, plans/0128) are never a repository's original branch — and
+// reads the isolation's own record beside them (reflogIsolationSource).
 export async function localBranches(root: string): Promise<string[]> {
   const listed = await git(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
   return listed.out.split("\n").map((line) => line.trim()).filter(Boolean)
+}
+
+// The from-branch of the OLDEST `checkout: moving from <X> to <branch>` entry
+// in HEAD's reflog — the establishment checkout's own record: isolateRound
+// moves the repository onto the round branch, and git writes that move into
+// HEAD's reflog (newest first, so the oldest match is the establishment's; a
+// same-branch re-checkout also writes an entry, `moving from <branch> to
+// <branch>`, which is why the oldest match — not any match — is the one).
+// This is the evidence `land`'s original-branch derivation reads
+// (plans/0192 D1). Undefined when the repository keeps no HEAD reflog
+// (core.logAllRefUpdates=false), the reflog is expired past the
+// establishment (gc.reflogExpire prunes oldest-first), the read fails, or no
+// move onto the branch is recorded — the caller's fallback answers. The
+// token may name no branch at all (an establishment from a detached HEAD
+// records the commit's sha); validating it against the repository's local
+// branches and the driver families is the caller's, in src/land.ts.
+export async function reflogIsolationSource(root: string, branch: string): Promise<string | undefined> {
+  const log = await git(root, ["reflog", "show", "HEAD", "--format=%gs"]).catch(() => undefined)
+  if (!log || log.code !== 0) return undefined
+  let source: string | undefined
+  for (const line of log.out.split("\n")) {
+    const move = /^checkout: moving from (\S+) to (\S+)$/.exec(line.trim())
+    if (move?.[2] === branch) source = move[1] // keep the last match: the oldest entry
+  }
+  return source
 }
 
 // The full SHA of one revision (a branch name, HEAD, `<rev>^{tree}` …),

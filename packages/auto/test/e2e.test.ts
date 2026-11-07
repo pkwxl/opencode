@@ -1585,6 +1585,36 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
+  test("land --onto: when the isolation record's branch is gone (the original deleted mid-round), land blocks teaching --onto and the named landing succeeds (plans/0192)", async () => {
+    const { dir, nested } = await isolateFixture("auto-cli-land-onto-")
+    try {
+      const original = (await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()
+      expect((await runCli(["init", dir, "--isolate", "pkg"])).code).toBe(0)
+      await commitFixture(dir)
+      expect((await runCli(["plan", dir])).code).toBe(0)
+      await Bun.write(join(dir, "pkg", "one.txt"), "one\n")
+      await nested("add", "-A")
+      await nested("commit", "-qm", "T-001 implement the migration: execute 1", "-m", "Auto-Stage: execute")
+      // the record's branch deleted mid-round (the repository sits on the
+      // round branch), another ordinary branch kept at the isolation point:
+      // the record's word blocks rather than crowning the survivor
+      await nested("branch", "wip", original)
+      await nested("branch", "-D", original)
+      const blocked = await runCli(["land", dir])
+      expect(blocked.code).toBe(2)
+      expect(blocked.err).toContain(`the isolation record names ${original} as the original branch, but no such local branch remains`)
+      expect(blocked.err).toContain("name the target with --onto")
+      // the person's named landing: --onto wip, exit 0, landed on wip
+      const named = await runCli(["land", dir, "--onto", "wip"])
+      expect(named.code).toBe(0)
+      expect(named.out).toContain("on wip (1 commit(s) of auto/R-01 as one); auto/R-01 deleted")
+      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("wip")
+      expect((await nested("branch", "--list", "auto/R-01")).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("land --abandon removes the isolation branch after the person-reviewed reset (exit 0, the tip printed, nothing landed); land's usage errors exit 1 (plans/0074 U-L2)", async () => {
     const { dir, nested } = await isolateFixture("auto-cli-land-abandon-")
     try {
@@ -1620,7 +1650,10 @@ describe("CLI: init freezes the project config", () => {
       const unknown = await runCli(["land", usage.dir, "--cascade"])
       expect(unknown.code).toBe(1)
       expect(unknown.err).toContain("--cascade is not a land option")
-      expect(unknown.err).toContain("land takes only --keep, --abandon and --merge")
+      expect(unknown.err).toContain("land takes only --keep, --abandon, --merge and --onto <branch>")
+      const bare = await runCli(["land", usage.dir, "--onto"])
+      expect(bare.code).toBe(1)
+      expect(bare.err).toContain("--onto names the original branch and takes a value")
       const swallowed = await runCli(["land", "--merge", usage.dir])
       expect(swallowed.code).toBe(1)
       expect(swallowed.err).toContain("land's landing-mode flag and takes no value")
