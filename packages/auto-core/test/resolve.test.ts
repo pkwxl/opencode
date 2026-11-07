@@ -267,6 +267,69 @@ describe("collectAgentResolves", () => {
     expect(driver.find((item) => item.question.includes("formatTokens"))!.matched).toBe(true)
     expect(driver.find((item) => item.question.includes("concurrency"))!.matched).toBeUndefined()
   })
+
+  // plans/0199 D1, enacting 0165-109 (S11-07): the scan's unit is the added
+  // line, not the changed file — in committed mode (the only mode; afterSession
+  // commits right after scanning) a later task editing a file that already
+  // carries committed markers re-booked them under the new task (the dedup key
+  // carries the task id, so cross-task re-sees are new items) and inflated its
+  // AUTO-DECISION count; the ⚑ highlight told the person the wrong task
+  // proxy-answered.
+  async function commitRepo(): Promise<void> {
+    await git(dir, "init", "-q")
+    await git(dir, "config", "user.email", "t@t")
+    await git(dir, "config", "user.name", "t")
+  }
+
+  test("a later task's edit of a file with committed markers books nothing (0199 D1)", async () => {
+    await commitRepo()
+    // T-001's markers, committed — the S11-07 repro's shape. The file ends
+    // with a newline so the later append is purely added lines (a line whose
+    // newline status changes counts as re-added by the diff — a different,
+    // legitimate booking).
+    const design =
+      [
+        "# Design",
+        "",
+        "- AUTO-RESOLVE: keep the v1 wire format -> v1 (cheapest migration)",
+        "- AUTO-DECISION: name the field matched (same word as the schema comment)",
+        "- AUTO-DECISION: scan line by line with a regex (same order of cost as a single pass)",
+      ].join("\n") + "\n"
+    await mkdir(join(dir, "docs"), { recursive: true })
+    await writeFile(join(dir, "docs", "design.md"), design)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "T-001 design markers")
+    // T-002 appends an unrelated paragraph to the same file.
+    await writeFile(join(dir, "docs", "design.md"), `${design}\nAn unrelated paragraph the later session wrote.\n`)
+    expect(await collectAgentResolves(dir, { task: "T-002", phase: "m", round: 1 })).toEqual({
+      resolves: 0,
+      decisions: 0,
+    })
+    expect(await readItems()).toEqual([])
+    expect(await decisionsOf(dir, "T-002")).toBe(0)
+  })
+
+  test("a marker line added to a tracked file is booked with its own line number (0199 D1)", async () => {
+    await commitRepo()
+    await mkdir(join(dir, "docs"), { recursive: true })
+    await writeFile(join(dir, "docs", "notes.md"), "# Notes\n\nParagraph one.\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    // The session INSERTS a resolve marker and a decision line between the
+    // existing lines — exactly the added lines the scan must see.
+    await writeFile(
+      join(dir, "docs", "notes.md"),
+      ["# Notes", "", "- AUTO-RESOLVE: keep the v1 wire format -> v1 (cheapest migration)", "- AUTO-DECISION: scan by line (same cost)", "", "Paragraph one."].join("\n"),
+    )
+    expect(await collectAgentResolves(dir, { task: "T-003", phase: "m", round: 2 })).toEqual({
+      resolves: 1,
+      decisions: 1,
+    })
+    const items = await readItems()
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ task: "T-003", question: "keep the v1 wire format", option: "v1", file: `${join("docs", "notes.md")}:3` })
+    expect(await decisionsOf(dir, "T-003")).toBe(1)
+  })
 })
 
 describe("resolveHighlight", () => {

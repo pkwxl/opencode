@@ -24,7 +24,7 @@
 import { mkdir, realpath, rename } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { taskDoc } from "./docpaths"
-import { changedFiles } from "./git"
+import { addedLines, type AddedLines } from "./git"
 
 // ===== schema(v:1,落盘 compact JSON;plans/0020-auto-resolve-design.md §F)=====
 
@@ -272,11 +272,13 @@ export async function recordResolves(dir: string | undefined, items: ResolveItem
   })
 }
 
-// 累加逐任务 AUTO-DECISION 计数。累加口径成立的前提是"每次扫描只看得见本次会话的
-// 未提交改动"(afterSession 扫描完即统一提交);`--commit false` 下改动跨会话堆积、
-// 同一批标记会被反复看见,计数偏大——AUTO-RESOLVE 侧由去重键吸收,计数侧不设行级
-// 明细故吸收不了。这是已接受边界: 该计数是"标注门槛是否失控"的体感指标,不是事实
-// 来源,而 `--commit false` 本身就已破坏该前提(见 plans/0020-auto-resolve-design.md §K)。
+// 累加逐任务 AUTO-DECISION 计数。累加口径的前提是"每次扫描只看得见本次会话
+// 新增的行"(0199 D1: 扫描以会话的 added lines 为单位——对 HEAD 的 diff 加未跟踪
+// 整文件;afterSession 扫描完即统一提交,提交内容不再进入后续扫描);dryrun 下
+// 提交被跳过、对 HEAD 的 diff 跨会话堆积,同一批标记会被反复看见,计数偏大
+// ——AUTO-RESOLVE 侧由去重键吸收,计数侧不设行级明细故吸收不了。这是已接受
+// 边界(0020 §K-10 原针对 --commit false 的裁定转写到 dryrun,唯一剩下的无提交
+// 世界): 该计数是"标注门槛是否失控"的体感指标,不是事实来源。
 function addDecisions(doc: ResolveDoc, task: string, count: number) {
   if (!task || count <= 0) return
   doc.decisions = { ...doc.decisions, [task]: (doc.decisions?.[task] ?? 0) + count }
@@ -303,12 +305,18 @@ export async function decisionsOf(dir: string | undefined, task: string): Promis
 
 // ===== 会话收尾扫描(H4)=====
 
-// 扫描本次会话的工作区变更文件,提取两类标记: AUTO-RESOLVE 落账(并回配 driver 项
-// 的 matched),AUTO-DECISION 只累加逐任务计数、不落行级明细——台账的存在理由是驱动
-// 高亮,AUTO-DECISION 不参与高亮就不需要行级持久化,它的持久轨迹本来就是进 git 的
-// 标记行本身;计数则是高亮块末行的折叠数字(§H-④)。
-// 变更文件经 git.ts 的 changedFiles 逐仓库遍历(嵌套子仓库是本项目常态);非 git
-// 目录返回空清单,机制自然空转。二进制与超过 2MB 的文件跳过。
+// 扫描本次会话工作区变更中的**新增行**,提取两类标记: AUTO-RESOLVE 落账(并回配
+// driver 项的 matched),AUTO-DECISION 只累加逐任务计数、不落行级明细——台账的存在
+// 理由是驱动高亮,AUTO-DECISION 不参与高亮就不需要行级持久化,它的持久轨迹本来
+// 就是进 git 的标记行本身;计数则是高亮块末行的折叠数字(§H-④)。
+// 扫描单位是 added line 而非 changed file(0199 D1, 0165-109): 标记语法是行语法,
+// 会话代答过的就是它写下的行——一个后任务改动了带已提交标记的文件时,整文件扫描
+// 会把前任务的标记按新任务重复落账(去重键含任务号,拦不住跨任务重看),高亮块
+// 便向用户指认该任务从未做过的代答。新增行经 git.ts 的 addedLines 逐仓库取回
+// (对 HEAD 的 -U0 diff;未跟踪文件整文件,beginUnit 的干净起点使其成为本单元
+// 的新写;嵌套子仓库是本项目常态);非 git 目录返回空清单,机制自然空转。HEAD
+// 不可解析或 diff 读取失败的仓库退回整文件扫描(0199 D1 的异常底线)。二进制与
+// 超过 2MB 的文件跳过。
 // 返回本次扫描到的标记条数(落账去重之前的口径: 它回答的是"扫描确实跑过、看见了
 // 多少标记",而非"台账新增了几条")。
 export async function collectAgentResolves(
@@ -316,16 +324,19 @@ export async function collectAgentResolves(
   ctx: ResolveCtx,
 ): Promise<{ resolves: number; decisions: number }> {
   if (!dir) return { resolves: 0, decisions: 0 }
-  const files = await changedFiles(dir).catch(() => [] as string[])
+  const files = await addedLines(dir).catch(() => new Map<string, AddedLines>())
   const items: ResolveItem[] = []
   let decisions = 0
   const at = clock()
-  for (const file of files) {
+  for (const [file, added] of files) {
     const text = await readScannable(join(dir, file))
     if (text === undefined) continue
     const lines = text.split("\n")
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]!
+    // "all" = 未跟踪文件(本单元的新写): 每一行都是本次会话新增的。
+    const numbers: readonly number[] = added === "all" ? lines.map((_, i) => i + 1) : added
+    for (const lineNo of numbers) {
+      const line = lines[lineNo - 1]
+      if (line === undefined) continue
       if (DECISION_MARK.test(line)) decisions++
       const parsed = parseResolveLine(line)
       if (!parsed) continue
@@ -338,7 +349,7 @@ export async function collectAgentResolves(
         question: parsed.question,
         option: parsed.option,
         reason: parsed.reason,
-        file: `${file}:${i + 1}`,
+        file: `${file}:${lineNo}`,
         malformed: parsed.malformed,
       })
     }

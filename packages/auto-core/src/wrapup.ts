@@ -243,6 +243,15 @@ async function verifySession(
         // overwrites it wholesale (D3's lifecycle rule).
         const committed = await git.afterSession(dir, opts, task, { stage: "wrapup", subject })
         if (committed.type === "failed") return { kind: "stop", stop: commitBlocked(`${task.id} ${input.label}`, committed) }
+        // The verify session's own unservable request on the FAIL side too
+        // (plans/0142 D1; the 0156 D8 declination amended by plans/0199 D2):
+        // a FAIL that leaves tmp/test.sh behind must not hand the fix round
+        // a dead marker to read as wiring for its whole run — nor let the
+        // round's close block naming a FIX session whose request it never
+        // made. Consumed here at this task's own close, the same label and
+        // log shape as the PASS site below; the round's close (0142 D2)
+        // then judges only its own sessions' markers.
+        await consumeDeadTestMarker(dir, opts, task.id)
         return { kind: "fail", reason: verdict.reason }
       }
       // PASS (or no verdict under the pack's own omission rule): the gap list
@@ -257,8 +266,9 @@ async function verifySession(
       // so the marker here is the T-058 shape (the session read the task's
       // gap list or document naming it), and without this consumption it
       // would linger until the NEXT task's wrap-up entry, whose log would
-      // misattribute it to that task. The FAIL path needs nothing: its fix
-      // round's close consumes and blocks on it already.
+      // misattribute it to that task. The FAIL return consumes through the
+      // same seam before its fix round opens (plans/0199 D2) — the round's
+      // close judges only its own sessions' markers.
       await consumeDeadTestMarker(dir, opts, task.id)
       return { kind: "pass" }
     }

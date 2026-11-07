@@ -165,9 +165,11 @@ export async function afterSession(
 // commit/dryrun early return — collection is auditing and must not depend
 // on the commit switch; in the on mode it degrades to a backstop (the
 // driver already logged everything on the event side), but markers the
-// session wrote voluntarily are still collected. Scans this session's
-// uncommitted changed files: AUTO-RESOLVE lands in the ledger,
-// AUTO-DECISION only returns a count.
+// session wrote voluntarily are still collected. Scans the ADDED LINES of
+// this session's uncommitted changes (the diff against HEAD plus untracked
+// files whole — plans/0199 D1: a whole-file scan re-booked earlier tasks'
+// committed markers under whichever task later touched the file):
+// AUTO-RESOLVE lands in the ledger, AUTO-DECISION only returns a count.
 // The H4 collector: counts go only into the verbose log (vlog), never the
 // terminal — AUTO-DECISION never competes with AUTO-RESOLVE for layout space
 // (§H-④), while "the scan really ran, and how many markers it saw" stays

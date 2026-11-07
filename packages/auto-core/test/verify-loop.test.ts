@@ -1156,4 +1156,58 @@ describe("the unservable test request (0142 D1/D2)", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  // plans/0199 D2, enacting 0165-111 (S11-10): the FAIL return consumed
+  // nothing — the verify session's dead marker survived into the fix round
+  // (read as wiring by its sessions) and the round's close blocked naming the
+  // FIX session for a request it never made, turning a completing round into
+  // an exit-2 misattribution.
+  test("the verify session's FAIL consumes its marker too (plans/0199 D2): the fix round opens clean and is never blocked over the verify session's request", async () => {
+    const dir = await seedRepo()
+    try {
+      const { client, calls } = scriptedClient([
+        async () => {
+          // The verify session FAILs and leaves the dead marker — the
+          // T-058 shape on the FAIL side.
+          await failTurn(dir)()
+          mkdirSync(join(dir, "tmp"), { recursive: true })
+          await Bun.write(join(dir, "tmp/test.sh"), "bash test/spike.sh\n")
+        },
+        async () => {
+          // The fix session writes no marker of its own: its round must
+          // complete and book.
+          await Bun.write(join(dir, "FIXES.md"), "fix round 1\n")
+        },
+        async () => {
+          mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+          await Bun.write(join(dir, "docs/T-001/report.md"), passReport)
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const lines: string[] = []
+      const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+        lines.push(args.map(String).join(" "))
+      })
+      let result: Awaited<ReturnType<typeof runWrapup>>
+      try {
+        result = await runWrapup(client, plan, plan.tasks[0]!, designOpts(dir), chain, { solo: false, label: "wrap-up session", persist: persistTo(dir) })
+      } finally {
+        printed.mockRestore()
+      }
+      // The loop completed: the fix round was neither handed the dead marker
+      // (pre-fix it read it as wiring through the whole round) nor blocked
+      // over it at its close (pre-fix the block named the fix session).
+      expect(result).toBeUndefined()
+      expect(calls.prompts).toHaveLength(3)
+      expect(promptText(calls.prompts[1]!)).toContain("You are the fix session")
+      // The marker is gone BEFORE the fix session dispatched, consumed at
+      // the verify session's own close with the ⚠ line naming this task.
+      expect(existsSync(join(dir, "tmp/test.sh"))).toBe(false)
+      expect(lines.some((line) => line.includes("T-001 left tmp/test.sh") && line.includes("the phase (design) is not a code-work phase"))).toBe(true)
+      expect(lines.some((line) => line.includes("ended with a driver-test request pending"))).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

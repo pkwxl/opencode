@@ -1629,6 +1629,119 @@ export async function untrackedFiles(dir: string): Promise<Set<string>> {
   return new Set(lists.flat().filter((entry) => entry.status === "??").map((entry) => entry.rel))
 }
 
+// The added lines of the worktree's uncommitted changes (plans/0199 D1): the
+// marker scan's unit — what a session proxy-answered is what that session
+// WROTE, and the AUTO-RESOLVE/AUTO-DECISION grammar is a line grammar, so the
+// scan must see exactly the lines this session added, never the committed
+// content of the files it happened to touch (a later task's edit of a file
+// with committed markers re-booked them under the new task — 0165-109). Per
+// repository root (repoRoots' own traversal, changedFiles' discipline): the
+// tracked changes diff against HEAD at -U0 (added lines only, no context),
+// the untracked files whole ("all" — beginUnit's clean start makes untracked
+// mean this unit's own new write, every line of it added). Keyed by the
+// target-directory-relative path, the same spelling changedFiles returns;
+// the line numbers are 1-based positions in the file's CURRENT text (the new
+// side of the diff), ready for a `path:line` record.
+// The diff read is pinned against the person's own diff configuration
+// (prefixes, renames, external drivers, colors, quoted paths): the parse
+// below reads the a/b headers git prints by default, and the target's
+// config must not change what the driver's own grammar sees.
+// A repository whose HEAD does not resolve or whose diff exits nonzero falls
+// back to whole-file for its tracked entries: unborn history has nothing
+// committed to over-book (whole-file IS the added-lines truth there), and for
+// the anomalous window the floor keeps today's whole-file scan — the ledger
+// is best-effort auditing (0020 §F), never a flow-affecting read.
+export type AddedLines = number[] | "all"
+
+export async function addedLines(dir: string): Promise<Map<string, AddedLines>> {
+  const out = new Map<string, AddedLines>()
+  for (const root of await repoRoots(dir)) {
+    const entries = await statusEntries(dir, root)
+    if (!entries.length) continue
+    const tracked = new Set<string>()
+    for (const entry of entries) {
+      if (entry.status === "??") out.set(entry.rel, "all")
+      else tracked.add(entry.rel)
+    }
+    if (!tracked.size) continue
+    const diff = await git(root, [
+      "-c",
+      "diff.noprefix=false",
+      "-c",
+      "diff.mnemonicPrefix=false",
+      "-c",
+      "core.quotePath=false",
+      "diff",
+      "HEAD",
+      "-U0",
+      "--patch",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-renames",
+      "--",
+      ".",
+    ])
+    if (diff.code !== 0) {
+      for (const rel of tracked) out.set(rel, "all")
+      continue
+    }
+    await collectAddedLines(dir, root, tracked, diff.out, out)
+  }
+  return out
+}
+
+// The -U0 hunk header: the capture is the first added line's number in the
+// new file (the counter the `+` content lines below it advance).
+const HUNK_HEAD = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/
+
+// One repository's diff parsed into added line numbers. Stateful by
+// construction: a file's `--- a/…`/`+++ b/…` headers precede all its hunks,
+// so a `+++ b/` line counts as the header exactly while no file is open
+// (`rel === undefined`), and inside a hunk every line carries its `+`/`-`
+// prefix — a content line whose text begins with `++ b/` renders as
+// `+++ b/…` too, and must stay content. Paths are top-level-relative (the a/
+// b/ prefixes are repository-root-relative), mapped to target-relative
+// exactly the way statusEntries maps its own output, and accepted only when
+// the mapping names a changed tracked file (a mangled or out-of-subtree
+// mapping is skipped — the best-effort floor, never a wrong-line record).
+async function collectAddedLines(
+  dir: string,
+  root: string,
+  tracked: Set<string>,
+  output: string,
+  out: Map<string, AddedLines>,
+): Promise<void> {
+  const top = (await git(root, ["rev-parse", "--show-toplevel"])).out.trim()
+  if (!top) {
+    for (const rel of tracked) out.set(rel, "all")
+    return
+  }
+  const phys = await physicalDir(dir)
+  let rel: string | undefined
+  let lineNo = 0
+  for (const line of output.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      rel = undefined
+      lineNo = 0
+    } else if (rel === undefined) {
+      if (line.startsWith("+++ b/")) {
+        const mapped = relative(phys, join(top, line.slice(6)))
+        if (tracked.has(mapped)) rel = mapped
+      }
+    } else {
+      const hunk = HUNK_HEAD.exec(line)
+      if (hunk) {
+        lineNo = Number(hunk[1])
+      } else if (lineNo > 0 && line.startsWith("+")) {
+        const existing = out.get(rel)
+        if (existing === undefined) out.set(rel, [lineNo])
+        else if (existing !== "all") existing.push(lineNo)
+        lineNo += 1
+      }
+    }
+  }
+}
+
 // --porcelain -z --no-renames -uall: NUL-separated per-file output with no
 // rename arrows; each entry is "XY <path>", the path relative to the
 // repository root (the worktree top level), converted to a path relative to
