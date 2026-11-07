@@ -148,7 +148,11 @@ export function sameIssue(a: string, b: string): boolean {
   return x === y || x.includes(y) || y.includes(x)
 }
 
-function normalize(text: string): string {
+// The one normalization home (whitespace removed, lowercased) — the pairing
+// rule's own transform, exported since plans/0198 D2 for the charter clamp's
+// exact-equality test (a write locator must prove equality, never substring
+// likeness — sameIssue stays the pairing rule, this its arithmetic).
+export function normalize(text: string): string {
   return text.replace(/\s+/g, "").toLowerCase()
 }
 

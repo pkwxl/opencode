@@ -45,7 +45,10 @@ const item = (over: Partial<ResolveItem> = {}): ResolveItem => ({
   question: "may implementers read the uapi header?",
   option: "yes, constants only",
   reason: "the spec points there",
-  file: "docs/T-001/report.md:4",
+  // The marker line's own position in MARKER_FILE (line 5) — the scan's
+  // `file:line` record; the clamp's locator treats it as a hint proven by
+  // content (plans/0198 D2), never as authority.
+  file: "docs/T-001/report.md:5",
   ...over,
 })
 
@@ -99,6 +102,9 @@ describe("clampRecordedResolves (plans/0082 §10 D12, the agent-fake check)", ()
       const text = await Bun.file(join(dir, "docs/T-001/report.md")).text()
       expect(text).toContain("AUTO-RESOLVE: may implementers read the uapi header? -> no reference-header reads; constants from the restated ABI (the spec points there; charter-clamped by the driver, 0082 D12")
       expect(text).toContain('the wider grant "yes, constants only" is OPEN until the person rules')
+      // The original wide grant is gone from the line — the clamped reading
+      // is the one in force in the document, not a second line beside it.
+      expect(text).not.toContain("-> yes, constants only (the spec points there)")
       // The re-recorded line still parses as a marker (the ledger's grammar).
     } finally {
       setClampCaller(undefined)
@@ -140,6 +146,119 @@ describe("clampRecordedResolves (plans/0082 §10 D12, the agent-fake check)", ()
     expect(parseResolveLine(reRecorded)?.question).toBe("may implementers read the uapi header?")
     expect(clampLine(item(), "no reference-header reads")).toContain("the default in force is \"no reference-header reads\"")
     expect(clampMarkerLine(item({ question: "" }), "x")).toBeUndefined()
+  })
+
+  // —— the content-proven locator (plans/0198 D2, enacting 0165-022) ——
+  //
+  // The old locator took the FIRST line matching by recorded position OR by
+  // a substring-equal question: a substring-matching earlier marker was
+  // overwritten (its decision destroyed) while the flagged wide default
+  // stayed in force, and a stale line number rewrote whatever line had
+  // drifted into the slot. The rewrite now requires the grammar's own
+  // parse to prove the line is exactly this item's marker.
+
+  test("an earlier substring-question marker is never the clamp's target (0198 D2): the flagged item's own line is rewritten, the unrelated marker untouched", async () => {
+    // The finding's repro shape: an unrelated narrower decision ("wire
+    // format -> v1") recorded on line 5, the flagged wider default ("wire
+    // format for exports -> v2 everywhere") on line 9 — the earlier line's
+    // question is a substring of the flagged item's.
+    const doc = [
+      "# Design",
+      "",
+      "## Decisions",
+      "",
+      "AUTO-RESOLVE: wire format -> v1 (the incident's fallback)",
+      "",
+      "## Later",
+      "",
+      "AUTO-RESOLVE: wire format for exports -> v2 everywhere (speed)",
+      "",
+    ].join("\n")
+    const dir = await mkdtemp(join(tmpdir(), "auto-clamp-"))
+    try {
+      await mkdir(join(dir, "docs"), { recursive: true })
+      await writeFile(join(dir, "docs/design.md"), doc)
+      await recordResolves(dir, [item({ question: "wire format for exports", option: "v2 everywhere", reason: "speed", file: "docs/design.md:9", task: "T-003" })])
+      setClampCaller(async () => ({ kind: "flagged", reading: "v2 for exports only" }))
+      const lines = await clampRecordedResolves(dir)
+      expect(lines).toHaveLength(1)
+      const text = await Bun.file(join(dir, "docs/design.md")).text()
+      // The unrelated v1 decision stands verbatim — the substring match
+      // never authorized its rewrite.
+      expect(text).toContain("AUTO-RESOLVE: wire format -> v1 (the incident's fallback)")
+      // The flagged item's OWN line is the one re-recorded: the clamped
+      // reading in force, the wide grant gone from the line.
+      expect(text).toContain("AUTO-RESOLVE: wire format for exports -> v2 for exports only (speed; charter-clamped by the driver")
+      expect(text).not.toContain("-> v2 everywhere (speed)")
+    } finally {
+      setClampCaller(undefined)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a moved marker is found by content; a stale line number never rewrites the line now at the slot (0198 D2)", async () => {
+    // The scan recorded the marker at line 4; the document has since been
+    // edited above it — the marker now sits at line 7 and unrelated prose
+    // occupies the recorded slot. Position alone proves nothing.
+    const doc = [
+      "# Report",
+      "",
+      "## Decisions",
+      "The v0 settle kept a single attempt in the hot path.",
+      "",
+      "## Notes",
+      "AUTO-RESOLVE: retry policy -> three attempts (the timeout incident)",
+      "",
+    ].join("\n")
+    const dir = await mkdtemp(join(tmpdir(), "auto-clamp-"))
+    try {
+      await mkdir(join(dir, "docs"), { recursive: true })
+      await writeFile(join(dir, "docs/report.md"), doc)
+      await recordResolves(dir, [item({ question: "retry policy", option: "three attempts", reason: "the timeout incident", file: "docs/report.md:4", task: "T-005" })])
+      setClampCaller(async () => ({ kind: "flagged", reading: "retry only on idempotent calls" }))
+      const lines = await clampRecordedResolves(dir)
+      expect(lines).toHaveLength(1)
+      const text = await Bun.file(join(dir, "docs/report.md")).text()
+      // The prose at the stale slot is untouched — the position hint was
+      // rejected because the line is not the item's marker.
+      expect(text).toContain("The v0 settle kept a single attempt in the hot path.")
+      // The moved marker itself is found by content and re-recorded there.
+      expect(text).toContain("AUTO-RESOLVE: retry policy -> retry only on idempotent calls (the timeout incident; charter-clamped by the driver")
+      expect(text).not.toContain("-> three attempts (the timeout incident)")
+    } finally {
+      setClampCaller(undefined)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("an ambiguous duplicate rewrites nothing — ledger-clamped only, the OPEN line still surfaced (0198 D2)", async () => {
+    // The same marker line twice in one file and the recorded position stale
+    // (it names a heading, not a marker): the exact-content search finds
+    // two, the match is ambiguous, and the conservative direction is no
+    // rewrite (P12) — the clamp, the ledger mark and the person's ⚡ line
+    // still land. (When the recorded slot itself holds an exact-content
+    // marker, that line is proven and re-records even under duplication
+    // elsewhere — the position hint disambiguates, the content authorizes.)
+    const twice = ["# Report", "", "## Proxy-answered questions", "", "- AUTO-RESOLVE: may implementers read the uapi header? -> yes, constants only (the spec points there)", "", "- AUTO-RESOLVE: may implementers read the uapi header? -> yes, constants only (the spec points there)", ""].join("\n")
+    const dir = await mkdtemp(join(tmpdir(), "auto-clamp-"))
+    try {
+      await mkdir(join(dir, "docs/T-001"), { recursive: true })
+      await writeFile(join(dir, "docs/T-001/report.md"), twice)
+      await recordResolves(dir, [item({ file: "docs/T-001/report.md:3" })])
+      setClampCaller(async () => ({ kind: "flagged", reading: "no reference-header reads" }))
+      const lines = await clampRecordedResolves(dir)
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain("OPEN question (charter-clamped)")
+      // The ledger half stands: clamped with the reading in force.
+      const [entry] = await resolvesOf(dir, "task", "T-001")
+      expect(entry?.clamped).toBe(true)
+      expect(entry?.clamp).toBe("no reference-header reads")
+      // The document is untouched — no line was provably THE one.
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(twice)
+    } finally {
+      setClampCaller(undefined)
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
 

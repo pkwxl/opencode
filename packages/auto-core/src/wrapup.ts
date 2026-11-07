@@ -12,13 +12,14 @@
 // (below): the pack's lane table runs as parallel driver processes and the
 // anchor pre-gate decides whether the verify session dispatches at all. A
 // bounded fix loop follows (plans/0083 D1–D5, the budget re-ruled by plans/
-// 0146): fix rounds run while progress holds — each round closes gaps under
+// 0146, the progress comparison re-ruled by plans/0198 D1): fix rounds run
+// while progress holds — each round closes gaps under
 // the pack's repair discipline and is committed with stage `execute`
 // (per-session commits, subject `<id> fix <round>.<session> <short title>`),
 // each followed by a re-verification
-// from scratch; the task blocks only once two consecutive rounds closed no
-// gap (the countable gap list stopped shrinking), never on a round count
-// alone. The round is session-unbounded (plans/0146 D5): gaps are the
+// from scratch; the task blocks only once two consecutive rounds beat none
+// of the loop's best gap count (the countable gap list stopped reaching new
+// lows), never on a round count alone. The round is session-unbounded (plans/0146 D5): gaps are the
 // natural handover boundaries, and a context-wall handover may land mid-gap
 // with no gap closed — progress is measured per round, so such sessions
 // cost nothing against it. Past the block today's ladder
@@ -76,11 +77,16 @@ import { commitBlocked, wrapupResolves } from "./unit-commit"
 // The fix loop's two named constants in one (plans/0083 D5, re-ruled by
 // plans/0146 D3): the minimum rounds before a block may fire, and the
 // consecutive-no-progress threshold — the task blocks only once FIX_ROUNDS
-// rounds have run AND the last FIX_ROUNDS rounds each closed no gap (the
-// gap count did not shrink). Rounds above the minimum are bounded by
-// progress itself: between two no-progress rounds a progress round must
-// strictly shrink the count, so a loop starting from N gaps runs at most
-// 2 + N rounds. Then the escalation ladder of plans/0079 §4 unchanged
+// rounds have run AND the last FIX_ROUNDS rounds each closed no gap (none
+// beat the loop's best count, the minimum the loop's FAILs have measured —
+// plans/0198 D1). Rounds above the minimum are bounded by progress itself:
+// a progress round must strictly lower that best, which starts at the seed
+// FAIL's count N and cannot be lowered more than N times, and between
+// progress rounds at most one no-progress round may sit before the streak
+// blocks — so a loop starting from N gaps runs at most 2N + 2 rounds
+// before it blocks or passes (in fact at most 2N on the FAIL path, where
+// every measured list carries at least one countable heading). Then the
+// escalation ladder of plans/0079 §4 unchanged
 // (block with the repair fact → `--repair` → the human). No CLI flag, no
 // config key; width, if ever needed, arrives run-side the way `--repair`'s
 // did.
@@ -585,8 +591,9 @@ function laneGapList(task: Task, runs: readonly LaneRun[], gate: { reason: strin
 // carry-forward makes the post-fix re-run narrow. round is the fix rounds
 // this task has already spent (resume, D7: a round counts once it opens, so
 // a resumed run never re-runs a spent round); noProgress and gaps carry the
-// progress rule's state (plans/0146 D4 — the consecutive no-progress rounds
-// and the count the last FAIL measured), persisted with the round at every
+// progress rule's state (plans/0146 D4, the comparison base re-ruled by
+// plans/0198 D1 — the consecutive no-progress rounds and the best count the
+// loop's FAILs have measured), persisted with the round at every
 // wrapup-stage write so a kill anywhere re-enters with the loop's exact
 // state; persist advances the progress
 // record's wrapup stage; baseline is the unit's start SHA baseline (the
@@ -616,12 +623,13 @@ export async function runWrapup(
   // baseline) would hand a re-run's verifier an empty range over the work
   // the task's own sessions committed before the interruption.
   const commitRange = commitRangeText(dir, await charterBaseline(task.id, input.baseline ?? []), input.scope)
-  // The progress rule's state (plans/0146 D2): lastGaps = the count the
-  // previous FAIL measured (undefined before this loop's first FAIL — that
-  // one only seeds, no round preceded it), noProgress = the consecutive
-  // fix rounds that closed no gap. Both ride the resumed phase record and
-  // every wrapup-stage persist below.
-  let lastGaps = input.gaps
+  // The progress rule's state (plans/0146 D2, the comparison base re-ruled
+  // by plans/0198 D1): bestGaps = the minimum gap count this loop instance's
+  // FAILs have measured (undefined before this loop's first FAIL — that one
+  // only seeds, no round preceded it), noProgress = the consecutive fix
+  // rounds that beat none of that best. Both ride the resumed phase record
+  // and every wrapup-stage persist below.
+  let bestGaps = input.gaps
   let noProgress = input.noProgress ?? 0
   for (let round = input.round ?? 0; ; ) {
     // The wrap-up's entry consumes a stale unservable marker (plans/0142 D1):
@@ -630,7 +638,7 @@ export async function runWrapup(
     // the incident's re-verification "verified" it as exactly right, twice.
     await consumeDeadTestMarker(dir, opts, task.id)
     autobanner(`${task.id} ${task.title}: wrap-up${round > 0 ? ` (re-verification after fix round ${round})` : ""}`)
-    await input.persist?.(wrapupStage(round, noProgress, lastGaps))
+    await input.persist?.(wrapupStage(round, noProgress, bestGaps))
     // The wrap-up entry is an /exit boundary (plans/0143 D5): the stage's
     // persist above is what a re-run re-enters by, and nothing of this
     // round's verification has started — the pause is the scene a kill at
@@ -658,15 +666,20 @@ export async function runWrapup(
       if (outcome.kind === "stop") return outcome.stop
       reason = outcome.reason
     }
-    // The progress measurement (plans/0146 D2): count the gap list this FAIL
-    // just produced (the driver-synthesized one on the red path, the verify
-    // session's on the other) and judge the round that preceded it. The
-    // first FAIL of a loop instance only seeds the baseline; every later one
-    // compares — a strictly smaller count is progress and clears the streak,
-    // anything else (same count, grown count) extends it.
+    // The progress measurement (plans/0146 D2, the comparison base re-ruled
+    // by plans/0198 D1): count the gap list this FAIL just produced (the
+    // driver-synthesized one on the red path, the verify session's on the
+    // other) and judge the round that preceded it against the loop's BEST,
+    // not the previous count — a fix that closes one gap while its
+    // predecessor's round broke another (the oscillating 2,1,2,1… shape)
+    // never reaches a new low and must not reset the streak. The first FAIL
+    // of a loop instance only seeds the best; every later one compares — a
+    // strictly smaller count than the best is progress and clears the
+    // streak, anything else (same count, grown count, a re-fall to a count
+    // the loop already saw) extends it.
     const gapsNow = countGaps(await Bun.file(join(dir, taskDoc(task.id, "gaps"))).text().catch(() => ""))
-    if (lastGaps !== undefined) noProgress = gapsNow < lastGaps ? 0 : noProgress + 1
-    lastGaps = gapsNow
+    if (bestGaps !== undefined) noProgress = gapsNow < bestGaps ? 0 : noProgress + 1
+    bestGaps = bestGaps === undefined ? gapsNow : Math.min(bestGaps, gapsNow)
     if (round >= FIX_ROUNDS && noProgress >= FIX_ROUNDS) {
       // No progress across the last two fix rounds (plans/0146 D3): today's
       // ladder verbatim (plans/0079 §4) — the
@@ -683,14 +696,14 @@ export async function runWrapup(
         type: "blocked",
         repair: { reason },
         question:
-          `${lead} and the last two fix rounds closed no gap (${round} fix rounds spent, the gap list still counts ${lastGaps} gap${lastGaps === 1 ? "" : "s"}); the remaining gaps are listed in ${taskDoc(task.id, "gaps")}. ` +
+          `${lead} and the last two fix rounds closed no gap (${round} fix rounds spent, the gap list still counts ${gapsNow} gap${gapsNow === 1 ? "" : "s"}); the remaining gaps are listed in ${taskDoc(task.id, "gaps")}. ` +
           `The work and the gap list are committed; accept the result with ${bin} close ${task.id} --reason <text>; ` +
           `or replace the task with ${bin} plan --force-close ${task.id} --reason <text> --append -p <what to do instead>; ` +
           `or list fix tasks before it in ${plan.index} by hand; then re-run.`,
       }
     }
     round += 1
-    await input.persist?.(wrapupStage(round, noProgress, lastGaps))
+    await input.persist?.(wrapupStage(round, noProgress, bestGaps))
     const stopped = await runFixRound(client, plan, task, opts, chain, round, input.persist)
     if (stopped) return stopped
     // Re-verification runs from scratch (D3/D4): the next loop iteration
@@ -700,9 +713,11 @@ export async function runWrapup(
 }
 
 // The wrapup stage's progress record (plans/0083 D7, the fields of plans/
-// 0146 D4): round = the fix rounds already spent (a round counts once it
-// opens), noProgress = the consecutive rounds that closed no gap (omitted at
-// zero), gaps = the count the last FAIL measured (the progress baseline).
+// 0146 D4, the `gaps` meaning re-ruled by plans/0198 D1): round = the fix
+// rounds already spent (a round counts once it opens), noProgress = the
+// consecutive rounds that beat none of the loop's best (omitted at zero),
+// gaps = the best count the loop's FAILs have measured — the minimum, not
+// the last (the progress baseline).
 // All three ride every wrapup-stage persist — the loop entry's and the
 // pre-fix-round's — so a kill anywhere re-enters with the loop's exact
 // state; the 0142 dead-channel rewind writes the roundless form and thereby

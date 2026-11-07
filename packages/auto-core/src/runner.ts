@@ -987,8 +987,9 @@ async function runCloseout(
       label: "wrapup session",
       // D7: the fix rounds this task has already spent (a round counts
       // once it opens, so a resumed run never re-runs a spent round), with
-      // the progress rule's state (plans/0146 D4 — the consecutive
-      // no-progress rounds and the count the last FAIL measured).
+      // the progress rule's state (plans/0146 D4, the meaning re-ruled by
+      // plans/0198 D1 — the consecutive no-progress rounds and the best
+      // count the loop's FAILs have measured).
       round: input.resume?.kind === "wrapup" ? (input.resume.round ?? 0) : 0,
       ...(input.resume?.kind === "wrapup" && input.resume.noProgress !== undefined ? { noProgress: input.resume.noProgress } : {}),
       ...(input.resume?.kind === "wrapup" && input.resume.gaps !== undefined ? { gaps: input.resume.gaps } : {}),

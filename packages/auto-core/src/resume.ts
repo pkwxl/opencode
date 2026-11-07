@@ -71,10 +71,11 @@ export type StepKind = "phase-plan" | "phase-handover" | "phase-append"
 //   plans/0083 (D1/D7: one session does verify + report); round = the fix
 //   rounds this task has already spent (a round counts once it opens, so a
 //   resumed run never re-runs a spent fix round; absent = none yet);
-//   noProgress = the consecutive fix rounds that closed no gap and gaps =
-//   the count the last FAIL measured (plans/0146 D4 — the progress rule's
-//   state, riding every wrapup-stage persist; absent = no baseline yet, the
-//   next FAIL seeds it). The
+//   noProgress = the consecutive fix rounds that beat none of the loop's
+//   best and gaps = the best count the loop's FAILs have measured — the
+//   minimum, not the last (plans/0146 D4, the meaning re-ruled by plans/
+//   0198 D1 — the progress rule's state, riding every wrapup-stage persist;
+//   absent = no baseline yet, the next FAIL seeds it). The
 //   kind stays "wrapup" for resume compatibility with pre-0083 records.
 // - closeout: the wrap-up is finished, only the task report result-line check
 //   and the completion mark remain (no session); on resume the wrap-up is

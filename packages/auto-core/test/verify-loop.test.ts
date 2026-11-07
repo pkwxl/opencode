@@ -347,6 +347,54 @@ describe("the verification loop (0083 D1–D7)", () => {
     }
   })
 
+  // plans/0198 D1, enacting 0165-003 (S11-02): the ruled bound was false in
+  // code — against the PREVIOUS count, an oscillating count (a fix closes one
+  // gap and its round's regression breaks another, the common whack-a-mole
+  // shape) reset the no-progress streak on every down step and the loop never
+  // blocked. Progress now beats the loop's BEST (the minimum measured): the
+  // oscillation 2,1,2,1 reaches its low at the second FAIL and never beats it
+  // again — the loop blocks at round 3 with the best held at 1.
+  test("an oscillating gap count blocks (0198 D1): 2 → 1 → 2 → 1 never beats the best again, the loop blocks at round 3, the record holds the best", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await seedUnits(dir, `## T-001: sample task [pending]\n\nBody.\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      let verify = 0
+      const verifyScript = async () => {
+        verify++
+        mkdirSync(join(dir, "docs", "T-001"), { recursive: true })
+        // Four FAILs oscillating 2,1,2,1, then a PASS — the PASS is the old
+        // rule's escape: against the previous count every second round was
+        // "progress" and the loop reached it; against the best it never does.
+        if (verify <= 4) await Bun.write(join(dir, "docs/T-001/gaps.md"), gapListText("T-001", "the acceptance gap stands", [2, 1, 2, 1][verify - 1]))
+        else await Bun.write(join(dir, "docs/T-001/report.md"), passReport)
+      }
+      const fixScript = async () => {
+        await Bun.write(join(dir, "FIXES.md"), `fix round ${verify - 1}\n`)
+      }
+      const { client } = scriptedClient([verifyScript, fixScript, verifyScript, fixScript, verifyScript, fixScript, verifyScript, fixScript, verifyScript])
+      const plan = await reloadUnits(dir)
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const persist = (phase: NonNullable<Parameters<typeof saveProgress>[1]["phase"]>) => saveProgress(dir, { task: "T-001", at: Date.now(), active: false, phase })
+      const outcome = await runWrapup(client, plan, plan.tasks[0]!, { dir } as Opts, chain, { solo: false, label: "wrap-up session", persist })
+      expect(outcome).toMatchObject({ type: "blocked" })
+      // Round 1 took the best 2 → 1 (progress, the streak cleared); rounds 2
+      // and 3 beat none of it — the two consecutive no-progress rounds that
+      // block, the message naming the stalled count (the last measurement).
+      expect((outcome as { question: string }).question).toContain("the last two fix rounds closed no gap (3 fix rounds spent, the gap list still counts 1 gap)")
+      const subjects = (await git(dir, "log", "--format=%s")).split("\n")
+      expect(subjects.filter((line) => line.startsWith("T-001 fix "))).toHaveLength(3)
+      // The record holds the pre-round-3 persist, and its gaps field holds
+      // the BEST (1), not the last measurement (2) — the field's meaning
+      // since 0198 D1.
+      expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup", round: 3, noProgress: 1, gaps: 1 })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("a re-opened round continues the session numbering from the log (0148 D1): the fresh round's first dispatch is 1.2, never a second 1.1", async () => {
     const dir = await freshRepo()
     try {

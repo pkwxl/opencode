@@ -26,7 +26,7 @@
 // — the handover and the prompts — is covered by the re-record plus
 // D13/D14.
 import { join } from "node:path"
-import { pendingClampItems, parseResolveLine, recordClamp, resolvesOf, sameIssue, type ResolveItem } from "./resolve"
+import { pendingClampItems, normalize, parseResolveLine, recordClamp, resolvesOf, type ResolveItem } from "./resolve"
 
 // The check caller the run start wires (prompt-verify's
 // checkTextAgainstCharter over the run's server and routing; structural so
@@ -76,8 +76,12 @@ export async function clampRecordedResolves(dir: string | undefined, intent?: st
 // Clamp one item: the ledger mark plus, for markers in Markdown process
 // documents, the re-record (D12) — the marker line is rewritten so the
 // default in force is the clamped reading and the wider grant rides inside
-// as the OPEN option. A marker whose line no longer matches (edited, moved)
-// is ledger-clamped only.
+// as the OPEN option. The rewrite is content-proven (plans/0198 D2, enacting
+// 0165-022): the recorded line number is a hint accepted only when the line
+// still parses as exactly this item's marker; a merely moved marker is found
+// by its content; a marker that cannot be proven — edited beyond normalize
+// equality, or duplicated so the match is ambiguous — is ledger-clamped only
+// (the module header's own promise, now true).
 async function clampItem(dir: string, item: ResolveItem, reading: string): Promise<void> {
   await recordClamp(dir, item, reading)
   if (item.file === undefined) return
@@ -91,15 +95,37 @@ async function clampItem(dir: string, item: ResolveItem, reading: string): Promi
   const lines = raw.split("\n")
   const reRecorded = clampMarkerLine(item, reading)
   if (reRecorded === undefined) return
-  const at = lines.findIndex((line, index) => index === lineText - 1 || sameIssueLine(line, item))
+  const at = clampLineAt(lines, lineText, item)
   if (at < 0) return
   lines[at] = reRecorded
   await Bun.write(path, lines.join("\n"))
 }
 
-function sameIssueLine(line: string, item: ResolveItem): boolean {
+// The exact-content test a line must pass before the driver may rewrite it:
+// the line parses as a resolve marker whose question equals the item's
+// question after normalization (whitespace- and case-insensitive equality —
+// never the substring likeness of sameIssue, the pairing rule) and whose
+// option equals the item's (undefined matching undefined, the malformed
+// shape included). Position and likeness never authorize a write into a
+// document's content; only the grammar's own parse does.
+function lineIsItem(line: string, item: ResolveItem): boolean {
   const parsed = parseResolveLine(line)
-  return parsed !== undefined && sameIssue(parsed.question, item.question)
+  if (parsed === undefined) return false
+  if (normalize(parsed.question) !== normalize(item.question)) return false
+  return normalize(parsed.option ?? "") === normalize(item.option ?? "")
+}
+
+// Locate the marker line: the recorded position first, accepted only when
+// the line there passes the exact test (a stale line number once rewrote
+// whatever line had drifted into the slot); otherwise the file is searched,
+// and exactly one exact match re-records there. No match, or several (an
+// ambiguous duplicate), rewrites nothing — the item is ledger-clamped only.
+function clampLineAt(lines: readonly string[], recorded: number, item: ResolveItem): number {
+  const at = recorded - 1
+  if (Number.isInteger(at) && at >= 0 && at < lines.length && lineIsItem(lines[at]!, item)) return at
+  const found: number[] = []
+  for (const [index, line] of lines.entries()) if (lineIsItem(line, item)) found.push(index)
+  return found.length === 1 ? found[0]! : -1
 }
 
 // The re-recorded marker line (parseResolveLine-compatible: one arrow, a
