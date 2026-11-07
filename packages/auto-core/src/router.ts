@@ -179,16 +179,18 @@ export type Router = {
   noteClaimContradiction(name: string): boolean
   // —— The failure-message classifier ——
   // The classifier's run state, keyed by the cache key the classify module
-  // derives from a failure's redacted text: the answers known this run, the
-  // calls in flight, the calls made against the run's budget, whether the
-  // limit line was logged (once per run) and the run's usage sink. The
-  // policies over this state (when to ask, how the key is derived, what a
-  // reply means) stay in classify.ts and reach the state through
+  // derives from a failure's redacted text: the answers known this run
+  // (each with the ask's time evidence — the instant-reuse policy's input,
+  // plans/0217 D3), the calls in flight, the calls made against the run's
+  // budget, whether the limit line was logged (once per run) and the run's
+  // usage sink. The policies over this state (when to ask, how the key and
+  // the time evidence are derived, what a reply means, what a later
+  // failure may reuse) stay in classify.ts and reach the state through
   // Classifier.router. `setClassifyUsageSink` keeps the name the module
   // exported, so the move reads as a move; the rest are the accessors the
   // moved state needs.
-  classifierAnswerOf(key: string): ClassifierAnswer | undefined
-  noteClassifierAnswer(key: string, answer: ClassifierAnswer): void
+  classifierAnswerOf(key: string): { answer: ClassifierAnswer; timeKey: string } | undefined
+  noteClassifierAnswer(key: string, answer: ClassifierAnswer, timeKey: string): void
   classifierInflightOf(key: string): Promise<ClassifierAnswer | undefined> | undefined
   noteClassifierInflight(key: string, call: Promise<ClassifierAnswer | undefined>): void
   dropClassifierInflight(key: string): void
@@ -339,12 +341,12 @@ export type Router = {
   // block), then realizes the mark-clearing by clearing the probe
   // candidate's mark before the dispatch (and its provider's key marks,
   // every one carrying its `until` since plans/0163 D1, with it), so the
-  // probe runs on the
-  // first in-window candidate ignoring the marks; a successful probe
+  // probe runs on the candidate select's probe arm picked — the in-window
+  // one whose recovery is unknown first, plans/0217 D2; a successful probe
   // leaves it cleared. undefined = a non-probe decision (nothing usable —
   // the caller's dispatch answers the rest). The re-mark on a failed
   // probe stays with the caller (it runs after the probe session
-  // returns).
+  // returns), restoring the remembered mark this method hands back.
   probeSelection(
     facts: RouteFacts,
     switches: Switches,
@@ -430,12 +432,15 @@ export function createRouter(): Router {
 
   // The failure-message classifier's run state (the state the classify
   // module held as a singleton until this tranche): the answers by cache
-  // key, the calls in flight by cache key, the calls made and whether the
+  // key — each entry carrying the ask's time evidence beside the answer
+  // (plans/0217 D3: the cached instant is served only to a failure whose
+  // own times match the ask's; the class stays shared under the masked
+  // key) — the calls in flight by cache key, the calls made and whether the
   // limit line was logged, plus the run's usage sink. One run is one
   // budget and one cache, exactly as one process was before the move; the
   // classify module keeps every policy over this state and reaches it
   // through the classifier's router.
-  const classifierAnswers = new Map<string, ClassifierAnswer>()
+  const classifierAnswers = new Map<string, { answer: ClassifierAnswer; timeKey: string }>()
   const classifierInflight = new Map<string, Promise<ClassifierAnswer | undefined>>()
   let classifierCallsMade = 0
   let classifierLimitLine = false
@@ -867,8 +872,8 @@ export function createRouter(): Router {
 
     // —— The failure-message classifier ——
     classifierAnswerOf: (key) => classifierAnswers.get(key),
-    noteClassifierAnswer: (key, answer) => {
-      classifierAnswers.set(key, answer)
+    noteClassifierAnswer: (key, answer, timeKey) => {
+      classifierAnswers.set(key, { answer, timeKey })
     },
     classifierInflightOf: (key) => classifierInflight.get(key),
     noteClassifierInflight: (key, call) => {
@@ -1055,13 +1060,19 @@ export function createRouter(): Router {
       }
       if (decision.kind !== "probe") return undefined
       const model = candidateKey(decision.candidate)
+      // The remembered mark (plans/0217 D2): the cleared `until` and
+      // classifier flag ride back to the caller, so the failed probe's
+      // re-mark restores what the clear erased — a probe that errors or
+      // fails stating nothing no longer degrades a stated reset to the
+      // scope boundary.
+      const remembered = downModels.get(model)
       clearModelDownMark(model)
       if (decision.candidate.kind === "entry" && decision.candidate.entry.provider !== undefined) {
         const provider = decision.candidate.entry.provider
         clearRingMarks(provider)
-        return { model, provider }
+        return { model, provider, ...(remembered !== undefined ? { remembered } : {}) }
       }
-      return { model, provider: undefined }
+      return { model, provider: undefined, ...(remembered !== undefined ? { remembered } : {}) }
     },
   }
 }
@@ -1310,7 +1321,9 @@ type RecoverySleepPlan = { now: number; at: number | undefined; reason: string |
 
 // The probe candidate of one wait-and-probe round (the answer of
 // `probeSelection`): the candidate's key (its model mark was cleared for
-// the probe and is re-marked on failure), and the provider whose ring
+// the probe and is re-marked on failure — the remembered fields below
+// restoring what the clear erased, plans/0217 D2), the provider whose ring
 // marks cleared with it (its current key is re-marked on failure;
-// undefined for a raw candidate or a ringless entry).
-type ProbeTarget = { model: string; provider: string | undefined }
+// undefined for a raw candidate or a ringless entry), and the mark as it
+// stood before the clear (absent = the candidate carried none).
+type ProbeTarget = { model: string; provider: string | undefined; remembered?: DownMark }

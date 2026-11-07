@@ -1817,6 +1817,41 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     }
   })
 
+  test("a failed probe restores the spent candidate's remembered reset (plans/0217 D2): the probe's clear never costs the stated instant", async () => {
+    // The all-known-spent-in-window scene: a held spent until its stated
+    // reset, b until-less and window-blocked (only usable from 18:00) — the
+    // probe cannot learn about b while its window is closed, so a stands as
+    // the in-window candidate (the residual shape of the evidence
+    // ordering). Pre-0217 the probe's failure re-marked a with NO instant,
+    // degrading the stated reset to the scope boundary.
+    const { routing } = fleet()
+    const blocked = parseWindow("18:00-24:00")
+    if ("error" in blocked) throw new Error(blocked.error)
+    const windowed = { ...routing.registry, models: new Map([...routing.registry.models].map(([name, item]) => (name === "b" ? [name, { ...item, only: [blocked.window] }] : [name, item]))) }
+    const aReset = T0 + 5 * 3_600_000
+    services().router.markModelDown("a", aReset)
+    services().router.markModelDown("b")
+    const agent = make({
+      turn: (ctx) => (ctx.n === 1 ? [ev.message(ctx.session, "msg_probe", 100), limitError(ctx.session), ev.idle(ctx.session)] : undefined),
+    })
+    // The mark as it stands right after the failed probe's re-mark, read off
+    // the loop's own line.
+    const reMarked: (Record<string, unknown> | undefined)[] = []
+    const out = capture((line) => {
+      if (line.includes("probe session still failing")) reMarked.push(services().router.modelDownMark("a") as Record<string, unknown> | undefined)
+    })
+    try {
+      expect((await runSession(agent.client, task, "p", { routing: { ...routing, registry: windowed } }, deepChain(), undefined, undefined, DEFAULTS)).type).toBe("idle")
+    } finally {
+      out.restore()
+    }
+    // The probe round failed stating nothing (a plain quota error): the
+    // remembered until comes back — the second probe round succeeds (the
+    // default turn), the re-dispatch follows on the cleared a.
+    expect(reMarked).toEqual([{ until: aReset }])
+    expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a", "prov/a"])
+  })
+
   test("a spent weekly window of unknown wording skips the retry ladder: without a registry it sleeps to the reset, under one it escalates at once", async () => {
     const weekly = (resetAt: number) =>
       failsFirst((session) => [ev.error(session, { name: "APIError", message: "Wochenkontingent aufgebraucht", resetAt, scope: "7d" }), ev.idle(session)])
@@ -3578,6 +3613,44 @@ describe("the plan-step verifier (plans/0080 §5; routing and default per plans/
       expect(audit).toMatch(/formulation R-01\.P01 fidelity: pass/)
     } finally {
       await rm(f.dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the formulation session routes the planning word (plans/0217 D1): the deep tier, the operator's phase-plan route, the unit's tail keeping its own roles", async () => {
+    // The fleet: deep [a, b], simple [b] — pre-0217 the formulation task
+    // dispatched as an ordinary whole task on the implement type's execute
+    // tier (b), the operator's planning route never reaching the session it
+    // was written for (0165-031).
+    const f = await verifierFixture(CHARTER_PACK, withConstructor("Reimplement the widget from the specification alone.", "Consistent: yes"))
+    try {
+      const { code } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing() })
+      expect(code).toBe(0)
+      // The formulation task's session — the phase's planning, the one that
+      // writes every task document — takes the planning role's deep tier
+      // (a), and the unit's wrap-up keeps its own role (the simple tier's
+      // b): the override is stage-scoped. (The bare filter keeps the find
+      // off the verifier session, whose embedded copy of the composed
+      // prompt carries the same single-input mark — on the planning route
+      // already.)
+      const formulation = f.agent.prompts.find((prompt) => prompt.text.includes("single input of this formulation task") && prompt.bare !== true)
+      expect(formulation).toMatchObject({ model: "prov/a" })
+      const wrapup = f.agent.prompts.find((prompt) => prompt.text.includes("This session only performs the wrap-up"))
+      expect(wrapup).toMatchObject({ model: "prov/b" })
+    } finally {
+      await rm(f.dir, { recursive: true, force: true })
+    }
+    // The operator's phase-plan route reaches the formulation too: a route
+    // keyed by the planning word pins the session to its own entry.
+    const routed = routing()
+    routed.registry = { ...routed.registry, routes: new Map([["phase-plan", { key: "phase-plan", layer: "operator", names: ["b"] }]]) }
+    const g = await verifierFixture(CHARTER_PACK, withConstructor("Reimplement the widget from the specification alone.", "Consistent: yes"))
+    try {
+      const { code } = await g.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routed })
+      expect(code).toBe(0)
+      const formulation = g.agent.prompts.find((prompt) => prompt.text.includes("single input of this formulation task") && prompt.bare !== true)
+      expect(formulation).toMatchObject({ model: "prov/b" })
+    } finally {
+      await rm(g.dir, { recursive: true, force: true })
     }
   })
 

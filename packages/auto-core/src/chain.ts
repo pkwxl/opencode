@@ -275,7 +275,8 @@ export function phaseToRole(phase: Phase | undefined): ModelRole | undefined {
 }
 
 // The session role (one of the routing keys): the explicit chain.role (set
-// by a bypass through requireArtifact's spec.role) wins, then derivation
+// by a bypass through requireArtifact's spec.role, and — stage-scoped — by
+// the formulation unit's whole stage, plans/0217 D1) wins, then derivation
 // from the execution chain's phase, then bypass as the final fallback. See
 // design B.5/C.1.
 export function roleOf(chain: SessionChain): ModelRole {

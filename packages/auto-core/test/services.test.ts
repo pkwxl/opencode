@@ -157,14 +157,15 @@ describe("the services holder", () => {
     router.activateRings(ringRegistry(), false)
     expect(router.ringsActive()).toBe(true)
     expect(router.hasActiveRing("zhipuai")).toBe(true)
-    // …and the classifier's run state: an answer, a budget call, the
+    // …and the classifier's run state: an answer (with its ask's time
+    // evidence, plans/0217 D3), a budget call, the
     // limit line's flag and the usage sink.
-    router.noteClassifierAnswer("k", { class: "quota" })
+    router.noteClassifierAnswer("k", { class: "quota" }, "time key")
     router.noteClassifierCall()
     router.noteClassifierLimit()
     router.setClassifyUsageSink(() => {})
     expect(router.classifierCalls()).toBe(1)
-    expect(router.classifierAnswerOf("k")).toEqual({ class: "quota" })
+    expect(router.classifierAnswerOf("k")).toEqual({ answer: { class: "quota" }, timeKey: "time key" })
     expect(router.classifierLimitNoted()).toBe(true)
     expect(router.classifyUsageSink()).toBeDefined()
   })

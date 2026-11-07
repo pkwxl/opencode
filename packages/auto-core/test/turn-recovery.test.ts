@@ -12,7 +12,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AgentClient, AgentError, AgentEvent } from "../src/agent/types"
 import type { ErrorClass, ErrorInfo } from "../src/chain"
-import { classifierCacheKey, classifierInput, mergeClass, shouldAsk, type Classifier } from "../src/classify"
+import { classifierCacheKey, classifierInput, classifierTimeKey, mergeClass, shouldAsk, type Classifier } from "../src/classify"
 import type { ModelRegistry } from "../src/models-schema"
 import type { ClassifierAnswer, Router } from "../src/router"
 import { createServices, type RunServices } from "../src/services"
@@ -99,9 +99,10 @@ const failureView = (over: { error?: string; retrying?: boolean; info?: ErrorInf
   failure: { error: over.error ?? "", retrying: over.retrying ?? false, ...(over.info !== undefined ? { info: over.info } : {}) },
 })
 
-// Seeding the run's answer cache for an error, the way a resolved call would.
+// Seeding the run's answer cache for an error, the way a resolved call would
+// (the ask's time evidence beside the answer, plans/0217 D3).
 const seedAnswer = (router: Router, info: ErrorInfo, answer: ClassifierAnswer): void =>
-  router.noteClassifierAnswer(classifierCacheKey(classifierInput(info)), answer)
+  router.noteClassifierAnswer(classifierCacheKey(classifierInput(info)), answer, classifierTimeKey(classifierInput(info)))
 
 describe("the recovery concern (retry: the pattern verdict with the classifier consult)", () => {
   test("a quota the agent cannot cure by retrying aborts the still-running old turn and settles error", async () => {

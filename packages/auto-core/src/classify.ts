@@ -19,7 +19,12 @@
 // prompt, a diff or a file.
 //
 // Cost: answers are cached for the run, keyed by the redacted text with its
-// digits, ids and times masked, so a repeated message costs one call; a run
+// digits, ids and times masked, so a repeated message costs one call — the
+// class is always shared under that key; the cached instant is served only
+// to a failure whose own time evidence matches the ask's (plans/0217 D3: the
+// instant is absolute, computed against the first ask's clock, and the
+// masked key erases exactly the digits that say whether it still applies —
+// a differing repeat receives the class alone); a run
 // makes at most 20 calls, after which the patterns decide alone (the log says
 // so once). A 30 s timeout or any failure counts as no answer. The
 // classifier's own failures are classified by the patterns alone and mark
@@ -136,6 +141,20 @@ export function classifierCacheKey(input: string): string {
     .replace(UUID_RE, "<id>")
     .replace(ID_RE, "<id>")
     .replace(/\d+/g, "#")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+// The time evidence of an ask (plans/0217 D3, enacting 0165-127): the
+// redacted input with ids masked and the whitespace collapsed, times and
+// digits KEPT — the share of the cache key's masking that carries time (a
+// reset hour, a duration count). Two failures of the same wording whose
+// time evidence equals are the same window; a differing request id is not
+// differing time evidence, a differing digit is.
+export function classifierTimeKey(input: string): string {
+  return input
+    .replace(UUID_RE, "<id>")
+    .replace(ID_RE, "<id>")
     .replace(/\s+/g, " ")
     .trim()
 }
@@ -295,12 +314,29 @@ export function classifierEntry(router: Router, registry: ModelRegistry, agentFi
 // reset hook the module once exported — and every function below reaches it
 // through the classifier's router as data.
 
+// What a later failure may reuse of a cached answer (plans/0217 D3,
+// amending §7.1 Cost's letter for the instant half): the class always —
+// the masked key's whole point, a provider repeats its wording across
+// models and windows — and the instant only when the failure's own time
+// evidence matches the ask's. The cached instant is absolute, computed
+// against the first ask's clock; served to a differing-time repeat it is
+// the stale instant the finding measured (too early: the mark lapses into
+// a spent window; already past: dropped). The class alone answers instead
+// — the mark clears at the scope boundary, the no-instant answer's
+// standing behavior — and nothing is re-asked: the budget clause keeps a
+// repeated wording at one call.
+export function reuseOf(entry: { answer: ClassifierAnswer; timeKey: string } | undefined, input: string): ClassifierAnswer | undefined {
+  if (entry === undefined) return undefined
+  if (entry.answer.resetAt === undefined || entry.timeKey === classifierTimeKey(input)) return entry.answer
+  return { class: entry.answer.class }
+}
+
 // The cached answer for an error, if one is known this run. The cache's
 // owner is the classifier's router (the routing facts carry it), so it is
 // the caller's leading parameter.
 export function cachedAnswer(router: Router, info: ErrorInfo): ClassifierAnswer | undefined {
   const input = classifierInput(info)
-  return input === "" ? undefined : router.classifierAnswerOf(classifierCacheKey(input))
+  return input === "" ? undefined : reuseOf(router.classifierAnswerOf(classifierCacheKey(input)), input)
 }
 
 // Asks about an error: a known answer resolves at once, a call in flight for
@@ -314,10 +350,14 @@ export function askClassifier(classifier: Classifier, info: ErrorInfo): Promise<
   if (input === "") return undefined
   const key = classifierCacheKey(input)
   const router = classifier.router
-  const known = router.classifierAnswerOf(key)
+  const known = reuseOf(router.classifierAnswerOf(key), input)
   if (known !== undefined) return Promise.resolve(known)
   const pending = router.classifierInflightOf(key)
-  if (pending !== undefined) return pending
+  // The joined call serves the first ask's answer; the joiner's own time
+  // evidence passes through the same comparison at resolution time (the
+  // entry is noted before the joined promise resolves outward).
+  if (pending !== undefined)
+    return pending.then((answer) => (answer === undefined ? undefined : reuseOf(router.classifierAnswerOf(key), input)))
   if (router.classifierCalls() >= CLASSIFY_CALL_LIMIT) {
     if (!router.classifierLimitNoted()) {
       router.noteClassifierLimit()
@@ -335,7 +375,7 @@ export function askClassifier(classifier: Classifier, info: ErrorInfo): Promise<
   const call = runClassifier(classifier, pick, input, now)
     .catch(() => undefined)
     .then((answer) => {
-      if (answer !== undefined) router.noteClassifierAnswer(key, answer)
+      if (answer !== undefined) router.noteClassifierAnswer(key, answer, classifierTimeKey(input))
       return answer
     })
     .finally(() => router.dropClassifierInflight(key))

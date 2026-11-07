@@ -245,7 +245,7 @@ describe("nothing usable (§6.3)", () => {
     expect(select(context({ models }, { marks: marked("k3", "opus") }), call())).toMatchObject({ kind: "probe" })
   })
 
-  test("the all-down probe uses the first candidate inside its window, ignoring the marks", () => {
+  test("the all-down probe uses the first candidate inside its window when every mark is until-less (the evidence ordering's floor, plans/0217 D2)", () => {
     const ctx = context({}, { marks: marked("opus", "opus-b", "k3") })
     expect(select(ctx, call())).toMatchObject({ kind: "probe" })
     expect(picked(select(ctx, call()))).toBe("opus")
@@ -256,6 +256,38 @@ describe("nothing usable (§6.3)", () => {
       { marks: marked("opus", "opus-b", "k3") },
     )
     expect(picked(select(outOfWindow, call()))).toBe("opus-b")
+  })
+
+  test("the probe reads the marks' evidence (plans/0217 D2): the unknown-recovery candidate is probed first, the spent-until one kept behind its reset", () => {
+    const until = (marks: Record<string, string>): Map<string, { until?: number }> =>
+      new Map(Object.entries(marks).map(([name, at]): [string, { until?: number }] => [name, { until: AT(at) }]))
+    // The finding's repro: opus held spent until a stated reset (18:00),
+    // opus-b and k3 down with no instant — the candidates a probe can learn
+    // about. Pre-0217 the first in-window candidate (opus) was probed every
+    // poll round — a certain failure, its stated reset cleared for the
+    // probe — while opus-b waited behind the reset.
+    const mixed = context({}, { marks: new Map([["opus", { until: AT("18:00") }], ["opus-b", {}], ["k3", {}]]) })
+    const result = select(mixed, call())
+    expect(result).toMatchObject({ kind: "probe" })
+    expect(picked(result)).toBe("opus-b")
+    // recoveryAt withholds the instant exactly because of the until-less
+    // candidates — the poll is FOR them; the schedule and the probe now
+    // agree on who the wait is for.
+    expect(recoveryAt(mixed, call())).toBeUndefined()
+    // Every in-window candidate known spent: the first in-window one stands
+    // (the list's own order — the residual shape; its instant rides the
+    // probe dance through the caller's remembered mark).
+    const spent = context({}, { marks: until({ opus: "18:00", "opus-b": "17:00", k3: "16:00" }) })
+    expect(picked(select(spent, call()))).toBe("opus")
+    // An until-less candidate outside its window does not outrank the
+    // in-window one (a probe cannot learn about a closed window): opus is
+    // the only in-window candidate, known spent — the documented backstop
+    // shape.
+    const blocked = context(
+      { models: avoiding({ "opus-b": "00:00-13:00", k3: "00:00-13:00" }) },
+      { marks: new Map([["opus", { until: AT("18:00") }], ["opus-b", {}], ["k3", {}]]) },
+    )
+    expect(picked(select(blocked, call()))).toBe("opus")
   })
 
   test("an until mark is down before its instant and cleared at it", () => {

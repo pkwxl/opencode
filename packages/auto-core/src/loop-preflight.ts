@@ -827,10 +827,14 @@ export async function preflight(
 // wrapup is off; a type without tasks runs its own knowledge session.
 // Run-level: the bypass one-offs in every mode (confirm turns, context-base
 // rebuilds, the dryrun precheck), the phased loop's planning and handover
-// sessions, and m mode's planning scan. prior-knowledge
+// sessions, and m mode's planning: the formulation task's session routes
+// the planning word (plans/0217 D1), so the phase-plan need — phased and m
+// mode alike — is the dispatched planning session's own coverage;
+// `implement-scan` has dispatched nothing since 0095 retired the planning
+// session. prior-knowledge
 // (shell-orchestrated outside runAll) stays off the list: a simple session,
 // so the bypass need keeps its tier covered.
-// AUTO-RESOLVE: does the default m mode need the deep tier? -> only under subtask: true, through the decompose sessions of its implicit implement phase (the pipeline runs the merged understand/decompose session, a deep role of that phase; §6.3 makes an emptied needed list a preflight error rather than a mid-run wait, and the previous trigger — deep only when the run plans or scans — would leave those dispatches waiting silently). The default subtask mode auto runs a lead whole-task session instead (plans/0059 D2, §11: the lead takes the whole role's tier), so like off and ondemand it takes the implement type's execute tier and the default m mode needs no deep tier unless it plans or scans.
+// AUTO-RESOLVE: does the default m mode need the deep tier? -> only under subtask: true, through the decompose sessions of its implicit implement phase (the pipeline runs the merged understand/decompose session, a deep role of that phase; §6.3 makes an emptied needed list a preflight error rather than a mid-run wait, and the previous trigger — deep only when the run plans or scans — would leave those dispatches waiting silently). The default subtask mode auto runs a lead whole-task session instead (plans/0059 D2, §11: the lead takes the whole role's tier), so like off and ondemand it takes the implement type's execute tier and the default m mode needs no deep tier unless it plans (the formulation task's planning-word route, plans/0217 D1).
 function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[], phases: string): DispatchNeed[] {
   // An invalid phases value fails at its own validation (config load, the
   // loop's routing); the coverage check stays total on the implicit type.
@@ -838,7 +842,7 @@ function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[], phase
   const phased = phases !== "m"
   const needs: DispatchNeed[] = [{ role: "bypass" }]
   if (phased) needs.push({ role: "phase-plan" }, { role: "phase-handover" })
-  else if (opts.planInput !== undefined) needs.push({ role: "implement-scan" })
+  else if (opts.planInput !== undefined) needs.push({ role: "phase-plan" })
   for (const entry of entries) {
     if (!entry.hasTasks) {
       needs.push({ role: "knowledge", entry })

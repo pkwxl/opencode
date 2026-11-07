@@ -148,12 +148,46 @@ describe("the cache", () => {
     const { agent, classifier } = setup({ turn: reply('{"class": "quota", "resetAt": null}') })
     const first = askClassifier(classifier, { message: "Kontingent erschöpft (Anfrage 17)" })
     const joined = askClassifier(classifier, { message: "Kontingent erschöpft (Anfrage 18)" })
-    expect(joined).toBe(first!)
+    expect(joined).toBeDefined()
     expect(await first).toEqual({ class: "quota" })
+    // The joiner rides the same call (one create, one budget call) and its
+    // resolution passes through the same reuse rule (plans/0217 D3: the
+    // wrapped promise, no longer the first ask's own).
+    expect(await joined).toEqual({ class: "quota" })
     expect(cachedAnswer(classifier.router, { message: "Kontingent erschöpft (Anfrage 99)" })).toEqual({ class: "quota" })
     expect(await askClassifier(classifier, { message: "Kontingent erschöpft (Anfrage 20)" })).toEqual({ class: "quota" })
     expect(classifier.router.classifierCalls()).toBe(1)
     expect(agent.argsOf("create")).toEqual([[{ title: CLASSIFY_TITLE }]])
+  })
+
+  test("the cached instant is served only on matching time evidence (plans/0217 D3): a differing repeat receives the class alone", async () => {
+    // The finding's own shape: the same wording, another reset hour — the
+    // masked key collides, the times differ.
+    const { classifier } = setup({ turn: reply('{"class": "quota", "resetAt": "2026-09-27T15:00:00+08:00"}') })
+    const first = await askClassifier(classifier, { message: "该模型的使用额度已用完，将于 15:00 重置 (req 9f2c1a)" })
+    expect(first).toEqual({ class: "quota", resetAt: Date.parse("2026-09-27T07:00:00Z") })
+    // The same wording naming 21:00: the class is shared wording-knowledge,
+    // the instant is the first ask's absolute answer and must not cross.
+    expect(cachedAnswer(classifier.router, { message: "该模型的使用额度已用完，将于 21:00 重置 (req 88b0e7)" })).toEqual({ class: "quota" })
+    // The English duration shape of the same defect: "3 hours" then "1
+    // hours" — the digit differs, the masked key does not.
+    const { classifier: en } = setup({ turn: reply('{"class": "quota", "resetAt": "2026-09-27T18:00:00+08:00"}') })
+    expect(await askClassifier(en, { message: "Usage limit reached. Please try again in 3 hours." })).toEqual({ class: "quota", resetAt: Date.parse("2026-09-27T10:00:00Z") })
+    expect(cachedAnswer(en.router, { message: "Usage limit reached. Please try again in 1 hours." })).toEqual({ class: "quota" })
+    // Nothing is re-asked for the differing repeat: the budget keeps a
+    // repeated wording at one call (the two fixtures asked once each).
+    expect(await askClassifier(classifier, { message: "该模型的使用额度已用完，将于 22:00 重置 (req 5d1f09)" })).toEqual({ class: "quota" })
+    expect(classifier.router.classifierCalls()).toBe(2)
+  })
+
+  test("a repeat whose time evidence matches the ask's receives the full cached answer", async () => {
+    const { classifier } = setup({ turn: reply('{"class": "quota", "resetAt": "2026-09-27T15:00:00+08:00"}') })
+    await askClassifier(classifier, { message: "quota spent, resets at 15:00 (trace 1b4e28ba-2fa1-11d2-883f-0016d3cca427)" })
+    // The same reset hour with another request id: the id is not time
+    // evidence (masked in both keys), so the absolute instant — correct for
+    // the same named hour — is reused.
+    const reused = cachedAnswer(classifier.router, { message: "quota spent, resets at 15:00 (trace 6fa459ea-ee8a-3ca4-894e-db77e160355e)" })
+    expect(reused).toEqual({ class: "quota", resetAt: Date.parse("2026-09-27T07:00:00Z") })
   })
 })
 

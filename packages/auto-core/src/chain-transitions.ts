@@ -29,7 +29,7 @@ import { roleOf, type FailedSession, type SessionChain, type Watch } from "./cha
 import { type UnitBaseline } from "./git"
 import type { PhaseKey } from "./phases/registry"
 import { type Phase } from "./resume"
-import type { Switches } from "./switches"
+import type { ModelRole, Switches } from "./switches"
 
 // One candidate fork source of a retry, failover, key rotation or recovery:
 // the session id, its accumulated context usage (the fork value, compared
@@ -360,6 +360,21 @@ export function nameSubject(chain: SessionChain, subject: string): void {
 // with it.
 export function enterPhase(chain: SessionChain, phase: Phase | undefined): void {
   chain.phase = phase
+}
+
+// Sets (or, with undefined, clears) the chain's explicit routing role
+// (plans/0217 D1, enacting 0165-031): the formulation unit's whole-stage
+// session — the phase's planning, the one session that writes every task
+// document the phase executes — rides the planning word (the descriptor's
+// deep tier and the operator's phase-plan route), whatever the phase type's
+// execute tier; 0055 §5's planning row is the letter, and 0095's relocation
+// of planning into a task unit changed the machinery, never the tier. The
+// override is stage-scoped: set where the formulation's whole stage begins,
+// cleared where the pipeline leaves the execution stages, so the unit's
+// wrap-up and fix sessions keep their phase-derived roles (the closeout
+// tail's boundary).
+export function setRole(chain: SessionChain, role: ModelRole | undefined): void {
+  chain.role = role
 }
 
 // Sets the chain's rollback anchor — the current execution unit's SHA

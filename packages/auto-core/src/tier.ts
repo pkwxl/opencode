@@ -1,8 +1,11 @@
 // Default reasoning tiers (plans/0055 §5): the tier every session gets from the
 // program, derived from its routing role and the current phase type. Planning
 // and understanding sessions are deep, because every later session inherits
-// their mistakes. The task sessions (`whole`, `subtask`) take the phase type's
-// execute tier (`PhaseTypeEntry.reasoning`). Reports, distillation, extraction
+// their mistakes — the formulation task's session included: since plans/0217
+// D1 it rides the planning word through a chain role override, so a phase's
+// planning runs deep whatever its execute tier. The other task sessions
+// (`whole`, `subtask`) take the phase type's execute tier
+// (`PhaseTypeEntry.reasoning`). Reports, distillation, extraction
 // and one-off sessions are simple.
 //
 // The tier is a property of the work (§3): it lives in the program (the

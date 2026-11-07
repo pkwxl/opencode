@@ -572,14 +572,20 @@ async function pauseForExit(run: SessionRun): Promise<never> {
 // — the contract-violating shape — or a returned error, see the probe catch
 // below) likewise counts as not recovered: keep waiting.
 // Under a registry (§6.3) the probe dispatches through selection like any
-// other: the probe candidate is the first one inside its window, ignoring
-// the down marks, so its mark is cleared for the probe and re-marked when
-// the probe fails — a successful probe leaves it cleared, which is exactly
-// "a successful probe clears that candidate's mark", and the re-dispatch
-// that follows picks it as the first usable candidate. A window-blocked
+// other: the probe candidate is the in-window one whose recovery is unknown
+// — the one a probe can learn something about (plans/0217 D2, amending
+// §6.3's first-in-window letter for the until era: a candidate whose
+// `until` lies ahead is held spent-until-then evidence, probed only when no
+// unknown one is in window) — so its mark is cleared for the probe and
+// re-marked when the probe fails, the re-mark restoring the mark's
+// remembered `until` and classifier flag when the probe's own failure
+// states nothing (the clear never destroys a stated reset); a successful
+// probe leaves it cleared, which is exactly "a successful probe clears
+// that candidate's mark", and the re-dispatch that follows picks it as the
+// first usable candidate. A window-blocked
 // list (the wait decision) never gets here: it waits on the window below
 // instead of burning probe rounds against a closed window.
-// AUTO-DECISION: the probe realizes the mark-clearing by clearing the probe candidate's mark before the dispatch and re-marking it on a failed probe, instead of bypassing selection with a dictated model (selection then picks the cleared candidate deterministically — it is the first in-window one — and no dispatch path exists that skips the windows or the marks)
+// AUTO-DECISION: the probe realizes the mark-clearing by clearing the probe candidate's mark before the dispatch and re-marking it on a failed probe, instead of bypassing selection with a dictated model (selection then picks the cleared candidate deterministically — it is the probe arm's own pick — and no dispatch path exists that skips the windows or the marks)
 // `cause` is the failure that led here (absent when selection found
 // nothing usable before any session ran); each failed probe replaces it.
 async function awaitRecovery(run: SessionRun, why: string, causeIn?: WaitCause): Promise<void> {
@@ -651,7 +657,10 @@ async function awaitRecovery(run: SessionRun, why: string, causeIn?: WaitCause):
       // tiny prompt, re-run each interval, is the bounded cost of riding the
       // wait out rather than the person's terminal; a measured incident of a
       // deterministic throw cycling this loop re-opens the question.
-      if (probed !== undefined) run.router.markModelDown(probed)
+      // The re-mark restores the remembered mark (plans/0217 D2): a probe
+      // round that throws keeps the candidate's stated reset instead of
+      // degrading it to the scope boundary.
+      if (probed !== undefined) run.router.markModelDown(probed, probePick?.remembered?.until, probePick?.remembered?.classifier)
       if (probedProvider !== undefined) run.router.markCurrentKeyDown(probedProvider, run.clock.now() + UNSTATED_KEY_HOLD_MS)
       // The probe-failure compensation counter (plans/0069 §2.4): one per
       // failed probe round, on the model it probed; an absent probed is a
@@ -670,8 +679,11 @@ async function awaitRecovery(run: SessionRun, why: string, causeIn?: WaitCause):
       await learnFailure(opts.dir, probeAccount, ping, run.clock.now())
       cause = { ...ping, account: probeAccount }
       // A reset time the classifier read from the probe's failure sets
-      // when the re-written marks clear (§7.1), as on the escalation.
-      if (probed !== undefined) run.router.markModelDown(probed, ping.resetAt, ping.classified)
+      // when the re-written marks clear (§7.1), as on the escalation; a
+      // failure stating nothing restores the remembered mark instead
+      // (plans/0217 D2 — the probe's clear must not cost the stated reset
+      // the original failure carried).
+      if (probed !== undefined) run.router.markModelDown(probed, ping.resetAt ?? probePick?.remembered?.until, ping.classified ?? probePick?.remembered?.classifier)
       if (probedProvider !== undefined) run.router.markCurrentKeyDown(probedProvider, ping.resetAt ?? run.clock.now() + UNSTATED_KEY_HOLD_MS)
       if (probed !== undefined) lateReset(run, ping.pendingReset, { model: probed })
       // The probe-failure compensation counter (plans/0069 §2.4), the same

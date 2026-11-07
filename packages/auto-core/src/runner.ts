@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
-import { anchorBaseline, attachNote, bindAgent, enterPhase, resetRoute, resumeSession, setRoute } from "./chain-transitions"
+import { anchorBaseline, attachNote, bindAgent, enterPhase, resetRoute, resumeSession, setRole, setRoute } from "./chain-transitions"
 import { ensureDecomposed, executeWhole, leadForkBase, runSubtask } from "./execute"
 import { rollbackUnitState, strictResumeActive } from "./unit-commit"
 import { handoffFile, subtaskDoc, taskDoc } from "./docpaths"
@@ -371,6 +371,13 @@ export async function runTask(
         strict,
         rerun,
         handedOff,
+        // The formulation's planning-word role (plans/0217 D1): a record at
+        // the whole stage resumes the session that runs under phase-plan, so
+        // the strict-resume eligibility judges the recorded model against
+        // the list the resumed dispatch will use — the same threading
+        // requireArtifact's spec.role callers get. Later stages (wrapup and
+        // beyond) keep the phase-derived role.
+        ...(task.formulate !== undefined && recalled.phase?.kind === "whole" ? { role: "phase-plan" as const } : {}),
         probe: async (session) => {
           const alive = await sessionAlive(recalledClient, session)
           return { alive, usage: alive ? await sessionUsage(recalledClient, session, recalled.used) : undefined }
@@ -605,6 +612,15 @@ export async function runTask(
       if (mode === "auto" && (await splitTaken(dir, task.id, task.checklist?.length ?? 0))) {
         log(`↻ ${task.id} the lead's split was taken earlier; its streams continue from ${taskDoc(task.id, "subtasks")}, the lead does not run again`)
       } else {
+        // The formulation's whole-stage session routes under the planning
+        // word (plans/0217 D1): the phase's planning IS this session — the
+        // one that writes every task document the phase executes — so it
+        // takes the planning role's deep tier and the operator's
+        // phase-plan route instead of the phase type's execute tier. The
+        // override is stage-scoped (set here, cleared at the subtasks
+        // boundary below), the recognition the Formulate: field
+        // (task.formulate) — the one predicate formulate.ts owns.
+        setRole(chain, task.formulate !== undefined ? "phase-plan" : undefined)
         await persistStage({ kind: "whole" })
         const blocked = await executeWhole(client, plan, task, opts, chain, mode === "auto", { docLane: input.docLane })
         if (blocked) return blocked
@@ -728,6 +744,13 @@ export async function runTask(
     // (or the record is a legacy verify/review one, which only ever followed
     // wrap-up) — only the result check and completion remain.
     if (resume?.kind !== "closeout") {
+      // The execution stages are over: the formulation's planning-word
+      // override (set at the whole stage above) clears here, so every later
+      // session of the unit — the subtask sessions, the wrap-up
+      // verification, the fix rounds — keeps its phase-derived role
+      // (plans/0217 D1's stage scoping; for every other task the write is
+      // the idempotent clear of an already-clear field).
+      setRole(chain, undefined)
       await persistStage({ kind: "subtasks" })
       if (opts.stream !== undefined) {
         // S5 (plans/0068 §6.8): the single-stream lane path — the subtask

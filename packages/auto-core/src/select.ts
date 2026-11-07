@@ -8,8 +8,8 @@
 //      continuation of the same prompt — the chain's model while it is still
 //      usable;
 //   3. the decision when nothing is usable (§6.3): wait for the earliest
-//      window opening, probe with the first in-window candidate, or the
-//      empty-tier error.
+//      window opening, probe the in-window candidate whose recovery is
+//      unknown (plans/0217 D2), or the empty-tier error.
 //
 // Every dispatch resolver calls this module (§12: attempt's
 // target, the session failover, unit-commit's resume, the `/failback`
@@ -275,11 +275,21 @@ export function select(ctx: SelectContext, call: SelectCall): Selection {
   }
   if (opening !== undefined) return { kind: "wait", until: opening.at, candidate: opening.candidate }
   // Every candidate is down (or nothing ever opens): the wait-and-probe
-  // loop. The probe uses the first candidate inside its window, ignoring
-  // the down marks.
-  // AUTO-DECISION: the probe candidate still passes the agent filter and is inside its window, and ignores the down marks, the ring and the cap — a candidate the filter excludes can never be dispatched, and a probe prompt is tiny, so the cap would keep a recoverable model from ever being probed; when no candidate is inside its window, the first filtered candidate stands in, because the probe loop waits between probes anyway and a model that never opens is the documented backstop case (§10 item 7)
-  const inWindow = inPlay.find((candidate) => !faultsOf(ctx, call, candidate)[0])
-  return { kind: "probe", candidate: inWindow ?? inPlay[0]! }
+  // loop. The probe reads the marks' own evidence (plans/0217 D2, amending
+  // §6.3's first-in-window letter for the until era — the rule was written
+  // when a mark meant only "cleared at the next failback boundary"): a
+  // candidate whose mark carries no `until` has an unknown return — the
+  // probe is the only way it comes back (0057 S4, the same premise
+  // recoveryAt withholds the instant on) — and is probed first; a candidate
+  // whose `until` lies ahead is the driver's held evidence that it is spent
+  // until then, and probing it buys a certain failure while clearing the
+  // stated reset for the probe's duration. When every in-window candidate is
+  // known spent, the first in-window one stands (the list's own order); when
+  // none is inside its window, the first filtered candidate stands in.
+  // AUTO-DECISION: the probe candidate still passes the agent filter and is inside its window, and ignores the down marks' state, the ring and the cap — a candidate the filter excludes can never be dispatched, and a probe prompt is tiny, so the cap would keep a recoverable model from ever being probed; when no candidate is inside its window, the first filtered candidate stands in, because the probe loop waits between probes anyway and a model that never opens is the documented backstop case (§10 item 7)
+  const inWindow = inPlay.filter((candidate) => !faultsOf(ctx, call, candidate)[0])
+  const unknown = inWindow.find((candidate) => ctx.marks?.get(candidateKey(candidate))?.until === undefined)
+  return { kind: "probe", candidate: unknown ?? inWindow[0] ?? inPlay[0]! }
 }
 
 // The earliest instant a list with nothing usable becomes usable again by

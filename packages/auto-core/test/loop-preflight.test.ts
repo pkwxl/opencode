@@ -664,6 +664,15 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
       const whole = await run(dir, { subtask })
       expect("exit" in whole.result).toBe(false)
     }
+    // m mode with a planning input plans (the formulation task's session
+    // routes the planning word, plans/0217 D1), so the planning need reads
+    // the word that dispatches — phase-plan, never the implement-scan word
+    // nothing has dispatched since 0095 retired the planning session.
+    const planning = await run(dir, { planInput: { text: "Reimplement the widget from the specification alone." } })
+    expect(planning.result).toEqual({ exit: 1 })
+    expect(planning.lines).toEqual([
+      `model registry: the deep tier is not declared (tiers.deep: (empty)); the phase-plan sessions of this run would have no model to dispatch on (${fix})`,
+    ])
   })
 
   test("OPENCODE_AUTO_MODEL takes internal names under a registry; an unknown name and _FALLBACK are usage errors", async () => {
