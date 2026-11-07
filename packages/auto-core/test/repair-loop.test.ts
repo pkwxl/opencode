@@ -4,7 +4,9 @@
 // report's evidence; a held verdict gate with budget appends repair tasks over
 // the gate evidence and re-verifies; the exhausted budget (and no budget at
 // all) blocks exactly as before. Every verdict the driver acts on is parsed
-// from a file — the fake agent only writes documents.
+// from a file — the fake agent only writes documents. The shared
+// repairRoundAppend is also driven directly (plans/0213 D3d's budget-order
+// pin) beside the loop-driven cases.
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -12,6 +14,11 @@ import { appendOneTask, artifactTurns, loopFixture, promptPhaseDir, type LoopFix
 import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
 import { establishRound } from "../src/phases"
 import { clampSwitches } from "../src/switches"
+import { repairRoundAppend, type LoopCtx } from "../src/loop-task"
+import { renderTaskIndex } from "../src/tasks"
+import { services } from "../src/services"
+import { singleHost } from "../src/agent-pool"
+import type { AgentHost } from "../src/agent/types"
 
 const made: LoopFixture[] = []
 afterEach(() => {
@@ -274,5 +281,57 @@ describe("repair (phase level: a held verdict gate)", () => {
     expect(lines.some((line) => line.includes("is held by its gate"))).toBe(true)
     expect(has(f, "docs/R-01/P02-acceptance/todo.md")).toBe(true)
     expect(await Bun.file(join(f.dir, "docs/R-01/P02-acceptance/verdict.md")).text()).toContain("Result: FAIL")
+  })
+})
+
+describe("repairRoundAppend (plans/0213 D3d): a refused close consumes no budget", () => {
+  // The unit under test is the bump's order: the round number is derived,
+  // and ctx.repairs takes it only once closeUnit closed. The refusal staged
+  // here is the repair path's own documented hazard (a dirty tree — the
+  // reason the doc loop's task site carries a quiet wait); pre-fix the
+  // refused round spent the budget, and the next FAIL's round blocked
+  // against "repair 1 <= repairs 1" with nothing logged about the loss.
+  test("the refused close blocks with the budget intact; the next call opens round 1", async () => {
+    const f = await fixture("m", repairTurns(new Set()))
+    // Seed the phase's index and T-001's pending document by hand (the pin
+    // drives the shared repair append directly; the planning session is not
+    // under test here).
+    const phaseDir = join("docs", "R-01", "P01-implement")
+    mkdirSync(join(f.dir, phaseDir), { recursive: true })
+    writeFileSync(join(f.dir, phaseDir, "tasks.md"), renderTaskIndex("R-01.P01", [{ id: "T-001", title: "task T-001" }]))
+    mkdirSync(join(f.dir, "docs", "T-001"), { recursive: true })
+    writeFileSync(join(f.dir, "docs", "T-001", "todo.md"), "# T-001: task T-001\nPhase: R-01.P01\n\n## Goal\n\ndelivered.\n\n## Scope\n\nx.\n\n## Acceptance\n\nok.\n\n<!-- auto: eof -->\n")
+    await f.commit("seed the task")
+    const host: AgentHost = { client: f.agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
+    const holder = services()
+    const ctx: LoopCtx = {
+      directory: f.dir,
+      opts: { phases: "m", subtask: "off", repair: 1 },
+      server: { ...singleHost(host), startedAgents: () => ["fake"] },
+      agentName: "auto",
+      phases: "m",
+      manual: true,
+      ran: 0,
+      repairs: 0,
+      router: holder.router,
+      control: holder.control,
+      git: holder.git,
+    }
+    // The refusal: a non-driver file dirties the tree at the close moment.
+    writeFileSync(join(f.dir, "stray.txt"), "dirt\n")
+    const refused = await repairRoundAppend(ctx, { kind: "task", task: { id: "T-001" } })
+    expect(refused).toBe("block")
+    // The budget is intact — pre-fix this was 1 and the refusal had spent
+    // it (the finding's silent shrink).
+    expect(ctx.repairs).toBe(0)
+    // The tree cleaned (the person's recovery), the next FAIL's round opens
+    // as round 1 — pre-fix the spent budget blocked it.
+    rmSync(join(f.dir, "stray.txt"))
+    const opened = await repairRoundAppend(ctx, { kind: "task", task: { id: "T-001" } })
+    expect(opened).toBe("appended")
+    expect(ctx.repairs).toBe(1)
+    expect(ctx.input?.text).toContain("Repair round 1: the task T-001 was closed")
+    expect(existsSync(join(f.dir, "docs", "T-001", "done.md"))).toBe(true)
+    expect((await Bun.file(join(f.dir, "docs", "T-001", "done.md")).text())).toContain("Closed: repair round 1: the task report concluded Result: FAIL")
   })
 })

@@ -3996,6 +3996,37 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
     expect(questions.some((text) => text.includes("task T-002"))).toBe(true)
   })
 
+  test("plans/0213 D3c: the doc loop's wait-between keys on ctx.ran — a later phase's first landing pauses like its siblings", async () => {
+    // The cross-phase scene: the run's earlier phases already ran units
+    // (ctx.ran = 2 on entry — the accumulator whose own declaration says it
+    // "decides whether --wait-between pauses before the first task of a
+    // later phase"). The serial loop (ctx.ran > 0) and the lane loop
+    // (firstLanding = ctx.ran === 0) pause this landing; the doc loop's
+    // per-call landing counter saw "first" and never did.
+    const { dir: repo, phase } = await docRepo([{ id: "T-001", touches: ["docs/T-001/"] }])
+    const agent = make({ turn: docTurns(repo) })
+    const questions: string[] = []
+    const ctx = {
+      ...docCtx(repo, serverOf(agent), { waitBetween: 1 }),
+      ran: 2,
+      repl: { attach() {}, detach() {}, question: async (text: string) => (questions.push(text), ""), close() {} },
+    }
+    expect(await runDocLoop(ctx, phase)).toBe(0)
+    expect(questions.filter((text) => text.includes("pause between tasks"))).toHaveLength(1)
+  })
+
+  test("plans/0213 D3c floor: the run's first doc landing never pauses — its own increment is the only one inside", async () => {
+    const { dir: repo, phase } = await docRepo([{ id: "T-001", touches: ["docs/T-001/"] }])
+    const agent = make({ turn: docTurns(repo) })
+    const questions: string[] = []
+    const ctx = {
+      ...docCtx(repo, serverOf(agent), { waitBetween: 1 }),
+      repl: { attach() {}, detach() {}, question: async (text: string) => (questions.push(text), ""), close() {} },
+    }
+    expect(await runDocLoop(ctx, phase)).toBe(0)
+    expect(questions).toEqual([])
+  })
+
   test("plans/0126 D3: a doc-lane session's test request is refused with a steer — no script runs beside siblings, the loop completes", async () => {
     // One doc unit: the shared tmp/test.sh marker is per-tree, so a second
     // lane's idle would race the first for it — the threading (the docLane

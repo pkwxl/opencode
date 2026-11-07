@@ -30,19 +30,42 @@ export type LaneWorker = {
 // one — so a worker that sees it knows exactly why it was re-dispatched.
 export type LaneMergeInstruction = { merge: string }
 
+// The self-invocation vector (plans/0213 D1, enacting 0165-011 / S06-05):
+// how this process re-invokes its own CLI entry, derived from the process
+// shape rather than assumed a spawnable script path. `argv1` is the entry
+// this process started from (the caller passes process.argv[1]):
+//   - a real path (the source layout `bun src/index.ts`, a bundle under
+//     `bun dist/index.js`) — `{ command: execPath, prefix: [argv1] }`: the
+//     interpreter re-runs the entry, today's vector exactly;
+//   - a Bun-compiled binary's virtual entry (argv[1] = `/$bunfs/root/<name>`
+//     — `bun build --compile` embeds the modules on Bun's virtual $bunfs,
+//     where a script path cannot be spawned; the child would read the
+//     virtual path as its command and refuse) or no entry at all —
+//     `{ command: execPath, prefix: [] }`: process.execPath already IS the
+//     program (the compiled binary), whose argv goes straight to command
+//     dispatch. The structural fact alone is encoded — no shell, no entry
+//     file name (the service shell's own twin, worker-command.ts, probes
+//     its sibling entry instead: a shell fact the core cannot own).
+export function selfInvoke(argv1: string | undefined): { command: string; prefix: string[] } {
+  if (argv1 !== undefined && !argv1.startsWith("/$bunfs/")) return { command: process.execPath, prefix: [argv1] }
+  return { command: process.execPath, prefix: [] }
+}
+
 // The default lane launcher: re-invoke this shell's CLI with the hidden
 // `_lane` subcommand (§6.4 — "re-invoke this shell's CLI with the hidden lane
-// subcommand"). process.argv[1] is the CLI entry this process started from,
-// so a shell's run spawning lanes reproduces its own invocation; a host
-// without one (a test, a 0067 daemon worker) overrides the profile field.
+// subcommand") through the self-invocation vector above (both shapes — the
+// source layout's entry path and the compiled binary itself, plans/0213 D1).
+// A host that owns its workers differently (a test, a 0067 daemon worker)
+// overrides the profile field.
 // A repair re-dispatch's merge instruction rides along as `--merge <branch>`
 // (the hidden subcommand's own option). The optional env record is tier 1's
 // cache-home injection (plans/0096 D9): the declared cache variables resolved
 // to shared and per-lane paths, merged over the inherited environment —
 // absent on every other dispatch, so the child's env is exactly as before.
 export function defaultLaneLauncher(worktree: string, unit: string, instruction?: LaneMergeInstruction, env?: Record<string, string>): LaneWorker {
+  const self = selfInvoke(process.argv[1])
   return Bun.spawn(
-    [process.execPath, process.argv[1]!, "_lane", worktree, "--unit", unit, ...(instruction ? ["--merge", instruction.merge] : [])],
+    [self.command, ...self.prefix, "_lane", worktree, "--unit", unit, ...(instruction ? ["--merge", instruction.merge] : [])],
     env === undefined ? { stdout: "pipe", stderr: "pipe" } : { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env } },
   )
 }

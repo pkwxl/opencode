@@ -58,7 +58,7 @@ import { renameTodoToDone } from "../src/document/state"
 import { taskDoc } from "../src/docpaths"
 import { seedUnits, unitsText } from "./fixtures/units"
 import { ExitRequested } from "../src/exit"
-import { runTaskLoop, type LoopCtx } from "../src/loop-task"
+import { runLaneUnit, runTaskLoop, type LoopCtx } from "../src/loop-task"
 import { recoverOrphanLanes, type RunAllOpts } from "../src/loop-preflight"
 import { RUN_LOCK_FILE } from "../src/lock"
 import { services } from "../src/services"
@@ -1647,6 +1647,58 @@ describe("recoverOrphanLanes (D14)", () => {
     } finally {
       setShellProfile({ laneLauncher: undefined })
     }
+  })
+
+  test("a stream unit's repair-merge subject carries the owning task's title (plans/0213 D3b): the never-existing docs/T-NNN.S<nn>/ read dead", async () => {
+    // The conflict-repair re-dispatch of a split's stream: the merge
+    // instruction runs ahead of everything else in the worker entry, and
+    // its title read is the unit under test. Pre-fix it read
+    // taskStatePaths("T-001.S01") — the never-existing docs/T-001.S01/
+    // directory (0156 D3's own finding shape) — found no document, and the
+    // merge commit's subject degraded to the bare unit id as its own title.
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    const unit = "T-001.S01"
+    const park = join(dir, lanePark(unit))
+    const added = await createGitOps().addWorktree(dir, park, await laneBranch(unit, dir))
+    if (!added.ok) throw new Error(added.error)
+    await writeScaffolding(park)
+    // The stream's completion, committed on the lane branch: the
+    // re-dispatch short-circuits right after the merge ("already complete").
+    await mkdir(join(park, "docs", "T-001", "S01"), { recursive: true })
+    await Bun.write(join(park, "docs", "T-001", "S01", "todo.md"), "Touches: src/widget.ts\n\n## Scope\n\nsrc only.\n")
+    await renameTodoToDone(park, "T-001", 1)
+    const settled = await commitTree(park, { id: unit, title: "the widget" }, { stage: "done", subject: `${unit} done stream 1 of the widget` })
+    expect(settled.ok).toBe(true)
+    // The parent's main advanced after the lane branched — the repair
+    // merge has content to merge.
+    const main = (await git(dir, "rev-parse", "--abbrev-ref", "HEAD")).trim()
+    await Bun.write(join(dir, "src", "lander.ts"), "export const landed = 1\n")
+    await git(dir, "add", "-A")
+    await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "a sibling lane landed")
+    // The re-dispatch through the real worker entry (the ctx the scheduler
+    // loop's lane children build): the owning task's document supplies the
+    // title — docs/T-001/todo.md, committed by schedulerProject at the
+    // baseline ("# T-001: the widget").
+    const holder = services()
+    const laneCtx: LoopCtx = {
+      directory: park,
+      opts: { subtask: "off", lane: { unit, merge: main } },
+      server: { ...singleHost(agentHost()), startedAgents: () => ["fake"] },
+      agentName: "auto",
+      phases: "m",
+      manual: true,
+      ran: 0,
+      repairs: 0,
+      router: holder.router,
+      control: holder.control,
+      git: createGitOps(),
+    }
+    expect(await runLaneUnit(laneCtx)).toBe(0)
+    const subject = (await git(park, "log", "--format=%s", "-3")).split("\n").find((line) => line.includes("merge repair"))
+    // The merge commit's subject names the OWNING task's title, never the
+    // bare unit id twice (the pre-fix degraded shape:
+    // "T-001.S01 merge repair T-001.S01").
+    expect(subject).toBe("T-001.S01 merge repair the widget")
   })
 
   test("park stragglers with no registry entry are pruned; one holding a live run lock is left alone", async () => {

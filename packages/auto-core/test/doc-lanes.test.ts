@@ -371,6 +371,29 @@ describe("the git seam's doc-lane decorator (plans/0099 stage B, D4–D6)", () =
     expect(failed).toEqual({ type: "failed", question: expect.stringContaining("src/foo.ts") })
   })
 
+  // plans/0213 D2 (0165-084 / S05-07): the rider admits driver-state files
+  // outside every LIVE scope — the sibling's in-transit rename waits for the
+  // sibling's own queued commit (its completion under its own Auto-Task),
+  // never this unit's.
+  test("the rider excludes a live sibling's in-transit completion; only the shared index tick rides (plans/0213 D2)", async () => {
+    // The finding's window, the status view the rider reads: T-002's
+    // markDone rename on disk uncommitted (its two --no-renames entries)
+    // beside the close-out tick, T-001's own session write in its scope.
+    const dirty = ["docs/T-001/notes.md", "docs/T-002/todo.md", "docs/T-002/done.md", "docs/R-01/P01-implement/tasks.md"]
+    const fake = fakeBase(async () => dirty)
+    const registry = createDocLaneRegistry()
+    registry.live.set("T-001", ["docs/T-001/"])
+    registry.live.set("T-002", ["docs/T-002/"])
+    const laneGit = createDocLaneGit(fake.base, registry)
+    await laneGit.commitTree(dir, { id: "T-001", ...one }, { stage: "execute", subject: "T-001 exec task one" })
+    // Pre-fix the rider swept the sibling's rename entries into T-001's
+    // pathspec (the own-scope exclusion alone admitted them).
+    expect(fake.calls.at(-1)).toEqual({
+      method: "commitTree",
+      args: ["T-001", "execute", "T-001 exec task one", ["docs/T-001/", "docs/R-01/P01-implement/tasks.md"]],
+    })
+  })
+
   // plans/0175 D4 (0165-139): the relaxation is a parameter of the free gate,
   // and the decorator contributes exactly its three deltas — the
   // byte-identical claim is pinned here, not asserted in a comment.
@@ -528,6 +551,53 @@ describe("the scoped variants over real git (plans/0099 stage B, D4/D7)", () => 
       expect(blocked.failures[0]!.error).toContain("src/foo.ts")
       expect([...registry.quarantine]).toEqual(["src/foo.ts"])
       expect(await changedFiles(repo)).toEqual(["src/foo.ts"])
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+    }
+  })
+
+  // plans/0213 D2 (0165-084 / S05-07), the real-git interleaving: whichever
+  // unit's queued commit runs while a sibling's markDone rename sits
+  // uncommitted must not land the sibling's completion under its own
+  // trailers — the sibling's own commit carries it.
+  test("a sibling's in-transit completion lands in the sibling's own commit, never this unit's (plans/0213 D2)", async () => {
+    const repo = await freshRepo()
+    try {
+      await Bun.write(join(repo, "docs/T-001/todo.md"), "one\n")
+      await Bun.write(join(repo, "docs/T-002/todo.md"), "two\n")
+      await Bun.write(join(repo, "docs/R-01/P01-implement/tasks.md"), "- [ ] T-001 task one\n- [ ] T-002 task two\n")
+      await git(repo, "add", "-A")
+      await git(repo, "commit", "-qm", "seed")
+      const registry = createDocLaneRegistry()
+      registry.live.set("T-001", ["docs/T-001/"])
+      registry.live.set("T-002", ["docs/T-002/"])
+      const laneGit = createDocLaneGit(createGitOps(), registry)
+      // The window: T-002's close-out renamed its unit (uncommitted, the
+      // two --no-renames entries) and ticked the shared index; T-001's
+      // session wrote its notes. T-001's exec commit enqueues first.
+      await rm(join(repo, "docs/T-002/todo.md"))
+      await Bun.write(join(repo, "docs/T-002/done.md"), "two\n")
+      await Bun.write(join(repo, "docs/T-001/notes.md"), "notes\n")
+      await Bun.write(join(repo, "docs/R-01/P01-implement/tasks.md"), "- [x] T-001 task one\n- [x] T-002 task two\n")
+      expect(await laneGit.commitTree(repo, { id: "T-001", ...one }, { stage: "execute", subject: "T-001 exec task one" })).toEqual({ ok: true, failures: [] })
+      // T-001's commit carries its own scope plus the shared tick — the
+      // sibling's rename stayed dirty for the sibling's own commit.
+      const execNames = await git(repo, "show", "--name-only", "--pretty=format:", "HEAD")
+      expect(execNames).toContain("docs/T-001/notes.md")
+      expect(execNames).toContain("docs/R-01/P01-implement/tasks.md")
+      expect(execNames).not.toContain("docs/T-002/done.md")
+      expect(execNames).not.toContain("docs/T-002/todo.md")
+      const execBody = await git(repo, "show", "--pretty=%B", "-s", "HEAD")
+      expect(execBody).toContain("Auto-Task: T-001")
+      // The sibling's own done commit lands its completion under its own
+      // trailer — pre-fix the rename had already left the tree inside
+      // T-001's exec commit and this commit carried none of it.
+      expect(await laneGit.commitTree(repo, { id: "T-002", title: "task two" }, { stage: "done", subject: "T-002 done task two" })).toEqual({ ok: true, failures: [] })
+      const doneBody = await git(repo, "show", "--pretty=%B", "-s", "HEAD")
+      expect(doneBody).toContain("Auto-Task: T-002")
+      const doneNames = await git(repo, "show", "--name-only", "--pretty=format:", "HEAD")
+      expect(doneNames).toContain("docs/T-002/done.md")
+      expect(await changedFiles(repo)).toEqual([])
     } finally {
       await rm(repo, { recursive: true, force: true })
     }

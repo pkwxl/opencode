@@ -442,29 +442,37 @@ export async function repairRoundAppend(
   if (opts.stopBefore !== undefined || (opts.repair ?? 0) <= ctx.repairs) return "block"
   if (site.kind === "task") {
     if (site.quiet) await site.quiet()
-    ctx.repairs++
-    const reason = `repair round ${ctx.repairs}: the task report concluded Result: FAIL${site.reason ? ` (${site.reason})` : ""}`
+    // The round number is derived and the counter takes it only once the
+    // close landed (plans/0213 D3d): a refused close (a dirty tree, a
+    // cascade refusal) never opened a round, and consuming budget there
+    // silently shrank the next FAIL's — 0079 §4's "each round consumes
+    // budget" means a round that opened. The header's invariant holds:
+    // the number the reason quotes is the number the counter holds once
+    // the round opens.
+    const round = ctx.repairs + 1
+    const reason = `repair round ${round}: the task report concluded Result: FAIL${site.reason ? ` (${site.reason})` : ""}`
     const closed = await closeUnit(directory, site.task.id, { reason, phases: ctx.phases, acceptanceGate: opts.acceptanceGate })
     for (const line of closed.lines) log(`  ${line}`)
-    if (closed.type === "closed") {
-      emitStatus({ type: "task-end", task: site.task.id, outcome: "blocked", detail: `${reason}; a repair round appends rework tasks (${ctx.repairs}/${opts.repair})` })
-      log(`↻ ${site.task.id}: ${reason}; the phase loop appends repair tasks over the report's evidence (round ${ctx.repairs} of ${opts.repair})`)
-      ctx.input = {
-        text:
-          `Repair round ${ctx.repairs}: the task ${site.task.id} was closed — its report docs/${site.task.id}/report.md concluded ` +
-          `Result: FAIL${site.reason ? ` (${site.reason})` : ""}. Read that report and the task's documents for what it ` +
-          `left unfinished or broken, then append repair tasks that finish the work: cover the remaining acceptance, fix what the report found, ` +
-          `and have the last task re-verify so the phase's verdict is rewritten honestly.` +
-          // The pack's repair discipline (plans/0080 §6): the boundary that
-          // keeps a repair from re-architecting.
-          withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
-      }
-      ctx.append = true
-      ctx.ran++
-      return "appended"
+    if (closed.type !== "closed") {
+      log(`⏸ the repair round could not close ${site.task.id}; blocking as usual`)
+      return "block"
     }
-    log(`⏸ the repair round could not close ${site.task.id}; blocking as usual`)
-    return "block"
+    ctx.repairs = round
+    emitStatus({ type: "task-end", task: site.task.id, outcome: "blocked", detail: `${reason}; a repair round appends rework tasks (${round}/${opts.repair})` })
+    log(`↻ ${site.task.id}: ${reason}; the phase loop appends repair tasks over the report's evidence (round ${round} of ${opts.repair})`)
+    ctx.input = {
+      text:
+        `Repair round ${round}: the task ${site.task.id} was closed — its report docs/${site.task.id}/report.md concluded ` +
+        `Result: FAIL${site.reason ? ` (${site.reason})` : ""}. Read that report and the task's documents for what it ` +
+        `left unfinished or broken, then append repair tasks that finish the work: cover the remaining acceptance, fix what the report found, ` +
+        `and have the last task re-verify so the phase's verdict is rewritten honestly.` +
+        // The pack's repair discipline (plans/0080 §6): the boundary that
+        // keeps a repair from re-architecting.
+        withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
+    }
+    ctx.append = true
+    ctx.ran++
+    return "appended"
   }
   ctx.repairs++
   log(`↻ repair round ${ctx.repairs}/${opts.repair}: the ${site.kind === "regression" ? "regression" : "verdict"} gate holds ${site.title} — appending repair tasks over the ${site.kind === "regression" ? "red receipts" : "gate evidence"}`)
@@ -771,8 +779,10 @@ async function runIsolationLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       // the main tree clean — pending receipts committed, one stale lane
       // launched into the copy.
       await regressionBoundary(ctx, ctx.opts, phase)
-      // The task boundary hooks (§6.2: boundaries keep unit granularity — a
-      // step pause or /exit stops scheduling and proceeds after the landing).
+      // The task boundary hooks (§6.2: boundaries keep unit granularity —
+      // the step pause waits for Enter here at the landing and scheduling
+      // resumes after; a pending /exit throws at the checkpoint, the run
+      // exiting 3 at this safe boundary — plans/0213 D3a).
       await taskBoundary(ctx, `task ${task.id} ${task.title}`)
       continue
     }
@@ -817,9 +827,11 @@ type LiveLane = { task: Task; worker: LaneWorker; output: Promise<string>; workt
 // A landing conflict is level-derived (D21): `low` blocks immediately with
 // the park path named; `medium`/`high` re-dispatch the lane once with D7's
 // merge instruction and a second conflict blocks.
-// Boundaries keep unit granularity: a step pause or a /exit stops scheduling
-// and drains — the /exit takes effect (throws) only after the last lane
-// landed, so in-flight work is never abandoned by the boundary itself.
+// Boundaries keep unit granularity (plans/0213 D3a): the step pause waits
+// for Enter at each landing and scheduling resumes after it; only a /exit
+// stops scheduling — the probe at each landing records the label and the
+// exit takes effect (throws) after the last lane landed, so in-flight work
+// is never abandoned by the boundary itself.
 // Phases serialize (D20): this loop drains completely before it returns, and
 // the phase loop routes nothing of the next phase until it does.
 async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
@@ -830,7 +842,9 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   // scheduler run — a re-run starts with a fresh budget).
   const repaired = new Set<string>()
   // false = no new lanes are dispatched (a block, an environment error, a
-  // step pause or /exit, a dispatch failure): the in-flight lanes drain.
+  // /exit probe, a dispatch failure): the in-flight lanes drain. A step
+  // pause never stops scheduling — it waits for Enter at the landing
+  // (plans/0213 D3a).
   let scheduling = true
   // The run's terminal stop once set (the first failure wins; later ones are
   // logged but do not move the exit code) — returned after the drain.
@@ -974,10 +988,10 @@ async function runLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     // conditions re-check cleanliness, so a landing between landings is a
     // no-op).
     await regressionBoundary(ctx, ctx.opts, phase)
-    // The boundary hooks at each landing (§6.2: unit granularity — a step
-    // pause or /exit stops scheduling and drains, then proceeds): the probe
-    // form of the /exit checkpoint — the request seen here stops dispatching
-    // and takes effect after the last lane lands (taskBoundary's comment).
+    // The boundary hooks at each landing (§6.2: unit granularity — the step
+    // pause waits for Enter here and scheduling resumes after; a /exit seen
+    // here stops dispatching and takes effect after the last lane lands,
+    // taskBoundary's probe form — plans/0213 D3a).
     await taskBoundary(ctx, `task ${task.id} ${task.title}`, () => {
       scheduling = false
       exitLabel = `task ${task.id} ${task.title}`
@@ -1156,7 +1170,8 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   try {
     const inFlight = new Map<string, LiveDocLane>()
     // false = no new lanes are dispatched (a block, an environment stop, a
-    // step pause or /exit): the in-flight lanes drain.
+    // /exit probe): the in-flight lanes drain. A step pause never stops
+    // scheduling — it waits for Enter at the landing (plans/0213 D3a).
     let scheduling = true
     // The run's terminal stop once set (the first failure wins) — returned
     // after the drain.
@@ -1171,7 +1186,6 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     // rule for throws, 0068 §6.2's matrix extended to the in-process loop).
     let failure: { error: unknown } | undefined
     let ordinal = 0
-    let landings = 0
     // The drain waiters' recompute wake: a lane parking at its gate changes
     // another waiter's blocking set, and a promise raced once does not
     // re-fire — the broadcast below is the second wake source.
@@ -1325,7 +1339,6 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         const keep = await finishBlocked(task, result)
         registry.live.delete(task.id)
         if (keep) {
-          landings++
           await regressionBoundary(ctx, opts, phase)
           // The boundary hooks in probe form beside it (plans/0211 D2): the
           // repair round's close is this unit's landing — the keep arm owed
@@ -1347,7 +1360,6 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         if (stop === undefined) stop = result.code
         return
       }
-      landings++
       // The background regression boundary (plans/0098 D4): the landing
       // left this unit's scope committed — pending receipts committed (the
       // decorator's janitorial routing excludes the live sibling scopes),
@@ -1361,8 +1373,16 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         exitLabel = `task ${task.id} ${task.title}`
       })
       // --wait-between pauses between landings — never before the first,
-      // the lane loop's placement (the lane boundary is the landing).
-      if (landings > 1 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl, directory)
+      // the lane loop's placement (the lane boundary is the landing). The
+      // key is ctx.ran like the sibling loops (plans/0213 D3c): a per-call
+      // landing count would zero at every phase, so a later phase's first
+      // doc landing never paused. This landing's own increment is already
+      // inside (the doc world's bumps happen in the pipelines, ahead of
+      // the landing continuation), so "> 1" = something ran before this
+      // landing — including a concurrent sibling whose pipeline completed
+      // behind the mutex (its work committed; between landings in this
+      // loop's own terms).
+      if (ctx.ran > 1 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl, directory)
     }
 
     // D10's recovery flatten, before scheduling: a killed run leaves doc
@@ -1693,13 +1713,17 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
   // D7's merge instruction (a conflict repair's re-dispatch only), ahead of
   // the routing and the already-complete short-circuit below: the repair
   // exists for the landing, and the landing needs the merged branch whether
-  // or not the unit still has work. The title is read straight off the unit
-  // document — before routing there is no plan to read it from, and the
-  // commit subject is the merge's only use of it.
+  // or not the unit still has work. The title is read off the OWNING task's
+  // document (plans/0213 D3b, 0156 D3's owning-task rule: a stream unit
+  // T-NNN.S<nn> has no docs/T-NNN.S<nn>/ state files — its grammar lives in
+  // the task document, and the old unit-path read found nothing, degrading
+  // the subject to the bare unit id) — before routing there is no plan to
+  // read it from, and the commit subject is the merge's only use of it.
   if (instruction !== undefined) {
+    const owner = stream?.task ?? unit
     const doc =
-      (await Bun.file(join(directory, taskStatePaths(unit).complete)).text().catch(() => undefined)) ??
-      (await Bun.file(join(directory, taskStatePaths(unit).pending)).text().catch(() => ""))
+      (await Bun.file(join(directory, taskStatePaths(owner).complete)).text().catch(() => undefined)) ??
+      (await Bun.file(join(directory, taskStatePaths(owner).pending)).text().catch(() => ""))
     const merged = await mergeLaneUpstream(directory, instruction, { id: unit, title: parseUnitDoc(doc).title || unit })
     if (merged.type === "conflict") {
       log(`⏸ ${unit} the repair merge of ${instruction} into the lane branch conflicts (${merged.detail}); the merge was aborted, the worktree is clean — the lane cannot resolve the conflict on its own`)

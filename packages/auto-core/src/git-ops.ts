@@ -304,10 +304,12 @@ export function createDocLaneRegistry(): DocLaneRegistry {
 //     the sole writer of git state, and the serialized commits keep the
 //     index and the object store single-writer in practice). A live doc
 //     unit's commit adds its effective scope plus the dirty driver-exclusive
-//     state files — the index tick of its close-out rides the unit's own
-//     commit exactly as the serial world's done commit does (dm-glm's
-//     measured shape: `docs/T-NNN/done.md` plus the phase `tasks.md` tick);
-//     every other call adds everything except the live scopes (with no
+//     state files OUTSIDE EVERY LIVE SCOPE (plans/0213 D2) — the index tick
+//     of its close-out rides the unit's own commit exactly as the serial
+//     world's done commit does (dm-glm's measured shape: `docs/T-NNN/done.md`
+//     plus the phase `tasks.md` tick), while a live sibling's in-transit
+//     state files wait for the sibling's own commit; every other call adds
+//     everything except the live scopes (with no
 //     lanes in flight that is `.` — today's sweep, byte-identical).
 //   - D5, the start gate relaxes by exactly the live scopes: beginUnit
 //     tolerates dirt inside the *other* live doc units' effective scopes
@@ -376,9 +378,18 @@ export function createDocLaneGit(base: GitOps, registry: DocLaneRegistry): GitOp
       }
       // The driver-state files riding the unit's own commit: the close-out
       // tick of the phase index (a driver write outside every scope, left
-      // dirty by markDone moments before); the unit's own todo/done state
-      // files are already inside the scope and stay deduplicated away.
-      return base.commitTree(dir, task, info, [...scope, ...dirty.filter((rel) => driverStateFile(rel) && !withinScopes(rel, scope))])
+      // dirty by markDone moments before; 0099 D8's shared write — whichever
+      // unit's queued commit lands first carries it); the unit's own
+      // todo/done state files are already inside the scope and stay
+      // deduplicated away. Admission is outside every LIVE scope (plans/0213
+      // D2, enacting S05-07): a sibling's in-transit rename
+      // (docs/T-B/todo.md → done.md, a driver write inside the sibling's own
+      // live scope) is excluded here and lands in the sibling's own queued
+      // close-out commit under its own trailers — the rider's letter was the
+      // index tick, never the sibling's completion. A dead unit's leftover
+      // rename (no live scope holds it) still rides — 0021's carryover
+      // posture, an interrupted driver close heals through the next gate.
+      return base.commitTree(dir, task, info, [...scope, ...dirty.filter((rel) => driverStateFile(rel) && !withinScopes(rel, [...scope, ...siblingScopes(task.id)]))])
     })
   return {
     records: base.records,
