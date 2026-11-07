@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, relative } from "node:path"
 import {
   applyExternalAllows,
   applyKnowledgeBoundary,
+  catchAllFor,
+  EDIT_ASKS,
+  EXTERNAL_DIRECTORY_ASKS,
   externalAllowsStatus,
   externalDirectoryEntries,
   knowledgeBoundaryMissing,
@@ -17,6 +20,7 @@ import {
   stampKnowledgeBoundary,
   stampReadOnlyEdits,
 } from "../src/external-dirs"
+import { admission, match } from "./helpers/perm-oracle"
 
 // The corpus and the project side by side under tmp (siblings, never nested:
 // the scan keeps only real paths outside the project root).
@@ -175,14 +179,18 @@ describe("externalAllowsStatus and applyExternalAllows", () => {
       await writeFile(file, JSON.stringify({ permission: { read: "allow" } }, null, 2) + "\n")
       await chmod(file, 0o444)
 
+      // The relative deny's anchor: a bare directory (no repository) falls
+      // back to the physical dir — the corpus is a sibling, so `../<name>`.
+      const rel = relative(project, corpus).replaceAll("\\", "/")
       const status = await externalAllowsStatus(project)
-      // The read-only composite (plans/0147 D2): both layers named — the
-      // external_directory allow and the edit-layer deny.
-      expect(status).toEqual({ status: "needs-stamp", missing: [`${corpus}/**`, `edit:${corpus}/**`] })
+      // The read-only composite (plans/0147 D2, the ask forms since 0188
+      // D3): both layers named — the external_directory allow and the
+      // edit-layer deny in every form the live tools ask.
+      expect(status).toEqual({ status: "needs-stamp", missing: [`${corpus}/**`, `edit:${corpus}/**`, `edit:${rel}/**`, "edit:linux/**"] })
       expect(await applyExternalAllows(project)).toBe(true)
       expect(await readFile(file, "utf8")).toBe(
         JSON.stringify(
-          { permission: { external_directory: { [`${corpus}/**`]: "allow" }, read: "allow", edit: { "*": "ask", [`${corpus}/**`]: "deny" } } },
+          { permission: { external_directory: { [`${corpus}/**`]: "allow" }, read: "allow", edit: { "*": "ask", [`${corpus}/**`]: "deny", [`${rel}/**`]: "deny", "linux/**": "deny" } } },
           null,
           2,
         ) + "\n",
@@ -320,22 +328,32 @@ describe("stampKnowledgeBoundary (plans/0147 D1)", () => {
   })
 })
 
-describe("stampReadOnlyEdits (plans/0147 D2)", () => {
-  const entries = readOnlyEditEntries(["/corpus"])
+describe("stampReadOnlyEdits (plans/0147 D2, the ask forms plans/0188 D3)", () => {
+  const entries = readOnlyEditEntries([{ name: "linux", target: "/corpus" }], "/proj")
 
   test("an absent edit rule materializes as the object form preserving the effective default; a bare action becomes the leading * entry", () => {
     const absent = stampReadOnlyEdits(JSON.stringify({ permission: {} }) + "\n", entries)!
-    expect((JSON.parse(absent) as any).permission.edit).toEqual({ "*": "ask", "/corpus/**": "deny" })
+    expect((JSON.parse(absent) as any).permission.edit).toEqual({ "*": "ask", "/corpus/**": "deny", "../corpus/**": "deny", "linux/**": "deny" })
     const bare = stampReadOnlyEdits(JSON.stringify({ permission: { edit: "allow" } }) + "\n", entries)!
-    expect((JSON.parse(bare) as any).permission.edit).toEqual({ "*": "allow", "/corpus/**": "deny" })
+    expect((JSON.parse(bare) as any).permission.edit).toEqual({ "*": "allow", "/corpus/**": "deny", "../corpus/**": "deny", "linux/**": "deny" })
   })
 
-  test("an existing edit object keeps its order, the deny placed to beat the blanket action and lose to the person's later keys", () => {
+  test("an existing edit object keeps its order, the denies placed to beat the blanket action and lose to the person's later keys", () => {
     const object = stampReadOnlyEdits(JSON.stringify({ permission: { edit: { "/person/**": "allow", "*": "allow" } } }) + "\n", entries)!
-    expect(Object.keys((JSON.parse(object) as any).permission.edit)).toEqual(["/person/**", "*", "/corpus/**"])
-    // A person key already on the deny's key is never inserted over.
-    expect(missingReadOnlyEditDenies(JSON.stringify({ permission: { edit: { "/corpus/**": "ask" } } }) + "\n", entries)).toEqual([])
+    expect(Object.keys((JSON.parse(object) as any).permission.edit)).toEqual(["/person/**", "*", "/corpus/**", "../corpus/**", "linux/**"])
+    // Person keys already on the deny keys (any of them) are never inserted over.
+    const personOwned = JSON.stringify({ permission: { edit: { "/corpus/**": "ask", "../corpus/**": "ask", "linux/**": "ask" } } }) + "\n"
+    expect(missingReadOnlyEditDenies(personOwned, entries)).toEqual([])
     expect(stampReadOnlyEdits("not json", entries)).toBeUndefined()
+  })
+
+  test("the entries: one door contributes the target, its worktree-relative form and the door name; several doors share the target key", () => {
+    expect(readOnlyEditEntries([{ name: "linux", target: "/corpus" }, { name: "aaa", target: "/corpus" }], "/proj")).toEqual({
+      "/corpus/**": "deny",
+      "../corpus/**": "deny",
+      "linux/**": "deny",
+      "aaa/**": "deny",
+    })
   })
 })
 
@@ -373,5 +391,112 @@ describe("the 0155 pins: the boundary pair under a person catch-all, the seal's 
     const external = (JSON.parse(closed) as any).permission.external_directory
     expect(external).toEqual({ [stampKey("/corpus")]: "deny", "/person/**": "allow" })
     expect(Object.keys(external)).toEqual([stampKey("/corpus"), "/person/**"])
+  })
+})
+
+// —— The admission oracle and the stamps it judges (plans/0188) ——
+
+describe("the mirror pin (plans/0188 D2): the catch-all predicate agrees with opencode's own matcher", () => {
+  const spellings = ["*", "**", "***", "/*", "/**", "/?*", "/a/**", "**/*", "?", "src/**", "/tmp/**", "/a/*", "*/*", "/Workspace/**"]
+
+  test("catchAllFor equals the imported matcher's verdict over the spelling corpus, both layers", () => {
+    for (const key of spellings) {
+      expect(catchAllFor(EXTERNAL_DIRECTORY_ASKS, key)).toBe(EXTERNAL_DIRECTORY_ASKS.every((ask) => match(ask, key)))
+      expect(catchAllFor(EDIT_ASKS, key)).toBe(EDIT_ASKS.every((ask) => match(ask, key)))
+    }
+  })
+
+  test("the ruled classification: the absolute layer admits every slash-crossing wildcard; the relative edit layer only * and **", () => {
+    // Every external ask is an absolute `<dirname>/*` glob — at least one
+    // slash, always leading — so `/**`, `/*`, `*`, `**`, `/?*`, `**/*` and
+    // `*/*` all cover it; the edit asks include a bare `z`, so only the
+    // slash-free `*` and `**` cover them.
+    for (const key of ["/**", "/*", "*", "**", "/?*", "**/*", "*/*"]) expect(catchAllFor(EXTERNAL_DIRECTORY_ASKS, key)).toBe(true)
+    for (const key of ["*", "**"]) expect(catchAllFor(EDIT_ASKS, key)).toBe(true)
+    for (const key of ["/a/**", "?", "src/**", "/tmp/**", "/a/*"]) expect(catchAllFor(EXTERNAL_DIRECTORY_ASKS, key)).toBe(false)
+    for (const key of ["/**", "/*", "/?*", "/a/**", "**/*", "?", "src/**", "/tmp/**", "/a/*", "*/*"]) expect(catchAllFor(EDIT_ASKS, key)).toBe(false)
+  })
+})
+
+describe("the catch-all placement under the oracle (plans/0188 D2, 0165-150): every spelling, both layers", () => {
+  test("a person external catch-all spelled *, ** or /* lands last: the stamped allow and the /tmp allowance still function beneath it", () => {
+    for (const catchAll of ["*", "**", "/*", "/**"]) {
+      const external: Record<string, string> = { "/mine/**": "ask" }
+      if (catchAll !== "/**") external["/**"] = "deny"
+      external[catchAll] = "deny"
+      const person = JSON.stringify({ permission: { external_directory: external } }) + "\n"
+      const allowed = stampExternalDirectories(person, externalDirectoryEntries(["/workspace/linux"]))!
+      const bounded = stampKnowledgeBoundary(allowed)!
+      // The exact quiet break the old literal cut let through: the inserts
+      // landed before the person's trailing catch-all and last-match-wins
+      // killed them — the corpus read denied, the receipts convention off.
+      expect(admission(bounded, "external_directory", "/workspace/linux/drivers/*")).toBe("allow")
+      expect(admission(bounded, "external_directory", "/tmp/opencode/receipt.md")).toBe("allow")
+      expect(admission(bounded, "external_directory", "/other/fork/src/x.c")).toBe("deny")
+    }
+  })
+
+  test("an edit object's catch-all spelled ** (beside the blanket *): the read-only denies still function beneath it", () => {
+    const entries = readOnlyEditEntries([{ name: "linux", target: "/corpus" }], "/proj")
+    const person = JSON.stringify({ permission: { edit: { "/mine/**": "allow", "*": "allow", "**": "allow" } } }) + "\n"
+    const stamped = stampReadOnlyEdits(person, entries)!
+    expect(admission(stamped, "edit", "../corpus/drivers/x.c")).toBe("deny")
+    expect(admission(stamped, "edit", "linux/drivers/x.c")).toBe("deny")
+    // Everything of the person's keeps winning its tie.
+    expect(admission(stamped, "edit", "mine/x.c")).toBe("allow")
+    expect(admission(stamped, "edit", "other.c")).toBe("allow")
+  })
+})
+
+describe("the read-only composite under the oracle (plans/0188 D1/D3, 0165-039)", () => {
+  test("a stamped project denies both live edit ask shapes and allows the corpus read; the blanket action stays the floor", async () => {
+    const { project, corpus } = await fixture()
+    try {
+      await symlink(corpus, join(project, "linux"))
+      const file = join(project, "opencode.json")
+      await writeFile(file, JSON.stringify({ permission: { edit: { "*": "allow" } } }, null, 2) + "\n")
+      expect(await applyExternalAllows(project)).toBe(true)
+      const stamped = await readFile(file, "utf8")
+      // The read side opens (0122): the external_directory ask names the
+      // corpus by its real path.
+      expect(admission(stamped, "external_directory", `${corpus}/drivers/*`)).toBe("allow")
+      // The write side closes on every ask shape the live tools send
+      // (0188 D3): an absolute-path edit asks the worktree-relative form of
+      // the corpus; an in-tree edit through the door asks the door name.
+      const rel = relative(project, corpus).replaceAll("\\", "/")
+      expect(admission(stamped, "edit", `${rel}/drivers/x.c`)).toBe("deny")
+      expect(admission(stamped, "edit", "linux/drivers/x.c")).toBe("deny")
+      // The person's blanket action still governs everything in-tree.
+      expect(admission(stamped, "edit", "src/mine.c")).toBe("allow")
+    } finally {
+      await rm(project, { recursive: true, force: true })
+      await rm(corpus, { recursive: true, force: true })
+    }
+  })
+
+  test("the relative key anchors at the git worktree root, not the directory: a target-directory project inside an outer repository", async () => {
+    const outer = await mkdtemp(join(tmpdir(), "auto-ext-outer-"))
+    const project = join(outer, "sub")
+    const corpus = await mkdtemp(join(tmpdir(), "auto-ext-corpus-"))
+    try {
+      await mkdir(project)
+      await Bun.spawn(["git", "-C", outer, "init", "-q"]).exited
+      await symlink(corpus, join(project, "linux"))
+      const file = join(project, "opencode.json")
+      await writeFile(file, JSON.stringify({ permission: { edit: { "*": "allow" } } }, null, 2) + "\n")
+      expect(await applyExternalAllows(project)).toBe(true)
+      const stamped = await readFile(file, "utf8")
+      // The session's worktree is the OUTER root (opencode derives it as
+      // git's toplevel), so the live edit ask for an absolute-path edit of
+      // the corpus is ../<corpus-name>/… relative to it — not the
+      // ../../<corpus-name>/… a directory-anchored key would spell.
+      const ask = relative(outer, corpus).replaceAll("\\", "/") + "/drivers/x.c"
+      expect(ask.startsWith("..")).toBe(true)
+      expect(admission(stamped, "edit", ask)).toBe("deny")
+      expect(admission(stamped, "edit", "linux/drivers/x.c")).toBe("deny")
+    } finally {
+      await rm(outer, { recursive: true, force: true })
+      await rm(corpus, { recursive: true, force: true })
+    }
   })
 })

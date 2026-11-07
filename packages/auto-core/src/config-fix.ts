@@ -53,7 +53,7 @@ import {
   retiredGitignoreEntries,
 } from "./gitignore"
 import { ANALYSIS_DOC, roundDirName } from "./docpaths"
-import { applyExternalAllows, applyKnowledgeBoundary, externalDirectoryEntries, knowledgeBoundaryMissing, missingExternalDirectoryAllows, missingReadOnlyEditDenies, OPENCODE_CONFIG_FILE, readOnlyEditEntries, rootSymlinkRealPaths, staleExternalDirectoryAllows, stampExternalDirectories, stampReadOnlyEdits } from "./external-dirs"
+import { applyExternalAllows, applyKnowledgeBoundary, externalDirectoryEntries, knowledgeBoundaryMissing, missingExternalDirectoryAllows, missingReadOnlyEditDenies, OPENCODE_CONFIG_FILE, readOnlyEditEntriesFor, rootSymlinkRealPaths, staleExternalDirectoryAllows, stampExternalDirectories, stampReadOnlyEdits } from "./external-dirs"
 import { provenanceFindings } from "./provenance"
 import { currentRound } from "./phases"
 import { supersedingPhases } from "./roadmap"
@@ -272,7 +272,7 @@ export async function planFix(dir: string): Promise<FixPlan> {
     const text = await Bun.file(templateConfig).text()
     const realPaths = await rootSymlinkRealPaths(dir)
     let next = stampExternalDirectories(text, externalDirectoryEntries(realPaths))
-    if (next !== undefined) next = stampReadOnlyEdits(next, readOnlyEditEntries(realPaths))
+    if (next !== undefined) next = stampReadOnlyEdits(next, await readOnlyEditEntriesFor(dir))
     return next ?? text
   }
   if (!(await Bun.file(join(dir, OPENCODE_CONFIG_FILE)).exists())) {
@@ -294,14 +294,15 @@ export async function planFix(dir: string): Promise<FixPlan> {
       fixable(OPENCODE_CONFIG_FILE, "permission.external_directory lacks the working-directory knowledge boundary (default-deny outside the working directory, /tmp excepted)", "insert the knowledge boundary (deny /** , allow /tmp/**)", () => applyKnowledgeBoundary(dir))
     }
     // The root-symlink read-only composite (plans/0122, the write side since
-    // 0147 D2): missing entries in either layer are fixable (the write
-    // re-derives from disk at apply time — idempotent); a stale allow or a
-    // file that cannot hold per-pattern entries is manual (never guess, never
-    // delete person content).
+    // 0147 D2 in every ask form since plans/0188 D3): missing entries in
+    // either layer are fixable (the write re-derives from disk at apply
+    // time — idempotent); a stale allow or a file that cannot hold
+    // per-pattern entries is manual (never guess, never delete person
+    // content).
     const realPaths = await rootSymlinkRealPaths(dir)
     if (realPaths.length) {
       const missing = missingExternalDirectoryAllows(text, externalDirectoryEntries(realPaths))
-      const editMissing = missingReadOnlyEditDenies(text, readOnlyEditEntries(realPaths))
+      const editMissing = missingReadOnlyEditDenies(text, await readOnlyEditEntriesFor(dir))
       if (missing === undefined || editMissing === undefined) {
         findings.push({
           class: "manual",

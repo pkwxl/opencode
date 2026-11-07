@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { ensurePointer } from "../src/agents-block"
 import { appendToSection, briefProposal, projectBriefText } from "../src/brief"
@@ -289,10 +289,13 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
       await applyFix(stamped)
       const written = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
       // The template's boundary (plans/0147) beneath the symlink's read-only
-      // composite: the deny first, the corpus allow after it (it must win the
-      // tie), /tmp excepted, the edit layer closing the write side.
+      // composite: the deny first, the corpus allow after it (it must win
+      // the tie), /tmp excepted, the edit layer closing the write side in
+      // every form the live tools ask (plans/0188 D3: the target, its
+      // worktree-relative form, the door name).
+      const rel = relative(dir, corpus).replaceAll("\\", "/")
       expect(written.permission.external_directory).toEqual({ "/**": "deny", [`${corpus}/**`]: "allow", "/tmp/**": "allow" })
-      expect(written.permission.edit).toEqual({ "*": "allow", [`${corpus}/**`]: "deny" })
+      expect(written.permission.edit).toEqual({ "*": "allow", [`${corpus}/**`]: "deny", [`${rel}/**`]: "deny", "linux/**": "deny" })
       expect((await planFix(dir)).findings).toEqual([])
     } finally {
       await rm(corpus, { recursive: true, force: true })
@@ -308,6 +311,7 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
       JSON.stringify({ model: "mine", permission: { read: "allow", external_directory: { "/person/**": "deny" } } }, null, 2) + "\n",
     )
     try {
+      const rel = relative(dir, corpus).replaceAll("\\", "/")
       const plan = await planFix(dir)
       expect(fixable(plan)).toEqual([
         {
@@ -319,7 +323,7 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
         {
           class: "fixable",
           path: "opencode.json",
-          problem: `the root-symlink stamps are incomplete (${corpus}/**, edit ${corpus}/**)`,
+          problem: `the root-symlink stamps are incomplete (${corpus}/**, edit ${corpus}/**, edit ${rel}/**, edit linux/**)`,
           change: "insert the root-symlink allow(s) and their read-only edit deny(s)",
         },
       ])
@@ -329,14 +333,14 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
       // tie), the person's own key last (still winning its ties).
       expect(Object.keys(written.permission.external_directory)).toEqual(["/**", `${corpus}/**`, "/tmp/**", "/person/**"])
       expect(written.permission.external_directory["/person/**"]).toBe("deny")
-      expect(written.permission.edit).toEqual({ "*": "ask", [`${corpus}/**`]: "deny" })
+      expect(written.permission.edit).toEqual({ "*": "ask", [`${corpus}/**`]: "deny", [`${rel}/**`]: "deny", "linux/**": "deny" })
       expect(written.model).toBe("mine")
       expect((await planFix(dir)).findings).toEqual([])
-      // A person-owned entry on the same key reads as present: no finding —
-      // with the boundary beside it, the file is clean.
+      // A person-owned entry on any of the deny keys reads as present: no
+      // finding — with the boundary beside it, the file is clean.
       await writeFile(
         join(dir, "opencode.json"),
-        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "deny" }, edit: { "*": "allow", [`${corpus}/**`]: "ask" } } }, null, 2) + "\n",
+        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "deny" }, edit: { "*": "allow", [`${corpus}/**`]: "ask", [`${rel}/**`]: "ask", "linux/**": "ask" } } }, null, 2) + "\n",
       )
       expect((await planFix(dir)).findings).toEqual([])
     } finally {
@@ -349,9 +353,10 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     const corpus = await mkdtemp(join(tmpdir(), "auto-fix-corpus-"))
     await symlink(corpus, join(dir, "linux"))
     try {
+      const rel = relative(dir, corpus).replaceAll("\\", "/")
       await writeFile(
         join(dir, "opencode.json"),
-        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "allow", "/gone/**": "allow" }, edit: { "*": "allow", [`${corpus}/**`]: "deny" } } }, null, 2) + "\n",
+        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "allow", "/gone/**": "allow" }, edit: { "*": "allow", [`${corpus}/**`]: "deny", [`${rel}/**`]: "deny", "linux/**": "deny" } } }, null, 2) + "\n",
       )
       const stale = await planFix(dir)
       expect(manual(stale)).toEqual([

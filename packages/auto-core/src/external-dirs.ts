@@ -11,10 +11,14 @@
 // every top-level symlink of the target directory whose real path lies
 // outside the project root contributes `"<realpath>/**": "allow"` under
 // `permission.external_directory` of the target's own opencode.json — and,
-// since plans/0147 D2, the matching `"<realpath>/**": "deny"` under
-// `permission.edit`: the symlink's target is reference knowledge, opened
-// read-only (the t083 incident's first fork read a sibling checkout's future
-// state through exactly such an opening and ported it as a "fix"). init
+// since plans/0147 D2 as widened by plans/0188 D3, a deny under
+// `permission.edit` in every form the live edit tools ask (opencode's v1
+// edit/write/apply_patch tools ask `edit` with the worktree-relative
+// path): the target's real path, that path relative to the session's
+// worktree root, and the door's own name — the symlink's target is
+// reference knowledge, opened read-only (the t083 incident's first fork
+// read a sibling checkout's future state through exactly such an opening
+// and ported it as a "fix"). init
 // stamps the entries (into the template when it creates the file, additively
 // into an existing one — the one conscious widening of "a person's file is
 // only written when missing": exactly these entries are inserted, nothing
@@ -34,15 +38,22 @@
 //
 // Ordering: opencode evaluates a permission object's rules last-match-wins,
 // so order matters only within one action's patterns. The driver inserts its
-// allow entries AFTER any `"/**"` key (the boundary's catch-all deny —
-// whoever set it — so the allows function), and otherwise at the front of
+// allow entries AFTER the last existing key that matches every pattern the
+// layer's tools ask under opencode's matcher (plans/0188 D2 — for
+// external_directory, whose asks are absolute `<dirname>/*` globs, every
+// catch-all spelling: `/**`, `/*`, `*`, `**`, `/?*`, `**/*`, …; the
+// boundary's catch-all deny
+// — whoever set it — so the allows function), and otherwise at the front of
 // external_directory — a person's later rules (the compliance wall's deny)
 // always win the tie, and a key the person already set, to any action, is
-// never inserted over. The edit-layer denies insert after a leading `"*"`
-// key of the edit object (so they beat the blanket action) and otherwise at
-// its front — again with every person key that follows still winning.
+// never inserted over. The edit-layer denies insert after the edit object's
+// last catch-all key (`*`, `**` — the blanket action the inserted denies
+// must beat; the relative layer's asks carry no leading slash, so `/*` and
+// `/**` are not catch-alls there) and otherwise at its front — again with
+// every person key that follows still winning.
 import { chmod, readdir, realpath, stat, writeFile } from "node:fs/promises"
-import { join, sep } from "node:path"
+import { join, relative, sep } from "node:path"
+import { git } from "./git"
 
 // The opencode config file at the target root (the shell's template path;
 // named here once so both commands and the tests agree).
@@ -94,17 +105,105 @@ export function externalDirectoryEntries(realPaths: readonly string[]): Record<s
   return entries
 }
 
-// The edit-layer entries of the read-only composite (plans/0147 D2):
-// `"<path>/**": "deny"` for each — the write side of a symlink target
-// closed while the external_directory allow opens the read side.
-export function readOnlyEditEntries(realPaths: readonly string[]): Record<string, "deny"> {
+// The edit-layer entries of the read-only composite (plans/0147 D2, the
+// ask forms since plans/0188 D3): opencode's live edit/write/apply_patch
+// tools ask `edit` with the worktree-relative path, so a door contributes
+// three deny keys — the target's real path (0147 D2's exact bytes, the
+// wall family's readers and any absolute-asking consumer's form), the
+// path relative to the session's worktree root (the `../<rel>/**` the
+// tools ask for an absolute-path edit), and the door's own name (in-tree
+// writes through the symlink) — one write side that closes on every ask
+// shape. Sorted doors in, deterministic key order out.
+export function readOnlyEditEntries(doors: readonly { name: string; target: string }[], base: string): Record<string, "deny"> {
   const entries: Record<string, "deny"> = {}
-  for (const real of realPaths) entries[`${real}/**`] = "deny"
+  for (const { name, target } of doors) {
+    entries[`${target}/**`] = "deny"
+    const rel = relative(base, target).replaceAll("\\", "/")
+    if (rel && rel !== ".") entries[`${rel}/**`] = "deny"
+    entries[`${name}/**`] = "deny"
+  }
   return entries
+}
+
+// The base the relative key is anchored to: opencode derives the session's
+// instance worktree as `git rev-parse --show-toplevel` (resolved — the fact
+// every live edit ask is relative to). One read through git's spawn helper;
+// when git will not answer (a bare directory, an unreadable repository) the
+// physical target directory stands in — a fallback base deeper than the
+// true one can only make the relative key more specific (inert at worst,
+// never broader), the conservative direction (P12).
+async function worktreeAskBase(dir: string): Promise<string> {
+  const got = await git(dir, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
+  const top = got?.out.trim()
+  if (got && got.code === 0 && top) return top
+  return await realpath(dir).catch(() => dir)
+}
+
+// The composite's edit layer derived from one directory: the door scan plus
+// the worktree base — init, fix and the tests share this one derivation.
+export async function readOnlyEditEntriesFor(dir: string): Promise<Record<string, "deny">> {
+  return readOnlyEditEntries(await rootSymlinkDoors(dir), await worktreeAskBase(dir))
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+
+// —— The ask shapes and the catch-all predicate (plans/0188 D2) ——
+//
+// opencode judges every permission key with its own wildcard matcher
+// (packages/core/src/util/wildcard.ts: escape the specials, `*` → `.*`,
+// `?` → `.`, anchored) and evaluates an object's rules last-match-wins in
+// file key order. The stamp placement needs one question of that matcher:
+// which existing keys are catch-alls — keys matching every pattern the
+// layer's tools can ask — because the driver's entries must land after the
+// LAST of them to function. The core carries no dependency on opencode's
+// packages (P14 — the SDK seam is the adapter's, and the matcher is not in
+// it), so the translation is mirrored here, in this one home, and
+// test/helpers/perm-oracle.ts pins the mirror against the matcher itself
+// (imported from the workspace source) over a spelling corpus: divergence
+// is a red test, never a silent drift.
+function opencodeMatch(input: string, pattern: string): boolean {
+  const normalized = input.replaceAll("\\", "/")
+  let escaped = pattern
+    .replaceAll("\\", "/")
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".")
+  if (escaped.endsWith(" .*")) escaped = escaped.slice(0, -3) + "( .*)?"
+  return new RegExp("^" + escaped + "$", process.platform === "win32" ? "si" : "s").test(normalized)
+}
+
+// What each layer's live tools ask (the 0165 R7-perm measurements, verified
+// at the source): external_directory asserts an absolute `<dirname>/*`
+// glob for whatever lies outside the working directory (opencode
+// src/tool/external-directory.ts); the v1 edit/write/apply_patch tools ask
+// `edit` with the worktree-relative path (src/tool/edit.ts, write.ts,
+// apply_patch.ts). The probes span the ask space's shapes — shallow and
+// deep, with and without a leading slash — so a key matching every probe
+// matches every ask: `/**` and `/*` cover the absolute layer's asks, `*`
+// and `**` both layers', and layer-specific prefixes (`/tmp/**`, `src/**`)
+// fail their foreign probes.
+export const EXTERNAL_DIRECTORY_ASKS: readonly string[] = ["/a/*", "/tmp/x/*", "/workspace/linux/drivers/*"]
+export const EDIT_ASKS: readonly string[] = ["z", "src/x.c", "../corpus/drivers/y.c"]
+
+// Whether a pattern key is a catch-all for one layer: it matches every
+// pattern that layer's tools ask under opencode's matcher (plans/0188 D2 —
+// `/**`, `/*`, `*`, `**`, `/?*`, `**/*`, `*/*` for the absolute layer; `*`,
+// `**` for the relative one; never a layer-specific prefix).
+export function catchAllFor(asks: readonly string[], key: string): boolean {
+  return asks.every((ask) => opencodeMatch(ask, key))
+}
+
+// The insert cut for a pattern object: after its LAST catch-all key (every
+// key matching every ask the layer's tools send — plans/0188 D2), else the
+// front. Inserting after the last catch-all is what makes the driver's
+// entries function beneath a person's blanket rule of any spelling, while
+// every person key after the cut keeps winning its tie.
+function cutAfterLastCatchAll(keys: readonly string[], asks: readonly string[]): number {
+  let cut = 0
+  for (let i = 0; i < keys.length; i++) if (catchAllFor(asks, keys[i]!)) cut = i + 1
+  return cut
+}
 
 // The entry keys the file does not yet carry — absent from its
 // permission.external_directory object entirely (a key the person already
@@ -143,13 +242,13 @@ export function missingReadOnlyEditDenies(text: string, entries: Record<string, 
   return Object.keys(entries).filter((key) => !(key in edit))
 }
 
-// Rebuild a pattern object with `inserted` placed after its `"*"` key when
-// one exists (the blanket action the inserted denies must beat), else at
-// the front — every existing key keeps its relative order (a person's later
-// keys keep winning the tie).
+// Rebuild a pattern object with `inserted` placed after its last catch-all
+// key (any spelling that matches every edit ask — the blanket action the
+// inserted denies must beat), else at the front — every existing key keeps
+// its relative order (a person's later keys keep winning the tie).
 function objectWithInserted<T>(existing: Record<string, unknown>, inserted: Record<string, T>): Record<string, unknown> {
   const keys = Object.keys(existing)
-  const cut = keys.includes("*") ? keys.indexOf("*") + 1 : 0
+  const cut = cutAfterLastCatchAll(keys, EDIT_ASKS)
   const out: Record<string, unknown> = {}
   for (const key of keys.slice(0, cut)) out[key] = existing[key]
   Object.assign(out, inserted)
@@ -158,14 +257,16 @@ function objectWithInserted<T>(existing: Record<string, unknown>, inserted: Reco
 }
 
 // Rebuild external_directory with the missing entries placed after its
-// `"/**"` key when present (the boundary's catch-all deny — whoever set it —
-// so the allows function beneath it), else at the front (0122's own
-// ordering, the file without a boundary). Shared by the symlink-allow stamp
-// and the boundary pair (plans/0155 D3: the /tmp allowance must win its tie
-// against a person-set `"/**"` the same way a corpus allow does).
+// last catch-all key when one exists (every spelling that matches every
+// external ask — the boundary's catch-all deny, whoever set it — so the
+// allows function beneath it), else at the front (0122's own ordering, the
+// file without a boundary). Shared by the symlink-allow stamp and the
+// boundary pair (plans/0155 D3: the /tmp allowance must win its tie
+// against a person-set catch-all of any spelling the same way a corpus
+// allow does).
 function externalWithAllows(existing: Record<string, unknown>, inserted: Record<string, unknown>): Record<string, unknown> {
   const keys = Object.keys(existing)
-  const cut = keys.indexOf("/**") + 1
+  const cut = cutAfterLastCatchAll(keys, EXTERNAL_DIRECTORY_ASKS)
   const out: Record<string, unknown> = {}
   for (const key of keys.slice(0, cut)) out[key] = existing[key]
   Object.assign(out, inserted)
@@ -196,13 +297,14 @@ export function stampExternalDirectories(text: string, entries: Record<string, "
   return JSON.stringify(next, null, 2) + "\n"
 }
 
-// The read-only composite's edit-layer stamp (plans/0147 D2): insert the
-// missing `"<realpath>/**": "deny"` keys into permission.edit — an absent or
-// bare-action rule materializes as the object form with the blanket action
-// preserved as its leading `"*"` entry; an existing object keeps its order
-// with the denies placed to function (after a leading `"*"` key, else at the
-// front). Returns the text unchanged when nothing is missing, undefined on
-// the malformed shapes — never a guess.
+// The read-only composite's edit-layer stamp (plans/0147 D2, the ask forms
+// since plans/0188 D3): insert the missing deny keys (each door's target,
+// worktree-relative and door-name forms) into permission.edit — an absent
+// or bare-action rule materializes as the object form with the blanket
+// action preserved as its leading `"*"` entry; an existing object keeps
+// its order with the denies placed to function (after the last catch-all
+// key, else at the front). Returns the text unchanged when nothing is
+// missing, undefined on the malformed shapes — never a guess.
 export function stampReadOnlyEdits(text: string, entries: Record<string, "deny">): string | undefined {
   const value = parseConfig(text)
   if (value === undefined) return undefined
@@ -249,14 +351,15 @@ export async function staleExternalDirectoryAllows(text: string, currentRealPath
 // file as it stands. `no-symlinks` and `unchanged` are the byte-identical
 // floor; `missing`/`malformed` hand the decision to their callers (init
 // creates the file; fix reports it). Since plans/0147 D2 the stamp is the
-// read-only composite — `missing` names either layer's absent keys.
+// read-only composite — `missing` names either layer's absent keys (the
+// edit layer's in every form the live tools ask, plans/0188 D3).
 export async function externalAllowsStatus(dir: string): Promise<
   { status: "no-symlinks" } | { status: "missing" } | { status: "malformed" } | { status: "unchanged" } | { status: "needs-stamp"; missing: string[] }
 > {
   const realPaths = await rootSymlinkRealPaths(dir)
   if (!realPaths.length) return { status: "no-symlinks" }
   const entries = externalDirectoryEntries(realPaths)
-  const editEntries = readOnlyEditEntries(realPaths)
+  const editEntries = await readOnlyEditEntriesFor(dir)
   const text = await Bun.file(join(dir, OPENCODE_CONFIG_FILE)).text().catch(() => undefined)
   if (text === undefined) return { status: "missing" }
   const missing = missingExternalDirectoryAllows(text, entries)
@@ -268,10 +371,10 @@ export async function externalAllowsStatus(dir: string): Promise<
 }
 
 // The apply half: re-derive from disk and write the read-only composite (the
-// external_directory allows and, since plans/0147 D2, the edit-layer denies)
-// when either layer changes anything (chmod 0644 first when the file is
-// read-only — the saveProjectConfig precedent). Idempotent; a no-op on the
-// floor states.
+// external_directory allows and, since plans/0147 D2 as widened by plans/0188
+// D3, the edit-layer denies in every ask form) when either layer changes
+// anything (chmod 0644 first when the file is read-only — the
+// saveProjectConfig precedent). Idempotent; a no-op on the floor states.
 export async function applyExternalAllows(dir: string): Promise<boolean> {
   const realPaths = await rootSymlinkRealPaths(dir)
   if (!realPaths.length) return false
@@ -280,7 +383,7 @@ export async function applyExternalAllows(dir: string): Promise<boolean> {
   if (text === undefined) return false
   let next = stampExternalDirectories(text, externalDirectoryEntries(realPaths))
   if (next === undefined) return false
-  next = stampReadOnlyEdits(next, readOnlyEditEntries(realPaths))
+  next = stampReadOnlyEdits(next, await readOnlyEditEntriesFor(dir))
   if (next === undefined || next === text) return false
   await chmod(file, 0o644).catch(() => {})
   await writeFile(file, next)
@@ -322,11 +425,12 @@ export function knowledgeBoundaryMissing(text: string): boolean | undefined {
 }
 
 // The boundary's stamp: insert the missing boundary keys in canonical order
-// (creating the section when absent) — at the front, or right after an
-// existing `"/**"` key when the file carries one (externalWithAllows'
-// placement, plans/0155 D3), every existing key kept in its order — existing
-// allows and person rules end up after the deny and therefore win their
-// ties, and the /tmp allowance wins its tie against a person-set catch-all
+// (creating the section when absent) — at the front, or right after the
+// last catch-all key when the file carries one (externalWithAllows'
+// placement, plans/0155 D3 widened by 0188 D2 to every spelling), every
+// existing key kept in its order — existing allows and person rules end up
+// after the deny and therefore win their ties, and the /tmp allowance wins
+// its tie against a person-set catch-all
 // too. Returns the text unchanged when the boundary is present, undefined on
 // the malformed shapes.
 export function stampKnowledgeBoundary(text: string): string | undefined {

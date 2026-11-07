@@ -761,7 +761,10 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   config: "runtime",
   "config-fix": "runtime",
   // The root-symlink external_directory stamp (plans/0122): init-time
-  // config-layer machinery beside config-fix, touching only node builtins.
+  // config-layer machinery beside config-fix — node builtins plus, since
+  // plans/0188 D3, the one git spawn (rev-parse --show-toplevel, the base
+  // the relative edit-deny key is anchored to) over the runtime→kernel
+  // edge the table below already allows.
   "external-dirs": "runtime",
   // The intent-bundle surface (plans/0079 §3): init-time installation
   // machinery beside config/config-fix — parse/materialize/register over the
