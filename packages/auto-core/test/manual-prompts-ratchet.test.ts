@@ -20,6 +20,17 @@
 // table against the producing code, the prompts arm holds the files to it,
 // and the ruled divergences are pinned as explicit absence so reversing one
 // is a conscious change that updates this file together with plans/0078.
+//
+// plans/0203 rules the oracle boundary (0165-165: the ratchets pinned
+// vocabulary presence while the ruled relationships drifted green): the unit
+// is the ruled relationship — the manual sentence, the retired defective
+// sentence, the frozen literal and the driver-side derivation producer held
+// together (the coupling arm below), so a conscious change on either side
+// trips this one file, which names the other side to carry with it.
+// Scenario-execution machinery is declined there (prompt copy has no
+// interpreter — a test-side re-statement would measure itself, never the
+// prompt; the semantics' one behavior home is each producer's own suite);
+// the named ceiling and the revisit trigger live in that ruling.
 import { describe, expect, test } from "bun:test"
 import { readdirSync, readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -72,6 +83,60 @@ describe("manual-driver prompt ratchet", () => {
     expect(src("loop-phase.ts")).toContain('stage: "phase-transition"')
     expect(src("formulate.ts")).toContain("`PLAN formulate ${phaseText(phase)}`")
     expect(src("formulate.ts")).toContain('stage: "phase-formulate"')
+  })
+
+  // plans/0203 (0165-165 / S25-11): the ratchet pins ruled relationships,
+  // not just vocabulary presence — and a relationship has two sides. The arms
+  // below hold the manual side (the ruled sentence, the retired defective
+  // sentence pinned absent); this arm holds the driver side of each one: the
+  // derivation-bearing producer line the manual copy mirrors. A conscious
+  // semantics change in a producer trips this file beside the producer's own
+  // suite (git.test.ts, verify-loop.test.ts, phases.test.ts, the unit tests
+  // hold the behavior), and each pin's pairing comment names the manual copy
+  // to carry in the same change — plans/0078's anti-rot pattern extended
+  // from vocabulary literals to ruled derivations. These are line pins, not
+  // behavior proofs; scenario execution is declined (plans/0203 D1).
+  test("the src side of the ruled relationships still holds (the coupling arm, plans/0203)", () => {
+    const gitSrc = src("git.ts")
+    // 0202 D2's short-title rule ("first clause, cut at the first `:` / `(` /
+    // em-dash", "capped at four words") → shortTitle's separators loop and
+    // four-word slice. The loop names the driver's true separator set — the
+    // full-width twins the prose does not name, 0202's accepted bounded
+    // divergence made visible here.
+    expect(gitSrc).toContain('for (const sep of [":", "(", "（", "—", "–"]) head = head.split(sep)[0]!')
+    expect(gitSrc).toContain('return words.slice(0, 4).join(" ")')
+    // 0201 D1's fix-subject ordinal ("one past the highest … already in the
+    // log", "1 when none exists") → nextFixSession's prefix scan and max+1.
+    expect(gitSrc).toContain("const prefix = `${taskId} fix ${round}.`")
+    expect(gitSrc).toContain("return max + 1")
+    // 0200 D1's verification baseline ("the parent of the task's first
+    // commit carrying the `Auto-Task: T-NNN` trailer") → charterBaseline's
+    // parent rev-parse of taskFirstCommit's first trailer hit.
+    expect(gitSrc).toContain('const parent = await git(root, ["rev-parse", "--short", `${first.first}^`]).catch(() => undefined)')
+    const wrapupSrc = src("wrapup.ts")
+    // 0201 D2's countable grammar ("`### Gap N` headings alone") → countGaps'
+    // mechanical line test and the shape gate's zero-headings rejection.
+    expect(wrapupSrc).toContain('for (const line of text.split("\\n")) if (/^### Gap\\b/.test(line)) n += 1')
+    expect(wrapupSrc).toContain("if (countGaps(text) === 0)")
+    // 0201 D2 / 0200 D1's progress rule ("strictly lower than the best",
+    // "the minimum its FAILs have measured") → the strictly-lower streak
+    // reset and the Math.min best update.
+    expect(wrapupSrc).toContain("if (bestGaps !== undefined) noProgress = gapsNow < bestGaps ? 0 : noProgress + 1")
+    expect(wrapupSrc).toContain("bestGaps = bestGaps === undefined ? gapsNow : Math.min(bestGaps, gapsNow)")
+    // 0200 D1's round-scoped verdict ("keys on that round's session writes
+    // alone") → the paired removal of the reserved files before each round's
+    // first dispatch.
+    expect(wrapupSrc).toContain('await rm(join(dir, taskDoc(task.id, "report")), { force: true })')
+    expect(wrapupSrc).toContain('await rm(join(dir, taskDoc(task.id, "gaps")), { force: true })')
+    const unitSrc = src("document/unit.ts")
+    // 0200 D3's phase selector (the unticked line; the tick the completion
+    // record) → nextReady's first-not-done find over the Depends graph — the
+    // done set is the tick, so tick beats order (currentPhase delegates
+    // here).
+    expect(unitSrc).toContain("return units.find((unit) => !done.has(unit.id) && (deps.get(unit.id) ?? []).every((dep) => done.has(dep)))?.id")
+    // 0200 D2's unit-state law ("exactly one of" todo.md / done.md) →
+    // scanUnitStates' both/neither illegal scan.
+    expect(unitSrc).toContain('if (state === "both" || state === "neither") illegal.push({ id: ref.id, kind: state })')
   })
 
   test("the commit grammar: the master control's share commits, then the close-out's wrapup → done", () => {
