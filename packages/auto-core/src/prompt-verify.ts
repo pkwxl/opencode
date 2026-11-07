@@ -243,6 +243,14 @@ type CharterCheck =
   | { kind: "skipped"; reason: string }
   | { kind: "consistent" }
   | { kind: "flagged"; reading: string }
+  // The check ran and could not judge (a timeout, a session error, an
+  // unparsable reply — the fail-closed arm, plans/0082 §10 D12): the strictest
+  // reading rides in the arm as the one in force (the ruled direction — the
+  // wider grant never stays in force unjudged), but nobody judged, so the
+  // callers surface the failure, never a flag (plans/0208 D1: the arm was
+  // formerly a `flagged` with a reason the type dropped — a flaky endpoint
+  // rendered as a charter conflict against the person's own words).
+  | { kind: "failed"; reading: string; reason: string }
 
 // The strictest reading — the fail-closed fallback when the check cannot
 // judge (a guarantee that can be slept through is not a guarantee; the
@@ -297,6 +305,8 @@ export async function checkTextAgainstCharter(input: {
     if (!verdict.clamp) return { kind: "consistent" }
     return { kind: "flagged", reading: verdict.reading }
   }
-  // Fail-closed: flagged with the strictest reading, the reason logged.
-  return { kind: "flagged", reading: OPEN_FALLBACK_READING, ...(lastReason ? { reason: lastReason } : {}) }
+  // Fail-closed (plans/0082 §10 D12, rendered per plans/0208 D1): the strictest
+  // reading is the one in force, but the arm says what happened — nobody
+  // judged. The callers render the failure, never a flag.
+  return { kind: "failed", reading: OPEN_FALLBACK_READING, reason: lastReason }
 }

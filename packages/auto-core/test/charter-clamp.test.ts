@@ -3,7 +3,9 @@
 // over the ledger — a charter-consistent default passes silently, a
 // charter-touching default is flagged, re-recorded (the charter-consistent
 // reading in force, the wider grant the OPEN option) and carried OPEN
-// through the ledger; the phase-boundary surfacing line. Beside them the
+// through the ledger; the phase-boundary surfacing line; and a check that
+// could not judge clamps fail-closed with the failure named, never a silent
+// flag (plans/0208 D1). Beside them the
 // Part II template pins: the shipped cleanroom charter's boundary sentence
 // (a golden for the bundle's verify-plan text, D11), the plan-verify
 // template's OPEN-judging rule and its location enumeration naming
@@ -106,6 +108,37 @@ describe("clampRecordedResolves (plans/0082 §10 D12, the agent-fake check)", ()
       // is the one in force in the document, not a second line beside it.
       expect(text).not.toContain("-> yes, constants only (the spec points there)")
       // The re-recorded line still parses as a marker (the ledger's grammar).
+    } finally {
+      setClampCaller(undefined)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a check that could not judge clamps fail-closed with the failure named — never a silent flag (plans/0208 D1)", async () => {
+    // 0165-097's clamp half: the fail-closed result was indistinguishable
+    // from a real flag. The ruled direction stands (the wider grant never
+    // stays in force unjudged — the item clamps to the strict reading
+    // through the same path); only the silence was the defect, so the
+    // surfaced line names the failure.
+    const dir = await ledgerDir()
+    try {
+      setClampCaller(
+        async () =>
+          ({ kind: "failed", reading: OPEN_FALLBACK_READING, reason: "the check replied without a parsable Clamp line; its last words: I am not sure, the endpoint is overloaded." }),
+      )
+      const lines = await clampRecordedResolves(dir)
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain("OPEN question (charter-clamped)")
+      expect(lines[0]).toContain(`the default in force is "${OPEN_FALLBACK_READING}"`)
+      expect(lines[0]).toContain("the check could not judge: the check replied without a parsable Clamp line")
+      // The ledger and the re-record: the strict reading in force, the same
+      // clampItem path a real flag takes.
+      const [entry] = await resolvesOf(dir, "task", "T-001")
+      expect(entry?.clamped).toBe(true)
+      expect(entry?.clamp).toBe(OPEN_FALLBACK_READING)
+      const text = await Bun.file(join(dir, "docs/T-001/report.md")).text()
+      expect(text).toContain(`AUTO-RESOLVE: may implementers read the uapi header? -> ${OPEN_FALLBACK_READING} (`)
+      expect(text).not.toContain("-> yes, constants only (the spec points there)")
     } finally {
       setClampCaller(undefined)
       await rm(dir, { recursive: true, force: true })

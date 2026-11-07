@@ -160,6 +160,67 @@ describe("loadPlan", () => {
       "## Goal\n\ng\n\n## Scope\n\ns\n\n## Acceptance\n\na",
     )
   })
+
+  test("taskBody strips the document's own trailing terminator, never a quoted interior one (plans/0208 D3)", () => {
+    // The terminator grammar is document-level (endsWithEof reads exactly the
+    // last non-empty line): the reader strips that line and no other. A
+    // terminator quoted on its own line inside the body is content — the
+    // format sketch the formulation todo teaches, a report restating the
+    // protocol — and reaches the session's prompt (0131's 38/38 omission was
+    // the sessions copying a sketch whose terminator this filter stripped).
+    const quoted = [
+      "# T-001: a",
+      "Phase: R-01.P01",
+      "",
+      "## Scope",
+      "",
+      "the sketch to copy:",
+      "",
+      "## Acceptance",
+      "",
+      "<acceptance: what counts as done>",
+      "",
+      "<!-- auto: eof -->",
+      "",
+      "body continues after the quoted mark",
+      "",
+      "<!-- auto: eof -->",
+      "",
+    ].join("\n")
+    expect(taskBody(quoted)).toBe(
+      "## Scope\n\nthe sketch to copy:\n\n## Acceptance\n\n<acceptance: what counts as done>\n\n<!-- auto: eof -->\n\nbody continues after the quoted mark",
+    )
+    // A document whose last non-empty line is NOT the mark keeps every line:
+    // nothing is stripped from a terminator-less body (the malformed space is
+    // the shape check's, never the reader's).
+    expect(taskBody("# T-001: a\n\nbody\n")).toBe("body")
+  })
+
+  test("the formulation todo's session-facing body carries the format sketch's terminator (plans/0208 D3, beside the goldens)", async () => {
+    // The goldens pin the rendered document (terminator present); this pins
+    // the body the session's prompt actually renders — loadPlan's read of the
+    // todo construction writes. The sketch ends with its terminator and the
+    // document ends with its own: the body keeps the first, drops the last.
+    const { renderFormulationTodo } = await import("../src/prompt-plan")
+    const { promptFacts } = await import("../src/prompt-facts")
+    const todo = renderFormulationTodo(promptFacts(), {
+      phaseId: "R-01.P01",
+      taskIndex: "docs/R-01/P01-implement/tasks.md",
+      numberStart: 2,
+      charter: "The plan honors the specification.",
+    })
+    const document = renderTaskTodo({ id: "T-001", title: "Formulate the phase tasks", phase: "R-01.P01", goal: todo.goal, scope: todo.scope, acceptance: todo.acceptance })
+    await Bun.write(join(dir, "docs/T-001/todo.md"), document)
+    await Bun.write(join(dir, "docs/R-01/P01-implement/tasks.md"), renderTaskIndex("R-01.P01", [{ id: "T-001", title: "Formulate the phase tasks" }]))
+    const body = (await loadPlan(dir, phase)).tasks[0]!.body
+    // The sketch's terminator survives the read: the copied shape agrees with
+    // the protocol line beside it that demands one.
+    expect(body).toContain("<acceptance: what counts as done>\n\n<!-- auto: eof -->")
+    // Exactly one STANDALONE terminator line — the sketch's; the document's
+    // own (its last line) is still stripped. (The protocol sentence's inline
+    // mention of the mark is text, not a line.)
+    expect(body.split("\n").filter((line) => line.trim() === "<!-- auto: eof -->")).toHaveLength(1)
+  })
 })
 
 describe("dependencies (M3.5)", () => {

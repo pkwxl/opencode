@@ -3541,6 +3541,44 @@ describe("the plan-step verifier (plans/0080 §5; routing and default per plans/
     }
   })
 
+  test("an admission check that could not judge renders unjudged: the ⚠ line names the failure, the audit records FAILED with no conflict, the run proceeds (plans/0208 D1)", async () => {
+    // 0165-097's admission half: the charter check's fail-closed result was
+    // indistinguishable from a real flag — a flaky classifier endpoint told
+    // the person their planning input conflicts with the charter and
+    // committed that WARN into the round's audit wall. The check session
+    // replies without a parsable Clamp line (twice — one retry, then the
+    // fail-closed arm); the admission must record the FAILURE, never a
+    // conflict, and never refuse (D14b's posture).
+    const CHECK_MARK = "You read one recorded provisional decision"
+    let checks = 0
+    const turn = (dir: string): TurnScript => (ctx) => {
+      if (ctx.text.includes(CHECK_MARK)) {
+        checks++
+        return [ev.text(ctx.session, `chk_${ctx.n}`, "I am not sure, the endpoint is overloaded."), ev.idle(ctx.session)]
+      }
+      return withConstructor("Reimplement the widget from the specification alone.", "Consistent: yes")(dir)(ctx)
+    }
+    const f = await verifierFixture(CHARTER_PACK, turn)
+    try {
+      const { code, lines } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing(), stopBefore: "formulate" })
+      // The admission never refuses: the step ran to transfer's review stop —
+      // the construction happened ahead of it.
+      expect(code).toBe(0)
+      expect(checks).toBe(2) // one retry, then the fail-closed arm
+      expect(lines.some((line) => line.includes("the planning input could not be judged against the intent charter"))).toBe(true)
+      expect(lines.some((line) => line.includes("no conflict recorded"))).toBe(true)
+      expect(lines.some((line) => line.includes("the planning input conflicts with the intent charter"))).toBe(false)
+      const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
+      expect(audit).toMatch(/admission formulation R-01\.P01: FAILED — the planning input could not be judged: the check replied without a parsable Clamp line/)
+      expect(audit).toContain("no conflict recorded")
+      expect(audit).not.toContain("WARN — the planning input conflicts with the charter")
+      // The wall documents a check that did not judge, not one that did.
+      expect(existsSync(join(f.dir, "docs", "R-01", "P01-implement", "tasks.md"))).toBe(true)
+    } finally {
+      await rm(f.dir, { recursive: true, force: true })
+    }
+  })
+
   test("a pack without verify-plan never opens a verifier session: nothing logged, nothing recorded, the run proceeds", async () => {
     // A guarantees section (precedence) without the charter: the charter's
     // presence is the activation, nothing else.

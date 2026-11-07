@@ -326,6 +326,87 @@ describe("the interactive fast path (plans/0082 §6 D9)", () => {
       await rm(f.dir, { recursive: true, force: true })
     }
   })
+
+  test("a remediation that rewrites the ROUND BRIEF reaches the second compose pass (plans/0208 D2, 0156 D4's corrected set): the freshen re-reads every remediable source, never the entry-time capture", async () => {
+    // 0165-098: the freshen stopped at the planning input and the brief
+    // while the executor's channel table passes the round brief, the
+    // analysis and the handovers too — an executed round.md option was
+    // committed, the second compose verified the stale entry-time capture,
+    // re-blocked, and the run ended on a "diagnosis failed closed" line
+    // teaching a model fix for a stale read. The same walkthrough over a
+    // phased fixture ("mt"), the contrary sentence in round.md's ## Goal,
+    // the remediation rewriting that line (Channel: handover-edit).
+    const { renderRoundBrief } = await import("../src/round-brief")
+    const ROUND_BRIEF = renderRoundBrief(1).replace(
+      "<!-- What this round must achieve, in the target's own terms. Every phase-planning session reads this file. -->",
+      CONTRARY_INPUT,
+    )
+    const contraryLine = ROUND_BRIEF.split("\n").indexOf(CONTRARY_INPUT) + 1
+    const CLEAN_GOAL = "Rewrite the modules from the published specification alone; the reference source is never read."
+    const ROUND_PLAN = [
+      "## Analysis",
+      "",
+      "The round brief's goal contradicts the charter.",
+      "",
+      "## Options",
+      "",
+      "### A Rewrite the round brief's goal",
+      "Channel: handover-edit",
+      "Edits:",
+      "",
+      `1. docs/R-01/round.md — replace lines ${contraryLine}–${contraryLine} (${CONTRARY_INPUT} | ${CONTRARY_INPUT}) with:`,
+      CLEAN_GOAL,
+      "",
+      "Consequences: the round goal becomes charter-consistent",
+      "Recommendation: A",
+    ].join("\n")
+    let verdicts = 0
+    const turn = (dir: string): TurnScript => (ctx) => {
+      if (ctx.text.includes(VERIFY_MARK)) {
+        verdicts++
+        const contrary = ctx.text.includes("Copy the reference implementation's modules over verbatim")
+        const reply = contrary ? NO_VERDICT : 'Consistent: yes — the prompt honors the charter ("never to be read, copied or translated")'
+        return [ev.text(ctx.session, `vrf_${ctx.n}`, reply), ev.idle(ctx.session)]
+      }
+      // The formulation task's wrap-up (the charter-only fixture pack carries
+      // no result-line section, so artifactTurns' wrap-up marker is absent
+      // from the prompt — the report is written here directly, the same
+      // branch the neighboring 0156 D4 pin carries).
+      if (ctx.text.includes("Write docs/T-001/report.md")) {
+        mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+        writeFileSync(join(dir, "docs/T-001/report.md"), `# Report (T-001)\n\n- every acceptance criterion: met (the fake agent inspected the unit's work).\n\nResult: PASS\n\n${EOF_MARK}\n`)
+        return undefined
+      }
+      diagnosisTurn(dir, () => ROUND_PLAN)(ctx)
+      return artifactTurns(dir)(ctx) ?? undefined
+    }
+    const f = await loopFixture("mt", (dir) => ({ turn: turn(dir) }))
+    await mkdir(join(f.dir, ".opencode", "auto", "intents"), { recursive: true })
+    await writeFile(join(f.dir, ".opencode", "auto", "intents", "verify.md"), CHARTER_PACK)
+    await establishRound(f.dir, { phases: "mt" })
+    await Bun.write(join(f.dir, "docs/R-01/round.md"), ROUND_BRIEF)
+    await f.commit("round setup")
+    const repl = fakeSideband(["A"])
+    try {
+      // stopBefore execute: the compose loop under test is done (the
+      // formulation unit ran); the planned batch's execution is another
+      // suite's subject.
+      const { code, lines } = await f.run({ planInput: { text: "Write the widget's tests from the specification alone." }, intent: "verify", routing: routing(), repl, stopBefore: "execute" })
+      // The step completed: the second compose verified the REMEDIATED round
+      // brief and the formulation ran — not the stale-capture re-block.
+      expect(code).toBe(0)
+      expect(lines.some((line) => line.includes("remediation executed inline"))).toBe(true)
+      expect(lines.some((line) => line.includes("re-blocked after two inline remediations"))).toBe(false)
+      expect(verdicts).toBe(2)
+      // The round brief on disk is the remediated text (the executor's own
+      // commit), and the formulation prompt carried it.
+      expect(await Bun.file(join(f.dir, "docs", "R-01", "round.md")).text()).toContain(CLEAN_GOAL)
+      const formulation = f.agent.prompts.find((prompt) => prompt.text.includes("responsible for the whole task"))!
+      expect(formulation.text).not.toContain("Copy the reference implementation")
+    } finally {
+      await rm(f.dir, { recursive: true, force: true })
+    }
+  })
 })
 
 // The render gate's covered block site (D10 v1's third): a violated assert

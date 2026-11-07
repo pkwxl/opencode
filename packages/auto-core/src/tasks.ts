@@ -279,7 +279,15 @@ export async function syncChecklistTicks(dir: string, id: string): Promise<strin
 // —— Task documents ——
 
 // The body of a task document: everything after the title line and the field
-// block, minus the terminator.
+// block, minus the document's own terminator. The terminator grammar is
+// document-level (endsWithEof reads exactly the last non-empty line, the
+// format's own rule), so the reader strips the same line and no other: a
+// terminator quoted on its own line INSIDE the body — the format sketch the
+// formulation todo's Scope teaches, a report restating the protocol — is
+// content the session's prompt must carry (plans/0208 D3: the old filter
+// stripped every standalone occurrence, so the sketch reached the session
+// without its terminator and the sessions copied what they saw — 0131's
+// 38/38 omission).
 export function taskBody(text: string): string {
   const lines = text.split("\n")
   let i = 0
@@ -288,11 +296,14 @@ export function taskBody(text: string): string {
     while (i < lines.length && lines[i]!.trim() === "") i++
   }
   while (i < lines.length && /^[A-Za-z][A-Za-z-]*:/.test(lines[i]!.trim())) i++
-  return lines
-    .slice(i)
-    .filter((line) => line.trim() !== EOF_MARK)
-    .join("\n")
-    .trim()
+  const body = lines.slice(i)
+  for (let last = body.length - 1; last >= 0; last--) {
+    const line = body[last]!.trim()
+    if (line === "") continue
+    if (line === EOF_MARK) body.splice(last, 1)
+    break
+  }
+  return body.join("\n").trim()
 }
 
 // The task document todo.md as a planning session is asked to write it; the

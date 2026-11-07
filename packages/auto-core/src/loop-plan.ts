@@ -171,7 +171,9 @@ function auditTail(auditText: string): string[] {
 // The planning input's admission warn (plans/0082 §10 D14b): the same
 // charter-check call over the person's text at admission — warn-and-record,
 // never refuse. Their words are theirs; the composition-time gate still
-// judges the composed whole.
+// judges the composed whole. A check that could not judge renders as
+// unjudged (plans/0208 D1): one honest line and a FAILED-shaped audit entry,
+// no conflict recorded — a WARN is a real flag's alone.
 async function admissionWarn(ctx: LoopCtx, phase: PhaseUnit, text: string, step: string): Promise<void> {
   const check = await checkTextAgainstCharter({
     server: ctx.server,
@@ -181,6 +183,24 @@ async function admissionWarn(ctx: LoopCtx, phase: PhaseUnit, text: string, step:
     label: `the planning input admitted to ${planInputPath(phase)}`,
     text,
   })
+  if (check.kind === "failed") {
+    log(
+      `⚠ the planning input could not be judged against the intent charter (${planInputPath(phase)}): ${check.reason} — ` +
+        `no conflict recorded (the run proceeds, and the composition-time gate still judges the composed whole)`,
+    )
+    const audit = join(dirname(phase.dir), "prompt-audit.md")
+    const stamp = new Date().toISOString()
+    await appendAudit(
+      ctx.directory,
+      audit,
+      `- ${stamp} admission ${step}: FAILED — the planning input could not be judged: ${check.reason}; no conflict recorded`,
+      ctx.git.commitTree,
+      `plan admission unjudged (${step})`,
+      `admission unjudged ${step}`,
+      (failures) => `⚠ the admission record could not be committed: ${failures}; commit ${audit} manually`,
+    )
+    return
+  }
   if (check.kind !== "flagged") return
   log(`⚠ the planning input conflicts with the intent charter (${planInputPath(phase)}): the charter-consistent reading in force is "${check.reading}" — the run proceeds, and the composition-time gate still judges the composed whole`)
   const audit = join(dirname(phase.dir), "prompt-audit.md")
@@ -256,23 +276,27 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   // first-planning-session digest block, the round brief, the approved
   // analysis, the final-phase report duty — read once; both the floor and
   // the synthesis compose from the same parts. m mode has none of it.
-  // (formulationParts stays an entry-time read: its digest half BOOKS the
-  // planning session's sizes — statsDigest counts one booking per call — so
-  // a per-pass re-read would double-book; a remediated handover re-voices at
-  // the step's next entry, the residual plans/0156 D4 names.)
+  // (The split, plans/0208 D2: the booking half — the digest texts, the cap
+  // decision, the one statsDigest booking — plus the driver-exclusive phase
+  // state and its trimmedPhases derivation stay an entry-time read; the
+  // side-effect-free sources the remediation executor can rewrite are
+  // freshened per pass below.)
   const parts = ctx.manual ? undefined : await formulationParts(ctx, phase)
   // The remediable sources re-read before every compose pass (plans/0156
-  // D4): the remediation executor can rewrite exactly the planning input
-  // (its planning-input channel, src/blockage-execute.ts) and the brief
-  // (its protect-passing write), and the design contract — "remediate" =
-  // the step re-composes and re-verifies from scratch (D7) — makes the
-  // second pass verify what landed, never the text the first pass read.
-  // Everything else the loop reads is machinery no remediation rewrites
-  // and stays captured (the task index path, the phase, the entry-held
-  // standing predicate below).
+  // D4, its captured set corrected by plans/0208 D2): the remediation
+  // executor can rewrite the planning input (its planning-input channel,
+  // src/blockage-execute.ts), the brief (its protect-passing write), and
+  // every process document its channel table passes — the round brief, the
+  // analysis, the handovers — and the design contract — "remediate" = the
+  // step re-composes and re-verifies from scratch (D7) — makes the second
+  // pass verify what landed, never the text the first pass read.
+  // Everything else the loop reads is machinery no remediation rewrites and
+  // stays captured (the digest half's booking, the phase state, the task
+  // index path, the phase, the entry-held standing predicate below).
   const freshen = async (): Promise<void> => {
     input = (await readPlanInput(directory, phase))?.trim() || undefined
     brief = await projectBriefText(directory)
+    if (parts !== undefined) Object.assign(parts, await readFormulationSources(directory, phase, parts.state))
   }
   // Whether a formulation todo already stands (plans/0101 D4): the dispatch
   // discipline below keys on it — a standing todo whose floor moved is
@@ -657,7 +681,10 @@ function previewFormulationDocument(todo: { goal: string; scope: string; accepta
 // brief, the approved analysis (human-gated phases), the final-phase report
 // duty and the pipeline-trimming note. The per-source health findings (the
 // missing handover documents, the expected-but-absent digest) ride along —
-// the crux's "never silence" rule.
+// the crux's "never silence" rule. Two halves (plans/0208 D2): the sources
+// readFormulationSources derives (handovers, round, analysis — remediable
+// process documents) re-read before every compose pass; the booking half
+// (the digest block below) and the driver-exclusive state read once.
 type FormulationParts = {
   state: PhaseState
   handovers: string
@@ -670,9 +697,18 @@ type FormulationParts = {
   trimmedPhases: boolean
 }
 
-async function formulationParts(ctx: LoopCtx, phase: PhaseUnit): Promise<FormulationParts> {
-  const { directory, opts } = ctx
-  const state = await phaseState(directory)
+// The side-effect-free sources of the composition state (plans/0208 D2): the
+// documents the remediation executor's channel table passes — the handovers,
+// the round brief, the analysis — read over the phase state (itself
+// driver-exclusive, never remediated, so the captured state serves every
+// pass). One derivation home: the entry read and every freshen pass compose
+// through it, so a remediated source reaches the next compose pass, never a
+// stale capture (0156 D4's contract, held for the whole remediable set).
+async function readFormulationSources(
+  directory: string,
+  phase: PhaseUnit,
+  state: PhaseState,
+): Promise<Pick<FormulationParts, "handovers" | "handoverDocs" | "missingHandovers" | "round" | "analysis">> {
   // Earlier phases' handovers (injection discipline): only the distilled
   // handovers are injected, never the earlier phases' raw docs/. Each done phase
   // that precedes this one in the phase index is appended in order; the handover
@@ -690,6 +726,21 @@ async function formulationParts(ctx: LoopCtx, phase: PhaseUnit): Promise<Formula
     if (text?.trim()) handoverDocs.push({ path, text })
     else missingHandovers.push(path)
   }
+  // The round brief docs/R-NN/round.md (plans/0049 G3): every planning session
+  // plans against the round's goal and criteria; an untouched stub injects nothing.
+  const round = await roundBriefText(directory, state.round)
+  // The approved project analysis (plans/0085 A1): the survey phase's
+  // formulation — the one that raises decisions — reads the person's
+  // settled decisions directly, so what the analysis settles is never
+  // re-raised as a fork. Human-gated phases only.
+  const analysis = phase.entry.gates.includes("human") ? await analysisText(directory) : undefined
+  return { handovers, handoverDocs, missingHandovers, round, analysis }
+}
+
+async function formulationParts(ctx: LoopCtx, phase: PhaseUnit): Promise<FormulationParts> {
+  const { directory, opts } = ctx
+  const state = await phaseState(directory)
+  const sources = await readFormulationSources(directory, phase, state)
   // Extra injection for the round's first planning session: ① prior knowledge
   // (the shell's startup distillation of existing migration results,
   // docs/R-NN/prior-kb.md, see src/knowledge.ts); ② the previous round's
@@ -729,23 +780,13 @@ async function formulationParts(ctx: LoopCtx, phase: PhaseUnit): Promise<Formula
       capped,
     })
   }
-  // The round brief docs/R-NN/round.md (plans/0049 G3): every planning session
-  // plans against the round's goal and criteria; an untouched stub injects nothing.
-  const round = await roundBriefText(directory, state.round)
-  // The approved project analysis (plans/0085 A1): the survey phase's
-  // formulation — the one that raises decisions — reads the person's
-  // settled decisions directly, so what the analysis settles is never
-  // re-raised as a fork. Human-gated phases only.
-  const analysis = phase.entry.gates.includes("human") ? await analysisText(directory) : undefined
+  // The round brief and the analysis ride `sources` (readFormulationSources
+  // above — the fresh half); the digest block stays here, the booking half.
   return {
     state,
-    handovers,
-    handoverDocs,
-    missingHandovers,
+    ...sources,
     prevRound,
     prevRoundExpected,
-    round,
-    analysis,
     // No analysis/design phase delivered in this round's index → the
     // implement phase's planning gets the pipeline-trimming note. A closed
     // analysis/design phase (plans/0053 D16: done for scheduling, not

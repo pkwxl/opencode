@@ -30,9 +30,14 @@ import { pendingClampItems, normalize, parseResolveLine, recordClamp, resolvesOf
 
 // The check caller the run start wires (prompt-verify's
 // checkTextAgainstCharter over the run's server and routing; structural so
-// this module reaches no policies layer).
+// this module reaches no policies layer). The `failed` arm (plans/0208 D1)
+// carries its own reading — the strict fallback in force — so this module
+// needs no policies-layer import for it.
 type ClampCaller = (input: { dir?: string; intent?: string; label: string; text: string }) => Promise<
-  { kind: "skipped" } | { kind: "consistent" } | { kind: "flagged"; reading: string }
+  | { kind: "skipped" }
+  | { kind: "consistent" }
+  | { kind: "flagged"; reading: string }
+  | { kind: "failed"; reading: string; reason: string }
 >
 
 let clampCaller: ClampCaller | undefined
@@ -62,6 +67,17 @@ export async function clampRecordedResolves(dir: string | undefined, intent?: st
         // Checked either way: the item never re-checks on later scans (a
         // consistent default keeps its recorded reading in force).
         await recordClamp(dir, item)
+        continue
+      }
+      if (check.kind === "failed") {
+        // The check that could not judge (plans/0208 D1): the fail-closed
+        // DIRECTION stands (0082 §10 D12 — the wider grant never stays in
+        // force unjudged), so the item clamps to the arm's strict reading
+        // through the same path; only the silence was the defect — the
+        // surfaced line names the failure, so the person knows the strict
+        // reading is a fallback in force, not a judgment.
+        await clampItem(dir, item, check.reading)
+        lines.push(`${clampLine(item, check.reading)} — the check could not judge: ${check.reason}`)
         continue
       }
       await clampItem(dir, item, check.reading)
