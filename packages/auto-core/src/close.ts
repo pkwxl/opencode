@@ -85,6 +85,23 @@ type ClosingPhase = { unit: PhaseUnit; plan: Plan; tasks: ClosingTask[] }
 
 const taskRef = (id: string): UnitRef => ({ level: "task", id })
 
+// The interrupted close-out's tell (plans/0207 D2, 0165-187): the unit's
+// done.md sits uncommitted in the tree — a kill or a failed commit after the
+// rename (or the whole close's writes before its commit) left the unit
+// closed in the worktree with its close-out dirty. Derived from disk (P6),
+// never a record; the completions rename is the fact and done.md its file.
+async function uncommittedCloseOut(dir: string, ref: UnitRef): Promise<boolean> {
+  const done = unitStatePaths(ref).complete.replaceAll("\\", "/")
+  return (await changedFiles(dir)).some((file) => file.replaceAll("\\", "/") === done)
+}
+
+// The recovery the tell teaches: the close itself is complete, the left
+// changes are the person's one manual commit — no re-close (the refusal the
+// re-run would meet is the one this line rides).
+function uncommittedCloseOutLine(ref: string): string {
+  return `ℹ ${ref} is closed in the worktree but its close-out is uncommitted — commit the left changes by hand (git add -A && git commit); no re-close is needed`
+}
+
 export async function closeUnit(dir: string, ref: string, opts: CloseOptions): Promise<CloseResult> {
   const refused = (lines: string[]): CloseResult => ({ type: "refused", lines })
   const reason = opts.reason.trim()
@@ -156,7 +173,14 @@ export async function closeUnit(dir: string, ref: string, opts: CloseOptions): P
     ownerPlan = owner.plan
     const target = owner.plan.tasks.find((task) => task.id === id)!
     if (target.status === "done") {
-      return refused([target.closed !== undefined ? `${id} is already closed: ${target.closed}` : `${id} is already done`])
+      const lines = [target.closed !== undefined ? `${id} is already closed: ${target.closed}` : `${id} is already done`]
+      // The interrupted close-out (plans/0207 D2, 0165-187): a kill or a
+      // failed commit after the rename leaves the unit closed in the
+      // worktree with its close-out uncommitted — the refusal names the one
+      // manual commit that completes it, instead of teaching nothing while
+      // the re-run keeps meeting this same refusal.
+      if (await uncommittedCloseOut(dir, taskRef(id))) lines.push(uncommittedCloseOutLine(id))
+      return refused(lines)
     }
     // The formulation task (plans/0095 D4): closing it would close the
     // phase's planning surface while leaving the phase itself open — the
@@ -175,7 +199,9 @@ export async function closeUnit(dir: string, ref: string, opts: CloseOptions): P
     if (!unit) return refused([`${ref} is not a phase of round ${roundDirName(round)} (see ${state?.index})`])
     if (state!.done.has(unit.id)) {
       const closed = state!.closed.get(unit.id)
-      return refused([closed !== undefined ? `${ref} is already closed: ${closed}` : `${ref} is already done`])
+      const lines = [closed !== undefined ? `${ref} is already closed: ${closed}` : `${ref} is already done`]
+      if (await uncommittedCloseOut(dir, phaseRef(unit))) lines.push(uncommittedCloseOutLine(ref))
+      return refused(lines)
     }
     let plan: Plan
     try {
@@ -283,12 +309,18 @@ export async function closeUnit(dir: string, ref: string, opts: CloseOptions): P
   const baseline = await unitBaseline(dir)
   const committed = await commitTree(dir, { id: ref, title: `${ref} closed: ${reason}` }, { stage: "force-close", subject: `${ref} closed: ${reason}`, body })
   if (!committed.ok) {
+    // The line teaches the recovery that works (plans/0207 D2, 0165-187):
+    // the units are already closed in the worktree, so a re-run over the
+    // same ref would refuse ("already closed") — the person's one manual
+    // commit completes the close (or a revert returns the ref to open, and
+    // the re-run works there).
     return {
       type: "failed",
       lines: [
         ...lines,
         `⏸ the close commit failed: ${committed.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
-          `The units are already marked closed in the worktree; commit the closing changes (or revert them) manually, then re-run`,
+          `The closing changes are still in the worktree — commit them by hand (git add -A && git commit), or revert them and re-run; ` +
+          `a re-run over the same ref would refuse (already closed), the close itself is complete`,
       ],
     }
   }

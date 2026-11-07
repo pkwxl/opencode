@@ -531,8 +531,22 @@ describe("closeUnit: commit boundary (D21)", () => {
       expect(result.type).toBe("failed")
       if (result.type !== "failed") return
       expect(result.lines.at(-1)).toContain("the close commit failed")
+      // The recovery line teaches what works (0207 D2, 0165-187): the close
+      // is complete in the worktree, so the same-ref re-run would refuse —
+      // the person's manual commit (or a revert and re-run) is the channel.
+      expect(result.lines.at(-1)).toContain("commit them by hand (git add -A && git commit), or revert them and re-run")
+      expect(result.lines.at(-1)).toContain("a re-run over the same ref would refuse (already closed), the close itself is complete")
+      expect(result.lines.at(-1)!.includes("then re-run")).toBe(false)
       expect(await exists(dir, "docs/T-001/done.md")).toBe(true)
       expect(await git(dir, "status", "--porcelain")).not.toBe("")
+      // The re-run (and the crash window — a kill after the rename lands in
+      // the same state): the already-closed refusal names the uncommitted
+      // close-out and its recovery instead of teaching nothing.
+      const again = await close(dir, "T-001")
+      expect(again).toEqual({
+        type: "refused",
+        lines: ["T-001 is already closed: not needed this round", "ℹ T-001 is closed in the worktree but its close-out is uncommitted — commit the left changes by hand (git add -A && git commit); no re-close is needed"],
+      })
     }),
   )
 

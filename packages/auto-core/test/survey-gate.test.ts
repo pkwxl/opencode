@@ -142,6 +142,10 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     expect(held.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
     expect(held.lines.some((line) => line.includes("records 1 open Fork: line(s)"))).toBe(true)
     expect(held.lines.some((line) => line.includes("add `Clarified: yes` to release the phase"))).toBe(true)
+    // The install promise rides the proposal (plans/0207 D3): this survey
+    // carries a `## Project brief` section, so the release line promises the
+    // install — the byte-identical floor of the conditional clause.
+    expect(held.lines.some((line) => line.includes("the phase completes and the approved `## Project brief` section is installed"))).toBe(true)
     // The release advice stays on the input's home (plans/0101 D4): the next
     // phase's planning input is its plan-input.md — `plan --file` on this
     // route is refused ("after the advance"), so the stop never names it.

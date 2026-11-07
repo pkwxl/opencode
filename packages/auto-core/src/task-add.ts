@@ -76,10 +76,17 @@ export async function addTask(dir: string, phase: PhaseUnit, title: string): Pro
   )
   const settled = await commitTree(dir, task, { stage: "task-add", subject: `PLAN add ${id} ${title}` })
   if (!settled.ok) {
+    // The line teaches the recovery that works (plans/0207 D2, 0165-187):
+    // the task is fully written (todo.md and the index line), so the add is
+    // complete — the person's one manual commit finishes it. A re-run now
+    // would refuse the dirty tree at the unit-start gate, and after the
+    // commit it would add a NEW task (the numbering floor moves past this
+    // one) — the old line's claim, stated as the warning it is.
     return {
       type: "failed",
       question: `task-add commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
-        `The task is left in the worktree; commit manually — a re-run would add it again`,
+        `The task is written but uncommitted (docs/${id}/todo.md and the index line) — commit the left changes by hand (git add -A && git commit); ` +
+        `the add is complete, no re-run needed (a re-run now would refuse the dirty tree, and after the commit it would add a new task)`,
     }
   }
   return { type: "added", id, index, ...(handoverRemoved !== undefined ? { handoverRemoved } : {}) }

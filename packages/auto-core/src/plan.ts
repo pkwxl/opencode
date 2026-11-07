@@ -20,7 +20,7 @@ import { ensurePointer } from "./agents-block"
 import { ACCEPTED_MARK } from "./document/roles"
 import { analysisProblems, renderAnalysisStub, releasedRoundBriefProposal, resolveRoundPhases, roundBriefNearMissNote, type RoundPhasesResolution } from "./analysis"
 import { releasedRoadmapRound } from "./roadmap"
-import { briefProposal, BRIEF_FILE, installBriefProposal, projectBriefText } from "./brief"
+import { briefProposal, BRIEF_FILE, BRIEF_PROPOSAL_HEADING, installBriefProposal, projectBriefText } from "./brief"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { dirtyStopLines, log } from "./log"
 import type { ModeSpec } from "./mode"
@@ -55,7 +55,7 @@ import { loadPhaseTypes } from "./phases/custom"
 import { phasesProblem, resolvePhases } from "./phases/registry"
 import { readPlanInput, planInputPath, type PlanInput } from "./plan-input"
 import { awaitingFormulation } from "./formulate"
-import { commitTree } from "./git"
+import { changedFiles, commitTree } from "./git"
 import { isolateRound } from "./git-land"
 import { installRoundBrief, renderRoundBrief, roundBriefText } from "./round-brief"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
@@ -563,7 +563,22 @@ export async function planPrelude(dir: string, opts: {
       task = plan.tasks.find((unit) => unit.id === ref)
       if (task) {
         const notReady = unitNotReady(plan, task)
-        if (notReady) return stop(1, [`${notReady}; take a ready unit (any unit whose prerequisites are done) — list them in ${taskIndexPath(route.phase)}`])
+        if (notReady) {
+          const lines = [`${notReady}; take a ready unit (any unit whose prerequisites are done) — list them in ${taskIndexPath(route.phase)}`]
+          // The interrupted close-out (plans/0207 D2, 0165-187): a kill or a
+          // failed commit after the rename leaves the unit done in the
+          // worktree with its close-out uncommitted — the refusal names the
+          // one manual commit that completes it, instead of letting the
+          // re-run the failed-commit line once taught keep meeting this same
+          // refusal.
+          const unit = task
+          if (unit.status === "done" && (await changedFiles(dir)).some((file) => file.replaceAll("\\", "/") === `docs/${unit.id}/done.md`)) {
+            lines.push(
+              `ℹ ${unit.id} is closed in the worktree but its close-out is uncommitted — commit the left changes by hand (git add -A && git commit); no re-adopt is needed, continue with run`,
+            )
+          }
+          return stop(1, lines)
+        }
       }
     } catch (error) {
       return stop(1, [`⏸ ${error instanceof Error ? error.message : String(error)}`])
@@ -838,7 +853,7 @@ function addedLines(dir: string, added: { id: string; index: string; handoverRem
 // the person's review of the round.
 type EstablishSetup =
   | { type: "dirty"; repos: { rel: string; files: string[] }[] }
-  | { type: "failed"; error: string }
+  | { type: "failed"; error: string; switched: string[] }
   | { type: "invalid"; problem: string }
   | { type: "error"; error: string }
   | { type: "ok"; round: number; state: PhaseState; units: PhaseUnit[]; isolated: string[]; resolved: RoundPhasesResolution; branch: string }
@@ -856,7 +871,7 @@ export async function establishRoundSetup(
   if (opts.isolate?.length) {
     const result = await isolateRound(dir, opts.isolate, branch)
     if (result.type === "dirty") return { type: "dirty", repos: result.repos }
-    if (result.type === "failed") return { type: "failed", error: result.error }
+    if (result.type === "failed") return { type: "failed", error: result.error, switched: result.switched }
     isolated = result.isolated
   }
   // A roadmap line whose types the pack no longer ships fails strictly here,
@@ -924,9 +939,18 @@ export async function gateStopLines(directory: string, phase: PhaseUnit, problem
     lines.push(
       `  to release: review ${survey}, resolve the recorded forks — each carries a \`Recommend:\` default; \`${CLARIFIED_MARK}\` accepts them all (append your answers beside any line you override; the next phase's planning input is its \`plan-input.md\` — write it there; the next \`transfer\` construct reads it)`,
     )
+    // The install promise conditioned on the proposal (plans/0207 D3,
+    // 0165-188): the release completes the phase either way, but only a
+    // survey carrying a `## Project brief` proposal installs one — the same
+    // extraction the install itself gates on (loop-phase's
+    // installApprovedBrief). A proposal-less survey must not promise an
+    // install the person will not see.
+    const surveyText = await Bun.file(join(directory, survey)).text().catch(() => "")
     lines.push(
       `  then release it: ${bin} clarify ${directory} — it writes the \`${CLARIFIED_MARK}\` line to ${survey} and commits it (or add the line, commit, re-run yourself); ` +
-        `the phase completes and the approved \`## Project brief\` section is installed`,
+        (briefProposal(surveyText) !== undefined
+          ? `the phase completes and the approved \`## Project brief\` section is installed`
+          : `the phase completes (this survey proposes no \`${BRIEF_PROPOSAL_HEADING}\` section, so nothing installs — the brief stands as it is)`),
     )
     // The reshape channel (plans/0101 D6; the authority branch retired by
     // plans/0137 — the roadmap line the one channel, `amend --phases`
@@ -1005,6 +1029,21 @@ export function roadmapExhaustedLines(directory: string, round: number): string[
   ]
 }
 
+// The G1 success block's opening pair (plans/0207 D3, completing 0102's
+// family): the ✓ established line and the isolation line — the one wording
+// both renderings compose through, the gate stop's success arm below and
+// transfer's proposal continuation (which carries no `next`; its own ℹ
+// proposal line and pointer flip follow).
+export function establishedLines(round: number, setup: Extract<EstablishSetup, { type: "ok" }>, established: string): string[] {
+  const name = roundDirName(round)
+  return [
+    `✓ round ${name} established: ${established}`,
+    // The isolation line rides both G1 shapes: the round's commits land on
+    // the round branch, the original branch never moves.
+    ...(setup.isolated.length ? [`✓ branch isolation: ${setup.isolated.join(", ")} on ${setup.branch} (the driver's commits land there; the original branch stays untouched)`] : []),
+  ]
+}
+
 // The establishment stop lines (plan's establish and transfer's
 // establishStop): every rendering of establishRoundSetup's outcome — the
 // dirty-repo refusal, the branch-isolation failure, the roadmap validation
@@ -1014,7 +1053,11 @@ export function roadmapExhaustedLines(directory: string, round: number): string[
 // phases with the roadmap source suffix) and `next` is the caller's own
 // rhythm line (plan's dispatch, transfer's construct-and-review), placed
 // between the isolation line and the guidance line as both callers print
-// it. The failure arms ignore both.
+// it. The failure arms ignore both. The isolation failure's partial arm
+// (plans/0207 D3, 0165-188): repositories switched before the failure are
+// named — a branch at HEAD changes no file content, and the re-run's
+// idempotent skips finish the rest — instead of the nothing-was-written
+// claim the switched state falsified.
 export function establishStopLines(
   dir: string,
   round: number,
@@ -1037,7 +1080,15 @@ export function establishStopLines(
     }
   }
   if (setup.type === "failed") {
-    return { code: 1, lines: [`branch isolation failed, nothing was written: ${setup.error}; fix the repository and re-run: ${command === "plan" ? surface.plan(dir) : surface.transfer(dir)}`] }
+    const retry = `fix the repository and re-run: ${command === "plan" ? surface.plan(dir) : surface.transfer(dir)}`
+    return {
+      code: 1,
+      lines: [
+        setup.switched.length
+          ? `branch isolation failed after switching ${setup.switched.join(", ")} (content-neutral branches; the re-run's idempotent skips finish the rest), nothing else was written: ${setup.error}; ${retry}`
+          : `branch isolation failed, nothing was written: ${setup.error}; ${retry}`,
+      ],
+    }
   }
   if (setup.type === "invalid") {
     return { code: 1, lines: [`⏸ ${setup.problem}; fix the roadmap line (or the phase types it names), then re-run: ${command === "plan" ? surface.plan(dir) : surface.transfer(dir)}`] }
@@ -1045,14 +1096,10 @@ export function establishStopLines(
   if (setup.type === "error") {
     return { code: 1, lines: [`round establishment failed: ${setup.error}`] }
   }
-  const { isolated, branch } = setup
-  // The isolation line rides both G1 shapes: the round's commits land on the
-  // round branch, the original branch never moves.
   return {
     code: 0,
     lines: [
-      `✓ round ${name} established: ${established}`,
-      ...(isolated.length ? [`✓ branch isolation: ${isolated.join(", ")} on ${branch} (the driver's commits land there; the original branch stays untouched)`] : []),
+      ...establishedLines(round, setup, established),
       next,
       `ℹ AGENTS.md carries this state's preparation guidance for your coding agent (the round brief's sections, and where their content comes from)`,
     ],

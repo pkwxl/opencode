@@ -9,7 +9,7 @@
 // rollback machinery runs unchanged against an isolated branch, with the
 // original branch never moving.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { formatProjectConfig, isolateProblem, loadProjectConfig, saveProjectConfig, CONFIG_DEFAULTS } from "../src/config"
 import { commitTree, rollbackUnit, unitBaseline, unitViolations } from "../src/git"
@@ -192,6 +192,37 @@ describe("isolateRound (plans/0074 §2.2: the round branch primitive)", () => {
         ],
       })
       for (const root of [pkg, other]) expect((await git(root, "branch", "--list", "auto/*")).trim()).toBe("")
+    }),
+  )
+
+  test(
+    "a failure mid-isolation carries the repositories already switched, and the establishment stop says so on the partial arm (plans/0207 D3, 0165-188)",
+    withDir(async (dir) => {
+      const first = await nestedRepo(dir, "pkg-a")
+      const second = await nestedRepo(dir, "pkg-b")
+      // A broken round ref in the second repository: the clean check passes,
+      // the first repository switches, then `git branch` fails on the broken
+      // reference — the partial isolation the old line misreported as
+      // "nothing was written".
+      mkdirSync(join(second, ".git/refs/heads/auto"), { recursive: true })
+      writeFileSync(join(second, ".git/refs/heads/auto/R-01"), "garbage-not-a-sha\n")
+      const failed = await isolateRound(dir, ["pkg-a", "pkg-b"], "auto/R-01")
+      expect(failed).toEqual({ type: "failed", error: expect.stringContaining("pkg-b:"), switched: ["pkg-a"] })
+      expect(await branchOf(first)).toBe("auto/R-01")
+      // The establishment's rendering: the partial arm names the switched
+      // repositories and the recovery (the re-run's idempotent skips); the
+      // round itself was never written.
+      const result = await planPrelude(dir, { phases: "m", isolate: ["pkg-a", "pkg-b"] })
+      expect(result.type === "stop" && result.code).toBe(1)
+      expect(result.type === "stop" && result.lines.some((line) => line.includes("branch isolation failed after switching pkg-a (content-neutral branches; the re-run's idempotent skips finish the rest), nothing else was written:"))).toBe(true)
+      expect(result.type === "stop" && result.lines.some((line) => line.includes("branch isolation failed, nothing was written"))).toBe(false)
+      expect(await exists(dir, "docs/R-01")).toBe(false)
+      // The recovery works as taught: healing the broken ref and re-running
+      // finishes the isolation idempotently.
+      rmSync(join(second, ".git/refs/heads/auto/R-01"))
+      const healed = await planPrelude(dir, { phases: "m", isolate: ["pkg-a", "pkg-b"] })
+      expect(healed.type === "stop" && healed.code).toBe(0)
+      expect(await branchOf(second)).toBe("auto/R-01")
     }),
   )
 })

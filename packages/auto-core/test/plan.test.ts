@@ -1079,6 +1079,36 @@ describe("planPrelude: the pre-round project analysis, m mode (rows 0a–0d, pla
   )
 
   test(
+    "row 0d's round-start commit carries the establishment's write surface alone: the person's dirt never rides it (0207 D1, 0165-013)",
+    withDir(async (dir) => {
+      analysisOn()
+      await commitAll(dir)
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      writeFileSync(
+        join(dir, "docs/analysis.md"),
+        FILLED_ANALYSIS.replace("\nClarified: yes", "\n## Round briefs\n\n### R-01\n\nPort the core with the retry ladder intact.\n\n- Acceptance: the suite passes.\n\nClarified: yes"),
+      )
+      writeFileSync(join(dir, "scratch.txt"), "the person's private note\n")
+      const result = await planPrelude(dir, { phases: "m" })
+      expect(result.type === "stop" && result.code).toBe(0)
+      // The brief install carries the brief and its source alone; the
+      // round-start commit the round directory alone; the scratch file
+      // stays the person's, still uncommitted (pre-0207 both commits swept
+      // it in unlisted).
+      const briefFiles = (await git(dir, "show", "--name-only", "--format=", "HEAD~1")).trim().split("\n")
+      expect(briefFiles).toEqual([".opencode/auto/brief.md", "docs/analysis.md"])
+      const startFiles = (await git(dir, "show", "--name-only", "--format=", "HEAD")).trim().split("\n")
+      expect(startFiles.every((file) => file === "docs/R-01" || file.startsWith("docs/R-01/"))).toBe(true)
+      // AGENTS.md is this fixture's untracked guidance render (the real
+      // init's ignore set keeps it local); the scratch file is the person's
+      // — both stay out of the driver's commits.
+      const status = await git(dir, "status", "--porcelain")
+      expect(status).toContain("?? scratch.txt")
+      expect(status).toContain("?? AGENTS.md")
+    }),
+  )
+
+  test(
     "OPENCODE_AUTO_ANALYSIS=off: a fresh m-mode target establishes directly, as before (the escape hatch)",
     withDir(async (dir) => {
       const result = await planPrelude(dir, { phases: "m" })

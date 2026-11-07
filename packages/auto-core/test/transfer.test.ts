@@ -187,6 +187,12 @@ describe("transfer: the phase-boundary refusals (plans/0101 D2)", () => {
     expect(out.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
     expect(out.lines.some((line) => line.includes("records 1 open Fork: line(s)"))).toBe(true)
     expect(out.lines.some((line) => line.includes("add `Clarified: yes` to release the phase"))).toBe(true)
+    // The install promise conditioned on the proposal (plans/0207 D3,
+    // 0165-188): this survey carries no `## Project brief` section, so the
+    // release line says the phase completes and nothing installs — never a
+    // promise the person will not see kept.
+    expect(out.lines.some((line) => line.includes("the phase completes (this survey proposes no `## Project brief` section, so nothing installs — the brief stands as it is)"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("the approved `## Project brief` section is installed"))).toBe(false)
     // The reshape channel is the line's alone (plans/0137): covered or
     // config-governed alike, the held boundary names the roadmap line —
     // `amend --phases` is retired, the config key init-stamped machinery.
@@ -735,6 +741,30 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
   })
 
+  test("the phase-sync commit takes its own write surface: the drift's paths alone, the person's dirt left for the clean gate (0207 D1, 0165-013)", async () => {
+    const dir = await repo()
+    const state = await (async () => {
+      await establishRound(dir, { phases: "implement", round: 1 })
+      return (await readPhases(dir, 1))!
+    })()
+    await pendingTaskPhase(dir, "implement", state.phases[0]!)
+    // Uncommitted person dirt beside the drift the advance applies: the
+    // phase-sync commit must take the index and the tail's directories
+    // alone — pre-0207 its pathspec-less add -A folded the dirt into `PLAN
+    // resync …`.
+    await Bun.write(join(dir, "src-main.ts"), "half-done\n")
+    const out = await capture(() => runTransfer(dir, { phases: "implement,analysis" }))
+    expect(out.code).toBe(2)
+    expect(out.lines.some((line) => line.includes("✓ unstarted tail of round R-01 re-derived to config phases (+ P02-analysis)"))).toBe(true)
+    expect(await git(dir, "log", "--format=%s")).toContain("PLAN resync R-01 tail to config phases (+ P02-analysis)")
+    const resyncFiles = (await git(dir, "show", "--name-only", "--format=", "HEAD")).trim().split("\n")
+    expect(resyncFiles).toContain("docs/R-01/phases.md")
+    expect(resyncFiles).toContain("docs/R-01/P02-analysis/todo.md")
+    expect(resyncFiles.some((file) => file === "src-main.ts")).toBe(false)
+    // The dirt stays the person's, still uncommitted.
+    expect((await git(dir, "status", "--porcelain")).trim()).toBe("?? src-main.ts")
+  })
+
   test("mid-phase re-derives first (0206 D3), then refuses naming run — the apply is the advance's in every state", async () => {
     const dir = await repo()
     const state = await (async () => {
@@ -844,6 +874,42 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
     const subjects = (await git(dir, "log", "--format=%s")).split("\n")
     expect(subjects).toContain("PLAN start R-01 (round brief installed from docs/analysis.md)")
     expect(subjects.some((subject) => subject.startsWith("PLAN formulate"))).toBe(true)
+  })
+
+  test("the release consumptions commit their own write surface: the person's uncommitted dirt never rides the brief install or the round-start commit (0207 D1, 0165-013)", async () => {
+    const dir = await cleanRepo()
+    // The person's in-flight work beside the release: a half-done edit and a
+    // private scratch file, both uncommitted when the advance consumes the
+    // released analysis — pre-0207 both landed unlisted in `PLAN brief
+    // install` (the pathspec-less add -A), and the clean gate never saw
+    // them.
+    await Bun.write(join(dir, "src/main.ts"), "fn main() {}\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "the person's working file")
+    await Bun.write(join(dir, "src/main.ts"), "fn main() { /* half-done */ }\n")
+    await Bun.write(join(dir, "notes-private.txt"), "scratch\n")
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]) + BRIEFS)
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    // The continuation runs (the proposal passes the round-start gate), the
+    // consumptions commit, and the construct's preflight then judges the
+    // dirt the consumptions left alone — the one gate that owns it.
+    expect(out.code).toBe(2)
+    expect(out.lines.some((line) => line.includes("installs verbatim — the round-start gate passes (your release was its review)"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:"))).toBe(true)
+    expect(out.lines.some((line) => line.trim() === "src/main.ts")).toBe(true)
+    expect(out.lines.some((line) => line.trim() === "notes-private.txt")).toBe(true)
+    // The brief install carries the brief and its approved source document
+    // alone — the release's evidence, never the person's work.
+    const briefFiles = (await git(dir, "show", "--name-only", "--format=", "HEAD~1")).trim().split("\n")
+    expect(briefFiles).toEqual([".opencode/auto/brief.md", "docs/analysis.md"])
+    // The round-start commit carries the establishment's write surface (the
+    // round directory) alone.
+    const startFiles = (await git(dir, "show", "--name-only", "--format=", "HEAD")).trim().split("\n")
+    expect(startFiles.every((file) => file === "docs/R-01" || file.startsWith("docs/R-01/"))).toBe(true)
+    // The dirt is untouched in the worktree, the person's own to commit.
+    const status = await git(dir, "status", "--porcelain")
+    expect(status).toContain("src/main.ts")
+    expect(status).toContain("notes-private.txt")
   })
 
   test("the floor stands: a released analysis without proposals keeps today's gate stop and the uncommitted setup", async () => {

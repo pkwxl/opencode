@@ -38,14 +38,16 @@ import { currentBranch } from "./git-worktree"
 // that are not clean — a precondition of the same class as the run-start
 // clean gate, so the caller blocks for human attention listing each repo's
 // uncommitted paths (relative to the target directory); failed carries one
-// repository's git error (branch creation or checkout), with nothing written
-// by this function on that path beyond the branches already switched (a
-// branch at HEAD changes no file content, so the scene stays recoverable —
-// the re-run's idempotent skips finish the rest).
+// repository's git error (branch creation or checkout) and, since plans/0207
+// D3 (0165-188), the repositories already switched before it — nothing is
+// written by this function on that path beyond those branches (a branch at
+// HEAD changes no file content, so the scene stays recoverable — the re-run's
+// idempotent skips finish the rest; the stop line names them instead of
+// claiming nothing was written).
 type IsolationResult =
   | { type: "ok"; isolated: string[] }
   | { type: "dirty"; repos: { rel: string; files: string[] }[] }
-  | { type: "failed"; error: string }
+  | { type: "failed"; error: string; switched: string[] }
 
 // Isolate every designated repository onto the round branch. Idempotent: a
 // repository already on the branch (an interrupted establishment re-run) is
@@ -85,7 +87,7 @@ export async function isolateRound(dir: string, isolate: readonly string[], bran
       if (exists.code !== 0) {
         const created = await git(root, ["branch", branch])
         if (created.code !== 0) {
-          return { type: "failed", error: `${rel}: ${firstLine(created.err || created.out) || `git branch exit code ${created.code}`}` }
+          return { type: "failed", error: `${rel}: ${firstLine(created.err || created.out) || `git branch exit code ${created.code}`}`, switched: [...isolated] }
         }
       }
       // This checkout is the act git's HEAD reflog records — the entry land's
@@ -93,12 +95,12 @@ export async function isolateRound(dir: string, isolate: readonly string[], bran
       // plans/0192 D1); nothing is written beyond git's own side effect.
       const checkedOut = await git(root, ["checkout", branch])
       if (checkedOut.code !== 0) {
-        return { type: "failed", error: `${rel}: ${firstLine(checkedOut.err || checkedOut.out) || `git checkout exit code ${checkedOut.code}`}` }
+        return { type: "failed", error: `${rel}: ${firstLine(checkedOut.err || checkedOut.out) || `git checkout exit code ${checkedOut.code}`}`, switched: [...isolated] }
       }
       isolated.push(rel)
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error)
-      return { type: "failed", error: `${rel}: ${firstLine(text)}` }
+      return { type: "failed", error: `${rel}: ${firstLine(text)}`, switched: [...isolated] }
     }
   }
   return { type: "ok", isolated }

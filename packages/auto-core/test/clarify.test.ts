@@ -480,6 +480,29 @@ describe("clarify: the survey release (plans/0116 D1/D4)", () => {
     expect(emptyOut.lines.some((line) => line.includes("nothing awaits your clarification"))).toBe(true)
     expect(emptyOut.lines.some((line) => line.includes("releases exactly two moments"))).toBe(true)
   })
+
+  test("the mark written but not committed is the interrupted release: the line teaches the one manual commit ahead of the advance (0207 D2, 0165-187)", async () => {
+    // A kill between clarify's own write and its commit — or a hand release
+    // never committed — leaves the mark in the worktree: the advance the
+    // already-released line names would refuse the uncommitted survey at its
+    // preflight, so the line commits first (pre-0207 it pointed straight at
+    // transfer).
+    const dir = await repo()
+    await surveyBoundary(dir, FORKED_SURVEY)
+    const survey = join(dir, "docs/R-01/P01-survey/survey.md")
+    writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", `${CLARIFIED_MARK}\n\n<!-- auto: eof -->`))
+    const out = (await capture(() => clarifyGate(dir, { phases: "survey,implement" }))).result
+    expect(out.type).toBe("held")
+    expect(out.lines.some((line) => line.includes("is released in the worktree but the release is not committed"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("commit it by hand (git add docs/R-01/P01-survey/survey.md && git commit)"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("already released — the phase completes on the next advance"))).toBe(false)
+    // Once committed, the byte-identical floor: today's already-released line.
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "hand-released")
+    const settled = (await capture(() => clarifyGate(dir, { phases: "survey,implement" }))).result
+    expect(settled.type).toBe("held")
+    expect(settled.lines.some((line) => line.includes("already released — the phase completes on the next advance: opencode-auto transfer"))).toBe(true)
+  })
 })
 
   test("a zero-fork survey proposing a brief is a release moment too (plans/0169 D3): the command writes the region and the gate passes", async () => {

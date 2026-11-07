@@ -8,7 +8,7 @@
 // the worktree states simulated by hand (a standalone session writes files
 // and commits nothing — the constitution forbids it).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { renderConstitutionPreamble } from "../src/agents-block"
 import { planPrelude } from "../src/plan"
@@ -205,6 +205,47 @@ describe("planPrelude: --adopt (row 13, plans/0076)", () => {
       expect(changed).toContain("src/feature.ts")
       expect(changed).toContain("docs/T-002/report.md")
       expect(result.lines.some((line) => line.startsWith("✓ T-002 adopted"))).toBe(true)
+    }),
+  )
+
+  test(
+    "a failed adopt commit teaches the manual recovery, and the re-run's already-done refusal names the interrupted close-out (0207 D2, 0165-187)",
+    withDir(async (dir) => {
+      await fixture(dir, [
+        { id: "T-001", done: true },
+        { id: "T-002" },
+      ])
+      mkdirSync(join(dir, "src"), { recursive: true })
+      writeFileSync(join(dir, "src", "feature.ts"), "export const feature = 1\n")
+      await Bun.write(join(dir, "docs", "T-002", "report.md"), SESSION_REPORT)
+      // The commit fails (a refusing hook): the rename and tick already ran,
+      // so the unit is closed in the worktree — pre-0207 the line taught
+      // "commit manually and re-adopt", a re-run this same command refuses.
+      writeFileSync(join(dir, ".git/hooks/pre-commit"), "#!/bin/sh\nexit 1\n")
+      chmodSync(join(dir, ".git/hooks/pre-commit"), 0o755)
+      const failed = await planPrelude(dir, { phases: "m", adopt: "T-002" })
+      expect(failed.type).toBe("stop")
+      if (failed.type !== "stop") return
+      expect(failed.code).toBe(2)
+      expect(failed.lines.some((line) => line.includes("T-002 adopted but the unified commit failed"))).toBe(true)
+      expect(failed.lines.some((line) => line.includes("The unit is closed in the worktree (docs/T-002/done.md"))).toBe(true)
+      expect(failed.lines.some((line) => line.includes("no re-adopt is needed"))).toBe(true)
+      expect(failed.lines.some((line) => line.includes("commit manually and re-adopt"))).toBe(false)
+      expect(await Bun.file(join(dir, "docs", "T-002", "done.md")).exists()).toBe(true)
+      // The re-run (the person following any older instinct): the readiness
+      // refusal answers "already done" AND names the uncommitted close-out —
+      // the crash window (a kill after the rename) lands on the same lines.
+      const rerun = await planPrelude(dir, { phases: "m", adopt: "T-002" })
+      expect(rerun.type).toBe("stop")
+      if (rerun.type !== "stop") return
+      expect(rerun.code).toBe(1)
+      expect(rerun.lines[0]).toContain("T-002 is already done")
+      expect(rerun.lines.some((line) => line.includes("T-002 is closed in the worktree but its close-out is uncommitted"))).toBe(true)
+      expect(rerun.lines.some((line) => line.includes("git add -A && git commit"))).toBe(true)
+      // The export route answers the same state the same way.
+      const exported = await planPrelude(dir, { phases: "m", export: "T-002" })
+      expect(exported.type === "stop" && exported.code).toBe(1)
+      expect(exported.type === "stop" && exported.lines.some((line) => line.includes("its close-out is uncommitted"))).toBe(true)
     }),
   )
 

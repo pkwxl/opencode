@@ -98,11 +98,15 @@ export function appendToSection(text: string, heading: string, body: string): st
 // The commit seam the brief install runs through: the free commitTree of
 // git.ts and the run's git service share this shape, so the loop's install
 // (through ctx.git, the no-commit test double included) and the prelude's
-// (the free function) are one implementation.
+// (the free function) are one implementation. The optional paths parameter
+// is the install's own pathspec (plans/0207 D1) — a seam that ignores it
+// (the doc-lane decorator, a three-argument test double) keeps its own
+// scoping, exactly as before.
 type BriefCommitter = (
   dir: string,
   task: { id: string; title: string },
   info: { stage: string; subject: string },
+  paths?: readonly string[],
 ) => Promise<{ ok: boolean; failures?: Array<{ rel: string; error: string }> }>
 
 // Install an approved brief proposal (plans/0081 D15.2, generalized by
@@ -111,9 +115,18 @@ type BriefCommitter = (
 // `brief-install` commit — and return the log lines. Idempotent: an installed
 // equal brief writes nothing and logs nothing. `source` names the document
 // the proposal was approved in (the survey of a human-gated phase, or the
-// pre-round project analysis) for the log line and the commit subject; the
-// commit failure is a warning line, never a throw — the caller's stop owns
-// the exit code.
+// pre-round project analysis) for the log line, the commit subject and —
+// since plans/0207 D1 (0165-013) — the commit's pathspec: the install
+// commits exactly `[BRIEF_FILE, source]`, the brief plus the document the
+// approval was read from (a hand-released document still uncommitted rides
+// the install as its evidence; a released-and-committed one contributes
+// nothing), never the person's unrelated uncommitted work — the release
+// consumptions run ahead of the clean gate, and what they fold is unlisted
+// otherwise. Inside the loop the tree is clean, so the pathspec is
+// behavior-neutral there except that the install no longer absorbs the
+// completion rename that precedes it — the transition commit keeps the
+// phase's close-out booking. The commit failure is a warning line, never a
+// throw — the caller's stop owns the exit code.
 export async function installBriefProposal(dir: string, source: string, proposal: string, commit: BriefCommitter): Promise<string[]> {
   const target = join(dir, BRIEF_FILE)
   if ((await Bun.file(target).text().catch(() => "")) === `${proposal}\n`) return []
@@ -123,7 +136,7 @@ export async function installBriefProposal(dir: string, source: string, proposal
   const settled = await commit(dir, { id: "PLAN", title: `brief install (${source})` }, {
     stage: "brief-install",
     subject: `PLAN brief install the approved project brief (from ${source})`,
-  })
+  }, [BRIEF_FILE, source])
   if (!settled.ok) {
     return [
       `⚠ the approved project brief was written to ${BRIEF_FILE} but its commit failed: ` +

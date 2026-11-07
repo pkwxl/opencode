@@ -15,7 +15,7 @@
 // member) — the round-start gate appears only for rounds without a released
 // proposal.
 import { join } from "node:path"
-import { roundBriefPath, roundDirName } from "./docpaths"
+import { roundBriefPath, roundDir, roundDirName } from "./docpaths"
 
 // Driver protocol string: the heading whose body the round-close gate requires.
 export const ROUND_CLOSE_HEADING = "## Close"
@@ -112,10 +112,13 @@ export function renderInstalledRoundBrief(round: number, proposal: string): stri
 // The commit seam the install runs through — brief.ts BriefCommitter's shape,
 // restated locally so this module (the document layer) imports nothing above
 // it: the free commitTree of git.ts and the run's git service both satisfy it.
+// The optional paths parameter is the install's own pathspec (plans/0207 D1);
+// a seam that ignores it keeps its own scoping, exactly as before.
 export type RoundBriefCommitter = (
   dir: string,
   task: { id: string; title: string },
   info: { stage: string; subject: string },
+  paths?: readonly string[],
 ) => Promise<{ ok: boolean; failures?: Array<{ rel: string; error: string }> }>
 
 export type RoundBriefInstall = { installed: boolean; lines: string[] }
@@ -124,11 +127,18 @@ export type RoundBriefInstall = { installed: boolean; lines: string[] }
 // file over the untouched stub, land the driver's own `round-start` commit —
 // which sweeps the uncommitted round setup when the install runs at the
 // establishment, the driver's commit replacing the gate's person one — and
-// return the log lines. Never clobbers: a round.md that already holds real
-// content stands (the person's file wins, an ℹ line saying so). An equal
-// re-run writes nothing and only re-commits (the interrupted-install shape:
-// the write landed, the commit did not). The commit failure is a ⚠ line,
-// never a throw — the caller's stop owns the exit code.
+// return the log lines. Since plans/0207 D1 (0165-013) the sweep is bounded
+// to the establishment's write surface: the commit's pathspec is the round's
+// root directory `docs/R-NN` (round.md plus the phase index and phase seeds
+// establishRoundSetup wrote), so the person's unrelated uncommitted work
+// stays for the next clean gate to judge — the release consumptions run
+// ahead of it, and what they fold is unlisted otherwise. Never clobbers: a
+// round.md that already holds real content stands (the person's file wins,
+// an ℹ line saying so). An equal re-run writes nothing and only re-commits
+// (the interrupted-install shape: the write landed, the commit did not —
+// round.md sits inside the pathspec, so the re-run's commit stages it). The
+// commit failure is a ⚠ line, never a throw — the caller's stop owns the
+// exit code.
 export async function installRoundBrief(
   dir: string,
   round: number,
@@ -147,7 +157,7 @@ export async function installRoundBrief(
   const settled = await commit(dir, { id: "PLAN", title: `round start (${name})` }, {
     stage: "round-start",
     subject: `PLAN start ${name} (round brief installed from ${source})`,
-  })
+  }, [roundDir(round)])
   if (!settled.ok) {
     return {
       installed: true,

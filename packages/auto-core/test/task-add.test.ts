@@ -124,6 +124,26 @@ describe("addTask: commits (git)", () => {
     expect(await git(dir, "status", "--porcelain")).toBe("")
   })
 
+  test("a failed add commit teaches the manual recovery: the add is complete, no re-run needed (0207 D2, 0165-187)", async () => {
+    await commitAll(dir)
+    // The add's commit fails (a refusing hook): the task is fully written,
+    // so the recovery is the person's manual commit — pre-0207 the line
+    // claimed "a re-run would add it again", which the unit-start gate's
+    // dirty refusal makes untrue before the manual commit.
+    const { chmodSync, writeFileSync } = await import("node:fs")
+    writeFileSync(join(dir, ".git/hooks/pre-commit"), "#!/bin/sh\nexit 1\n")
+    chmodSync(join(dir, ".git/hooks/pre-commit"), 0o755)
+    const result = await addTask(dir, phase, TITLE)
+    expect(result).toEqual({
+      type: "failed",
+      question:
+        `task-add commit failed: .: git commit exit code 1. ` +
+        `The task is written but uncommitted (docs/T-001/todo.md and the index line) — commit the left changes by hand (git add -A && git commit); ` +
+        `the add is complete, no re-run needed (a re-run now would refuse the dirty tree, and after the commit it would add a new task)`,
+    })
+    expect(await Bun.file(join(dir, "docs/T-001/todo.md")).exists()).toBe(true)
+  })
+
   test("a dirty worktree is refused with the dirty files", async () => {
     await commitAll(dir)
     await Bun.write(join(dir, "unrelated.txt"), "dirty\n")

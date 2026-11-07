@@ -211,6 +211,25 @@ async function surveyGate(
       }
     }
     if (clarifiedMark(text)) {
+      // The interrupted release's tell (plans/0207 D2, 0165-187): the mark
+      // written but the document uncommitted — a kill between clarify's own
+      // write and its commit, or a hand release never committed. The advance
+      // the already-released line names would refuse the uncommitted survey
+      // at its preflight; the line teaches the one manual commit first.
+      // Derived from disk, never a record; the committed case keeps today's
+      // line byte-identical.
+      if ((await changedFiles(directory)).some((file) => file.replaceAll("\\", "/") === doc)) {
+        return {
+          result: {
+            type: "held",
+            lines: [
+              `⏸ ${doc} is released in the worktree but the release is not committed — commit it by hand (git add ${doc} && git commit), ` +
+                `then continue: ${bin} transfer ${directory} — the phase completes on the next advance`,
+            ],
+          },
+          refusal: false,
+        }
+      }
       return {
         result: {
           type: "held",

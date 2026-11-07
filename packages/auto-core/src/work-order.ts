@@ -248,11 +248,19 @@ export async function adoptUnit(
   // 4. The unified commit with the Auto-Stage trailer.
   const settled = await commitTree(dir, task, { stage: "done", subject: `${task.id} done ${shortTitle(task.title)}` })
   if (!settled.ok) {
+    // The line teaches the recovery that works (plans/0207 D2, 0165-187):
+    // the rename and tick already ran, so the unit is CLOSED in the worktree
+    // — a re-adopt would refuse "already done" at the readiness gate. The
+    // person's one manual commit completes the close (the missing Auto-Stage
+    // trailer is harmless: the next unit's baseline starts at that HEAD),
+    // and the run continues.
     return {
       ok: false,
       code: 2,
       lines: [
-        `⏸ ${task.id} adopted but the unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The task mark is still in the worktree; commit manually and re-adopt`,
+        `⏸ ${task.id} adopted but the unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
+          `The unit is closed in the worktree (docs/${task.id}/done.md, ${plan.index} ticked) — commit the left changes by hand (git add -A && git commit), then continue with ${bin} run; ` +
+          `no re-adopt is needed, and none is possible (a re-run would refuse: ${task.id} is already done)`,
       ],
     }
   }

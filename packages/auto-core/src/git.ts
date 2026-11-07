@@ -1503,10 +1503,17 @@ export type WorktreeResult = { ok: boolean; error?: string }
 // opts → git → opts.
 export type GitOps = {
   readonly records: boolean
-  // commitTree's optional add pathspec (plans/0099 D4) is the doc-lane seam
-  // decorator's injection point — never a caller's argument: absent = the
-  // whole-subtree sweep, the byte-identical floor every existing call site
-  // keeps by passing nothing.
+  // commitTree's optional add pathspec: absent = the whole-subtree sweep, the
+  // byte-identical floor most call sites keep by passing nothing. Two
+  // conscious families pass it (plans/0207 D1 restating 0099 D4's premise,
+  // first breached by the wall close's 0190 D2): the doc-lane seam decorator
+  // INJECTS its own scoping (ignoring whatever a caller passed — a decorated
+  // base never re-scopes), and an enumerated caller-side family names its own
+  // write surface — the wall close's record commit (0190 D2) and the three
+  // release consumptions (0207 D1: the brief install, the round-brief
+  // install, the phase-sync commit), whose subjects claim exact contents and
+  // which run ahead of the clean gate that would otherwise never judge what
+  // they folded.
   commitTree(
     dir: string,
     task: { id: string; title: string },

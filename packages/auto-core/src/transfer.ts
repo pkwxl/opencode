@@ -72,6 +72,7 @@ import {
   analysisGate,
   applyTailDrift,
   driftPairs,
+  establishedLines,
   establishRoundSetup,
   establishStopLines,
   nothingToAdvanceLine,
@@ -249,10 +250,23 @@ async function rederiveTail(directory: string, round: number, opts: RunAllOpts):
   }
   if (applied.type === "refused") return 1 // unreachable: no refusal hook rode along
   const { drift, from } = applied
+  // The commit's pathspec (plans/0207 D1, 0165-013): the sync's own write
+  // surface, derived from the drift it applies — the phase index plus the
+  // tail directories (the removed ones' deletions and the created ones'
+  // seeds must stage; the started prefix stays out by construction). The
+  // person's unrelated uncommitted work stays for preflight's clean gate,
+  // which owns judging it — this commit runs ahead of that gate, so the
+  // pathspec is what keeps the fold honest.
+  const tailPaths = [
+    phaseIndexPath(round),
+    ...drift.index.slice(drift.keep).map((unit) => unit.dir),
+    ...drift.planned.slice(drift.keep).map((unit) => unit.dir),
+  ]
   const settled = await commitTree(
     directory,
     { id: "PLAN", title: `phase tail re-derived (${roundDirName(round)})` },
     { stage: "phase-sync", subject: `PLAN resync ${roundDirName(round)} tail to ${from} (${driftPairs(drift)})` },
+    tailPaths,
   )
   if (!settled.ok) {
     log(
@@ -326,8 +340,10 @@ async function establishStop(directory: string, round: number, opts: RunAllOpts,
   // holding content, or no proposal, keeps today's gate stop.
   if (ok && (await roundBriefText(directory, round)) === undefined && (await releasedRoundBriefProposal(directory, round)) !== undefined) {
     for (const line of before) log(line)
-    log(`✓ round ${name} established: ${ok.units.map(phaseLabel).join(", ")}${sourceSuffix}`)
-    if (ok.isolated.length) log(`✓ branch isolation: ${ok.isolated.join(", ")} on ${ok.branch} (the driver's commits land there; the original branch stays untouched)`)
+    // The pair through the one wording home (plans/0207 D3, 0165-188): the
+    // continuation composes through establishedLines exactly as the G1 stop's
+    // success arm does — no second inline spelling to drift.
+    for (const line of establishedLines(round, ok, `${ok.units.map(phaseLabel).join(", ")}${sourceSuffix}`)) log(line)
     log(
       `ℹ the released \`${roundDirName(round)}\` round-brief proposal of ${ANALYSIS_DOC} installs verbatim — the round-start gate passes (your release was its review); ` +
         `revise the brief in place any time, every planning session reads the current file`,
