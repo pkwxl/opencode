@@ -198,6 +198,54 @@ describe("the construction landing (plans/0095 D1)", () => {
     expect(await Bun.file(join(repo, "docs/T-001/todo.md")).text()).toContain(BODY.scope)
   })
 
+  test("pending beside hand-added rows (plans/0205 D1, enacting S08-01): the awaiting predicate holds and the constructor rewrites the todo alone", async () => {
+    const first = await constructFormulation(repo, phase, BODY)
+    expect(first.type).toBe("constructed")
+    // The person's one supported act at the review stop: --new-task beside
+    // the reviewed todo (plans/0101 stage C widened every dispatch predicate
+    // to this state; the constructor's recognition joins it).
+    const { addTask } = await import("../src/task-add")
+    const added = await addTask(repo, phase, "the person's hand-added task")
+    expect(added.type === "added" && added.id).toBe("T-002")
+    // The state: pending — the todo stands beside the added row, never
+    // foreign (pre-fix: any second entry read as foreign, transfer exiting 2
+    // with no command out).
+    expect(await formulationState(repo, phase)).toEqual({ type: "pending", id: "T-001", inProgress: false })
+    // The reconstruct rewrites the todo alone: the changed body lands, both
+    // index rows survive untouched.
+    const again = await constructFormulation(repo, phase, { ...BODY, scope: BODY.scope + "\n\nAn amended source list." })
+    expect(again).toEqual({ type: "current", id: "T-001", numberStart: 2 })
+    const index = await Bun.file(join(repo, taskIndexPath(phase))).text()
+    expect(index).toContain("- [ ] T-001 Formulate the Implementation tasks")
+    expect(index).toContain("- [ ] T-002 the person's hand-added task")
+    expect(await Bun.file(join(repo, "docs/T-001/todo.md")).text()).toContain("An amended source list.")
+  })
+
+  test("in flight beside hand-added rows: the already-in-progress refusal keeps its own voice (0205 D1)", async () => {
+    await constructFormulation(repo, phase, BODY)
+    const { addTask } = await import("../src/task-add")
+    expect((await addTask(repo, phase, "a second task")).type).toBe("added")
+    const { begin } = await import("../src/tasks")
+    await begin(repo, "T-001")
+    const refused = await constructFormulation(repo, phase, { ...BODY, scope: "a changed scope" })
+    expect(refused.type).toBe("failed")
+    expect(refused.type === "failed" && refused.question).toContain("already in progress")
+  })
+
+  test("the construction records render into the field block, and only when given (plans/0205 D2/D3)", async () => {
+    // Without a record: neither field — the pre-0205 document, byte-identical.
+    await constructFormulation(repo, phase, BODY)
+    const plain = await Bun.file(join(repo, "docs/T-001/todo.md")).text()
+    expect(plain).not.toContain("Prefix:")
+    expect(plain).not.toContain("Floor-Digest:")
+    // With the record: both fields land, the rewrite-on-diff carrying them
+    // onto the standing todo.
+    const again = await constructFormulation(repo, phase, BODY, { digest: "0123456789abcdef", prefix: ["T-002"] })
+    expect(again.type).toBe("current")
+    const recorded = await Bun.file(join(repo, "docs/T-001/todo.md")).text()
+    expect(recorded).toContain("Depends: none\nPrefix: T-002\nFloor-Digest: 0123456789abcdef\n")
+  })
+
   test("foreign: the constructor refuses a phase whose index lists other work", async () => {
     await Bun.write(join(repo, taskIndexPath(phase)), renderTaskIndex("R-01.P01", [{ id: "T-009", title: "hand-listed" }]))
     const refused = await constructFormulation(repo, phase, BODY)

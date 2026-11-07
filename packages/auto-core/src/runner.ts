@@ -8,13 +8,13 @@ import { handoffFile, subtaskDoc, taskDoc } from "./docpaths"
 import { restoreFormulationRow } from "./formulate"
 import { coverageProblems, ledgerOf } from "./formulate-synthesis"
 import { gitOf } from "./git-ops"
-import type { DecomposeMode } from "./document/unit"
+import { parseIndex, type DecomposeMode } from "./document/unit"
 import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
 import { checklistProblems, nextChecklistIndex, scanSubtaskStates, subtaskId } from "./document/state"
 import { failbackApplies } from "./failback"
 import { formatTokens } from "./format"
-import { removeIfUntracked, unitBaseline, type UnitBaseline } from "./git"
+import { contentAtBase, removeIfUntracked, unitBaseline, type UnitBaseline } from "./git"
 import { taskNumber } from "./numbering"
 import { hibernatePause } from "./hibernate"
 import { log } from "./log"
@@ -901,7 +901,72 @@ export async function runTask(
         const [round, phaseId] = plan.phase.split(".")
         const phase = { round: round!, id: phaseId!, dir: dirname(plan.index) }
         const n = taskNumber(task.id) ?? 1
-        const checked = await plannedTaskProblems(dir, phase, { before: await takenTaskIds(dir, phase), numberStart: n + 1, skip: new Set([task.id]) })
+        // The review-seam fixed prefix (plans/0205 D2, enacting S08-09): at
+        // the unit's FIRST dispatch the phase's committed rows beside the
+        // formulation are the person's/driver's — a pending unit has no
+        // session output, so every other row arrived through
+        // `plan --new-task` or a person's commit — and they are fixed: the
+        // session neither removes, reorders, edits nor replaces one. The
+        // snapshot is the unit-start baseline (input.baseline — the
+        // committed state the session was dispatched over; P4 keeps the
+        // session off git and the unified commit lands after this collect),
+        // read per file: a failed read degrades to the unchecked floor
+        // (addedLines' precedent, 0199 D1), never a block. A retry
+        // (attempts past 1) replans over its own prior output — the prefix
+        // is not enforced there, the crashed rows are the session's to
+        // rewrite (plans/0141 D2); the landed todo's teaching remains the
+        // retry's guard.
+        const prefixProblems: string[] = []
+        let skip = new Set([task.id])
+        let preExisting = 0
+        if (task.attempts === 1) {
+          const base = await contentAtBase(dir, unitStart, plan.index)
+          if (base.ok && base.text !== undefined) {
+            const expected = parseIndex(base.text, "task").entries
+            const current = parseIndex(await Bun.file(join(dir, plan.index)).text(), "task").entries
+            // The first-n check (0053 D24's rule, the formulation's own row
+            // included): every baseline row still stands, in order, its line
+            // unchanged — id, title, tick (the driver ticks through its own
+            // write, after this collect).
+            if (current.length < expected.length) {
+              prefixProblems.push(
+                `${plan.index} lists ${current.length} task(s) but held ${expected.length} before the session; the pre-existing lines are fixed — plan beside them, never remove one`,
+              )
+            } else {
+              for (let i = 0; i < expected.length; i++) {
+                const was = expected[i]!
+                const now = current[i]!
+                if (now.id !== was.id) {
+                  prefixProblems.push(`${plan.index} line ${now.line}: ${now.id} sits where ${was.id} sat; the pre-existing lines are fixed — plan after them, never reorder or replace`)
+                  break
+                }
+                if (now.title !== was.title || now.ticked !== was.ticked) {
+                  prefixProblems.push(`${plan.index} line ${now.line}: the existing line of ${was.id} was edited; pre-existing lines are fixed`)
+                  break
+                }
+              }
+            }
+            // Each pre-existing task's state files byte-identical to the
+            // baseline (D24's file-identity check): a replaced document, a
+            // removal or a forged done.md all surface by name.
+            for (const entry of expected.filter((row) => row.id !== task.id)) {
+              preExisting += 1
+              skip.add(entry.id)
+              const paths = taskStatePaths(entry.id)
+              for (const key of ["pending", "complete"] as const) {
+                const was = await contentAtBase(dir, unitStart, paths[key])
+                if (!was.ok) continue
+                const now = await Bun.file(join(dir, paths[key])).text().catch(() => undefined)
+                if (was.text === undefined && now !== undefined) {
+                  prefixProblems.push(`${paths[key]} of the pre-existing task ${entry.id} is new; a formulation session never touches a pre-existing task's state files`)
+                } else if (was.text !== undefined && now !== was.text) {
+                  prefixProblems.push(`${paths[key]} of the pre-existing task ${entry.id} was changed or removed; a formulation session never edits a pre-existing task's document`)
+                }
+              }
+            }
+          }
+        }
+        const checked = await plannedTaskProblems(dir, phase, { before: await takenTaskIds(dir, phase), numberStart: n + 1, skip })
         // The coverage-map totality check (plans/0097 D7): beside the index
         // collect, the ledger's rows against the coverage map the session
         // wrote — every row exactly once, mapped ids listed, deferrals with
@@ -909,11 +974,14 @@ export async function runTask(
         // byte-identical Stage-1 collect.
         const ledger = ledgerOf(task.body)
         const coverage = ledger !== undefined ? await coverageProblems(ledger, await Bun.file(join(dir, taskDoc(task.id, "coverage"))).text().catch(() => ""), checked.ids) : []
-        const problems = [...checked.problems, ...coverage]
+        const problems = [...prefixProblems, ...checked.problems, ...coverage]
         if (problems.length) {
           return { type: "blocked", question: `the formulation output is invalid: ${problems.join("; ")}` }
         }
-        log(`✓ ${task.id} formulation output accepted: ${plan.index} lists ${checked.ids.length - 1} planned task(s)${ledger !== undefined ? `, the coverage map holds all ${ledger.rows.length} ledger row(s)` : ""}`)
+        log(
+          `✓ ${task.id} formulation output accepted: ${plan.index} lists ${checked.ids.length - 1 - preExisting} planned task(s)` +
+            `${preExisting ? `, beside ${preExisting} pre-existing task(s) kept unchanged` : ""}${ledger !== undefined ? `, the coverage map holds all ${ledger.rows.length} ledger row(s)` : ""}`,
+        )
         // Plan-time inversion detection (plans/0096 D6): a soft warn beside
         // the accepted collect — a task's Scope referencing a consumable of
         // a task that depends on it is an inversion the planner is invited

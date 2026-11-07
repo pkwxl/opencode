@@ -684,6 +684,27 @@ export async function unitBaseline(dir: string): Promise<UnitBaseline> {
   return baseline
 }
 
+// The committed content of one directory-relative path at a unit-start
+// baseline (plans/0205 D2): the formulation collect's fixed-prefix snapshot —
+// the rows and documents as last committed when the unit began, the state the
+// session was dispatched over (P4: the session writes nothing to git; the
+// unified commit lands after the collect). `{ ok: false }` = the read failed
+// (no baseline entry for the path's repository, an empty sha, or git itself
+// refused) — the caller degrades to the unchecked floor, never blocks on a
+// failed read (the addedLines precedent, plans/0199 D1); `{ ok: true }` with
+// text undefined = the path is absent at the baseline.
+export type BaseContent = { ok: true; text: string | undefined } | { ok: false }
+
+export async function contentAtBase(dir: string, baseline: UnitBaseline, rel: string): Promise<BaseContent> {
+  const abs = join(dir, rel)
+  const entry = baseline.find(({ root }) => root === dir || abs === root || abs.startsWith(root + sep))
+  if (!entry || !entry.sha) return { ok: false }
+  const shown = await git(entry.root, ["show", `${entry.sha}:${relative(entry.root, abs).replaceAll("\\", "/")}`])
+  if (shown.code === 0) return { ok: true, text: shown.out }
+  if (/does not exist/i.test(shown.err)) return { ok: true, text: undefined }
+  return { ok: false }
+}
+
 // Unit close-out check: ① the worktree must be clean (still dirty after a
 // successful unified commit = a commit failed or new changes appeared);
 // ② within each repository's baseline..HEAD range every commit must carry the

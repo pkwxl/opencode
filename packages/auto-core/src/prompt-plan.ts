@@ -182,6 +182,13 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
   phaseId: string
   taskIndex: string
   numberStart: number
+  // The review-seam fixed prefix (plans/0205 D2): the pre-joined
+  // existingTaskList lines of the phase's rows that already stand beside the
+  // formulation task (hand-added through `plan --new-task` or a person's
+  // commit) — rendered as a fixed-prefix block the session plans around,
+  // never rewrites. Absent or blank = no prefix (the common floor, nothing
+  // rendered, the document byte-identical).
+  existingTasks?: string
   brief?: string
   round?: string
   analysis?: string
@@ -412,6 +419,28 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
         "`Depends:`/`Touches:` allow it run side by side in this tree — plan for that as follows:",
         "",
         docConcurrency.trim(),
+        "",
+      ].join("\n"),
+    )
+  }
+  // The review-seam fixed prefix (plans/0205 D2): the rows that already
+  // stand beside the formulation task are not the session's to plan — their
+  // lines and documents are fixed, the planned tasks come after them, and
+  // the numbering start already passes their numbers. The block renders only
+  // when a prefix stands, so every state without one renders the document
+  // byte-identically (the floor).
+  if (input.existingTasks?.trim()) {
+    parts.push(
+      [
+        "## Input: pre-existing tasks of this phase (fixed prefix)",
+        "",
+        "This phase's task index already lists the task(s) below beside this task's own row — hand-added",
+        "(`plan --new-task` or a person's commit), never this session's output. Their index lines and documents",
+        "are fixed: keep every line unchanged and in place, plan this phase's tasks after the last of them, and",
+        "never replace, renumber, or rewrite one — their numbers are taken, and the numbering start below",
+        "already sits past them:",
+        "",
+        input.existingTasks.trim(),
         "",
       ].join("\n"),
     )

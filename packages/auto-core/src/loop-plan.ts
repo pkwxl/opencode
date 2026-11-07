@@ -15,7 +15,7 @@ import { openBlockage, type BlockageSite } from "./blockage-diagnose"
 import type { BlockMapEntry } from "./blockage"
 import { BRIEF_FILE, projectBriefText } from "./brief"
 import { floorDigest, protocolFrameText, renderLedger, synthesizeFormulation, type LedgerSource } from "./formulate-synthesis"
-import { constructFormulation, formulationAcceptance, formulationNumber, standingFormulation } from "./formulate"
+import { awaitingFormulation, constructFormulation, formulationAcceptance, formulationNumber, standingFormulation } from "./formulate"
 import { PromptGuaranteeError, resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
 import { dirtyStopLines, formatTokens, log } from "./log"
@@ -41,7 +41,6 @@ import {
   loadPlan,
   newTaskProblems,
   qualifiedPhase,
-  recordSynthDigest,
   renderTaskTodo,
   takenTaskIds,
   taskDecl,
@@ -50,7 +49,7 @@ import {
   unitSynthDigest,
   type PlanPhase,
 } from "./tasks"
-import { isUnitId, parseIndex, unitProblems, type IndexEntry, type UnitDecl } from "./document/unit"
+import { isUnitId, parseIndex, parseUnitDoc, unitProblems, type IndexEntry, type UnitDecl } from "./document/unit"
 
 // the phase index (routing already validated it; re-read here only for the
 // done set and the order, missing/invalid treated as empty).
@@ -302,13 +301,54 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   > => {
     await freshen()
     const charter = formulationAcceptance(planFacts(ctx), charterPhaseEntry(ctx, phase))
-    const n = await formulationNumber(directory, phase)
     const facts = planFacts(ctx)
+    // The standing formulation and the review-seam prefix (plans/0205 D2):
+    // while the standing todo has never been dispatched (pending), every
+    // other row of the index arrived through `plan --new-task` or a person's
+    // commit — those rows are the formulation's fixed prefix, rendered into
+    // the todo and planned around. A ran (blocked) formulation keeps a
+    // row-blind prefix instead: its extra rows may be its own session's
+    // never-collected output, which the re-dispatch must be free to rewrite
+    // (plans/0141 D2), so the prefix reads back from the landed todo's own
+    // `Prefix:` field — the rows the todo was constructed beside, never the
+    // session's output. A fresh construction has no prefix (the constructor
+    // only writes an empty phase).
+    const standingPlan = await loadPlan(directory, phase).catch(() => undefined)
+    const standing = standingPlan === undefined ? undefined : awaitingFormulation(standingPlan.tasks, phase)
+    const landedText =
+      standing === undefined ? undefined : await Bun.file(join(directory, taskStatePaths(standing.id).pending)).text().catch(() => undefined)
+    const landedFields = landedText === undefined ? {} : parseUnitDoc(landedText).fields
+    const review = standing !== undefined && standing.status === "pending"
+    const prefixIds = review
+      ? standingPlan!.tasks.filter((task) => task.id !== standing!.id).map((task) => task.id)
+      : (landedFields.prefix ?? "").split(/[\s,]+/).filter(Boolean)
+    const existingTasks = prefixIds.length && standingPlan !== undefined
+      ? existingTaskList(
+          standingPlan.tasks
+            .filter((task) => prefixIds.includes(task.id))
+            .map((task) => ({ id: task.id, title: task.title, status: task.status })),
+        )
+      : undefined
+    // The numbering start (plans/0205 D2): past the prefix. The review state
+    // takes the deterministic floor — the same derivation addTask allocates
+    // from (taskNumberFloor), so the taught start and a hand-add's allocation
+    // share one rule and the taught number can never be one the add already
+    // took (the finding's collision, impossible by construction). A ran
+    // formulation keeps max(its own number, the recorded prefix) + 1 — past
+    // the person's rows, its session's rows left re-takeable. A fresh
+    // construction keeps the formulation number + 1 (the floor the unit
+    // itself is about to occupy, + 1 — nothing runs between the two,
+    // plans/0097 D6's own premise).
+    const numberStart = review
+      ? await taskNumberFloor(directory)
+      : standing !== undefined && prefixIds.length
+        ? Math.max(taskNumber(standing.id) ?? 0, ...prefixIds.map((id) => taskNumber(id) ?? 0)) + 1
+        : (await formulationNumber(directory, phase)) + 1
     const baseInput = ctx.manual
       ? {
           phaseId,
           taskIndex,
-          numberStart: n + 1,
+          numberStart,
           brief,
           input: input!,
           inputPath: planInputPath(phase),
@@ -316,12 +356,13 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           parallel: opts.parallel,
           maxSessions: opts.maxSessions,
           charter,
+          ...(existingTasks ? { existingTasks } : {}),
         }
       : {
           phase: phase.entry,
           phaseId,
           taskIndex,
-          numberStart: n + 1,
+          numberStart,
           brief,
           round: parts!.round,
           analysis: parts!.analysis,
@@ -337,34 +378,45 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           maxSessions: opts.maxSessions,
           testByDriver: opts.testByDriver,
           charter,
+          ...(existingTasks ? { existingTasks } : {}),
         }
     // The floor always composes first: it is the digest's input, the
     // fallback, and (charter-less) the whole story. Its guarantee gate
     // throws here — a floor that violates the pack's asserts is a human
-    // problem (exit 2 at the run boundary), exactly as before 0097.
+    // problem (exit 2 at the run boundary), exactly as before 0097. The
+    // preview carries the prefix field (plans/0205 D2) so the digest moves
+    // with an add — never the Floor-Digest value itself (the digest of
+    // itself); that field construction renders beside the todo it describes.
     const floorTodo = renderFormulationTodo(facts, baseInput)
-    const floorDocument = previewFormulationDocument(floorTodo, phaseId)
+    const floorDocument = previewFormulationDocument(floorTodo, phaseId, prefixIds.length ? prefixIds : undefined)
     const digest = floorDigest(floorDocument)
     // The digest-keep (plans/0097 D6, widened by plans/0101 D4 to the
-    // standing predicate — the todo keeps its place beside hand-added tasks):
-    // a standing todo whose recorded digest still matches keeps its landed
-    // text (no churn from constructor nondeterminism); a changed floor
-    // re-runs the pipeline. transfer --resynthesize (plans/0101 D3) bypasses
-    // the keep — the rejected synthesized ledger is re-voiced, construction's
-    // rewrite-on-diff landing the new todo for review (a one-shot force: the
-    // floor digest is unchanged, so the next plain transfer keeps whatever
-    // lands).
-    const standing = await standingFormulation(directory, phase)
-    if (standing && !opts.resynthesize && (await unitSynthDigest(directory, standing.id)) === digest) {
-      const landedText = await Bun.file(join(directory, taskStatePaths(standing.id).pending)).text()
-      return {
-        todo: floorTodo,
-        document: landedText,
-        blocks: [{ block: "formulation todo", source: "the landed synthesis (floor assembly unchanged, plans/0097 D6)" }],
-        audit: [],
-        digest,
-        landed: true,
-        id: standing.id,
+    // standing predicate — the todo keeps its place beside hand-added tasks;
+    // the digest's home moved into the landed todo's own `Floor-Digest:`
+    // field by plans/0205 D3): a standing todo whose recorded digest still
+    // matches keeps its landed text (no churn from constructor
+    // nondeterminism); a changed floor re-runs the pipeline. The field first
+    // — committed with the todo it describes, durable across fresh clones
+    // and fork worktrees — the .auto/units.json record the pre-0205
+    // fallback; both absent (a fresh clone of a pre-0205 todo) misses and
+    // the reconstruct lands the field. transfer --resynthesize
+    // (plans/0101 D3) bypasses the keep — the rejected synthesized ledger is
+    // re-voiced, construction's rewrite-on-diff landing the new todo for
+    // review (a one-shot force: the floor digest is unchanged, so the next
+    // plain transfer keeps whatever lands).
+    if (standing && !opts.resynthesize && landedText !== undefined) {
+      const field = landedFields["floor-digest"]
+      const recorded = field ? field : await unitSynthDigest(directory, standing.id)
+      if (recorded === digest) {
+        return {
+          todo: floorTodo,
+          document: landedText,
+          blocks: [{ block: "formulation todo", source: "the landed synthesis (floor assembly unchanged, plans/0097 D6)" }],
+          audit: [],
+          digest,
+          landed: true,
+          id: standing.id,
+        }
       }
     }
     const phaseEntryOf = charterPhaseEntry(ctx, phase)
@@ -487,13 +539,22 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       // phase's first task unit — idempotent, so the remediate loop's final
       // composition is the one that lands. The digest-hit re-entry (D6)
       // skips construction: the landed todo stands, byte for byte, and its
-      // recorded digest already matches.
+      // recorded digest already matches. The construction record
+      // (plans/0205 D2/D3): the floor digest and the prefix ids travel into
+      // the todo's own field block — the prefix derived from the preview's
+      // field (the one source the floor already rendered), the digest the
+      // keep compares; the .auto/units.json record write retired with the
+      // field (D3).
       let id: string
       if (composed.landed && composed.id !== undefined) {
         id = composed.id
         log(`✓ the landed formulation todo of ${id} stands — the floor assembly is unchanged (plans/0097 D6)`)
       } else {
-        const landed = await constructFormulation(directory, phase, composed.todo)
+        const prefix = parseUnitDoc(composed.document).fields.prefix?.split(/[\s,]+/).filter(Boolean)
+        const landed = await constructFormulation(directory, phase, composed.todo, {
+          digest: composed.digest,
+          ...(prefix?.length ? { prefix } : {}),
+        })
         if (landed.type === "dirty") {
           for (const line of dirtyStopLines("worktree not clean before constructing the formulation task", landed.files)) log(line)
           return 2
@@ -502,7 +563,6 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           log(`⏸ ${landed.question}`)
           return 2
         }
-        await recordSynthDigest(directory, landed.id, composed.digest)
         id = landed.id
         log(`✓ formulation task ${landed.id} ${landed.type === "constructed" ? "constructed" : "current"}: its todo is the planning session's single input (docs/${landed.id}/todo.md)`)
       }
@@ -570,8 +630,23 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
 // The verify-time preview of the formulation document (plans/0095 D4): the
 // exact todo construction writes, with the placeholder id the number
 // allocation fills at landing — the charter-judging content is identical.
-function previewFormulationDocument(todo: { goal: string; scope: string; acceptance: string }, phaseId: string): string {
-  return renderTaskTodo({ id: "T-NNN", title: "Formulate the phase tasks", phase: phaseId, formulate: phaseId, decompose: "whole", depends: "none", goal: todo.goal, scope: todo.scope, acceptance: todo.acceptance })
+// The prefix field (plans/0205 D2) renders here too, so the digest covers
+// the rows the todo is composed beside and moves when they change; the
+// Floor-Digest field deliberately does not (the digest of itself — the field
+// records this digest beside the landed todo, construction's other half).
+function previewFormulationDocument(todo: { goal: string; scope: string; acceptance: string }, phaseId: string, prefix?: string[]): string {
+  return renderTaskTodo({
+    id: "T-NNN",
+    title: "Formulate the phase tasks",
+    phase: phaseId,
+    formulate: phaseId,
+    decompose: "whole",
+    depends: "none",
+    ...(prefix?.length ? { prefix } : {}),
+    goal: todo.goal,
+    scope: todo.scope,
+    acceptance: todo.acceptance,
+  })
 }
 
 // The phased formulation's composition state (the former phasePlanPrompt's

@@ -50,12 +50,17 @@ export async function standingFormulation(dir: string, phase: PlanPhase): Promis
   return plan === undefined ? undefined : awaitingFormulation(plan.tasks, phase)
 }
 
-// The phase's formulation state on disk (plans/0095 D4): `none` = the index is
-// absent, empty or lists no pending formulation unit (the fresh-construction
-// path); `pending` = the index lists exactly the formulation task, not done
-// (the re-entry path — rewrite-on-diff when the session has not started);
-// `foreign` = the index lists other work (hand-listed or already formulated
-// past the first line), the formulation writer has no business here.
+// The phase's formulation state on disk (plans/0095 D4, the pending arm
+// re-keyed by plans/0205 D1 onto the awaiting predicate): `none` = the index
+// is absent, empty or lists no formulation unit (the fresh-construction
+// path); `pending` = a formulation task of this phase stands in the index,
+// not done (the re-entry path — rewrite-on-diff when the session has not
+// started), WHEREVER it sits — beside hand-added tasks too, the review-seam
+// state `--new-task` creates: plans/0101 stage C widened every dispatch
+// predicate to that state, and the constructor's recognition now shares it
+// (the todo is rewritten alone; the index's other rows are never touched);
+// `foreign` = the index lists work and no formulation task of this phase
+// stands in it, the formulation writer has no business here.
 type FormulationState = { type: "none" } | { type: "pending"; id: string; inProgress: boolean } | { type: "foreign" }
 
 export async function formulationState(dir: string, phase: PlanPhase): Promise<FormulationState> {
@@ -67,10 +72,10 @@ export async function formulationState(dir: string, phase: PlanPhase): Promise<F
   // constructor's to diagnose: entries exist, so the phase is not empty —
   // file routing surfaces the loader's error itself.
   const plan = await loadPlan(dir, phase).catch(() => undefined)
-  if (plan === undefined || !(plan.tasks.length === 1 && isFormulation(plan.tasks[0]!, phase) && plan.tasks[0]!.status !== "done")) {
-    return { type: "foreign" }
-  }
-  return { type: "pending", id: plan.tasks[0]!.id, inProgress: plan.tasks[0]!.status === "in_progress" }
+  if (plan === undefined) return { type: "foreign" }
+  const standing = plan.tasks.find((task) => isFormulation(task, phase) && task.status !== "done")
+  if (standing === undefined) return { type: "foreign" }
+  return { type: "pending", id: standing.id, inProgress: standing.status === "in_progress" }
 }
 
 // The formulation number without landing (the compose-and-verify loop's
@@ -88,12 +93,18 @@ export async function formulationNumber(dir: string, phase: PlanPhase): Promise<
 // The construction (plans/0095 D1): write the formulation task's todo.md plus
 // the index's first line, one `PLAN formulate` commit (stage phase-formulate).
 // `body` is the rendered single input (renderFormulationTodo's goal / scope /
-// acceptance). Idempotent: when the index already lists exactly the pending
-// formulation task, the body is re-rendered and rewritten (its own commit of
-// the same grammar — the changed-input restart path) only when it differs,
-// and a formulation task already in_progress is never rewritten (the session
-// may have read it). numberStart of the result is the formulation number + 1
-// — the first number the formulation session's own tasks may take.
+// acceptance). Idempotent: when a pending formulation task stands in the
+// index — beside hand-added rows too (plans/0205 D1) — the body is re-rendered
+// and the todo alone rewritten (its own commit of the same grammar — the
+// changed-input restart path) only when it differs, and a formulation task
+// already in_progress is never rewritten (the session may have read it).
+// `record` (plans/0205 D2/D3) threads the construction's two committed
+// records into the todo's field block: the floor-assembly digest the
+// digest-keep compares (`Floor-Digest:`) and the pre-existing rows the todo
+// was constructed beside (`Prefix:`) — both omitted when absent, so a
+// construction without them renders the pre-0205 document byte-identically.
+// numberStart of the result is the formulation number + 1 — the first number
+// the formulation session's own tasks may take.
 type ConstructedFormulation =
   | { type: "constructed"; id: string; numberStart: number }
   | { type: "current"; id: string; numberStart: number }
@@ -104,10 +115,11 @@ export async function constructFormulation(
   dir: string,
   phase: PhaseUnit,
   body: { goal: string; scope: string; acceptance: string },
+  record?: { digest?: string; prefix?: string[] },
 ): Promise<ConstructedFormulation> {
   const state = await formulationState(dir, phase)
   if (state.type === "foreign") {
-    return { type: "failed", question: `${taskIndexPath(phase)} lists work beyond the formulation task; the formulation constructor only writes an empty phase` }
+    return { type: "failed", question: `${taskIndexPath(phase)} lists work and no formulation task of this phase stands in it; the formulation constructor only writes an empty phase` }
   }
   if (state.type === "pending" && state.inProgress) {
     return {
@@ -135,6 +147,8 @@ export async function constructFormulation(
     formulate: qualifiedPhase(phase),
     decompose: "whole",
     depends: "none",
+    ...(record?.prefix?.length ? { prefix: record.prefix } : {}),
+    ...(record?.digest !== undefined ? { floorDigest: record.digest } : {}),
     goal: body.goal,
     scope: body.scope,
     acceptance: body.acceptance,

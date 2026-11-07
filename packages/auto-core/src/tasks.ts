@@ -296,7 +296,13 @@ export function taskBody(text: string): string {
 }
 
 // The task document todo.md as a planning session is asked to write it; the
-// driver itself uses it only for tests and fixtures.
+// driver itself uses it only for tests and fixtures. The two construction
+// records of the formulation todo (plans/0205 D2/D3) ride the same field
+// block: `Prefix:` (the phase's pre-existing rows the todo was constructed
+// beside — the fixed prefix the session plans around) and `Floor-Digest:`
+// (the floor-assembly digest the digest-keep compares, committed with the
+// todo it describes). Both are driver-written markers of the formulation
+// unit alone; `newTaskProblems` refuses them on a planned task.
 export function renderTaskTodo(input: {
   id: string
   title: string
@@ -305,6 +311,8 @@ export function renderTaskTodo(input: {
   decompose?: string
   depends?: string
   touches?: string
+  prefix?: string[]
+  floorDigest?: string
   goal?: string
   scope?: string
   acceptance?: string
@@ -316,6 +324,8 @@ export function renderTaskTodo(input: {
     ...(input.decompose !== undefined ? [`Decompose: ${input.decompose}`] : []),
     ...(input.depends !== undefined ? [`Depends: ${input.depends}`] : []),
     ...(input.touches !== undefined ? [`Touches: ${input.touches}`] : []),
+    ...(input.prefix?.length ? [`Prefix: ${input.prefix.join(", ")}`] : []),
+    ...(input.floorDigest !== undefined ? [`Floor-Digest: ${input.floorDigest}`] : []),
     "",
     "## Goal",
     "",
@@ -365,7 +375,10 @@ type Runtime = {
   // constructed. Idempotence is keyed on it, never on model output — a
   // pending unit whose recorded digest equals the freshly composed floor
   // keeps its landed todo (no churn from constructor nondeterminism); a
-  // changed digest re-constructs through the full pipeline.
+  // changed digest re-constructs through the full pipeline. Since plans/0205
+  // D3 the digest's durable home is the landed todo's own committed
+  // `Floor-Digest:` field; this record is the pre-0205 fallback (its write
+  // retired — the reader serves constructions from before the field).
   synthDigest?: string
   // The landed-todo digest (plans/0171 D6): the content digest of the
   // formulation todo.md as the driver last wrote it — the collect's pin that
@@ -780,7 +793,10 @@ export async function runtimeSplit(dir: string, id: string): Promise<UnitBaselin
 // The floor-assembly digest: recorded when a formulation unit is constructed,
 // compared at re-entry. Pending + digest unchanged → the landed todo stands
 // (no churn from constructor nondeterminism); changed → re-construct through
-// the full pipeline.
+// the full pipeline. Since plans/0205 D3 the digest's durable home is the
+// landed todo's own committed `Floor-Digest:` field (read by the compose's
+// keep ahead of this record); this reader is the pre-0205 fallback, and the
+// record's write retired with it.
 
 // Reads a task's recorded floor-assembly digest, if any.
 export async function unitSynthDigest(dir: string, id: string): Promise<string | undefined> {
@@ -1017,14 +1033,20 @@ export async function newTaskProblems(
   const fields = parseUnitDoc(doc).fields
   if (fields.phase !== qualified) problems.push(`${paths.pending} must carry the field line \`Phase: ${qualified}\` right after its title line`)
   // The driver's own markers are never a planned task's to carry
-  // (plans/0171 D6, enacting S08-08): `Formulate:` is driver-written
-  // (0095 D1), and a session copying its own todo's field block onto a task
-  // it planned once reclassified that task as machinery — missing from the
-  // person's review summary, run through the formulation collect, blocked
-  // with a remedy naming a different task. `Closed:` is the done.md closure
-  // record's field; on a pending document it is nothing at all.
+  // (plans/0171 D6, enacting S08-08; the two construction records joined by
+  // plans/0205 D2/D3): `Formulate:` is driver-written (0095 D1), and a
+  // session copying its own todo's field block onto a task it planned once
+  // reclassified that task as machinery — missing from the person's review
+  // summary, run through the formulation collect, blocked with a remedy
+  // naming a different task. `Prefix:` and `Floor-Digest:` are the
+  // formulation todo's construction records (the fixed prefix, the
+  // floor-assembly digest) — the same copying hazard, the same home.
+  // `Closed:` is the done.md closure record's field; on a pending document
+  // it is nothing at all.
   if (fields.formulate !== undefined) problems.push(`${paths.pending} carries a \`Formulate:\` field — the driver's marker of the phase's formulation unit; remove the field line`)
   if (fields.closed !== undefined) problems.push(`${paths.pending} carries a \`Closed:\` field — the closure record belongs to a done.md; remove the field line`)
+  if (fields.prefix !== undefined) problems.push(`${paths.pending} carries a \`Prefix:\` field — the driver's record of the formulation unit's pre-existing tasks; remove the field line`)
+  if (fields["floor-digest"] !== undefined) problems.push(`${paths.pending} carries a \`Floor-Digest:\` field — the driver's record of the formulation unit's floor assembly; remove the field line`)
   return { problems, decl: taskDecl(id, doc) }
 }
 
