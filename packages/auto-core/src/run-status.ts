@@ -66,8 +66,10 @@ let runAt: number | undefined
 // kill -9 leaves no run-end and the next run's startRunStatus resets this).
 let ended = false
 // The run's own usage totals: the figures the run-end bracket closes with
-// (stats books no run bucket — the emitter totals one from the session
-// roll-ups it emits, each session counted exactly once).
+// (stats books no run bucket — the emitter totals one from the roll-ups it
+// emits, each consumption counted exactly once: a session roll-up's delta —
+// this booking's figures, never the resumed entry's cumulative re-counted —
+// plus a lane landing's booked usage, plans/0212 D4).
 let runUsage: UsageFigures = zeroUsage()
 
 function zeroUsage(): UsageFigures {
@@ -143,16 +145,29 @@ export function emitStatus(input: StatusEventInput): void {
 
 // The one append path every emission shares: the journal write and the
 // run-total accumulation.
+function addFigures(target: UsageFigures, add: UsageFigures) {
+  target.input += add.input
+  target.output += add.output
+  target.reasoning += add.reasoning
+  target.cacheRead += add.cacheRead
+  target.cacheWrite += add.cacheWrite
+  target.cost += add.cost
+  target.steps += add.steps
+}
+
 function publish(event: RunStatusEvent): void {
+  // The run total counts each consumption exactly once (plans/0212 D4): a
+  // session roll-up contributes its `delta` when the stats seam handed one
+  // (this booking's figures — the cumulative `usage` a resumed session
+  // carries already counted in the run that booked it), its whole `usage`
+  // otherwise (a direct emitter's own shape); a lane landing contributes
+  // the booked detail's breakdown (emitted exactly where the booking ran —
+  // a lane-less run emits none).
   if (event.type === "usage-rollup" && event.scope === "session") {
-    const usage = event.usage
-    runUsage.input += usage.input
-    runUsage.output += usage.output
-    runUsage.reasoning += usage.reasoning
-    runUsage.cacheRead += usage.cacheRead
-    runUsage.cacheWrite += usage.cacheWrite
-    runUsage.cost += usage.cost
-    runUsage.steps += usage.steps
+    addFigures(runUsage, event.delta ?? event.usage)
+  }
+  if (event.type === "lane-landing" && event.usage !== undefined) {
+    addFigures(runUsage, event.usage)
   }
   if (fd !== undefined) {
     try {

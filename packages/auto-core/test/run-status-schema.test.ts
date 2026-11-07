@@ -133,12 +133,15 @@ describe("the run-status event table's additive-only ratchet", () => {
       { type: "session-handover", run: 1, at: 8, task: "T-014", scope: "whole", due: false, used: 64_000, wall: 128_000 },
       { type: "question-raised", run: 1, at: 9, origin: "agent", question: "Which library?", request: "req_1", session: "ses_1", task: "T-014" },
       { type: "question-answered", run: 1, at: 9, by: "human", request: "req_1", session: "ses_1", answer: "zod" },
-      { type: "usage-rollup", run: 1, at: 10, scope: "task", task: "T-014", usage: { input: 1, output: 2, reasoning: 3, cacheRead: 4, cacheWrite: 5, cost: 0.5, steps: 6 } },
+      // The session roll-up's live shape (plans/0212 D4): the cumulative
+      // `usage` beside this booking's `delta` — the run bracket's total
+      // counts deltas.
+      { type: "usage-rollup", run: 1, at: 10, scope: "session", session: "ses_1", task: "T-014", usage: { input: 1, output: 2, reasoning: 3, cacheRead: 4, cacheWrite: 5, cost: 0.5, steps: 6 }, delta: { input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.5, steps: 1 } },
       { type: "failure", run: 1, at: 11, message: "spawn failed", class: "unknown", session: "ses_1", task: "T-014" },
       { type: "exit-request", run: 1, at: 12, boundary: "task" },
       { type: "lane-dispatch", run: 1, at: 13, lane: "T-014", worktree: join(".auto", "worktrees", "T-014"), pid: 4242 },
       { type: "lane-exit", run: 1, at: 14, lane: "T-014", code: 0, report: true, result: "PASS" },
-      { type: "lane-landing", run: 1, at: 15, lane: "T-014", outcome: "landed", tokens: 1200, wallMs: 34_000, sessions: 3 },
+      { type: "lane-landing", run: 1, at: 15, lane: "T-014", outcome: "landed", tokens: 1200, wallMs: 34_000, sessions: 3, usage: { input: 1200, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 3 } },
       { type: "lane-block", run: 1, at: 16, lane: "T-015", reason: "the dispatch attempts cap (3) is hit" },
     ]
     expect(samples.map((event) => event.type).sort()).toEqual([...RUN_STATUS_EVENT_TYPES].sort())

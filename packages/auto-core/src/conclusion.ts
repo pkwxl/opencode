@@ -244,11 +244,12 @@ function digestLine(digests: DigestStats | undefined): string[] {
 // the report carried model data), and without it (a report an older shape
 // wrote) they stay lane-local figures.
 // AUTO-DECISION (the roll-up line lives in the round block only): the lanes
-// section of the stats document is run-scoped — it carries no phase
-// attribution, so a phase-close lanes line cannot be derived without a new
-// per-phase record; the round conclusion is the roll-up the design names,
-// and the phase block's times are the same parent-wall caliber by
-// construction.
+// section of the stats document is round-scoped (plans/0212 D2 — it rolls
+// with roundB at the load's round rollover, so every round's conclusion
+// reads only its own lanes) and it carries no phase attribution, so a
+// phase-close lanes line cannot be derived without a new per-phase record;
+// the round conclusion is the roll-up the design names, and the phase
+// block's times are the same parent-wall caliber by construction.
 function laneRollupLines(rollup: LaneRollup | undefined): string[] {
   if (!rollup) return []
   const booked = rollup.booked ? " (booked into the totals above)" : ""

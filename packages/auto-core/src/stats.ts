@@ -32,7 +32,7 @@
 // the two halves are separable, and a type-only importer binds no store
 // code); this module is the store and the public APIs, re-exporting the
 // schema's public surface so its consumers keep their single import point.
-import { appendFileSync, mkdirSync } from "node:fs"
+import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readSync } from "node:fs"
 import { mkdir, realpath, rename } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { currentRound } from "./phases"
@@ -232,7 +232,9 @@ type Handle = {
   // lastKey is the unit whose begin opened the currently-open segment: fold
   // credits its accumulator (the union caliber the header documents — with
   // overlapping sessions only the segment holder's per-session figure grows,
-  // the others undercount).
+  // the others undercount). A sibling's end no longer closes the segment
+  // (plans/0212 D3): lastKey moves to the latest-begun remaining unit, so
+  // the accumulator that grows is always a live session's.
   active: Map<string, ActiveSession>
   lastKey?: string
   // Human-wait nesting depth counter: depth 0→1 closes the segment (after the
@@ -316,6 +318,27 @@ async function load(dir: string): Promise<Loaded> {
     if (doc.round >= 1 && round !== doc.round) {
       rollHistory(doc)
       doc.roundB = emptyBucket(String(round), now)
+      // The lanes section rolls with roundB (plans/0212 D2): it carries no
+      // phase/round attribution and its booked figures just rolled into
+      // history with roundB — keeping the per-unit entries would shadow every
+      // later round's conclusion with the directory's whole lane past (the
+      // "(booked into the totals above)" claim false from round 2 on). A
+      // same-round resume never enters this branch (the floor).
+      doc.lanes = undefined
+    }
+    // The stint-ledger crash guard (plans/0212 D1): when the ledger's last
+    // line already records the loaded task bucket's (id, since), the closing
+    // append reached the ledger but the reset never reached stats.json (a
+    // kill inside the switch's write queue) — the stint closed before the
+    // crash. Reset the bucket to a fresh unnamed stint and clear the session
+    // map: both records live in the ledger's line, whose figures are the
+    // fuller ones (booked at the switch moment, past the last persisted
+    // write); the next switch appends the ordinary unnamed bracket. No match
+    // — a missing ledger, a torn or unparsable last line, anything uncertain
+    // (P12 conservative) — leaves the document exactly as loaded.
+    if (doc.taskB.id !== "" && stintAlreadyRecorded(dir, doc.taskB.id, doc.taskB.since)) {
+      doc.taskB = emptyBucket("", now)
+      doc.sessions = {}
     }
     doc.round = round
   } else {
@@ -373,7 +396,13 @@ export async function flushStats(dir: string | undefined): Promise<void> {
 // fold), without modifying doc or persisting — the display layer can read the
 // current value at any moment, the state machine is unaffected.
 function extrapolate(doc: StatsDoc, bucket: Bucket): Bucket {
-  const copy: Bucket = { id: bucket.id, since: bucket.since, ...copyTotals(bucket) }
+  const copy: Bucket = {
+    id: bucket.id,
+    since: bucket.since,
+    ...(bucket.phase !== undefined ? { phase: bucket.phase } : {}),
+    ...(bucket.round !== undefined ? { round: bucket.round } : {}),
+    ...copyTotals(bucket),
+  }
   const open = doc.open
   if (open) {
     const now = clock()
@@ -427,6 +456,12 @@ export async function statsTask(dir: string | undefined, id: string): Promise<vo
   if (handle.doc.taskB.id === id) return
   appendTaskStint(dir, handle)
   handle.doc.taskB = emptyBucket(id, clock())
+  // The stint-identity stamp (plans/0212 D5): the phase and round the stint
+  // OPENS under — the record reads these at the close, where the document's
+  // own phase/round would name the next task's context (statsPhase has
+  // already moved them past the phase's last task).
+  handle.doc.taskB.phase = handle.doc.phase
+  handle.doc.taskB.round = handle.doc.round
   handle.doc.taskB.tasks = 1
   handle.doc.phaseB.tasks += 1
   handle.doc.roundB.tasks += 1
@@ -449,6 +484,37 @@ function appendTaskStint(dir: string, handle: Handle): void {
     appendFileSync(join(dir, LEDGER_FILE), JSON.stringify(record) + "\n")
   } catch {
     // A missed ledger line is tolerated; the aggregates keep the figures.
+  }
+}
+
+// The ledger tail read (plans/0212 D1): whether the ledger's LAST line
+// already records the stint `(task, since)`. Reads only the final
+// LEDGER_TAIL bytes, so the cross-run-retained ledger costs a bounded read
+// at load; any uncertainty — a missing or unreadable ledger, an empty file,
+// a torn or unparsable last line, a line longer than the cap — answers
+// false (the conservative direction: the load-time guard does not fire, and
+// an uncertain match can never destroy an open stint's figures).
+const LEDGER_TAIL = 64 * 1024
+
+function stintAlreadyRecorded(dir: string, task: string, since: number): boolean {
+  let fd: number | undefined
+  try {
+    fd = openSync(join(dir, LEDGER_FILE), "r")
+    const size = fstatSync(fd).size
+    if (size === 0) return false
+    const start = Math.max(0, size - LEDGER_TAIL)
+    const buffer = Buffer.alloc(size - start)
+    readSync(fd, buffer, 0, buffer.length, start)
+    const lines = buffer.toString("utf8").split("\n").filter(Boolean)
+    if (start > 0) lines.shift() // the chunk's first line is partial unless the file fit whole
+    const last = lines.at(-1)
+    if (last === undefined) return false
+    const record = JSON.parse(last) as { task?: unknown; since?: unknown }
+    return record.task === task && record.since === since
+  } catch {
+    return false
+  } finally {
+    if (fd !== undefined) closeSync(fd)
   }
 }
 
@@ -567,11 +633,12 @@ type StatsSessionReport = {
 // End of a session round (including error/blocked/abnormal paths — all 8
 // runner returns carry it): fold, post usage into the four layers (the
 // task/phase/round buckets + per-session), sessions count +1, close the AI
-// segment and reopen a wall-clock segment, stop the heartbeat, persist, and
-// return the printable report. Without a paired begin (a fallback for dispatch
-// failures and similar abnormal paths) thisAiMs = 0, while usage and the
-// sessions/rounds counts still record — the consumption really happened, do
-// not drop it.
+// segment and reopen a wall-clock segment when this was the last active
+// session (plans/0212 D3 — under doc lanes a surviving sibling keeps the AI
+// segment and the heartbeat open), persist, and return the printable report.
+// Without a paired begin (a fallback for dispatch failures and similar
+// abnormal paths) thisAiMs = 0, while usage and the sessions/rounds counts
+// still record — the consumption really happened, do not drop it.
 // model/tier (passed in by attempt over the registry in force — layered or
 // implicit, plans/0055 §7.1 "Stats"): the candidate key — an internal name,
 // or the raw
@@ -600,7 +667,6 @@ export async function statsSessionEnd(
   if (!dir) return undefined
   const { handle } = await ensure(dir)
   fold(handle)
-  stopHeartbeat(handle)
   const key = task ?? handle.lastKey
   const active = key !== undefined ? handle.active.get(key) : undefined
   if (key !== undefined) handle.active.delete(key)
@@ -609,12 +675,28 @@ export async function statsSessionEnd(
   // session's unit (or nothing at all — the pre-statsTask bypass shape).
   const ownBucket = key === undefined || doc.taskB.id === key || doc.taskB.id === ""
   const now = clock()
-  // Close the AI segment and reopen a wall-clock segment; if currently inside
-  // a human wait (the segment is already closed), waitEnd does the reopening —
-  // wait.ai flips back to false so what resumes after the wait is a wall-clock
-  // segment, not the ended session's AI segment.
-  if (handle.wait.depth === 0) doc.open = { at: now, ai: false }
-  else handle.wait.ai = false
+  // The sibling-aware close (plans/0212 D3): only the LAST active session's
+  // end stops the heartbeat and reopens the segment as wall-clock — written
+  // for one live session (0019), the unconditional close broke doc lanes
+  // (0099 D8's per-unit map): a sibling's end froze a still-running
+  // session's AI time (against the union caliber the Handle header
+  // documents) and stopped the heartbeat that bounds its crash loss. With a
+  // sibling remaining the AI segment stays open, the heartbeat keeps
+  // ticking, and lastKey moves to the latest-begun remaining unit so the
+  // folds (and statsWaitEnd's wait attribution) keep crediting a live
+  // session's accumulator. The unpaired-end fallback takes the same branch
+  // by the map's state.
+  if (handle.active.size === 0) {
+    stopHeartbeat(handle)
+    // Close the AI segment and reopen a wall-clock segment; if currently
+    // inside a human wait (the segment is already closed), waitEnd does the
+    // reopening — wait.ai flips back to false so what resumes after the wait
+    // is a wall-clock segment, not the ended session's AI segment.
+    if (handle.wait.depth === 0) doc.open = { at: now, ai: false }
+    else handle.wait.ai = false
+  } else {
+    handle.lastKey = [...handle.active.keys()].at(-1)
+  }
   for (const bucket of ownBucket ? [doc.taskB, doc.phaseB, doc.roundB] : [doc.phaseB, doc.roundB]) {
     bucket.sessions += 1
     addUsage(bucket.usage, usage)
@@ -655,8 +737,18 @@ export async function statsSessionEnd(
   // every session end (all 8 runner returns book through here) pushes the
   // session's accumulated figures as one typed event; this file stays the
   // durable numbers, the event is the same shape as a push. Outside a run
-  // (a bare statsSessionEnd in a test) the emitter is a no-op.
-  emitStatus({ type: "usage-rollup", scope: "session", usage: { ...entry.usage }, session: sessionID, ...(entry.task ? { task: entry.task } : {}) })
+  // (a bare statsSessionEnd in a test) the emitter is a no-op. `delta`
+  // (plans/0212 D4): this booking's figures beside the cumulative `usage`
+  // — the run bracket's total counts deltas, so a resumed takeover never
+  // re-counts the consumption the previous run already booked.
+  emitStatus({
+    type: "usage-rollup",
+    scope: "session",
+    usage: { ...entry.usage },
+    delta: usage,
+    session: sessionID,
+    ...(entry.task ? { task: entry.task } : {}),
+  })
   return {
     thisAiMs: active?.aiMs ?? 0,
     session: { ...entry, usage: { ...entry.usage } },
@@ -825,14 +917,18 @@ export async function statsDecomposeOf(dir: string | undefined, task: string): P
 }
 
 // The two pipeline-overhead bookings' shared shape (the classify and
-// synthesis wrappers below): the named bucket key's per-model record in each
-// of the three buckets gains the usage and one session — outside the
-// unit-session totals, displayed beside the internal model names.
+// synthesis wrappers below): the named bucket key's per-model record in the
+// PHASE and ROUND buckets gains the usage and one session — outside the
+// unit-session totals, displayed beside the internal model names. Never the
+// task bucket (plans/0212 D5, enacting 0152 D4(c)): a one-shot is no unit's
+// session, and the open task stint's ledger line must not carry it — the
+// bucket at booking time is whichever unit the loop last switched to, never
+// the one-shot's own.
 // Lazy-loaded like the other APIs when no handle exists.
 async function bucketUsage(dir: string | undefined, bucketName: string, usage: Usage): Promise<void> {
   if (!dir) return
   const { handle } = await ensure(dir)
-  for (const bucket of [handle.doc.taskB, handle.doc.phaseB, handle.doc.roundB]) {
+  for (const bucket of [handle.doc.phaseB, handle.doc.roundB]) {
     const stat = ((bucket.models ??= {})[bucketName] ??= emptyModelStat())
     addUsage(stat.usage, usage)
     stat.sessions += 1
@@ -841,19 +937,21 @@ async function bucketUsage(dir: string | undefined, bucketName: string, usage: U
 }
 
 // The failure-message classifier's token booking (plans/0055 §7.1 "Stats"):
-// recorded into each of the three buckets' `classify` bucket — outside the
+// recorded into the phase and round buckets' `classify` bucket — outside the
 // unit-session totals (not into the buckets' usage/sessions, not into
-// per-session), displayed beside the internal model names. The classifier's
-// one-shot session counts as a session (it is indeed a session, just one that
-// belongs to no unit). Lazy-loaded like the other APIs when no handle exists.
+// per-session, never the task stint's record — plans/0212 D5), displayed
+// beside the internal model names. The classifier's one-shot session counts
+// as a session (it is indeed a session, just one that belongs to no unit).
+// Lazy-loaded like the other APIs when no handle exists.
 export async function statsClassifyUsage(dir: string | undefined, usage: Usage): Promise<void> {
   await bucketUsage(dir, CLASSIFY_BUCKET, usage)
 }
 
 // The formulation one-shots' token booking (plans/0097 D6): the constructor
 // and the fidelity pass, through the router's synthesis sink — same shape as
-// the classify booking, its own bucket so the two pipelines' overhead stay
-// readable apart in the per-model lines.
+// the classify booking (phase/round only, never the task stint), its own
+// bucket so the two pipelines' overhead stay readable apart in the per-model
+// lines.
 export async function statsSynthesisUsage(dir: string | undefined, usage: Usage): Promise<void> {
   await bucketUsage(dir, SYNTHESIS_BUCKET, usage)
 }

@@ -22,6 +22,7 @@ import {
   statsQuotaWait,
   statsSessionBegin,
   statsSessionEnd,
+  statsSynthesisUsage,
   statsTask,
   statsTotals,
   statsWaitBegin,
@@ -31,6 +32,7 @@ import {
   type Usage,
 } from "../src/stats"
 import { roundCompleteLines } from "../src/conclusion"
+import { endRunStatus, startRunStatus, stopRunStatus } from "../src/run-status"
 
 // A usage helper shared with the conclusion-line case (the loop-conclusion
 // suite's shape).
@@ -665,6 +667,70 @@ describe("stats sessions and waits", () => {
     expect(doc.taskB.aiMs).toBe(0) // wall-clock segment: no AI booked
     expect(doc.taskB.wallMs).toBe(1000)
   })
+
+  // plans/0212 D3 (0165-123): under doc lanes (0099 D8's per-unit active
+  // map) one sibling's end must not stop the shared heartbeat or close the
+  // AI segment — the Handle header's "union of AI-active wall time" caliber
+  // and 0019's ~30s crash bound hold only while a live session keeps the
+  // segment open.
+  test("a sibling's end does not stop the union: the remaining session's AI time keeps counting and its accumulator keeps growing", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    await statsSessionBegin(dir, "T-002") // the sibling pipeline's session; lastKey moves to T-002
+    now += 60_000 // both sessions active (the overlap)
+    await statsSessionEnd(dir, "s1", usage(10), "glm", "simple", "T-001")
+    now += 600_000 // T-002's session alone: still AI time — the union continues
+    const report = await statsSessionEnd(dir, "s2", usage(20), "glm", "deep", "T-002")
+    await flushStats(dir)
+    const doc = await readDoc()
+    // The union of AI-active wall time: 60s of overlap + 600s of s2 alone
+    // = 660s — the sibling's end closed nothing (pre-fix: 60s, the segment
+    // reopened wall-only at s1's end).
+    expect(doc.roundB.aiMs).toBe(660_000)
+    expect(doc.roundB.wallMs).toBe(660_000)
+    // The surviving sibling held the segment from its begin: its per-session
+    // accumulator grew through both intervals; the ended sibling never held
+    // the segment after T-002's begin.
+    expect(doc.sessions["s2"]!.aiMs).toBe(660_000)
+    expect(report?.thisAiMs).toBe(660_000)
+    expect(doc.sessions["s1"]!.aiMs).toBe(0)
+  })
+
+  // plans/0212 D4 (0165-124): the session roll-up event carries this
+  // booking's delta beside the cumulative — the run bracket's total counts
+  // deltas, so a resumed takeover of a session booked in a previous run
+  // never re-counts that run's consumption.
+  test("the session roll-up carries the booking's delta: across a resumed session the run bracket counts each consumption exactly once", async () => {
+    await loadStats(dir)
+    startRunStatus(dir)
+    try {
+      await statsSessionBegin(dir, "T-001")
+      await statsSessionEnd(dir, "ses-1", usage(100), "glm", "simple", "T-001")
+      await flushStats(dir) // the interrupted run's graceful end
+      // The next run's resumed takeover: the same session id, 40 more.
+      await loadStats(dir)
+      await statsSessionBegin(dir, "T-001")
+      await statsSessionEnd(dir, "ses-1", usage(40), "glm", "simple", "T-001")
+      endRunStatus(0)
+    } finally {
+      stopRunStatus()
+    }
+    const events = (await Bun.file(join(dir, ".auto", "run-status.jsonl")).text())
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, any>)
+    const sessions = events.filter((event) => event.type === "usage-rollup" && event.scope === "session")
+    expect(sessions).toHaveLength(2)
+    // The journal line keeps the cumulative (the reader's meaning) beside
+    // this booking's delta.
+    expect(sessions[0]).toMatchObject({ session: "ses-1", usage: { input: 100 }, delta: { input: 100 } })
+    expect(sessions[1]).toMatchObject({ session: "ses-1", usage: { input: 140 }, delta: { input: 40 } })
+    // The run bracket's total: the two deltas — never the cumulative twice
+    // (pre-fix: 240, the resumed takeover re-counting run 1's 100).
+    const run = events.find((event) => event.type === "usage-rollup" && event.scope === "run")
+    expect(run?.usage).toMatchObject({ input: 140 })
+  })
 })
 
 // plans/0152 — the task-usage ledger: one append-only JSON line per closed
@@ -878,6 +944,84 @@ describe("the task-usage ledger", () => {
     expect(lines[3].wallMs).toBe(3000)
     expect(lines[3].since).toBeGreaterThanOrEqual(lines[1].at) // the second stint's bracket starts at/after the first closed
   })
+
+  // plans/0212 D1 (0165-121): the crash window inside the task switch — the
+  // ledger append is synchronous, the reset document reaches stats.json only
+  // through the async write queue, and a kill between the two leaves the
+  // closed stint open on disk so the restart's switch appends it twice. The
+  // load derives the already-recorded fact from the ledger's last line.
+  test("the crash window of the switch: a ledger line already recording the loaded bucket's (task, since) closes the stint at load — no duplicate line, the bucket opens fresh", async () => {
+    // The kill-between-append-and-persist scene, materialized: stats.json is
+    // the pre-switch state (T-001 still the open stint, its session map
+    // intact), the ledger already holds T-001's closing line.
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await writeDoc({
+      v: 1,
+      round: 1,
+      phase: "R-01.P01",
+      open: { at: 103_000, ai: false },
+      lastWriteAt: 104_000,
+      taskB: { id: "T-001", since: 101_000, aiMs: 3000, wallMs: 4000, waitMs: 0, sessions: 1, tasks: 1, usage: usage(100) },
+      phaseB: { id: "R-01.P01", since: 100_000 },
+      roundB: { id: "1", since: 100_000 },
+      sessions: { s1: { task: "T-001", aiMs: 3000, wallMs: 3000, rounds: 1, usage: usage(100), at: 103_000 } },
+      history: { rounds: 0 },
+    })
+    await Bun.write(
+      join(dir, ".auto", "task-usage.jsonl"),
+      [
+        JSON.stringify({ v: 1, task: "", phase: "R-01.P01", round: 1, since: 100_000, at: 101_000 }),
+        JSON.stringify({ v: 1, task: "T-001", phase: "R-01.P01", round: 1, since: 101_000, at: 105_000, aiMs: 3000, wallMs: 5000, sessions: 1, usage: usage(100) }),
+      ].join("\n") + "\n",
+    )
+    // The restarted run dispatches the next task: the switch must not append
+    // T-001 a second time.
+    await loadStats(dir)
+    await statsTask(dir, "T-002")
+    await flushStats(dir)
+    const lines = await readLedger()
+    expect(lines.filter((l) => l.task === "T-001")).toHaveLength(1) // the closed stint, once
+    expect(lines.at(-1)!.task).toBe("") // the restart's fresh unnamed pre-task bracket, as every run start
+    const doc = await readDoc()
+    expect(doc.taskB.id).toBe("T-002")
+    expect(doc.sessions).toEqual({}) // the recorded session map cleared with the bucket
+    expect(doc.taskB.phase).toBe("R-01.P01") // the fresh stint stamps its own open context (no phase switch happened in the restart)
+  })
+
+  // plans/0212 D5 (0165-125): the line's phase/round are the stint's own —
+  // stamped at the open, not read from the document at the close (where the
+  // phase boundary and the round rollover have already moved past the stint).
+  test("the stint's phase and round are its own: a close after a phase switch or a round rollover keeps the stint's opened-under identity", async () => {
+    await loadStats(dir)
+    await statsPhase(dir, "R-01.P01")
+    await statsTask(dir, "T-005")
+    await statsSessionBegin(dir, "T-005")
+    now += 60_000
+    await statsSessionEnd(dir, "s1", usage(100), "glm", "simple", "T-005")
+    // The phase boundary passes: T-005 (P01's last task) closes at P02's
+    // first switch — the line must say P01, not the close moment's P02.
+    await statsPhase(dir, "R-01.P02")
+    await statsTask(dir, "T-006")
+    await flushStats(dir)
+    let lines = await readLedger()
+    const t5 = lines.find((l) => l.task === "T-005")!
+    expect(t5.phase).toBe("R-01.P01")
+    expect(t5.round).toBe(1)
+    // The round half: T-006's stint opens in round 1 and closes after the
+    // rollover to round 2 — the line must say round 1.
+    await flushStats(dir)
+    await mkdir(join(dir, "docs", "R-02"), { recursive: true })
+    await loadStats(dir) // the rollover: doc.round becomes 2
+    await statsTask(dir, "T-007")
+    await flushStats(dir)
+    lines = await readLedger()
+    const t6 = lines.find((l) => l.task === "T-006")!
+    expect(t6.phase).toBe("R-01.P02")
+    expect(t6.round).toBe(1)
+    const doc = await readDoc()
+    expect(doc.taskB.phase).toBe("R-01.P02") // the open stint T-007's stamp is its own open context
+    expect(doc.taskB.round).toBe(2)
+  })
 })
 
 // Per-model and per-tier usage, the `classify` bucket and the protocol-drift
@@ -964,19 +1108,31 @@ describe("stats per-model / per-tier / classify buckets", () => {
     expect(doc.roundB.tiers?.deep?.sessions).toBe(1)
   })
 
-  test("the classify bucket: classifier tokens outside the unit's session totals", async () => {
+  // plans/0212 D5 (0165-125), enacting 0152 D4(c): the one-shots book to
+  // phase/round only — never the open task stint, whose ledger line they
+  // would land in (a one-shot is no unit's session).
+  test("the classify/synthesis buckets: one-shot tokens outside the unit's session totals and outside the task stint's record — phase/round only", async () => {
     await loadStats(dir)
     await statsTask(dir, "T-001")
     await statsClassifyUsage(dir, usage(42))
+    await statsSynthesisUsage(dir, usage(7))
+    await statsTask(dir, "T-002") // closes T-001's stint: the line must not carry the one-shots
     await flushStats(dir)
     const doc = await readDoc()
-    for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
+    for (const bucket of [doc.phaseB, doc.roundB]) {
       expect(bucket.models?.classify?.usage.input).toBe(42)
       expect(bucket.models?.classify?.sessions).toBe(1)
+      expect(bucket.models?.synthesis?.usage.input).toBe(7)
+      expect(bucket.models?.synthesis?.sessions).toBe(1)
       expect(bucket.usage.input).toBe(0) // never in the bucket's own totals
       expect(bucket.sessions).toBe(0)
     }
     expect(doc.sessions).toEqual({}) // and never in a per-session record
+    // The closed stint's ledger line carries no one-shot models section.
+    const raw = await Bun.file(join(dir, ".auto", "task-usage.jsonl")).text()
+    const line = JSON.parse(raw.trim().split("\n").at(-1)!) as { task: string; models?: unknown }
+    expect(line.task).toBe("T-001")
+    expect(line.models).toBeUndefined()
   })
 
   test("protocol-drift counters: fail / stuck / reprompt land on the model record in all three buckets", async () => {
@@ -1099,8 +1255,13 @@ describe("stats per-model / per-tier / classify buckets", () => {
     expect(doc.taskB.models?.glm?.sessions).toBe(2)
     expect(doc.taskB.models?.glm?.usage.input).toBe(150)
     expect(doc.taskB.models?.glm?.fails).toBe(2)
-    expect(doc.taskB.models?.classify?.usage.input).toBe(15)
-    expect(doc.taskB.models?.classify?.sessions).toBe(2)
+    // The classify one-shot accumulates in phase/round only (plans/0212 D5,
+    // 0152 D4(c) enacted) — never the task stint's record.
+    expect(doc.taskB.models?.classify).toBeUndefined()
+    expect(doc.phaseB.models?.classify?.usage.input).toBe(15)
+    expect(doc.phaseB.models?.classify?.sessions).toBe(2)
+    expect(doc.roundB.models?.classify?.usage.input).toBe(15)
+    expect(doc.roundB.models?.classify?.sessions).toBe(2)
     expect(doc.taskB.tiers?.simple?.sessions).toBe(2)
     expect(doc.taskB.usage.input).toBe(150) // classify stays outside the flat totals
     expect(doc.taskB.sessions).toBe(2)
@@ -1426,5 +1587,29 @@ describe("stats lane usage booking (plans/0068 D13, S4)", () => {
   test("no lanes section: the roll-up reader answers undefined (the conclusion keeps its shape)", async () => {
     expect(await statsLaneRollup(dir)).toBeUndefined()
     expect((await readDoc()).lanes).toBeUndefined()
+  })
+
+  // plans/0212 D2 (0165-122): the lanes section rolls with the round —
+  // cleared at the load's round rollover beside roundB, so no later round's
+  // conclusion reports lanes its totals do not hold (the "(booked into the
+  // totals above)" claim false from round 2 on, and the section the one
+  // unbounded part of the document). The same-round resume keeps it.
+  test("the lanes section rolls with the round: a rollover clears it, the new round's roll-up and conclusion carry no stale lanes; the same-round resume keeps it", async () => {
+    await statsTask(dir, "T-001")
+    await statsLaneUsage(dir, "T-001", { tokens: 5000, wallMs: 60_000, sessions: 3, detail: { usage: usage({ input: 5000 }) } })
+    await flushStats(dir)
+    // The same-round resume (an interrupted run re-loaded within round 1):
+    // the section survives the reload — the floor.
+    await loadStats(dir)
+    expect((await readDoc()).lanes?.["T-001"]?.tokens).toBe(5000)
+    expect(await statsLaneRollup(dir)).toMatchObject({ lanes: 1, tokens: 5000, booked: true })
+    await flushStats(dir)
+    // Round 2 opens (docs/R-02): the rollover clears the section with roundB.
+    await mkdir(join(dir, "docs", "R-02"), { recursive: true })
+    await loadStats(dir)
+    expect(await statsLaneRollup(dir)).toBeUndefined()
+    expect((await readDoc()).lanes).toBeUndefined()
+    const lines = await roundCompleteLines(dir)
+    expect(lines?.some((line) => line.startsWith("  lanes:"))).toBe(false)
   })
 })

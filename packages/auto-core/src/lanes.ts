@@ -1150,7 +1150,12 @@ export async function landLane(
       sessions: report.sessions,
       ...(report.detail !== undefined ? { detail: report.detail } : {}),
     })
-  const landedEvent = (outcome: "landed" | "conflict" | "blocked", extra: { detail?: string; usage?: boolean }) =>
+  // `booked: true` names the sites that ran `book()` above (the settled
+  // landing and the landing-sync failure): the report's detail breakdown
+  // rides the event there and only there (plans/0212 D4 — the run bracket's
+  // total counts it; the early-blocked paths book nothing and carry
+  // nothing, keeping the event and the stats buckets in step).
+  const landedEvent = (outcome: "landed" | "conflict" | "blocked", extra: { detail?: string; usage?: boolean; booked?: boolean }) =>
     emitStatus({
       type: "lane-landing",
       lane: task.id,
@@ -1159,6 +1164,7 @@ export async function landLane(
       ...(extra.usage
         ? { tokens: report.usage.tokens, wallMs: report.usage.wallMs, sessions: report.sessions }
         : {}),
+      ...(extra.booked && report.detail !== undefined ? { usage: report.detail.usage } : {}),
     })
   // ① verify the lane branch.
   const base = await mergeBaseSha(dir, "HEAD", branch)
@@ -1228,7 +1234,7 @@ export async function landLane(
     await clearLane(dir, task.id)
     await book()
     await teardownLane(gitOps, dir, task.id, branch)
-    landedEvent("blocked", { detail: "the landing-sync commit failed" })
+    landedEvent("blocked", { detail: "the landing-sync commit failed", booked: true })
     return { type: "blocked", error: `the landing-sync commit of ${task.id} failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The merge landed; commit the index ticks manually and re-run` }
   }
   // ④ the runtime fields and the report's usage.
@@ -1236,7 +1242,7 @@ export async function landLane(
   await book()
   // ⑤ teardown.
   const teardown = await teardownLane(gitOps, dir, task.id, branch)
-  landedEvent("landed", { usage: true })
+  landedEvent("landed", { usage: true, booked: true })
   return { type: "landed", teardown }
 }
 

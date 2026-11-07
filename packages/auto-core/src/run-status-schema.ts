@@ -244,8 +244,11 @@ export type RunStatusEvent =
   // A usage roll-up: the accumulated figures of one scope, pushed at the
   // driver's narrative points (session end, task/phase/round close-out,
   // run end). The stats module's own records (`.auto/stats.json`) stay the
-  // durable numbers; this is the same shapes as a push.
-  | { type: "usage-rollup"; run: number; at: number; scope: UsageScope; usage: UsageFigures; task?: string; session?: string }
+  // durable numbers; this is the same shapes as a push. `delta` (additive,
+  // plans/0212 D4) rides a session roll-up: this booking's figures beside
+  // the cumulative `usage` — the run bracket's total counts deltas, so a
+  // resumed takeover never re-counts the consumption a previous run booked.
+  | { type: "usage-rollup"; run: number; at: number; scope: UsageScope; usage: UsageFigures; delta?: UsageFigures; task?: string; session?: string }
   // A driver-level failure: a failure the driver itself met or classified —
   // a failed dispatch, a close-out violation, a spawn failure, a session
   // failure the retry ladder gave up on. `message` is the error text the
@@ -281,12 +284,15 @@ export type RunStatusEvent =
   //   - lane-landing: the landing protocol's outcome for one lane (D7) —
   //     a landed lane carries the report's usage figures (the numbers the
   //     parent books into its run stats), a conflict or a blocked landing
-  //     carries `detail`;
+  //     carries `detail`; `usage` (additive, plans/0212 D4) is the report's
+  //     detail breakdown, carried exactly where the parent booked that
+  //     detail into its stats buckets — the run bracket's total counts it,
+  //     so a parallel run's total is never its parent sessions alone;
   //   - lane-block: a lane blocked the run (the failure matrix's exit-2
   //     rows: a FAIL/blocked report, a landing conflict that spent its
   //     repair budget, the dispatch attempts cap) — `reason` the one-line
   //     fact, data rather than log prose.
   | { type: "lane-dispatch"; run: number; at: number; lane: string; worktree: string; pid?: number; merge?: string }
   | { type: "lane-exit"; run: number; at: number; lane: string; code: number; report: boolean; result?: LaneResult }
-  | { type: "lane-landing"; run: number; at: number; lane: string; outcome: LaneLandingOutcome; detail?: string; tokens?: number; wallMs?: number; sessions?: number }
+  | { type: "lane-landing"; run: number; at: number; lane: string; outcome: LaneLandingOutcome; detail?: string; tokens?: number; wallMs?: number; sessions?: number; usage?: UsageFigures }
   | { type: "lane-block"; run: number; at: number; lane: string; reason: string }

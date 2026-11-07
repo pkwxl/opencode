@@ -115,6 +115,36 @@ describe("the emitter (start/bracket/journal)", () => {
     }
   })
 
+  // plans/0212 D4 (0165-124): the run total counts each consumption exactly
+  // once — a session roll-up's delta (never the resumed entry's cumulative
+  // re-counted) plus a lane landing's booked usage (the detail the landing
+  // site folded into the stats buckets; no new event type, no new scope
+  // word — the finding's own route).
+  test("the run total counts deltas and booked lane landings — each consumption exactly once", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "run-status-total-"))
+    try {
+      startRunStatus(dir)
+      const cumulative = { input: 140, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 3 }
+      const delta = { input: 40, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 1 }
+      emitStatus({ type: "usage-rollup", scope: "session", usage: cumulative, delta, session: "ses_1" })
+      const laneUsage = { input: 90, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.01, steps: 2 }
+      emitStatus({ type: "lane-landing", lane: "T-001", outcome: "landed", tokens: 100, wallMs: 1000, sessions: 2, usage: laneUsage })
+      endRunStatus(0)
+      const events = journalOf(dir)
+      const run = events.find((event) => event.type === "usage-rollup" && event.scope === "run")!
+      // 40 (this booking's delta) + 90 (the booked lane) — never 140 (the
+      // cumulative a resumed session re-carries) and never the lane omitted.
+      expect(run).toMatchObject({ type: "usage-rollup", scope: "run", usage: { input: 130, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.01, steps: 3 } })
+      // The journal lines keep their reader meanings: the cumulative beside
+      // the delta, the landing's breakdown beside its headline figures.
+      expect(events.find((event) => event.type === "usage-rollup" && event.scope === "session")).toMatchObject({ usage: cumulative, delta })
+      expect(events.find((event) => event.type === "lane-landing")).toMatchObject({ usage: laneUsage })
+    } finally {
+      stopRunStatus()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("SERVICE_ENTRIES did not grow (the emitter is the log.ts family, never a services member)", () => {
     // The seed of the consolidation's services stage, still the list's
     // ceiling: this unit adds a driver-wide seam WITHOUT joining the holder

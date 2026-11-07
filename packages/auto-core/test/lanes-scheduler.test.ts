@@ -1283,7 +1283,10 @@ describe("the lane loop's observability (D13/§6.7, S4)", () => {
     for (const exit of exits) expect(exit).toMatchObject({ code: 0, report: true, result: "PASS" })
     const landings = events.filter((event) => event.type === "lane-landing")
     expect(landings.map((landing) => (landing as { lane: string }).lane).sort()).toEqual(["T-001", "T-002"])
-    for (const landing of landings) expect(landing).toMatchObject({ outcome: "landed", tokens: 100, wallMs: 1000, sessions: 2 })
+    // plans/0212 D4: the landing events carry the booked detail's breakdown
+    // beside their headline figures (the run bracket's total counts it), and
+    // only where the booking ran — these two landings booked.
+    for (const landing of landings) expect(landing).toMatchObject({ outcome: "landed", tokens: 100, wallMs: 1000, sessions: 2, usage: DETAIL.usage })
     // Both reports' usage booked: the per-unit lanes entries marked booked,
     // the fold visible in the round bucket (sessions, usage, the model and
     // tier records) — never in the task bucket.

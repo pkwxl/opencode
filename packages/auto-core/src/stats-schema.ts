@@ -130,7 +130,15 @@ export const CLASSIFY_BUCKET = "classify"
 // which ran), and the same collision edge accepted for the same reason.
 export const SYNTHESIS_BUCKET = "synthesis"
 
-export type Bucket = Totals & { id: string; since: number }
+// The stint-identity stamp (plans/0212 D5): a TASK bucket carries the phase
+// and round its stint OPENED under, stamped at statsTask — the close-moment
+// doc.phase/doc.round would name the next task's context (the closing switch
+// runs after the phase boundary moved them, so the last task of every phase
+// would record under the next phase, the last of a round under the next
+// round). Optional and absent on older documents (lenient parse = missing);
+// phaseB/roundB never carry the fields. The ledger record reads the stamp,
+// falling back to the close-moment values for older documents.
+export type Bucket = Totals & { id: string; since: number; phase?: string; round?: number }
 
 // Per-sessionID accumulation (requirement 2: sub-session continuation); task is the owning task, at is the last-active moment (eviction order).
 // model/tier (plans/0152 D3): the dispatch's internal model name and routed
@@ -166,6 +174,10 @@ export type StatsDoc = {
   // wired: `booked` marks a unit whose report carried the usage detail (the
   // figures below also folded into the phase/round buckets), and the
   // conclusion's lanes line reads the section through statsLaneRollup.
+  // The section rolls with the round (plans/0212 D2): cleared at the load's
+  // round rollover beside roundB — it carries no phase/round attribution and
+  // its booked figures rolled into history with roundB, so every round's
+  // conclusion reads only its own lanes.
   lanes?: Record<string, LaneStat>
   // The current task's plan-recorded execution mode (plans/0075 §2.4): what
   // the runner resolved the task to run under and where the decision came
@@ -389,7 +401,16 @@ function parseTierStats(raw: unknown): Record<string, TierStat> | undefined {
 
 function parseBucket(raw: unknown, fallbackId: string): Bucket {
   const b = (raw ?? {}) as Record<string, unknown>
-  return { id: str(b.id) || fallbackId, since: num(b.since), ...parseTotals(b) }
+  return {
+    id: str(b.id) || fallbackId,
+    since: num(b.since),
+    // The stint-identity stamp (plans/0212 D5): carried when present, absent
+    // stays absent (an older document's bucket keeps the close-moment
+    // fallback in the record assembly).
+    ...(str(b.phase) ? { phase: str(b.phase) } : {}),
+    ...(num(b.round) > 0 ? { round: num(b.round) } : {}),
+    ...parseTotals(b),
+  }
 }
 
 function parseSessions(raw: unknown): Record<string, SessionStat> {
@@ -609,7 +630,10 @@ function copySessionStat(s: SessionStat): SessionStat {
 }
 
 // Pure assembly of the closing stint's record from the document (the store
-// calls this after the final fold, before the bucket reset).
+// calls this after the final fold, before the bucket reset). The stint's
+// phase/round identity is the bucket's own stamp (plans/0212 D5 — the values
+// the stint opened under), with the close-moment document values as the
+// fallback for older documents whose buckets carry no stamp.
 export function taskStintRecord(doc: StatsDoc, at: number): TaskStintRecord {
   const bucket = doc.taskB
   const sessionLog = Object.entries(doc.sessions)
@@ -618,8 +642,8 @@ export function taskStintRecord(doc: StatsDoc, at: number): TaskStintRecord {
   return {
     v: 1,
     task: bucket.id,
-    phase: doc.phase,
-    round: doc.round,
+    phase: bucket.phase || doc.phase,
+    round: bucket.round || doc.round,
     since: bucket.since,
     at,
     aiMs: bucket.aiMs,
