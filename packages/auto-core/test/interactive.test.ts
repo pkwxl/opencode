@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { PassThrough, Writable } from "node:stream"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { opencodeAgent } from "../src/agent/opencode/client"
-import { interactiveChannel, startInteractive, type Interactive } from "../src/interactive"
+import { interactiveChannel, requestControl, startInteractive, type Interactive } from "../src/interactive"
 import { log } from "../src/log"
-import { services } from "../src/services"
+import { createServices, installServices, services, uninstallServices } from "../src/services"
 
 // Drive the resident readline with injected streams; the stub client records
 // the messages promptAsync receives. chunks collects everything the output
@@ -318,5 +318,40 @@ describe("interactiveChannel (the io/Interactive seam's resolver)", () => {
     })
     expect(channel).toEqual({ kind: "io", io: { input, output } })
     expect(runs).toBe(1)
+  })
+})
+
+// The sideband's control seam (plans/0194): the one route every control
+// word — the terminal sideband's own /exit and /failback lines above, and a
+// shell transport's injected Interactive (the worker's WebSocket bridge)
+// — takes into the run's services. The ambient holder read stays inside
+// src/interactive.ts (a SERVICE_ENTRIES member the callers ratchet sees);
+// a transport outside the core calls this export, never the holder itself
+// (each shell's boundary scan asserts its src never imports it).
+describe("requestControl (the sideband's control seam, plans/0194)", () => {
+  test("both requests land on the installed holder — exit the control flag, failback the router order", () => {
+    // The seam's reads must resolve to whatever holder the run installed,
+    // never a private fallback: the transport's frames steer the run's own
+    // control and router services.
+    const holder = createServices()
+    installServices(holder)
+    try {
+      expect(holder.control.exitRequested()).toBe(false)
+      requestControl("exit")
+      expect(holder.control.exitRequested()).toBe(true)
+      expect(holder.router.failbackRequested()).toBe(false)
+      // The no-argument form (the seam's default): the request is consumed
+      // as a plain reset with no model-order override.
+      requestControl("failback")
+      expect(holder.router.failbackRequested()).toBe(true)
+      expect(holder.router.consumeFailback()).toBe(true)
+      expect(holder.router.failbackOverride()).toBeUndefined()
+      // The ordered form threads the list exactly as the router takes it.
+      requestControl("failback", ["prov/a", "prov/b"])
+      expect(holder.router.consumeFailback()).toBe(true)
+      expect(holder.router.failbackOverride()).toEqual({ wildcard: "prov/a", fallback: ["prov/b"] })
+    } finally {
+      uninstallServices()
+    }
   })
 })

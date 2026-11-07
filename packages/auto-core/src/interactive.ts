@@ -70,6 +70,32 @@ export function interactiveChannel(opt: InteractiveOption | undefined): Interact
   return { kind: "injected", interactive: opt }
 }
 
+// The sideband's control seam (plans/0194): the one route every control
+// word — this module's own /exit and /failback lines below, and a shell
+// transport's injected Interactive (the WebSocket bridge carrying the same
+// words) — takes into the run's services. The ambient holder read stays in
+// this module (interactive is one of the SERVICE_ENTRIES the callers
+// ratchet in test/services.test.ts can see), and the seam keeps it that
+// way: a transport outside auto-core calls this export and never reaches
+// the holder itself, so the allowlist's reach and its ratchet's scan stay
+// the same shape (each shell's own suite asserts its src never imports the
+// holder module). The seam performs no validation — the terminal sideband
+// checks its arguments against the registry's names, a transport without
+// one against the slash rule; validation is the caller's transport
+// knowledge, applying the request is the run's state, and the seam carries
+// exactly the latter.
+export function requestControl(action: "exit" | "failback", order: string[] = []): void {
+  if (action === "exit") {
+    // The run-wide /exit flag: the safe boundaries and the recovery wait
+    // consume it wherever the loop stands.
+    services().control.requestExit()
+  } else {
+    // The pending reset/redefinition of the model order: the safe
+    // boundaries consume it (src/router.ts).
+    services().router.requestFailback(order)
+  }
+}
+
 // clients resolves the client of the session the sideband currently feeds
 // (plans/0055 §8.1): under a pool the session's agent picks the host; a
 // single client ignores the agent, as the no-registry path always did.
@@ -155,7 +181,7 @@ export function startInteractive(
       // takes the exit from there.
       if (text === "/exit" && pending.timer === undefined) {
         settle(undefined)
-        services().control.requestExit()
+        requestControl("exit")
         log("🚪 /exit received at the pause: stopping here — progress is persisted, re-run to resume exactly")
         rl.prompt()
         return
@@ -183,11 +209,11 @@ export function startInteractive(
     // is attached). A wait-and-probe loop sleeping at the time wakes and
     // pauses at once (plans/0057 §6).
     if (text === "/exit") {
-      // The request routes through the run's control service (the installed
-      // services' control): the sideband is one of the entries the services
-      // allowlist names, and the request is run-wide state — the safe
-      // boundaries and the recovery wait consume it wherever the loop stands.
-      services().control.requestExit()
+      // The request routes through the sideband's control seam (the
+      // installed services' control): the request is run-wide state — the
+      // safe boundaries and the recovery wait consume it wherever the loop
+      // stands.
+      requestControl("exit")
       log("🚪 /exit received: will pause and exit at the next safe boundary (a phase, task or subtask boundary, a session handover, a wrap-up entry, or a recovery wait); progress is persisted, re-run to resume exactly")
       rl.prompt()
       return
@@ -213,11 +239,10 @@ export function startInteractive(
             : `⚠ invalid /failback argument: "${bad}" (under a model registry, arguments are internal model names or provider/model with a slash; usage: /failback [primary <name> candidate <name> ...])`,
         )
       } else {
-        // The pending order routes through the run's router service (the
-        // installed services' router): the sideband is one of the entries
-        // the services allowlist names, and the state is run-wide — the
-        // safe boundaries consume it wherever the loop stands.
-        services().router.requestFailback(order)
+        // The pending order routes through the sideband's control seam (the
+        // installed services' router): the state is run-wide — the safe
+        // boundaries consume it wherever the loop stands.
+        requestControl("failback", order)
         log(
           order.length
             ? `⇄ /failback received: model order will be redefined at the next safe boundary (phase/task/subtask handover point) — primary ${order[0]}, fallback candidates ${order.slice(1).join(", ") || "(none)"}, and the primary will be retried`

@@ -10,19 +10,21 @@
 // question frame as an opaque payload and is never parsed back for state
 // (the direction draft §五 no-scraping rule; assessment risk #2).
 //
-// The control channel lands on the in-worker seams the assessment verified
-// as transport-neutral, exactly as the terminal sideband reaches them
-// (auto-core src/interactive.ts's /exit and /failback handlers):
-//   exit     → services().control.requestExit() — the run-wide /exit flag,
-//              consumed at the next safe boundary into exit 3 with progress
+// The control channel lands on the sideband's own core seam (auto-core
+// plans/0194):
+//   exit     → requestControl("exit") — the run-wide /exit flag, consumed
+//              at the next safe boundary into exit 3 with progress
 //              persisted (auto-core src/exit.ts:37-42, src/loop.ts);
-//   failback → services().router.requestFailback(order) — the pending order
-//              the safe boundaries consume (auto-core src/router.ts).
-// The ambient holder read is the sideband's own route (interactive is one of
-// the SERVICE_ENTRIES); the frames arrive while the run holds the
-// installation, which the channel knows from the run's own first attach —
-// before that (the starting window) there is no run to control and the
-// frame is answered unapplied, never dropped on a holder nobody reads.
+//   failback → requestControl("failback", order) — the pending order the
+//              safe boundaries consume (auto-core src/router.ts).
+// The seam export (auto-core src/interactive.ts, the sideband's home) is
+// the one route a transport outside the core may take into the run's
+// services; the ambient holder itself is closed to a shell's src (each
+// shell's boundary scan asserts its production sources never import it).
+// The frames arrive while the run holds the installation, which the
+// channel knows from the run's own first attach — before that (the
+// starting window) there is no run to control and the frame is answered
+// unapplied, never dropped on a holder nobody reads.
 //
 // Degradation is the contract (the task's scope; auto-core
 // src/opts.ts:184-185's never-a-hang rule): the timer arms only when minutes
@@ -42,8 +44,8 @@
 // or not its journal replay already held them — the two halves of the
 // reconstruction, the journal and the worker's still-blocking state, meet.
 import type { Interactive } from "@opencode-ai/auto-core/control-types"
+import { requestControl } from "@opencode-ai/auto-core/interactive"
 import { log } from "@opencode-ai/auto-core/log"
-import { services } from "@opencode-ai/auto-core/services"
 import { encodeFrame, type ControlAction, type FrameBody, type WsFrame } from "./ws-protocol"
 
 // How long the bridge has to come back after a loss (or to appear for an
@@ -161,10 +163,10 @@ export function wsInteractive(config: TransportConfig): Interactive {
       return
     }
     if (action === "exit") {
-      services().control.requestExit()
+      requestControl("exit")
       log("🚪 /exit received over the transport: will pause and exit at the next safe boundary (phase/task/subtask handover point, or a recovery wait); progress is persisted, re-run to resume exactly")
     } else {
-      services().router.requestFailback(order ?? [])
+      requestControl("failback", order)
       log(
         order?.length
           ? `⇄ /failback received over the transport: model order will be redefined at the next safe boundary (phase/task/subtask handover point) — primary ${order[0]}, fallback candidates ${order.slice(1).join(", ") || "(none)"}, and the primary will be retried`
