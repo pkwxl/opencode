@@ -13,7 +13,8 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { clarifyGate } from "../src/clarify"
-import { CLARIFIED_MARK, establishRound, phaseGateProblems, phaseGates, readPhases } from "../src/phases"
+import { renderAnalysisStub } from "../src/analysis"
+import { CLARIFIED_MARK, clarifiedMark, establishRound, phaseGateProblems, phaseGates, readPhases } from "../src/phases"
 import { briefProposal } from "../src/brief"
 import { runTransfer } from "../src/transfer"
 import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
@@ -171,6 +172,60 @@ describe("clarify: the analysis release (plans/0116 D1/D4)", () => {
     expect(result.lines.some((line) => line.includes("next: opencode-auto plan"))).toBe(true)
   })
 
+  test("the review lists the round-brief proposals (plans/0204 D2): one line per `### R-NN`, the absent posture named", async () => {
+    const dir = await repo()
+    await Bun.write(
+      join(dir, "docs/analysis.md"),
+      [
+        "# Project analysis",
+        "",
+        "## Analysis",
+        "",
+        "Two modules, one risk area.",
+        "",
+        "## Goals",
+        "",
+        "Ship the port with the protocol intact.",
+        "",
+        "## Project brief",
+        "",
+        "A faithful port.",
+        "",
+        "## Roadmap",
+        "",
+        "- R-01 mt — port the core",
+        "- R-02 mt — harden it",
+        "",
+        "## Round briefs",
+        "",
+        "### R-01",
+        "",
+        "Port the core; the protocol stays byte-identical.",
+        "",
+        "### R-02",
+        "",
+        "Harden the edges the port left thin.",
+        "",
+      ].join("\n"),
+    )
+    const { result } = await capture(() => clarifyGate(dir, { phases: "mt" }))
+    expect(result.type).toBe("released")
+    // One review line per proposal (0115's channel joins 0116 D3's list):
+    // each installs verbatim and passes its round's start gate on this mark.
+    expect(
+      result.lines.some((line) => line.includes("- R-01 — its round-brief proposal installs verbatim as its round.md when it opens (that round's round-start gate passes on this release)")),
+    ).toBe(true)
+    expect(
+      result.lines.some((line) => line.includes("- R-02 — its round-brief proposal installs verbatim as its round.md when it opens (that round's round-start gate passes on this release)")),
+    ).toBe(true)
+    // The absent posture: no section, every round keeps its round-start gate.
+    const plain = await repo()
+    await Bun.write(join(plain, "docs/analysis.md"), ANALYSIS(false))
+    const plainOut = (await capture(() => clarifyGate(plain, { phases: "mt" }))).result
+    expect(plainOut.type).toBe("released")
+    expect(plainOut.lines.some((line) => line.includes("no `## Round briefs` proposals — every round keeps its round-start gate, where you write its round.md by hand"))).toBe(true)
+  })
+
   test("grammar problems hold the release: nothing written, nothing committed", async () => {
     const dir = await repo()
     await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "no sections at all", ""].join("\n"))
@@ -179,6 +234,68 @@ describe("clarify: the analysis release (plans/0116 D1/D4)", () => {
     const { result } = await capture(() => clarifyGate(dir, { phases: "mt" }))
     expect(result.type).toBe("held")
     expect(result.lines.some((line) => line.includes("problems that hold its release"))).toBe(true)
+    expect((await Bun.file(join(dir, "docs/analysis.md")).text()).includes(CLARIFIED_MARK)).toBe(false)
+    expect((await git(dir, "log", "--format=%s")).includes("PLAN clarify")).toBe(false)
+  })
+})
+
+describe("clarify: an unreleased analysis past the project start (plans/0204 D1)", () => {
+  test("a stub left by establishment never captures the command: the held survey releases, the stub untouched", async () => {
+    const dir = await repo()
+    await surveyBoundary(dir, FORKED_SURVEY)
+    // The off posture's leftover (0101 D8): the untouched stub beside an
+    // established R-01, committed.
+    await Bun.write(join(dir, "docs/analysis.md"), renderAnalysisStub())
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "the stub the off posture left")
+    const { result } = await capture(() => clarifyGate(dir, { phases: "survey,implement" }))
+    expect(result.type).toBe("released")
+    // The survey released — the stub's analysis problems never surfaced.
+    expect(result.lines.some((line) => line.includes("the release of docs/R-01/P01-survey/survey.md accepts every recorded default:"))).toBe(true)
+    expect(result.lines.some((line) => line.includes("problems that hold its release"))).toBe(false)
+    // The stub stays unreleased: no whole-line mark in it (the stub's own
+    // comment hint names the line — hence clarifiedMark, not includes), no
+    // analysis-release commit.
+    expect(clarifiedMark(await Bun.file(join(dir, "docs/analysis.md")).text())).toBe(false)
+    expect((await git(dir, "log", "--format=%s")).includes("PLAN clarify the analysis release")).toBe(false)
+    // The note teaches the passed moment beside the release.
+    expect(result.lines.some((line) => line.includes("docs/analysis.md is unreleased — its release moment (the project start) has passed"))).toBe(true)
+  })
+
+  test("a valid analysis drafted later releases nothing: the survey is the target, the note teaches the hand channel", async () => {
+    const dir = await repo()
+    await surveyBoundary(dir, FORKED_SURVEY)
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(false, "- R-01 survey,implement — port the core\n- R-02 mt — harden it"))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "a later-drafted analysis")
+    const { result } = await capture(() => clarifyGate(dir, { phases: "survey,implement" }))
+    expect(result.type).toBe("released")
+    expect(result.lines.some((line) => line.includes("the release of docs/R-01/P01-survey/survey.md accepts every recorded default:"))).toBe(true)
+    // No analysis release: no commit, no mark, and none of the release's
+    // false next line (the promises only the project start honors).
+    expect((await git(dir, "log", "--format=%s")).includes("PLAN clarify the analysis release")).toBe(false)
+    expect((await Bun.file(join(dir, "docs/analysis.md")).text()).includes(CLARIFIED_MARK)).toBe(false)
+    expect(result.lines.some((line) => line.includes("the approved brief installs and R-01 opens"))).toBe(false)
+    expect(result.lines.some((line) => line.includes("docs/analysis.md is unreleased — its release moment (the project start) has passed, so it was not this command's target"))).toBe(true)
+    expect(result.lines.some((line) => line.includes("a hand `Clarified: yes` edit is the channel, putting the roadmap and round-brief proposals in force for the rounds and phases not yet started"))).toBe(true)
+  })
+
+  test("past the moment the refusal's analysis bullet teaches the passed moment (the interrupted-establishment shape)", async () => {
+    const dir = await repo()
+    // R-01's directory exists without its index (an interrupted
+    // establishment, plan's row 1): the analysis moment is past, whatever
+    // docs/analysis.md says.
+    await mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(false))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "interrupted establishment, analysis drafted")
+    const { result } = await capture(() => clarifyGate(dir, { phases: "survey,implement" }))
+    expect(result.type).toBe("held")
+    expect(result.lines.some((line) => line.includes("nothing awaits your clarification"))).toBe(true)
+    // The third bullet spelling: the truth, never the "is released" claim.
+    expect(result.lines.some((line) => line.includes("docs/analysis.md is unreleased — its release moment (the project start) has passed, so it is not this command's target"))).toBe(true)
+    expect(result.lines.some((line) => line.trim() === "- the project analysis docs/analysis.md is released")).toBe(false)
+    // Nothing written, nothing committed.
     expect((await Bun.file(join(dir, "docs/analysis.md")).text()).includes(CLARIFIED_MARK)).toBe(false)
     expect((await git(dir, "log", "--format=%s")).includes("PLAN clarify")).toBe(false)
   })

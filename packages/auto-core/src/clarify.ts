@@ -7,23 +7,27 @@
 // path stays fully supported — the stop lines name the command first and the
 // hand edit beside it.
 //
-// Two surfaces, resolved in state order (sequential by construction: the
-// analysis releases before any round exists):
-//   1. the project analysis docs/analysis.md, unreleased — mode-independent
-//      (transfer's project-start shape for a phased project, plan's m-mode
-//      rows); the release grammar gates run first, so a mark is never written
-//      onto a document the release checks would refuse anyway;
+// Two surfaces, each at its own moment (plans/0204 D1):
+//   1. the project analysis docs/analysis.md, unreleased, only while no round
+//      is established — the gate's own project-start condition (plan's rows
+//      0a–0d, transfer's projectStart), mode-independent. Establishment never
+//      requires the analysis (the off posture establishes from config with
+//      the stub on disk, and the analysis is a living document a person may
+//      draft at any time), so past that moment an unreleased analysis is a
+//      note line beside the survey branch, never the target; the release
+//      grammar gates run first, so a mark is never written onto a document
+//      the release checks would refuse anyway;
 //   2. the held survey of the current human-gated phase — the handover route
 //      (all tasks done, the phase not complete), survey.md present, open
 //      Fork: lines, no mark: the same predicate transfer's boundary refusal
 //      and run's boundary stop check ahead of any session.
 //
-// The command is the review (plans/0116 D3): before writing it prints what
-// the mark accepts — the survey's Fork: lines with their Recommend: defaults,
-// the analysis's roadmap lines and brief proposal. Overrides keep their
-// channel: an answer beside a fork line, written before (riding the release
-// commit) or after (a plain committed edit the planners read — the release
-// stays).
+// The command is the review (plans/0116 D3, completed by 0204 D2): before
+// writing it prints what the mark accepts — the survey's Fork: lines with
+// their Recommend: defaults, the analysis's roadmap lines, its round-brief
+// proposals and the brief proposal. Overrides keep their channel: an answer
+// beside a fork line, written before (riding the release commit) or after (a
+// plain committed edit the planners read — the release stays).
 //
 // The dirty-tree discipline is close's D20 tightened to the target (D5): the
 // target document's own uncommitted changes — the person's fill, the whole
@@ -42,7 +46,7 @@
 // phase index). The commit is the driver's own, Auto-Stage: clarify, the PLAN
 // family the release's other halves (PLAN brief install …) sit in.
 import { join } from "node:path"
-import { analysisProblems } from "./analysis"
+import { analysisProblems, roundBriefProposals, ROUND_BRIEFS_HEADING } from "./analysis"
 import { briefProposal, BRIEF_PROPOSAL_HEADING } from "./brief"
 import { ANALYSIS_DOC, roundDirName } from "./docpaths"
 import { EOF_MARK } from "./doccheck"
@@ -50,12 +54,14 @@ import { changedFiles, commitTree, driverStateFile, repoRoots } from "./git"
 import {
   CLARIFIED_MARK,
   clarifiedMark,
+  currentRound,
   forkLines,
   forksWithoutRecommend,
   nearMissForkLines,
   phaseGates,
   phaseSurveyDoc,
   readPhases,
+  roundRoot,
   routePhase,
   surveyForks,
 } from "./phases"
@@ -72,14 +78,39 @@ export type ClarifyResult = { type: "released" | "held" | "error"; lines: string
 // plan's in m mode (transfer refuses it), so the next-step lines say so.
 export type ClarifyOptions = { phases: string }
 
+// The refusal's analysis bullet (plans/0204 D1): the document's state beside
+// the survey branch. The third spelling matters — an unreleased analysis past
+// the project start is not "released" (which the branch order asserted for a
+// document it had just declined to target): its moment has passed, and the
+// teaching names the hand channel's real consequences (the roadmap and
+// round-brief readers arm on a hand release, living governance for the rounds
+// and phases not yet started).
+type AnalysisBullet = "released" | "absent" | "unreleased-past"
+
+const analysisBulletLine = (state: AnalysisBullet): string =>
+  state === "released"
+    ? `the project analysis ${ANALYSIS_DOC} is released`
+    : state === "absent"
+      ? `no project analysis ${ANALYSIS_DOC} exists`
+      : `the project analysis ${ANALYSIS_DOC} is unreleased — its release moment (the project start) has passed, so it is not this command's target; ` +
+        `a hand \`${CLARIFIED_MARK}\` edit is the channel, putting the roadmap and round-brief proposals in force for the rounds and phases not yet started`
+
 export async function clarifyGate(directory: string, opts: ClarifyOptions): Promise<ClarifyResult> {
   const { bin } = shellProfile()
   const manual = opts.phases === "m"
   const advance = `${bin} ${manual ? "plan" : "transfer"} ${directory}`
 
-  // —— 1. The analysis gate (state order: before any round exists) ——
+  // —— 1. The analysis gate, at its own moment (plans/0204 D1): the branch is
+  // taken only while no round is established — the project-start condition
+  // plan's rows 0a–0d and transfer's projectStart hold (`currentRound` 1 with
+  // no R-01 directory). Past it an unreleased analysis rides branch 2 as the
+  // note, never as the target: the analysis is a living document (the off
+  // posture's establishment leaves the stub on disk, a person may draft one
+  // at any time), and its mid-project release is a consequential act no stop
+  // surfaces.
   const raw = await Bun.file(join(directory, ANALYSIS_DOC)).text().catch(() => undefined)
-  if (raw !== undefined && !clarifiedMark(raw)) {
+  const unreleased = raw !== undefined && !clarifiedMark(raw)
+  if (unreleased && (await currentRound(directory)) === 1 && !(await roundRoot(directory, 1))) {
     let types: ReturnType<typeof loadPhaseTypes>
     try {
       types = loadPhaseTypes(directory)
@@ -97,6 +128,11 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
         ],
       }
     }
+    // The round-brief proposals the release puts in force (plans/0204 D2):
+    // one line per `### R-NN`, from analysis.ts's own parser — the same
+    // extraction the problems gate and the install path share. The absent
+    // posture teaches what a round without a proposal keeps: its gate.
+    const briefs = roundBriefProposals(raw)
     return await release(
       directory,
       ANALYSIS_DOC,
@@ -104,6 +140,12 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
       [
         `the release of ${ANALYSIS_DOC} puts in force, as written:`,
         ...roadmapRounds(raw).map((entry) => `  - ${roundDirName(entry.round)} ${entry.phases} — ${entry.goal}`),
+        ...(briefs.size
+          ? [...briefs.keys()].map(
+              (round) =>
+                `  - ${roundDirName(round)} — its round-brief proposal installs verbatim as its round.md when it opens (that round's round-start gate passes on this release)`,
+            )
+          : [`  - no \`${ROUND_BRIEFS_HEADING}\` proposals — every round keeps its round-start gate, where you write its round.md by hand`]),
         ...forkLines(raw).map((line) => `  ${line.trim()}`),
         `  ${
           briefProposal(raw) !== undefined
@@ -116,31 +158,65 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
     )
   }
 
-  // —— 2. The survey gate of the current human-gated phase ——
+  // —— 2. The survey gate of the current human-gated phase —— An unreleased
+  // analysis reaching this branch is past its moment: the refusal teaches it
+  // in the analysis bullet, every other non-error result carries the same
+  // teaching as one appended ℹ line (plans/0204 D1 — one statement per
+  // output).
+  const analysis: AnalysisBullet = raw === undefined ? "absent" : unreleased ? "unreleased-past" : "released"
+  const survey = await surveyGate(directory, opts, bin, advance, analysis)
+  if (survey.refusal || survey.result.type === "error" || !unreleased) return survey.result
+  return {
+    ...survey.result,
+    lines: [
+      ...survey.result.lines,
+      `ℹ ${ANALYSIS_DOC} is unreleased — its release moment (the project start) has passed, so it was not this command's target; ` +
+        `a hand \`${CLARIFIED_MARK}\` edit is the channel, putting the roadmap and round-brief proposals in force for the rounds and phases not yet started`,
+    ],
+  }
+}
+
+// Branch 2 (plans/0116 D1): the survey gate over the routed phase, the result
+// paired with a refusal flag — the general refusal's analysis bullet is the
+// unreleased-analysis teaching's home there, so clarifyGate appends the ℹ
+// note only beside the non-refusal results.
+async function surveyGate(
+  directory: string,
+  opts: ClarifyOptions,
+  bin: string,
+  advance: string,
+  analysis: AnalysisBullet,
+): Promise<{ result: ClarifyResult; refusal: boolean }> {
   let state: Awaited<ReturnType<typeof readPhases>>
   try {
     state = await readPhases(directory)
   } catch (error) {
-    return { type: "error", lines: [`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`] }
+    return { result: { type: "error", lines: [`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`] }, refusal: false }
   }
-  if (state === undefined) return generalRefusal(directory, advance, raw !== undefined, "no round is established")
+  if (state === undefined) return { result: generalRefusal(directory, advance, analysis, "no round is established"), refusal: true }
   const route = await routePhase(directory, { loadPlan, bin, phases: opts.phases })
-  if (route.type === "blocked") return { type: "error", lines: [`⏸ phase flow blocked: ${route.reason}`] }
+  if (route.type === "blocked") return { result: { type: "error", lines: [`⏸ phase flow blocked: ${route.reason}`] }, refusal: false }
   if (route.type === "handover" && phaseGates(route.phase).includes("human")) {
     const doc = phaseSurveyDoc(route.phase)
     const text = await Bun.file(join(directory, doc)).text().catch(() => undefined)
     if (text === undefined) {
       return {
-        type: "held",
-        lines: [
-          `⏸ ${doc} is missing — the survey must exist before the phase can complete; the phase's closing task writes it, so this is a gate problem, not a clarification awaiting you (see the boundary stop)`,
-        ],
+        result: {
+          type: "held",
+          lines: [
+            `⏸ ${doc} is missing — the survey must exist before the phase can complete; the phase's closing task writes it, so this is a gate problem, not a clarification awaiting you (see the boundary stop)`,
+          ],
+        },
+        refusal: false,
       }
     }
     if (clarifiedMark(text)) {
       return {
-        type: "held",
-        lines: [`⏸ ${doc} is already released — the phase completes on the next advance: ${bin} transfer ${directory}`],
+        result: {
+          type: "held",
+          lines: [`⏸ ${doc} is already released — the phase completes on the next advance: ${bin} transfer ${directory}`],
+        },
+        refusal: false,
       }
     }
     // Near-miss fork lines (plans/0169 D3): the release accepts exactly the
@@ -149,36 +225,45 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
     const nearMiss = nearMissForkLines(text)
     if (nearMiss.length > 0) {
       return {
-        type: "held",
-        lines: [
-          `⏸ ${doc} carries ${nearMiss.length} near-miss Fork line(s) the release scan cannot read — normalize them to start with \`Fork:\` (or remove them), then re-run: ${bin} clarify ${directory}`,
-          ...nearMiss.map((line) => `  ${line.trim().slice(0, 120)}`),
-        ],
+        result: {
+          type: "held",
+          lines: [
+            `⏸ ${doc} carries ${nearMiss.length} near-miss Fork line(s) the release scan cannot read — normalize them to start with \`Fork:\` (or remove them), then re-run: ${bin} clarify ${directory}`,
+            ...nearMiss.map((line) => `  ${line.trim().slice(0, 120)}`),
+          ],
+        },
+        refusal: false,
       }
     }
     if (surveyForks(text) > 0) {
       const bare = forksWithoutRecommend(text)
       if (bare > 0) {
         return {
-          type: "held",
-          lines: [
-            `⏸ ${doc} has ${bare} Fork: line(s) without a \`Recommend:\` default — the person decides from consequences plus one default; ` +
-              `have your agent add the missing defaults, then re-run: ${bin} clarify ${directory}`,
-          ],
+          result: {
+            type: "held",
+            lines: [
+              `⏸ ${doc} has ${bare} Fork: line(s) without a \`Recommend:\` default — the person decides from consequences plus one default; ` +
+                `have your agent add the missing defaults, then re-run: ${bin} clarify ${directory}`,
+            ],
+          },
+          refusal: false,
         }
       }
-      return await release(
-        directory,
-        doc,
-        text,
-        [
-          `the release of ${doc} accepts every recorded default:`,
-          ...forkLines(text).map((line) => `  ${line.trim()}`),
-          `\`${CLARIFIED_MARK}\` accepts every \`Fork:\` line's \`Recommend:\` default — your own answers sit beside the lines (written now or later: a later answer is a plain committed edit the planners read)`,
-        ],
-        `PLAN clarify ${phaseRefText(route.phase)} (release the recorded forks)`,
-        `next: ${bin} transfer ${directory} — the phase completes, the approved \`${BRIEF_PROPOSAL_HEADING}\` section installs, and the next phase's plan task is constructed for your review`,
-      )
+      return {
+        result: await release(
+          directory,
+          doc,
+          text,
+          [
+            `the release of ${doc} accepts every recorded default:`,
+            ...forkLines(text).map((line) => `  ${line.trim()}`),
+            `\`${CLARIFIED_MARK}\` accepts every \`Fork:\` line's \`Recommend:\` default — your own answers sit beside the lines (written now or later: a later answer is a plain committed edit the planners read)`,
+          ],
+          `PLAN clarify ${phaseRefText(route.phase)} (release the recorded forks)`,
+          `next: ${bin} transfer ${directory} — the phase completes, the approved \`${BRIEF_PROPOSAL_HEADING}\` section installs, and the next phase's plan task is constructed for your review`,
+        ),
+        refusal: false,
+      }
     }
     // Zero forks with a proposed brief (plans/0169 D3): the proposal's
     // approval is a release moment too — the mark installs it (the sibling
@@ -187,24 +272,28 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
     // ungated completion) — not a clarification moment; the general refusal
     // below names the state.
     if (surveyForks(text) === 0 && briefProposal(text) !== undefined) {
-      return await release(
-        directory,
-        doc,
-        text,
-        [
-          `the release of ${doc} approves the proposed \`${BRIEF_PROPOSAL_HEADING}\` section — it installs as the project brief on the next advance:`,
-        ],
-        `PLAN clarify ${phaseRefText(route.phase)} (release the proposed brief)`,
-        `next: ${bin} transfer ${directory} — the phase completes, the approved \`${BRIEF_PROPOSAL_HEADING}\` section installs, and the next phase's plan task is constructed for your review`,
-      )
+      return {
+        result: await release(
+          directory,
+          doc,
+          text,
+          [`the release of ${doc} approves the proposed \`${BRIEF_PROPOSAL_HEADING}\` section — it installs as the project brief on the next advance:`],
+          `PLAN clarify ${phaseRefText(route.phase)} (release the proposed brief)`,
+          `next: ${bin} transfer ${directory} — the phase completes, the approved \`${BRIEF_PROPOSAL_HEADING}\` section installs, and the next phase's plan task is constructed for your review`,
+        ),
+        refusal: false,
+      }
     }
   } else if (route.type === "execute") {
     const pending = route.plan.tasks.filter((task) => task.status !== "done").length
     return {
-      type: "held",
-      lines: [
-        `⏸ ${phaseRefText(route.phase)} still holds ${pending} pending task(s) — the clarification gate follows the phase's completion; execute them first: ${bin} run ${directory}`,
-      ],
+      result: {
+        type: "held",
+        lines: [
+          `⏸ ${phaseRefText(route.phase)} still holds ${pending} pending task(s) — the clarification gate follows the phase's completion; execute them first: ${bin} run ${directory}`,
+        ],
+      },
+      refusal: false,
     }
   }
   const atBoundary =
@@ -213,17 +302,17 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
       : route.type === "plan"
         ? `${phaseRefText(route.phase)} has no tasks yet — its planning has not run; the gate follows the phase's work`
         : `${roundDirName(state.round)} is complete — the next advance opens the following round`
-  return generalRefusal(directory, advance, raw !== undefined, atBoundary)
+  return { result: generalRefusal(directory, advance, analysis, atBoundary), refusal: true }
 }
 
 // The neither-gate refusal (plans/0116 D2): what was checked, where the mark
 // is valid, and the next command.
-function generalRefusal(directory: string, advance: string, analysisPresent: boolean, stateLine: string): ClarifyResult {
+function generalRefusal(directory: string, advance: string, analysis: AnalysisBullet, stateLine: string): ClarifyResult {
   return {
     type: "held",
     lines: [
       "⏸ nothing awaits your clarification right now:",
-      `  - ${analysisPresent ? `the project analysis ${ANALYSIS_DOC} is released` : `no project analysis ${ANALYSIS_DOC} exists`}`,
+      `  - ${analysisBulletLine(analysis)}`,
       `  - ${stateLine}`,
       `\`${CLARIFIED_MARK}\` releases exactly two moments: the unreleased analysis at the project start, and a held survey's open \`Fork:\` lines at a phase boundary — the awaiting stop names the document of the moment.`,
       `next: ${advance}`,
