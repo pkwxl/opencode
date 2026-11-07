@@ -24,7 +24,7 @@ Distinguish two kinds of knowledge: the task units (`docs/R-NN/P<nn>-<type>/task
 
 - **Templates must keep the `with { type: "file" }` import** — the only way shell packages embed them into the binary at compile time. When adding a built-in template, register it in the same change: prompt templates → the embedded registry in `src/template.ts` (shell-added templates go through `registerTemplate`), mode templates → `src/mode.ts`, intent packs → `src/intent/load.ts`, intent bundles → the built-in table in `src/bundle.ts`; init copy templates are registered by the shell.
 - `src/templates.d.ts` provides path-string types for `*.md` / `*.json` imports; do not remove `resolveJsonModule: false` from `tsconfig.json`.
-- Shells reference this package's TS sources and template files directly via `package.json` `exports` (`"./*": "./src/*.ts"`, `"./templates/*"`); new src files need no exports registration. **The core does not know shells** (never import any shell package); shell differences are injected exclusively via the `src/shell.ts` profile or parameter passing.
+- Shells reference this package's TS sources and template files directly via `package.json` `exports` (`"./*": "./src/*.ts"`, `"./templates/*"`); new src files need no exports registration — the open `./*` boundary is ruled (0196 D1: the shape pinned core-side, the specifier the only route from a shell, held by each shell's own boundary scan). **The core does not know shells** (never import any shell package); shell differences are injected exclusively via the `src/shell.ts` profile or parameter passing.
 
 ## Core/shell contract
 

@@ -15,7 +15,7 @@ Decision rule: session pipeline, state-file protocol, prompt rendering, acceptan
 
 ## B. One-way dependency
 
-- Shells import `@opencode-ai/auto-core/*` (core `package.json` `exports`: `"./*": "./src/*.ts"`, `"./templates/*": "./templates/*"`); templates are imported from `@opencode-ai/auto-core/templates/<file>` via `with { type: "file" }` (embedded into the binary at compile time).
+- Shells import `@opencode-ai/auto-core/*` (core `package.json` `exports`: `"./*": "./src/*.ts"`, `"./templates/*": "./templates/*"`); templates are imported from `@opencode-ai/auto-core/templates/<file>` via `with { type: "file" }` (embedded into the binary at compile time). The open `./*` boundary is **ruled, not accidental** (plans/0196 D1, finding 0165-174): every src module is consumable, the shape pinned core-side by the import-direction suite so any narrowing or widening amends that ruling; and the package specifier is the **only** sanctioned route — no relative import may escape a shell package into any sibling (each shell's `test/no-ambient-services.test.ts` holds both this rule and the ambient-holder ban, plans/0194 D3/0196 D3), because relative imports bypass the exports map entirely.
 - **The core does not know shells**: packages/auto-core must not import any shell package; default behavior = the general shell's status quo — with no profile set, core messages are byte-identical to historical behavior.
 - **Shells never depend on each other**: shell packages never import one another; they share only the core.
 - Each shell package must ship its own `src/templates.d.ts` shim (path-string types for `*.md`/`*.json` imports; without it, cross-package template imports all go red); do not remove `resolveJsonModule: false` from `tsconfig.json`.

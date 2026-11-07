@@ -24,6 +24,13 @@
 //   9. no HTTP          — the core imports no HTTP module and calls no HTTP
 //                         server API (0067 §三.1: the core never imports HTTP;
 //                         serving belongs to a shell)
+//  10. seam policy reach — the run-services seam's member homes reach
+//                         pipeline/policies modules only as SEAM_POLICY_REACH
+//                         declares, and every declared edge stays live
+//                         (plans/0196 D2, finding 0165-174)
+//  11. exports shape    — package.json's exports map keeps its ruled open
+//                         shape (plans/0196 D1); drift in either direction
+//                         amends that ruling, never a silent edit
 // Any violation lists the offending edges; a legitimate new dependency means a
 // conscious, reviewed edit to the tables below — never a silent one.
 // Type-only edges count for every direction rule. For cycles they are checked
@@ -873,6 +880,31 @@ const SUBDOMAIN_EDGES: Array<[Subdomain, Subdomain]> = [
   ["runtime", "policies"],
 ]
 
+// The services seam's policy reach at member granularity (plans/0196 D2,
+// finding 0165-174): the class ratchet cannot judge a seam home's policy
+// dependencies — measured at 0196's ruling, `git-ops → charter-clamp` is the
+// ONLY kernel→pipeline value edge in the graph (the class-wide allowance is
+// exactly as wide as this one edge, so no second one could ever fail it),
+// and `git-ops → resolve` is intra-kernel, invisible to every class pair.
+// These entries are the run-services seam's declared policy edges, each a
+// live fact with its why; the rule (checkSeamPolicyReach) is that a listed
+// source home reaches no pipeline/policies member outside its declared set
+// and that every declared edge still exists — a new policy reach into the
+// seam or a dead declaration is an architecture event, never a silent edit.
+// A new services member home joins the source set consciously, with its why.
+const SEAM_POLICY_REACH: Array<{ from: string; to: string; why: string }> = [
+  {
+    from: "git-ops",
+    to: "charter-clamp",
+    why: "afterSession's marker collection clamps each freshly collected default against the charter at the scan that collected it (0082 §10 D12) — the reach 0165-174 measured as the only kernel→pipeline edge in the graph",
+  },
+  {
+    from: "git-ops",
+    to: "resolve",
+    why: "the same collection reads the proxy-answer ledger (0020 H4: collection is auditing hoisted before the commit gate, independent of the commit switch — the no-commit double keeps it for the same reason)",
+  },
+]
+
   // Session-driving chain, bottom → top (0024 §D.2): imports between ranked
   // modules must go strictly downward in rank.
   const RANK: Record<string, number> = {
@@ -1481,6 +1513,54 @@ function checkSubdomainEdges(): string[] {
   return problems
 }
 
+// The services seam's policy reach (plans/0196 D2): every declared edge is a
+// live module-to-module edge, and a listed source home reaches no
+// pipeline/policies member outside its declared set. Type-only edges count —
+// a type reach of policy into the seam couples it all the same (the header's
+// standing convention for direction rules).
+function checkSeamPolicyReach(): string[] {
+  const problems: string[] = []
+  const known = new Set(modules)
+  for (const entry of SEAM_POLICY_REACH) {
+    if (!known.has(entry.from)) problems.push(`SEAM_POLICY_REACH lists src/${entry.from}.ts which does not exist — remove the stale entry`)
+    if (!known.has(entry.to)) problems.push(`SEAM_POLICY_REACH lists src/${entry.to}.ts which does not exist — remove the stale entry`)
+  }
+  for (const [from, list] of edges) {
+    const declared = SEAM_POLICY_REACH.filter((entry) => entry.from === from).map((entry) => entry.to)
+    if (declared.length === 0) continue
+    for (const e of list) {
+      const b = subdomainOf(e.to)
+      if (b !== "pipeline" && b !== "policies") continue
+      if (!declared.includes(e.to)) {
+        problems.push(`seam policy reach: src/${from}.ts imports src/${e.to}.ts (${b}) outside SEAM_POLICY_REACH — the run-services seam's homes reach policy only as declared (plans/0196 D2); a new reach is an architecture event, never a silent edit${e.typeOnly ? " [type]" : ""}`)
+      }
+    }
+  }
+  for (const entry of SEAM_POLICY_REACH) {
+    const list = edges.get(entry.from) ?? []
+    if (!list.some((e) => e.to === entry.to)) problems.push(`stale SEAM_POLICY_REACH entry: src/${entry.from}.ts no longer imports src/${entry.to}.ts — remove it (the declaration tracks a live edge: ${entry.why})`)
+  }
+  return problems
+}
+
+// The package boundary's ruled shape (plans/0196 D1): the exports map is the
+// declared seam every shell consumption rides on, ruled OPEN — `./*` maps
+// every src module, `./templates/*` the embedded assets. A change in either
+// direction (narrowing to an entry-module list, widening, re-shaping) amends
+// that ruling and its shell-contract sentence; this pin makes the drift fail
+// here first, naming the ruling.
+function checkExportsShape(): string[] {
+  const pkg = JSON.parse(readFileSync(join(SRC, "..", "package.json"), "utf8")) as { exports?: Record<string, string> }
+  const expected: Record<string, string> = { "./templates/*": "./templates/*", "./*": "./src/*.ts" }
+  const got = pkg.exports ?? {}
+  const keys = Object.keys(got).sort()
+  const want = Object.keys(expected).sort()
+  if (JSON.stringify(keys) !== JSON.stringify(want) || keys.some((k) => got[k] !== expected[k])) {
+    return [`exports map drifted: package.json exports is ${JSON.stringify(pkg.exports)} — the ruled shape is ${JSON.stringify(expected)} (plans/0196 D1: the open ./* boundary stands by measured decision; any change amends that ruling, with the shells' specifier-only scans as the map's complement)`]
+  }
+  return []
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1532,5 +1612,13 @@ describe("import direction (M0.7 / F11)", () => {
 
   test("sub-domain value edges stay inside the seeded allowlist; contract is a leaf, no engine → pipeline (R10)", () => {
     expect(checkSubdomainEdges().join("\n")).toBe("")
+  })
+
+  test("the services seam's policy reach stays declared; every declared edge stays live (0196 D2)", () => {
+    expect(checkSeamPolicyReach().join("\n")).toBe("")
+  })
+
+  test("the exports map keeps its ruled open shape (0196 D1)", () => {
+    expect(checkExportsShape().join("\n")).toBe("")
   })
 })
