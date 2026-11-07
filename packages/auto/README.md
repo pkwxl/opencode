@@ -1164,7 +1164,7 @@ The `agent` key selects the **coding agent that drives the sessions** (`init --a
 | Choice | Description |
 | --- | --- |
 | `opencode` (default) | Managed or reused `opencode serve` (see above), the full capability set |
-| `claude` | Claude Code headless (`claude -p --output-format stream-json`, requires the `claude` CLI on PATH); one child process per working session, `--server` ignored. Missing capabilities (fork, questions, …) are degraded automatically at run start and printed one by one |
+| `claude` | Claude Code headless (`claude -p --output-format stream-json`, requires the `claude` CLI on PATH); one child process per working session, `--server` ignored. Missing capabilities (fork, questions, …) are degraded automatically at run start and printed one by one. The `opencode.json` `permission.external_directory` posture — the working-directory knowledge boundary, the root-symlink read-only stamps, a sealed wall's standing deny — reaches no claude session (auto-core plans/0190): `status` renders the limit, and a project that declares a wall refuses to seal under claude (advance the sealing `transfer` under an agent that carries it, e.g. `OPENCODE_AUTO_AGENT=opencode`) |
 
 Precedence: the shell profile's agent > the environment variable `OPENCODE_AUTO_AGENT` (per-run override;
 empty string = no override) > the config's `agent` key > `opencode`. Every session (including the `m`-mode
@@ -1175,7 +1175,10 @@ optional since M6.1; the old `--agent <name>` contract-name semantics are retire
 contract — strictly do only the current role, treat state files as read-only, verification execution rights
 belong to the driver, permission questions go through the question tool while everything else is decided
 autonomously with the decision process recorded. opencode uses it as the session agent; claude appends its
-body to the system prompt and translates `opencode.json`'s permission rules into claude settings. When the
+body to the system prompt and translates `opencode.json`'s permission rules into claude settings —
+except `permission.external_directory`, which has no claude translation today (auto-core plans/0190:
+the knowledge boundary and the wall's standing deny are opencode-session facts; a declared wall's
+close refuses under claude). When the
 contract differs from the built-in template, `init` / `amend` / `fix` always replace it with the latest
 template, and `run` prints a refresh hint at startup when it spots a mismatch; a missing file is caught by
 the pre-run integrity check — both point at `opencode-auto fix <dir>` (rewrites the contract from the

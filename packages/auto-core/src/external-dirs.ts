@@ -24,9 +24,12 @@
 // only written when missing": exactly these entries are inserted, nothing
 // else); fix keeps them in sync as a fixable finding. The write is a
 // mechanical grammar (P7) and pure derivation from disk (P6 — re-running
-// reproduces the same bytes; the machine-specific real path lives only in the
-// gitignored opencode.json, never in git); with no root symlinks nothing is
-// written and every byte stays as before (P10).
+// reproduces the same bytes; opencode.json has been a committed project
+// surface since plans/0138, so the machine-specific real path reaches git
+// with the file when it is tracked — a person who keeps the file local by
+// their own ignore line owns that posture, and the wall commit's record
+// lines then stay the only tracked copy, plans/0190 D2); with no root
+// symlinks nothing is written and every byte stays as before (P10).
 //
 // The boundary (plans/0147 D1): the template ships
 // `external_directory: { "/**": "deny", "/tmp/**": "allow" }` — every path

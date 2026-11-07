@@ -34,8 +34,11 @@ async function wallFixture(gate?: string): Promise<{ f: LoopFixture; corpus: str
   const corpus = mkdtempSync(join(tmpdir(), "auto-wall-advance-corpus-"))
   made.push(corpus)
   writeFileSync(join(corpus, "timer.c"), "void tick(void) {}\n")
-  // opencode.json is untracked machine state (0122): the retirement write
-  // must never dirty the next unit's clean gate.
+  // This fixture keeps opencode.json in the pre-0138 local-only posture —
+  // the byte-identical floor of plans/0190 D2 (the retirement write stays
+  // out of the wall commit's pathspec, an ignored file `git add` would
+  // refuse): the tracked-posture pins — the deny riding the wall commit —
+  // live in wall.test.ts.
   await Bun.write(join(f.dir, ".gitignore"), ".auto/\ntmp/\nopencode.json\n")
   mkdirSync(join(f.dir, ".opencode/auto/phases"), { recursive: true })
   writeFileSync(

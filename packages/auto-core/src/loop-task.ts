@@ -132,6 +132,12 @@ export type LoopCtx = {
   // false = the run's agents cannot fork, so auto's lead runs without its
   // split clause (plans/0059 D7); set once at run start by the degradation.
   leadSplit?: false
+  // false = no agent of the run's fleet carries opencode.json's
+  // external_directory posture into its sessions (plans/0190 D1); set once
+  // at run start by the same degradation. The wall's boundary entry reads
+  // it: a declared wall's close refuses under such a fleet. Absent = the
+  // fleet carries it (the byte-identical floor for every existing ctx).
+  externalDirectory?: false
   // The repair rounds this run has driven (plans/0079 §4): incremented as a
   // round opens, read against opts.repair (the budget). Run state only,
   // nothing persists it — an interrupted or re-run process starts a fresh

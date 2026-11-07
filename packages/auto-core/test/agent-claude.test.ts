@@ -12,6 +12,7 @@ import { claudeAgent, claudeEnv, claudeProjectsDir, CLAUDE_CAPABILITIES, CLAUDE_
 import { claudePermissions, contractArgs, contractBody } from "../src/agent/claude/contract"
 import { createClaudeHost } from "../src/agent/claude/host"
 import { claudeStream } from "../src/agent/claude/stream"
+import { OPENCODE_CAPABILITIES } from "../src/agent/opencode/client"
 import type { AgentEvent } from "../src/agent/types"
 import { degrade } from "../src/capability"
 import { classifySessionError } from "../src/chain"
@@ -360,6 +361,23 @@ describe("contract translation", () => {
     expect(claudePermissions(undefined)).toEqual({ allow: [], deny: [] })
   })
 
+  test("external_directory has no translation today — the declared capability carries the limit (plans/0190 D1; 0165-040, its translation 033/step 058)", () => {
+    // The boundary-carrying section the template ships (0147 D1) and a
+    // wall's standing deny both translate to nothing under 0041 D6's key
+    // map (ruled before 0122 existed): the adapter declares
+    // externalDirectory: false and a declared wall's close refuses on that
+    // fact (plans/0190 D1). This pin is the ratchet the adapter wave's
+    // probe-verified translation ruling (0166 step 058) updates
+    // consciously, never a silent drift.
+    expect(
+      claudePermissions({
+        permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", "/workspace/linux/**": "deny" } },
+      }),
+    ).toEqual({ allow: [], deny: [] })
+    expect(CLAUDE_CAPABILITIES.externalDirectory).toBe(false)
+    expect(OPENCODE_CAPABILITIES.externalDirectory).toBe(true)
+  })
+
   test("process arguments per preset; a missing contract fails", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-claude-"))
     try {
@@ -476,8 +494,21 @@ async function collect(events: AsyncIterable<AgentEvent>, until: (e: AgentEvent)
 }
 
 describe("claudeAgent: process manager", () => {
-  test("capabilities as measured: resume, whole-session fork, steer, abort; no question / permission / history; usage in-turn", () => {
-    expect(CLAUDE_CAPABILITIES).toEqual({ resume: true, fork: "session", steer: true, abort: true, question: false, permission: false, history: false, usage: "events" })
+  test("capabilities as measured: resume, whole-session fork, steer, abort; no question / permission / history; usage in-turn; external_directory not carried", () => {
+    // plans/0190 D1: externalDirectory false is the adapter's declared limit
+    // (the contract translation has no external_directory row) — the wall's
+    // close consumes it, never a clamp.
+    expect(CLAUDE_CAPABILITIES).toEqual({
+      resume: true,
+      fork: "session",
+      steer: true,
+      abort: true,
+      question: false,
+      permission: false,
+      history: false,
+      usage: "events",
+      externalDirectory: false,
+    })
     // The run start degrades only what claude lacks (MA.4): ask off, notes for the preset and history.
     const switches = parseSwitches({ [SWITCH_ENV.fork]: "on", [SWITCH_ENV.steer]: "on", [SWITCH_ENV.ask]: "on" })
     const degraded = degrade(CLAUDE_CAPABILITIES, switches, { testByDriver: true })

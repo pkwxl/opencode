@@ -6276,14 +6276,17 @@ describe("CLI: release certifies the destination standing alone (auto-core plans
 })
 
 // The sealed reference wall through the real CLI (auto-core plans/0132): the
-// three-step close rides the person's transfer — the admission scan, the wall
-// commit between the distillation and the transition — and the boundary
-// vocabulary (repeated closure, a reopened door, a person-authored covering
-// allow) answers with exit 2 ahead of any session. The retrofit trigger is
-// driven as the field meets it: the wall declared a phase late, the next
-// transfer past the seal closes it under the sealing phase's name. The
-// undeclared floor is behavior: a project without the Wall: field never
-// grows wall machinery, its door standing.
+// close rides the person's transfer — but this harness's only agent is the
+// fake claude CLI, and under claude the close REFUSES (auto-core plans/0190
+// D1: the adapter carries no external_directory posture into its sessions,
+// so the seal would be a record with no session-side enforcement). The CLI
+// shape pinned here is that refusal — exit 2 ahead of the admission scan,
+// nothing mutated, the remedy line teaching the opencode advance — and the
+// undeclared floor stays behavior. The close itself (the wall commit between
+// the distillation and the transition, repeated closure, the reopened door,
+// the person-authored covering allow, the retrofit close under the sealing
+// phase's name) needs a carrying agent, so it lives at auto-core's wall and
+// transfer-wall suites, which drive the boundary directly.
 describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
   // One wall project: the corpus beside the target, the door symlinked and
   // committed, the sealing type and the divergence lane row as the project's
@@ -6344,7 +6347,7 @@ describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
     for (const file of artifacts) await Bun.write(join(dir, unit.dir, file), `# ${file}\n\nBehavior only.\n\n<!-- auto: eof -->\n`)
   }
 
-  test("closure, repeated closure, reopen and the person-authored allow — the wall's boundary vocabulary through transfer", async () => {
+  test("the close refuses under a fleet that carries no external_directory posture — the CLI shape at the seal boundary (auto-core plans/0190 D1)", async () => {
     const { dir, corpus } = await wallProject(true)
     const agent = await fakeClaude()
     const git = gitOf(dir)
@@ -6362,50 +6365,33 @@ describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
       const state = (await readPhases(dir))!
       await seedPhaseDone(dir, state.phases[0]!, ["T-100"], ["spec-notes.md"])
       await commitFixture(dir)
-      // The advance: the distillation, the admission, the wall commit, the
-      // transition — the retrofit-free close at the sealing phase's own
-      // boundary.
-      const closed = await agent.run(["transfer", dir])
-      expect(closed.code, `${closed.out}\n${closed.err}`).toBe(0)
-      expect(closed.out).toContain("sealed reference wall closed (P01-spec-read Spec read)")
-      expect(closed.out).toContain(corpus)
-      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(false)
-      const record = await git("log", "--format=%H %B", "--grep=PLAN wall close")
-      expect(record).toContain(`Auto-Stage: wall`)
-      expect(record).toContain(`Wall-door: linux -> ${corpus}`)
-      expect(record).toContain("Wall-sealed: docs/R-01/P01-spec-read/spec-notes.md")
-      expect(record).toContain("Wall-sealed: docs/T-100/notes.md")
+      // The advance at the seal (the distillation commits first, then the
+      // boundary): under this run's claude fleet the close REFUSES ahead of
+      // the admission scan (auto-core plans/0190 D1) — the standing deny the
+      // close would record reaches no claude session, so the seal would be a
+      // record with no session-side enforcement. Nothing mutates: the door
+      // stands, the stamped allow stands, no wall commit, the phase held at
+      // its boundary for a re-run under a carrying agent — the remedy the
+      // refusal itself teaches. (This harness has no carrying agent; the
+      // close's own vocabulary — the wall commit, repeated closure, the
+      // reopen and person-allow blocks — lives at auto-core's wall and
+      // transfer-wall suites, which drive the boundary directly.)
+      const refused = await agent.run(["transfer", dir])
+      expect(refused.code, `${refused.out}\n${refused.err}`).toBe(2)
+      expect(refused.out).toContain("the wall cannot close under this run's agent fleet")
+      expect(refused.out).toContain("the seal would be a record with no session-side enforcement")
+      expect(refused.out).toContain("OPENCODE_AUTO_AGENT=opencode")
+      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(true)
       const config = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      // The wall's deny beside the knowledge boundary's pair (plans/0147).
-      expect(config.permission.external_directory).toEqual({ "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "deny" })
-      // Repeated closure never re-closes: the wall derives closed, the next
-      // advance is P02's ordinary review stop.
-      const again = await agent.run(["transfer", dir])
-      expect(again.code, `${again.out}\n${again.err}`).toBe(0)
-      expect(again.out).not.toContain("sealed reference wall closed")
-      expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim().split("\n")).toHaveLength(1)
-      // A reopened door: transfer refuses ahead of any session.
-      await symlink(corpus, join(dir, "linux"))
-      await commitFixture(dir)
-      const reopened = await agent.run(["transfer", dir])
-      expect(reopened.code).toBe(2)
-      expect(reopened.out).toContain("present again")
-      expect(reopened.out).toContain("reopen")
-      await rm(join(dir, "linux"))
-      await commitFixture(dir)
-      expect((await agent.run(["transfer", dir])).code).toBe(0)
-      // A person-authored covering allow: the driver never removes the
-      // person's lines — the block names the entry.
-      const withPerson = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      withPerson.permission.external_directory[`${dirname(corpus)}/**`] = "allow"
-      await Bun.write(join(dir, "opencode.json"), JSON.stringify(withPerson, null, 2) + "\n")
-      const personBlock = await agent.run(["transfer", dir])
-      expect(personBlock.code).toBe(2)
-      expect(personBlock.out).toContain("person-authored external_directory entry")
-      expect(personBlock.out).toContain(`${dirname(corpus)}/**`)
-      delete withPerson.permission.external_directory[`${dirname(corpus)}/**`]
-      await Bun.write(join(dir, "opencode.json"), JSON.stringify(withPerson, null, 2) + "\n")
-      expect((await agent.run(["transfer", dir])).code).toBe(0)
+      expect(config.permission.external_directory[`${corpus}/**`]).toBe("allow")
+      expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim()).toBe("")
+      // status renders the same limit over the same agent choice (the env
+      // override the refused run made): one ⚠ row naming the close's
+      // refusal — detection, not a gate (auto-core plans/0190 D1).
+      const rows = await runCli(["status", dir], { OPENCODE_AUTO_AGENT: "claude" })
+      expect(rows.code).toBe(0)
+      expect(rows.out).toContain("translates none of it")
+      expect(rows.out).toContain("the wall's close refuses under it")
     } finally {
       await agent.done()
       await rm(dir, { recursive: true, force: true })
@@ -6413,7 +6399,7 @@ describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
     }
   }, 120_000)
 
-  test("the retrofit trigger: a wall declared a phase late closes at the next transfer past the seal, under the sealing phase's name", async () => {
+  test("the retrofit trigger: a wall declared a phase late meets the close at the next transfer past the seal — refused under this fleet (auto-core plans/0190 D1)", async () => {
     const { dir, corpus } = await wallProject(false)
     const agent = await fakeClaude()
     const git = gitOf(dir)
@@ -6433,8 +6419,12 @@ describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
       expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim()).toBe("")
       expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(true)
       // The person declares the wall a phase late (the field project's sync
-      // or hand fill) and seeds P02: the next transfer past the seal closes
-      // under the sealing phase's name — the retrofit's one-time act.
+      // or hand fill) and seeds P02: the next transfer past the seal meets
+      // the close — and under this run's claude fleet it refuses
+      // (auto-core plans/0190 D1), the door standing and the stamped allow
+      // untouched. (The retrofit close itself — under the sealing phase's
+      // name, the one-time act — is pinned at auto-core's wall suite, which
+      // drives the boundary directly under a carrying fleet.)
       await Bun.write(
         join(dir, ".opencode/auto/phases/spec-read.md"),
         ["# Spec read", "", "Wall: seal linux", "Phase-artifacts: spec-notes.md", "Task-artifacts: notes.md", "", "## plan duties", "", "Read the reference, distill the notes.", "", "<!-- auto: eof -->", ""].join("\n"),
@@ -6443,12 +6433,14 @@ describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
       await seedPhaseDone(dir, advanced.phases[1]!, ["T-200"], [])
       await commitFixture(dir)
       const retrofit = await agent.run(["transfer", dir])
-      expect(retrofit.code, `${retrofit.out}\n${retrofit.err}`).toBe(0)
-      expect(retrofit.out).toContain("sealed reference wall closed (P01-spec-read Spec read)")
-      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(false)
+      expect(retrofit.code, `${retrofit.out}\n${retrofit.err}`).toBe(2)
+      expect(retrofit.out).toContain("the wall cannot close under this run's agent fleet")
+      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(true)
       const config = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      // The wall's deny beside the knowledge boundary's pair (plans/0147).
-      expect(config.permission.external_directory).toEqual({ "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "deny" })
+      // The init-stamped allow still stands (the knowledge boundary's pair
+      // beside it, plans/0147): the refusal mutated nothing.
+      expect(config.permission.external_directory).toEqual({ "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "allow" })
+      expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim()).toBe("")
     } finally {
       await agent.done()
       await rm(dir, { recursive: true, force: true })

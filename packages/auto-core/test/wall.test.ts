@@ -17,6 +17,7 @@ import { establishRound, readPhases, renderPhaseTodo, type PhaseUnit } from "../
 import { loadPhaseTypes, parsePhaseTypeFile } from "../src/phases/custom"
 import { renderTaskIndex } from "../src/tasks"
 import { findWallCommit, sealedChannelCheck, wallBoundary, wallPrecheckFindings, wallSealingPhase, type WallCtx } from "../src/wall"
+import { renderStatus } from "../src/status"
 import { admission } from "./helpers/perm-oracle"
 import { captureRun } from "./fixtures/capture"
 import { freshRepo, git } from "./fixtures/runner"
@@ -54,7 +55,10 @@ describe("the Wall: field grammar (D1, src/phases/custom.ts)", () => {
 
 // One wall project: a repo with the wall type, a lane pack, a corpus behind
 // a tracked root symlink and the stamped allow — the aster-mig shape.
-async function wallProject(command = "true", doors = "linux"): Promise<{ dir: string; corpus: string; phase: PhaseUnit; ctx: WallCtx }> {
+// `tracked` (plans/0190 D2's 0138 posture) drops the config file's ignore
+// line so the fixture's setup commit tracks it: the committed-surface shape
+// every post-0138 project runs.
+async function wallProject(command = "true", doors = "linux", tracked = false): Promise<{ dir: string; corpus: string; phase: PhaseUnit; ctx: WallCtx }> {
   const dir = await freshRepo()
   made.push(dir)
   // The corpus lives OUTSIDE /tmp (plans/0147): the knowledge boundary's
@@ -64,7 +68,7 @@ async function wallProject(command = "true", doors = "linux"): Promise<{ dir: st
   const corpus = mkdtempSync(join(homedir(), "auto-wall-corpus-"))
   made.push(corpus)
   writeFileSync(join(corpus, "timer.c"), "void tick(void) {}\n")
-  await Bun.write(join(dir, ".gitignore"), ".auto/\ntmp/\nopencode.json\n")
+  await Bun.write(join(dir, ".gitignore"), `.auto/\ntmp/\n${tracked ? "" : "opencode.json\n"}`)
   mkdirSync(join(dir, ".opencode/auto/phases"), { recursive: true })
   writeFileSync(join(dir, ".opencode/auto/phases/spec-read.md"), TYPE_FILE(doors))
   mkdirSync(join(dir, ".opencode/auto/intents"), { recursive: true })
@@ -105,11 +109,85 @@ describe("the close (D2): predicate, recorded target, idempotency, reopening, th
     expect(record).toBeDefined()
     expect(record!.doors).toEqual([{ name: "linux", target: corpus }])
     expect(record!.sealed).toEqual(["docs/R-01/P01-spec-read/spec-notes.md", "docs/T-001/notes.md"])
-    // The wall commit's tracked diff is the door removal alone.
+    // The wall commit's tracked diff is the door removal alone (the
+    // pre-0138 local-only floor: the file stays out of the pathspec) —
+    // and the record's words tell the file's real posture (plans/0190 D2:
+    // the ledger wording, never the stale "untracked" clause).
     const show = await git(dir, "show", "--name-status", "--format=", record!.sha)
     expect(show.trim()).toBe(`D\tlinux`)
+    const body = await git(dir, "log", "-1", "--format=%B", record!.sha)
+    expect(body).toContain("door→target ledger")
+    expect(body).not.toContain("untracked machine state")
     expect(out.lines.some((line) => line.includes("sealed reference wall closed"))).toBe(true)
     expect(out.lines.some((line) => line.includes(corpus))).toBe(true)
+  })
+
+  test("the 0138 posture: a tracked opencode.json rides the wall commit — the seal atomic with its own deny, the tree clean after (plans/0190 D2, 0165-147)", async () => {
+    const { dir, corpus, phase, ctx } = await wallProject("true", "linux", true)
+    const out = await captureRun(async () => {
+      expect(await wallBoundary(ctx, phase)).toEqual([])
+      return 0
+    })
+    const record = await findWallCommit(dir)
+    expect(record).toBeDefined()
+    expect(record!.doors).toEqual([{ name: "linux", target: corpus }])
+    // One wall commit carrying both halves: the door removal and the
+    // retirement write itself — the deny never left to the next
+    // phase-transition commit or a gate hold's dirty tree.
+    const show = await git(dir, "show", "--name-status", "--format=", record!.sha)
+    expect(show.trim().split("\n").sort()).toEqual([`D\tlinux`, "M\topencode.json"])
+    // The close leaves the tracked file clean: a hold past the wall no
+    // longer hands the next run's clean gate a dirty opencode.json.
+    const status = await git(dir, "status", "--porcelain", "--", "opencode.json")
+    expect(status.trim()).toBe("")
+    // The record's words name the tracked posture it just carried.
+    const body = await git(dir, "log", "-1", "--format=%B", record!.sha)
+    expect(body).toContain("carried by this same commit when the file is tracked")
+    expect(body).not.toContain("untracked machine state")
+    // The deny stands in the file the commit carries.
+    const config = await opencode(dir)
+    expect(config.permission.external_directory).toEqual({ [`${corpus}/**`]: "deny" })
+    expect(out.lines.some((line) => line.includes("sealed reference wall closed"))).toBe(true)
+  })
+
+  test("the close refuses under a fleet that carries no external_directory posture (plans/0190 D1, 0165-040): nothing mutated, the door stands, the re-run seals", async () => {
+    const { dir, corpus, phase, ctx } = await wallProject()
+    const blocked = await wallBoundary({ ...ctx, externalDirectory: false }, phase)
+    expect(blocked.length).toBeGreaterThan(0)
+    expect(blocked.join("\n")).toContain("cannot close under this run's agent fleet")
+    expect(blocked.join("\n")).toContain("the seal would be a record with no session-side enforcement")
+    expect(blocked.join("\n")).toContain("OPENCODE_AUTO_AGENT=opencode")
+    // The refusal sits ahead of every mutating step (P12/P20): the door
+    // still stands, the stamped allow still in place, no wall commit.
+    expect(existsSync(join(dir, "linux"))).toBe(true)
+    const config = await opencode(dir)
+    expect(config.permission.external_directory).toEqual({ [`${corpus}/**`]: "allow" })
+    expect(await findWallCommit(dir)).toBeUndefined()
+    // The same project seals lawfully under a carrying fleet (the field
+    // absent — the byte-identical floor every carrying run reads).
+    expect(await wallBoundary(ctx, phase)).toEqual([])
+  })
+
+  test("status renders the wall's agent dependence over the static agent choice (plans/0190 D1)", async () => {
+    const { dir } = await wallProject()
+    // The default agent (opencode) carries the posture: no row.
+    expect((await renderStatus(dir)).join("\n")).not.toContain("translates none of it")
+    // The config's agent key names claude — the adapter that declares it
+    // carries none of the external_directory posture: one ⚠ row naming the
+    // limit and the close's refusal (chooseAgent's precedence reads the
+    // env override first; the switch snapshot is memoized per process, so
+    // the pin goes through the config side of the same choice). The shell
+    // profile's own injected agent is out of the read's reach by ruling —
+    // the shell's declaration, its row to render.
+    await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ agent: "claude" }, null, 2) + "\n")
+    const rows = (await renderStatus(dir)).join("\n")
+    expect(rows).toContain("translates none of it")
+    expect(rows).toContain("the wall's close refuses under it")
+    // A wall-undeclared project never renders the row (the P10 floor).
+    const bare = await freshRepo()
+    made.push(bare)
+    await Bun.write(join(bare, ".opencode/auto/config.json"), JSON.stringify({ agent: "claude" }, null, 2) + "\n")
+    expect((await renderStatus(bare)).join("\n")).not.toContain("translates none of it")
   })
 
   test("idempotency: a closed wall re-derives closed — the boundary passes with the scan re-run, no second wall commit", async () => {

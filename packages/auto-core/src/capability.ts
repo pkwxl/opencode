@@ -23,6 +23,9 @@
 // | permission        | --permission becomes a PermissionPreset fixed at host start           |
 // | history           | a session's usage cannot be rebuilt → unknown (session-api)           |
 // | abort             | nothing: every abort is already best-effort                           |
+// | externalDirectory | no switch and no clamp (plans/0190 D1): a wall-declared project's    |
+// |                   | close refuses under such a fleet, and status renders the limit; a   |
+// |                   | wall-undeclared project is byte-identical (the flag forces nothing) |
 //
 // The usage tier is MA.2's matrix (src/usage.ts), not repeated here.
 //
@@ -54,6 +57,14 @@ type Degradation = {
   // OPENCODE_AUTO_FORK governs `true` alone (D1), so the run start hands this
   // fact to the task pipeline (Opts.leadSplit) instead of clamping a switch.
   leadSplit?: false
+  // false = no agent of the fleet carries opencode.json's
+  // permission.external_directory posture into its sessions (plans/0190 D1):
+  // on a wall-declared project the wall's close refuses. Absent = every
+  // dispatch agent carries it. Not a switch and no run-start note of its
+  // own: a wall-undeclared project is byte-identical (nothing reads the
+  // fact), and the wall-declared project sees the limit at status and at
+  // the close itself.
+  externalDirectory?: false
 }
 
 // The run-start options degradation reads.
@@ -129,6 +140,7 @@ export function degradeAgents(agents: FleetAgent[], switches: Switches, opts: De
     permission: !forced((c) => !c.permission),
     history: !forced((c) => !c.history),
     usage: "events",
+    externalDirectory: !forced((c) => c.externalDirectory !== true),
   }
   const by = (found: FleetAgent | undefined): string => (labelNotes && found ? `; ${found.label} has none` : "")
   const patch: DegradedSwitches = {}
@@ -191,5 +203,11 @@ export function degradeAgents(agents: FleetAgent[], switches: Switches, opts: De
     opts.testByDriver && opts.codeWork !== false && !opts.dryrun && !caps.steer
       ? `--test-by-driver needs an agent that takes messages into a live session (the driver feeds test results back that way); this agent cannot${labelNotes && weakSteer ? ` (${weakSteer.label})` : ""}. Re-init the project without --test-by-driver.`
       : undefined
-  return { switches: patch, notes, ...(error ? { error } : {}), ...(forks ? {} : { leadSplit: false as const }) }
+  return {
+    switches: patch,
+    notes,
+    ...(error ? { error } : {}),
+    ...(forks ? {} : { leadSplit: false as const }),
+    ...(caps.externalDirectory ? {} : { externalDirectory: false as const }),
+  }
 }

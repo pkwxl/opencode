@@ -93,10 +93,13 @@ export type AgentPool = ServerControl & { startedAgents(): string[] }
 
 // leadSplit false = the fleet cannot fork, so auto's lead runs without its
 // split clause (plans/0059 D7; Degradation.leadSplit), carried to every task
-// through Opts.leadSplit.
+// through Opts.leadSplit. externalDirectory false = no agent of the fleet
+// carries opencode.json's external_directory posture into its sessions
+// (plans/0190 D1; Degradation.externalDirectory), carried to the phase loop
+// so a wall-declared project's close refuses.
 type StartedPool =
-  | { pool: AgentPool; profileName: string; error?: string; leadSplit?: false }
-  | { pool?: undefined; profileName?: undefined; error: string; leadSplit?: undefined }
+  | { pool: AgentPool; profileName: string; error?: string; leadSplit?: false; externalDirectory?: false }
+  | { pool?: undefined; profileName?: undefined; error: string; leadSplit?: undefined; externalDirectory?: undefined }
 
 // A host that cannot start for a dispatch (a profile env reference that no
 // longer resolves, a factory gap): the run stops (exit 1), exactly as the
@@ -139,7 +142,12 @@ export async function startPool(directory: string, opts: StartPoolOpts): Promise
     const profileName = agent?.name ?? "opencode"
     if (degraded.error) return { pool: singleHostPool(host, profileName), profileName, error: degraded.error }
     clampSwitches(degraded.switches)
-    return { pool: singleHostPool(host, profileName), profileName, ...(degraded.leadSplit === false ? { leadSplit: false as const } : {}) }
+    return {
+      pool: singleHostPool(host, profileName),
+      profileName,
+      ...(degraded.leadSplit === false ? { leadSplit: false as const } : {}),
+      ...(degraded.externalDirectory === false ? { externalDirectory: false as const } : {}),
+    }
   }
   const registry = opts.registry
   const startProfile = agentProfileFor(registry, agent?.name)
@@ -192,7 +200,12 @@ export async function startPool(directory: string, opts: StartPoolOpts): Promise
   for (const note of degraded.notes) log(`⚙ ${note}`)
   if (degraded.error) return { error: degraded.error }
   clampSwitches(degraded.switches)
-  return { pool: poolOf(directory, opts, registry, profileName, preludeEnvs), profileName, ...(degraded.leadSplit === false ? { leadSplit: false as const } : {}) }
+  return {
+    pool: poolOf(directory, opts, registry, profileName, preludeEnvs),
+    profileName,
+    ...(degraded.leadSplit === false ? { leadSplit: false as const } : {}),
+    ...(degraded.externalDirectory === false ? { externalDirectory: false as const } : {}),
+  }
 }
 
 // The pool under a registry: lazy hosts per profile, keyed by profile name.
@@ -376,6 +389,10 @@ function adapterCapabilities(adapter: string): AgentCapabilities {
       permission: false,
       history: false,
       usage: "none",
+      // Unproven = not carried (plans/0190 D1, P12's conservative direction):
+      // a shell adapter that translates the external_directory posture
+      // declares it in its registered record.
+      externalDirectory: false,
     }
   )
 }

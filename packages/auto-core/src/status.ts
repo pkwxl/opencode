@@ -18,8 +18,16 @@ import { awaitingFormulation } from "./formulate"
 import { loadProjectConfig } from "./config"
 import { provenanceFindings } from "./provenance"
 import { phasesDiverge, releasedRoadmapRound } from "./roadmap"
-import { shellProfile } from "./shell"
+import { shellAdapter, shellProfile } from "./shell"
+import { autoSwitches } from "./switches"
 import { checklistTitle, laneRecords, loadPlan, type Task } from "./tasks"
+import { wallDeclared } from "./wall"
+// The builtin capability records, read for the wall's agent-dependence row
+// (plans/0190 D1) through the agent domain's entry modules (D8's rule — the
+// re-exports are the seam): the constants are static data, and this read
+// starts nothing.
+import { OPENCODE_CAPABILITIES } from "./agent/opencode/server"
+import { CLAUDE_CAPABILITIES } from "./agent/claude/host"
 
 const TASK_MARK: Record<Task["status"], string> = { pending: " ", in_progress: "▶", blocked: "⏸", done: "✓" }
 
@@ -44,6 +52,35 @@ export async function renderStatus(dir: string): Promise<string[]> {
   {
     const comparison = await provenanceComparison(dir)
     if (comparison !== undefined) for (const finding of provenanceFindings(comparison)) provenance.push(`⚠ ${finding.path}: ${finding.problem}`)
+  }
+  // The wall's agent dependence (plans/0190 D1): a declared wall seals —
+  // and its standing deny holds — only under an agent that carries
+  // opencode.json's external_directory posture into its sessions. The
+  // statically chosen adapter's record says whether it does (a
+  // shell-injected agent profile is the shell's own declaration, out of
+  // this read's reach — a shell wanting the row registers its adapter's
+  // record). Detection, not a gate: the close itself refuses; this row
+  // teaches before the seal moment. Beside provenance so the broken-tree
+  // paths below still surface it.
+  {
+    if (await wallDeclared(dir)) {
+      const chosen =
+        shellProfile().agent === undefined
+          ? (autoSwitches().agent ?? (await loadProjectConfig(dir).catch(() => undefined))?.agent ?? "opencode")
+          : undefined
+      const carries =
+        chosen === undefined
+          ? true // the shell's own profile — not this read's to judge
+          : chosen === "opencode"
+            ? OPENCODE_CAPABILITIES.externalDirectory === true
+            : chosen === "claude"
+              ? CLAUDE_CAPABILITIES.externalDirectory === true
+              : shellAdapter(chosen)?.capabilities.externalDirectory === true
+      if (!carries)
+        provenance.push(
+          `⚠ the sealed wall's standing deny and the working-directory knowledge boundary reach sessions only through an agent that carries permission.external_directory; this project's agent (${chosen}) translates none of it — the wall's close refuses under it (plans/0190; the built-in opencode adapter carries it)`,
+        )
+    }
   }
   let state
   try {

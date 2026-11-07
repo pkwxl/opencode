@@ -6,9 +6,10 @@
 
 import { describe, expect, test } from "bun:test"
 import type { AgentCapabilities, AgentClient } from "../src/agent/types"
+import { CLAUDE_CAPABILITIES } from "../src/agent/claude/client"
 import { OPENCODE_CAPABILITIES } from "../src/agent/opencode/client"
 import { attempt } from "../src/attempt"
-import { degrade, permissionPreset } from "../src/capability"
+import { degrade, degradeAgents, permissionPreset } from "../src/capability"
 import type { SessionChain } from "../src/chain"
 import { seedPinFork } from "../src/exec-session"
 import { implicitRegistry } from "../src/models"
@@ -112,6 +113,26 @@ describe("degrade: run-start clamp", () => {
     expect(steer("true")).toBe(
       `${SWITCH_ENV.steer}=on needs an agent that takes messages mid-turn; running with steer off (no handover hint, a session over the cap finishes naturally)`,
     )
+  })
+
+  test("the external_directory posture intersects the fleet (plans/0190 D1): carried = absent, any non-carrier = false — no switch, no note of its own", () => {
+    // The opencode record carries the posture (the server reads
+    // permission.external_directory itself): the fleet fact is absent from
+    // the degradation — the byte-identical floor every existing run reads.
+    expect(degrade(OPENCODE_CAPABILITIES, parseSwitches({}), {})).not.toHaveProperty("externalDirectory")
+    // The claude record declares it does not (plans/0190 D1): the fact
+    // lands beside leadSplit for the wall's close to consume, forcing no
+    // switch and adding no note — the wall-undeclared project must be
+    // byte-identical (claude's own permission-preset note is its MA.4 row,
+    // not this fact's).
+    const got = degrade(CLAUDE_CAPABILITIES, parseSwitches({}), {})
+    expect(got.externalDirectory).toBe(false)
+    expect(got.switches).toEqual({})
+    expect(got.notes.join("\n")).not.toContain("external_directory")
+    // One non-carrying agent in the fleet is enough — the intersection's
+    // rule (0055 §8.5): a session can land on the weak agent at any
+    // dispatch, so the seal must assume it will.
+    expect(degradeAgents([{ caps: OPENCODE_CAPABILITIES, label: "opencode" }, { caps: CLAUDE_CAPABILITIES, label: "claude (claude)" }], parseSwitches({}), {}, false).externalDirectory).toBe(false)
   })
 
   test("--test-by-driver without steer has no fallback: startup error, dryrun exempt", () => {

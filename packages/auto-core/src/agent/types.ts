@@ -42,7 +42,13 @@
 // event — the transport's own pulse, naming no session — and
 // AgentCapabilities.heartbeat, the pulse interval an adapter's stream
 // promises; the driver's probe reads the pulse's arrival to judge the turn's
-// own stream, not only the server.
+// own stream, not only the server. The sealed wall's agent boundary
+// (plans/0190 D1) amended it a ninth time, consciously:
+// AgentCapabilities.externalDirectory — whether the adapter carries
+// opencode.json's permission.external_directory posture (0147's knowledge
+// boundary, 0122's allows, the wall's standing deny) into its sessions;
+// absent = it does not, and on a wall-declared project the wall's close
+// refuses while status renders the limit.
 
 // Every call resolves; none rejects. A failure the agent reports and a
 // transport failure (network error, timeout, abort via signal) both arrive as
@@ -282,6 +288,15 @@ export type AgentCapabilities = {
   // §1.3 measured. Absent = no pulse: the probe judges by the fresh
   // connection alone (0026 D3's original shape, byte-identical).
   heartbeat?: number
+  // The adapter carries opencode.json's permission.external_directory
+  // posture into its sessions (plans/0190 D1): 0147's working-directory
+  // knowledge boundary (the `/**` deny and the /tmp allowance), 0122's
+  // root-symlink allows, and the sealed wall's standing deny reach the
+  // session process through this. Absent = the adapter translates none of
+  // it (the claude adapter today — the translation's probe-verified ruling
+  // is the adapter wave's), so a declared wall's close refuses and status
+  // renders the limit; nothing else reads the flag.
+  externalDirectory?: boolean
 }
 
 export type PromptInput = {

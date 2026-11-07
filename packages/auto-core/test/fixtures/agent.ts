@@ -51,6 +51,10 @@ export const FULL_CAPABILITIES: AgentCapabilities = {
   permission: true,
   history: true,
   usage: "events",
+  // The fully-capable agent carries opencode.json's external_directory
+  // posture into its sessions (plans/0190 D1): a fleet over full fakes reads
+  // carrying — the fact absent from Degradation, the byte-identical floor.
+  externalDirectory: true,
 }
 
 // The barest agent the driver accepts: one-shot sessions, no mid-turn input,

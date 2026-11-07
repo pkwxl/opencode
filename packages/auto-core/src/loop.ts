@@ -363,6 +363,7 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
       // without a preflight, a lane worker) reads as tier 0.
       treeTier,
       ...(started.leadSplit === false ? { leadSplit: false as const } : {}),
+      ...(started.externalDirectory === false ? { externalDirectory: false as const } : {}),
     }
     // The lane entry (plans/0068 §6.3): one unit, no phase loop.
     if (opts.lane) return await runLaneUnit(ctx)

@@ -12,16 +12,22 @@
 //       this exists anywhere (the P10 floor, tested as behavior);
 //   D2  the close, at any transfer whose source phase is at or after the
 //       sealing phase while the wall derives open: the admission scan
-//       (read-only) → one wall commit (the door removal, its message
-//       recording the resolved targets — the tracked record of what the
-//       untracked opencode.json's allows admitted) → the transition commit.
-//       The closed predicate is re-derived from disk and git at every
-//       boundary: the wall is closed iff the door is absent and no live
-//       external_directory entry covers the recorded target — the allow is
-//       the wall, the door a convenience. The driver retires only the
-//       allows it stamped itself (0122's exact bytes); a person-authored
-//       covering entry is a blocking finding that names the entry, and the
-//       close stamps a standing deny on the recorded target.
+//       (read-only) → one wall commit (the door removal and, since
+//       plans/0138 made opencode.json a committed surface, the retirement
+//       write whenever git tracks the file — the atomic seal; the record
+//       lines below remain the door→target ledger, the standing deny's
+//       tracked twin when the file is a person-kept local one) → the
+//       transition commit. The closed predicate is re-derived from disk
+//       and git at every boundary: the wall is closed iff the door is
+//       absent and no live external_directory entry covers the recorded
+//       target — the allow is the wall, the door a convenience. The driver
+//       retires only the allows it stamped itself (0122's exact bytes); a
+//       person-authored covering entry is a blocking finding that names
+//       the entry, and the close stamps a standing deny on the recorded
+//       target. Plans/0190 D1 adds the close's one agent gate: the deny
+//       reaches sessions only through an agent that carries the
+//       external_directory posture into them, so a fleet that carries it
+//       nowhere refuses the close ahead of every mutating step.
 //       Plans/0189 amends the enactment shape on four points: the close
 //       still rides the person's advance path alone, and every OTHER
 //       handover path whose phase meets the seal threshold HOLDS there,
@@ -91,10 +97,11 @@ export type WallDoor = { name: string; target: string }
 
 // The wall commit's record (plans/0132 D2/D4): the newest commit carrying
 // `Auto-Stage: wall`, its message parsed back — the doors with their
-// resolved targets (what the retiring allows admitted; opencode.json is
-// untracked machine state, so the tracked record must carry it) and the
-// sealed channel frozen at the wall (protect's declared set, the one
-// diff-check's scope).
+// resolved targets (what the retiring allows admitted; the door→target
+// ledger, redundant with the tracked standing deny since plans/0190 lands
+// the file in the same commit, the only tracked copy when the person keeps
+// the file local) and the sealed channel frozen at the wall (protect's
+// declared set, the one diff-check's scope).
 export type WallRecord = { sha: string; doors: WallDoor[]; sealed: string[] }
 
 const WALL_STAGE_LINE = "Auto-Stage: wall"
@@ -108,6 +115,11 @@ export type WallCtx = {
   directory: string
   git: Pick<GitOps, "commitTree">
   opts: { stopBefore?: string; dryrun?: boolean; intent?: string; idleMs?: number; maxMs?: number; pollMs?: number }
+  // false = no agent of the run's fleet carries opencode.json's
+  // external_directory posture into its sessions (plans/0190 D1): the
+  // standing deny the close records would reach no session, so the close
+  // refuses. Absent = the fleet carries it (LoopCtx's own floor).
+  externalDirectory?: false
 }
 
 // The newest wall commit, read as a stream and stopped at the first hit
@@ -268,9 +280,9 @@ function openFindingsOf(text: string, targets: readonly string[]): { stamps: { t
 }
 
 // The retirement write (D2): retire the driver-stamped allows and stamp the
-// standing deny on every target — one idempotent write to the untracked
-// opencode.json (chmod'd through protect's allowWrite while a run holds the
-// file read-only). "" = clean; anything else is the blocking failure line.
+// standing deny on every target — one idempotent write to opencode.json
+// (chmod'd through protect's allowWrite while a run holds the file
+// read-only). "" = clean; anything else is the blocking failure line.
 async function retireAndDeny(dir: string, targets: readonly string[]): Promise<string> {
   const file = join(dir, OPENCODE_CONFIG_FILE)
   const text = await opencodeText(dir)
@@ -554,6 +566,21 @@ async function recoveredDoors(
 // (stopBefore "formulate") with the threshold met and the wall open.
 async function closeWall(ctx: WallCtx, phase: PhaseUnit, sealing: PhaseUnit): Promise<string[]> {
   const dir = ctx.directory
+  // (0) The agent gate (plans/0190 D1), first and read-only: the standing
+  // deny this close records reaches sessions only through an agent that
+  // carries the external_directory posture into them, so a fleet that
+  // carries it nowhere cannot seal — the record would claim an enforcement
+  // no session sees. Ahead of the admission scan, so a refused close
+  // mutates nothing and the door stands for a re-run under a carrying
+  // agent.
+  if (ctx.externalDirectory === false) {
+    const { bin } = shellProfile()
+    return [
+      `⏸ the wall cannot close under this run's agent fleet: the standing deny the close records in ${OPENCODE_CONFIG_FILE} reaches sessions only through an agent that carries permission.external_directory into them, ` +
+        `and this run's fleet carries it nowhere (plans/0190 — the claude adapter translates no external_directory rule today) — the seal would be a record with no session-side enforcement. ` +
+        `Run the sealing advance under an agent that carries it (the built-in opencode adapter does): OPENCODE_AUTO_AGENT=opencode ${bin} transfer ${dir}, or amend the config's agent key; nothing was mutated`,
+    ]
+  }
   // (1) The admission scan — read-only, so a block mutates nothing and the
   // remediation session is still pre-close and lawfully dirty.
   const admission = await wallAdmission(ctx, phase)
@@ -608,14 +635,31 @@ async function closeWall(ctx: WallCtx, phase: PhaseUnit, sealing: PhaseUnit): Pr
       ]
     }
   }
-  // The retirement + the standing deny (the untracked half of the wall).
+  // The retirement + the standing deny (the permission-file half of the
+  // wall).
   const write = await retireAndDeny(dir, targets)
   if (write) return [write]
   // The door removal (the tracked half) and the wall commit — its message
-  // the record: the doors with resolved targets (what the allows admitted)
-  // and the sealed channel. The pathspec covers the present doors alone;
-  // a recovered-only close (nothing tracked to remove) rides the empty
-  // record commit.
+  // the record: the doors with resolved targets (the door→target ledger)
+  // and the sealed channel. The pathspec covers the present doors and,
+  // since plans/0138 made opencode.json a committed surface, the file
+  // itself whenever git tracks it (plans/0190 D2 — the retirement write
+  // lands in the wall commit, the seal atomic with its own deny; a
+  // person-kept local or pre-0138 ignored file stays out: `git add` would
+  // refuse an explicitly named ignored file, and the close must not start
+  // failing there — the record lines remain the only tracked copy). A
+  // recovered-only close (nothing tracked to remove) rides the whole-tree
+  // record commit, which carries the write the same way.
+  const trackedConfig = await git(dir, ["ls-files", "--", OPENCODE_CONFIG_FILE]).then(
+    (got) => got.code === 0 && got.out.trim() === OPENCODE_CONFIG_FILE,
+    () => false,
+  )
+  const pathspec =
+    present.length && trackedConfig
+      ? [...present.map((door) => door.name), OPENCODE_CONFIG_FILE]
+      : present.length
+        ? present.map((door) => door.name)
+        : undefined
   for (const door of present) await rm(join(dir, door.name), { force: true })
   const sealed = await sealedPathsOf(dir, sealing)
   const settled = await ctx.git.commitTree(
@@ -626,14 +670,14 @@ async function closeWall(ctx: WallCtx, phase: PhaseUnit, sealing: PhaseUnit): Pr
       subject: `PLAN wall close ${phaseTitle(sealing)}`,
       allowEmpty: true,
       body: [
-        `The sealed reference wall closed at ${phaseTitle(sealing)}. The resolved targets below are the tracked record of what the retiring external_directory allows admitted (${OPENCODE_CONFIG_FILE} is untracked machine state):`,
+        `The sealed reference wall closed at ${phaseTitle(sealing)}. The resolved targets below are the wall's door→target ledger (what the retiring external_directory allows admitted); the standing deny on each target lives in ${OPENCODE_CONFIG_FILE}, carried by this same commit when the file is tracked (plans/0138's committed-surface posture — a person-kept local file leaves these lines the only tracked copy):`,
         ...doors.map((door) => `Wall-door: ${door.name} -> ${door.target}`),
         ...(sealed.length
           ? [`The sealed channel, frozen at this commit (a person-committed amendment is the one recorded exception, visible in the diff against this commit):`, ...sealed.map((path) => `Wall-sealed: ${path}`)]
           : []),
       ].join("\n"),
     },
-    present.length ? present.map((door) => door.name) : undefined,
+    pathspec,
   )
   if (!settled.ok) {
     // Plans/0189 D5: the re-run IS the remedy — the recovery recognizes the
@@ -655,7 +699,7 @@ async function closeWall(ctx: WallCtx, phase: PhaseUnit, sealing: PhaseUnit): Pr
     `✓ sealed reference wall closed (${phaseTitle(sealing)}): door${doors.length === 1 ? "" : "s"} ${doors.map((door) => door.name).join(", ")} removed, ` +
       `the driver-stamped allow(s) retired, a standing deny recorded in ${OPENCODE_CONFIG_FILE}`,
   )
-  log(`  the wall commit records the resolved target(s) ${targets.join(", ")} — the tracked record of what the allows admitted`)
+  log(`  the wall commit records the resolved target(s) ${targets.join(", ")} — the door→target ledger; the standing deny rides the same commit when ${OPENCODE_CONFIG_FILE} is tracked`)
   if (sealed.length) {
     log(`  sealed channel (frozen at the wall, the person-committed amendment the one exception): ${sealed.join(", ")}`)
     await protectAdditional(dir, sealed)

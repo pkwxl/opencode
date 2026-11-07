@@ -11,6 +11,12 @@
 // | .opencode/agent/<name>.md body    | --append-system-prompt (frontmatter stripped)    |
 // | AGENTS.md                         | read natively (built-in AGENTS.md support)       |
 // | opencode.json `permission` rules  | --settings {"permissions": {allow, deny}}        |
+// | opencode.json `external_directory`| no translation (plans/0190 D1: the adapter        |
+// |                                   | declares `externalDirectory: false` — the        |
+// |                                   | knowledge boundary, the 0122 allows and the     |
+// |                                   | wall's standing deny reach no claude session;   |
+// |                                   | a declared wall's close refuses; the section's  |
+// |                                   | translation is the adapter wave's question)     |
 // | --permission preset (MA.4)        | allow → --permission-mode bypassPermissions;     |
 // |                                   | deny / block → --permission-prompts none         |
 // | question tool                     | AskUserQuestion disallowed (capability off)      |

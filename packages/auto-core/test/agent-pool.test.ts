@@ -439,6 +439,47 @@ describe("the capability intersection (§8.5)", () => {
       started.pool.close()
     }
   })
+
+  test("a fleet that carries no external_directory posture threads the fact beside leadSplit for the wall's close, no note of its own (plans/0190 D1)", async () => {
+    const dir = await temp("auto-agent-pool-noextdir-")
+    const a = fakeAgent({ limits: { "prov/a": 100_000 } })
+    const b = fakeAgent({ limits: { "other/b": 100_000 } })
+    // fake-a declares the limit the claude record does (the adapter that
+    // translates no external_directory rule); fake-b carries the posture
+    // (FULL_CAPABILITIES since plans/0190): one non-carrier in the dispatch
+    // set is enough — a session can land on it at any dispatch.
+    registerAgentAdapter("fake-a", { host: fakeAgentHost(a).factory, capabilities: { ...FULL_CAPABILITIES, externalDirectory: false } })
+    registerAgentAdapter("fake-b", { host: fakeAgentHost(b).factory, capabilities: FULL_CAPABILITIES })
+    const file = join(dir, "models.json")
+    const registryText = (agents: Record<string, unknown>, models: Record<string, unknown>, tiers: Record<string, unknown>) =>
+      JSON.stringify({ agents, models, tiers })
+    const mixed = registryText({ a: { adapter: "fake-a" }, b: { adapter: "fake-b" } }, { a1: { agent: "a", model: "prov/a" }, b1: { agent: "b", model: "other/b" } }, { deep: ["a1", "b1"], simple: ["b1"] })
+    await writeFile(file, mixed)
+    const mixedRegistry = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file } }))!
+    const started = await startPool(dir, { registry: mixedRegistry })
+    try {
+      // The fact threads at the registry start site for the phase loop's
+      // ctx (LoopCtx.externalDirectory, the wall's close consumes it) —
+      // forcing no switch and adding no note: a wall-undeclared project is
+      // byte-identical, the wall-declared one learns the limit from status
+      // and the close itself.
+      expect(started.externalDirectory).toBe(false)
+      expect(lines.some((line) => line.includes("external_directory"))).toBe(false)
+    } finally {
+      started.pool?.close()
+    }
+    // A fleet whose every dispatch agent carries it: the fact is absent —
+    // the byte-identical floor every carrying run reads.
+    const carrying = registryText({ b: { adapter: "fake-b" } }, { b1: { agent: "b", model: "other/b" } }, { deep: ["b1"], simple: ["b1"] })
+    await writeFile(file, carrying)
+    const carryingRegistry = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file } }))!
+    const full = await startPool(dir, { registry: carryingRegistry })
+    try {
+      expect(full.externalDirectory).toBeUndefined()
+    } finally {
+      full.pool?.close()
+    }
+  })
 })
 
 describe("preflight's bin check (§8.7)", () => {

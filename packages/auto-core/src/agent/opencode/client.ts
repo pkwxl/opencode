@@ -19,6 +19,9 @@ import { mapEvent, mapMessage } from "./events"
 // a live session, and measures context per message in the event stream.
 // The server's event connections pulse a heartbeat every 10 seconds
 // (plans/0187 D1's measured cadence) — the liveness probe's stream leg.
+// The server reads opencode.json's permission.external_directory section
+// itself (0122's consent surface), so the adapter carries that posture into
+// every session (plans/0190 D1).
 export const OPENCODE_CAPABILITIES: AgentCapabilities = {
   resume: true,
   fork: "message",
@@ -29,6 +32,7 @@ export const OPENCODE_CAPABILITIES: AgentCapabilities = {
   history: true,
   usage: "events",
   heartbeat: 10_000,
+  externalDirectory: true,
 }
 
 // opencode's error type names (session.error `name`; watch folds the name into

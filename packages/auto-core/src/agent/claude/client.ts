@@ -41,6 +41,13 @@ export const CLAUDE_CAPABILITIES: AgentCapabilities = {
   // internal; the driver's rebuild paths degrade instead (MA.4 row).
   history: false,
   usage: "events",
+  // Declared, not silent (plans/0190 D1): the contract translation (0041
+  // D6's key map) has no external_directory row, so 0147's knowledge
+  // boundary, 0122's allows and the wall's standing deny reach no claude
+  // session — a declared wall's close refuses on this fact. Translating the
+  // section is the adapter wave's probe-verified question (0166 step 058);
+  // landing it flips this one declared value.
+  externalDirectory: false,
 }
 
 // claude's own error wording (the assistant `error` code, folded into the
