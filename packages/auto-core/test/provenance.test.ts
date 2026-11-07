@@ -168,6 +168,56 @@ describe("the three-state comparison (plans/0100 D2)", () => {
     }
   })
 
+  // Plans/0214 D1: a sha-differing, heading-identical file names NO
+  // direction — the grammar's evidence (sha equality, heading lines) cannot
+  // tell which binary is newer, and both time-directions of the scene
+  // produce byte-identical evidence. The comparator says so instead of
+  // guessing binary-newer (the pre-fix label whose advice downgraded the
+  // newer committed pack). The oracle gap behind it (0165-158): every
+  // pre-existing direction case mutated a heading.
+  test("a body-only difference is direction-unknown at every surface: the comparator, the finding, the notice (plans/0214 D1)", async () => {
+    const reword = (text: string) => text.replace("never invent them.", "never invent them — the artifacts on disk are the only source.")
+    const packPath = ".opencode/auto/intents/faithful.md"
+    const assertHonest = (dir: string, binary: IntentBundleFiles) => {
+      const stamp = readStamp(dir)
+      const comparison = compareProvenance(stamp, diskOf(dir, stamp.files), bundleFileMap(parseIntentBundle(binary)))
+      const state = comparison.files[packPath]!
+      expect(state.state).toBe("stale")
+      if (state.state !== "stale") throw new Error("unreachable")
+      expect(state.direction).toBe("body-only")
+      expect(state.inBinary).toBe(true)
+      expect(state.added).toEqual([])
+      expect(state.removed).toEqual([])
+      const finding = provenanceFindings(comparison).find((item) => item.path === packPath)!
+      expect(finding.problem).toContain("differs in body only")
+      expect(finding.problem).toContain("either binary may be newer")
+      expect(finding.problem).not.toContain("the running bundle is newer")
+      expect(finding.problem).toContain("sync")
+      const line = provenanceNoticeLine(comparison)!
+      expect(line).toContain("the running bundle differs in body only")
+      expect(line).toContain("a body-only difference cannot name the newer side")
+      expect(line).not.toContain("can fast-forward to the running binary's bundle")
+    }
+    // Scene A: the running binary is really the NEWER one — the project was
+    // materialized from a body-reworded older bundle.
+    const a = await materialized((files) => {
+      files["intents/faithful.md"] = reword(files["intents/faithful.md"]!)
+    })
+    // Scene B: the running binary is really the OLDER one — the finding's
+    // downgrade scene (materialized from the current bundle, compared
+    // against a body-reworded binary that predates the rewording).
+    const b = await materialized()
+    try {
+      assertHonest(a.dir, await binaryFiles())
+      assertHonest(b.dir, await binaryFiles((files) => {
+        files["intents/faithful.md"] = reword(files["intents/faithful.md"]!)
+      }))
+    } finally {
+      rmSync(a.dir, { recursive: true, force: true })
+      rmSync(b.dir, { recursive: true, force: true })
+    }
+  })
+
   test("a file the binary no longer ships: stale, inBinary false, its headings all removed", async () => {
     const { dir } = await materialized()
     try {

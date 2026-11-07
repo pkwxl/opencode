@@ -48,6 +48,19 @@ async function ageToCharterless(dir: string): Promise<void> {
   await Bun.write(join(dir, PROVENANCE_FILE), renderProvenanceStamp(provenanceStampOf("faithful", map)))
 }
 
+// Age the pack and stamp to a body-reworded older bundle (plans/0214 D1's
+// shape): the sha differs, the headings are identical — the
+// direction-unknown case.
+async function ageToRewordedBody(dir: string): Promise<void> {
+  const files = await faithfulFiles()
+  const current = readFileSync(join(dir, PACK_PATH), "utf8")
+  const old = current.replace("never invent them.", "never invent them — the artifacts on disk are the only source.")
+  await Bun.write(join(dir, PACK_PATH), old)
+  const map = bundleFileMap(parseIntentBundle(files))
+  map[PACK_PATH] = old
+  await Bun.write(join(dir, PROVENANCE_FILE), renderProvenanceStamp(provenanceStampOf("faithful", map)))
+}
+
 describe("planSync / applySync: the stamped fast-forward (plans/0100 D4)", () => {
   test("a stale unedited pack fast-forwards byte-identically and the stamp rewrites; detection goes quiet", async () => {
     const dir = project()
@@ -165,6 +178,68 @@ describe("planSync / applySync: the stamped fast-forward (plans/0100 D4)", () =>
       expect(plan.openRound).toContain("docs/R-01/phases.md")
       expect(plan.entries.some((item) => item.action === "fast-forward")).toBe(true)
       expect(formatSyncPlan(plan)).toContain("the boundary call is yours")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Plans/0214 D1: a body-only difference names no direction, so the plan's
+  // fast-forward line carries the direction-unknown caveat (the pre-fix
+  // label asserted binary-newer and printed no caveat — the confirmed sync
+  // downgraded the newer committed pack).
+  test("a body-only difference fast-forwards with the direction-unknown caveat, never a plain fast-forward (plans/0214 D1)", async () => {
+    const dir = project()
+    try {
+      await materializeIntentBundle(dir, parseIntentBundle(await faithfulFiles()))
+      await withConfig(dir)
+      await ageToRewordedBody(dir)
+      const plan = await planSync(dir)
+      const entry = plan.entries.find((item) => item.path === PACK_PATH)
+      expect(entry).toMatchObject({ action: "fast-forward", direction: "body-only" })
+      const text = formatSyncPlan(plan)
+      expect(text).toContain("fast-forward to the running bundle (a body-only difference — either the running binary or your materialized pack may be newer; this writes the binary's bytes; upgrade the tool if that is not intended)")
+      expect(text).not.toContain("predates your materialized pack")
+      // The write is real and converges to the binary's bytes.
+      await applySync(dir, plan)
+      const binary = bundleFileMap(parseIntentBundle(await faithfulFiles()))
+      expect(readFileSync(join(dir, PACK_PATH), "utf8")).toBe(binary[PACK_PATH])
+      expect(provenanceFindings((await provenanceComparison(dir))!)).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Plans/0214 D2: the kill window between applySync's file writes and its
+  // sidecar rewrite leaves disk at the binary's bytes with a stale stamp —
+  // the tool's own write, pre-fix reported as the person's edit forever
+  // (the stamp entry standing, sync never converging it). The re-plan
+  // re-stamps: the file is never written, the sidecar rewrite rides, and
+  // the state converges.
+  test("an interrupted applySync (files written, sidecar not) converges by re-stamp, never a false person-edit (plans/0214 D2)", async () => {
+    const dir = project()
+    try {
+      await materializeIntentBundle(dir, parseIntentBundle(await faithfulFiles()))
+      await withConfig(dir)
+      await ageToCharterless(dir)
+      // The kill: applySync's file writes land, the sidecar rewrite never
+      // does (the last write in applySync's order).
+      const first = await planSync(dir)
+      for (const write of first.writes) await Bun.write(join(dir, write.path), write.text)
+      const packOnDisk = readFileSync(join(dir, PACK_PATH), "utf8")
+      const plan = await planSync(dir)
+      const entry = plan.entries.find((item) => item.path === PACK_PATH)
+      expect(entry).toMatchObject({ action: "re-stamp" })
+      // The file itself is never written; the sidecar rewrite is a real
+      // change (0158's byte-honest gate counts it).
+      expect(plan.writes.map((write) => write.path)).not.toContain(PACK_PATH)
+      expect(plan.stampText).toBeDefined()
+      expect(syncWritesAnything(plan)).toBe(true)
+      expect(formatSyncPlan(plan)).toContain("already byte-identical to the running bundle — re-stamped (an interrupted materialization/sync write; the file was not written)")
+      await applySync(dir, plan)
+      expect(readFileSync(join(dir, PACK_PATH), "utf8")).toBe(packOnDisk)
+      // Converged: detection goes quiet, a second plan is all-current.
+      expect(provenanceFindings((await provenanceComparison(dir))!)).toEqual([])
+      expect((await planSync(dir)).entries.every((item) => item.action === "current")).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

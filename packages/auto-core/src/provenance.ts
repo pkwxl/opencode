@@ -133,11 +133,15 @@ export function parseProvenanceStamp(text: string): ProvenanceStamp | undefined 
 // (the running bundle carries sections the stamped pack lacks — the
 // fast-forward case), binary-older (the stamped pack carries sections the
 // running bundle does not — a binary predating the materialization disables
-// features just as silently), diverged (both). inBinary: false marks a file
-// the running bundle no longer ships at all.
+// features just as silently), diverged (both). A sha-differing file whose
+// headings are identical carries body-only: the difference lives in body
+// prose alone and the delta names no direction — either binary may be the
+// newer one, and the label says the evidence's shape, never a guess
+// (plans/0214 D1). inBinary: false marks a file the running bundle no
+// longer ships at all.
 type ProvenanceFileState =
   | { state: "current" }
-  | { state: "stale"; direction: "binary-newer" | "binary-older" | "diverged"; inBinary: boolean; added: string[]; removed: string[] }
+  | { state: "stale"; direction: "binary-newer" | "binary-older" | "diverged" | "body-only"; inBinary: boolean; added: string[]; removed: string[] }
   // added/removed: what the running bundle would change vs the on-disk file
   // (the upgrade story every message tells). stampAdded/stampRemoved: the
   // person's own edit vs the stamp. onDisk: false = deleted since
@@ -174,7 +178,7 @@ export function compareProvenance(stamp: ProvenanceStamp, disk: Record<string, s
       const { added, removed } = headingsDelta(record.headings, binaryText === undefined ? [] : headingLines(binaryText))
       files[path] = {
         state: "stale",
-        direction: !binaryText ? "binary-older" : removed.length === 0 ? "binary-newer" : added.length === 0 ? "binary-older" : "diverged",
+        direction: !binaryText ? "binary-older" : added.length === 0 && removed.length === 0 ? "body-only" : removed.length === 0 ? "binary-newer" : added.length === 0 ? "binary-older" : "diverged",
         inBinary: binaryText !== undefined,
         added,
         removed,
@@ -231,7 +235,9 @@ export function provenanceFindings(comparison: ProvenanceComparison): { path: st
           ? "the running bundle is newer"
           : state.direction === "binary-older"
             ? "the running binary's bundle predates your materialized pack"
-            : "the running bundle diverged from your materialized pack"
+            : state.direction === "body-only"
+              ? "the running bundle differs in body only (either binary may be newer)"
+              : "the running bundle diverged from your materialized pack"
       findings.push({ path, problem: `stale — ${direction} (${deltaText(state.added, state.removed)}); run sync to fast-forward the unedited files` })
     } else if (state.state === "person-edited") {
       const own = state.onDisk ? editText(state.stampAdded, state.stampRemoved) : "the file was deleted"
@@ -256,18 +262,23 @@ export function provenanceNoticeLine(comparison: ProvenanceComparison): string |
   // the binary is older than the pack ("upgrade the tool"). A file the
   // bundle no longer ships is a divergence in either direction — a newer
   // binary may have retired it deliberately — so that shape names the gap
-  // and leaves the direction to the per-file part (plans/0158).
+  // and leaves the direction to the per-file part (plans/0158). A body-only
+  // difference names no direction at all, so it never draws the
+  // unqualified fast-forward advice either (plans/0214 D1).
   const predates = stale.some(([, state]) => state.state === "stale" && state.inBinary && state.direction === "binary-older")
   const retired = stale.some(([, state]) => state.state === "stale" && !state.inBinary)
+  const bodyOnly = stale.some(([, state]) => state.state === "stale" && state.inBinary && state.direction === "body-only")
   const parts = stale.map(([path, state]) => {
     if (state.state !== "stale") return ""
     const delta = deltaText(state.added, state.removed)
-    return `${path}: ${!state.inBinary ? "no longer shipped by the running bundle" : state.direction === "binary-older" ? "your pack predates it, the running bundle lacks sections you have" : delta ? `the running bundle ${delta}` : "the running bundle differs"}`
+    return `${path}: ${!state.inBinary ? "no longer shipped by the running bundle" : state.direction === "binary-older" ? "your pack predates it, the running bundle lacks sections you have" : state.direction === "body-only" ? "the running bundle differs in body only — either side may be newer" : delta ? `the running bundle ${delta}` : "the running bundle differs"}`
   })
   const aggregate = predates
     ? "differ from the running binary's bundle (a stale binary disables sections just as silently — upgrade the tool)"
     : retired
       ? "differ from the running binary's bundle (a file it no longer ships is a divergence in either direction — sync names each; remove a retired file by hand if the retirement is intended)"
-      : "can fast-forward to the running binary's bundle (sync)"
+      : bodyOnly
+        ? "differ from the running binary's bundle (a body-only difference cannot name the newer side — sync names each; upgrade the tool if your binary is not the newer one)"
+        : "can fast-forward to the running binary's bundle (sync)"
   return `⚠ intent bundle ${comparison.bundle}: ${stale.length} materialized file(s) ${aggregate} — ${parts.join("; ")}`
 }

@@ -8,9 +8,15 @@
 //   stamped project   unedited managed files fast-forward byte-identically
 //                     to the running binary's bundle and the stamp rewrites
 //                     with the new digests; person-edited files are reported
-//                     with the headings delta and never written; files the
-//                     running bundle no longer ships are reported, never
-//                     deleted; files the bundle newly ships land as adds.
+//                     with the headings delta and never written — except the
+//                     converged shape: a file already at the binary's exact
+//                     bytes with a stale stamp entry is the tool's own
+//                     interrupted write (a killed applySync or
+//                     materialization between the file writes and the
+//                     sidecar), re-stamped without writing the file
+//                     (plans/0214 D2); files the running bundle no longer
+//                     ships are reported, never deleted; files the bundle
+//                     newly ships land as adds.
 //   unstamped project the bootstrap (D5): for each file the running bundle
 //                     (resolved by the config's intent key) would write,
 //                     byte-identical → adopt (write the stamp, report
@@ -56,11 +62,18 @@ type SyncEntry =
   | { action: "current"; path: string }
   // Stamped, disk = stamp, the binary's bytes differ and still ship: the
   // write — byte-identical fast-forward. The direction is named (a binary
-  // predating the materialization downgrades on confirm; the plan says so).
-  | { action: "fast-forward"; path: string; direction: "binary-newer" | "binary-older" | "diverged"; added: string[]; removed: string[] }
+  // predating the materialization downgrades on confirm; the plan says so —
+  // and a body-only difference names no direction, its caveat saying so
+  // instead, plans/0214 D1).
+  | { action: "fast-forward"; path: string; direction: "binary-newer" | "binary-older" | "diverged" | "body-only"; added: string[]; removed: string[] }
   // Stamped, the running bundle no longer ships the file: reported, never
   // deleted; it leaves the managed set (the stamp drops it).
   | { action: "retired"; path: string; removed: string[] }
+  // Stamped, disk ≠ stamp but disk = the binary's exact bytes: the tool's
+  // interrupted write (a killed applySync/materialization between the file
+  // writes and the sidecar) — the stamp re-stamps to the binary's digests
+  // and the file itself is never written (plans/0214 D2).
+  | { action: "re-stamp"; path: string }
   // Stamped, disk ≠ stamp: person-owned — reported with the person's own
   // edit and the bundle's offer, never written; the stamp entry stands so
   // detection keeps its visibility.
@@ -137,6 +150,18 @@ export async function planSync(dir: string, opts: SyncOpts = {}): Promise<SyncPl
         }
         entries.push({ action: "fast-forward", path, direction: state.direction, added: state.added, removed: state.removed })
         writes.push({ path, text: binary[path]! })
+        see(path, binary[path]!)
+        continue
+      }
+      // The tool's own interrupted write converges (plans/0214 D2): disk at
+      // the binary's exact bytes while the stamp still holds the old digests
+      // is the killed-applySync (or killed-materialization) shape — a
+      // person's hand-copy of the bundle's exact bytes is indistinguishable
+      // and converged by the same content truth. The stamp re-stamps (the
+      // file itself never written); every other edit keeps the standing
+      // entry below.
+      if (state.onDisk && disk[path] === binary[path]) {
+        entries.push({ action: "re-stamp", path })
         see(path, binary[path]!)
         continue
       }
@@ -265,11 +290,20 @@ export function formatSyncPlan(plan: SyncPlan): string {
         break
       case "fast-forward":
         lines.push(
-          `  → ${entry.path}: fast-forward to the running bundle${delta(entry.added, entry.removed)}${entry.direction === "binary-older" ? " (the running binary's bundle predates your materialized pack — this writes its bytes; upgrade the tool if that is not intended)" : ""}`,
+          `  → ${entry.path}: fast-forward to the running bundle${delta(entry.added, entry.removed)}${
+            entry.direction === "binary-older"
+              ? " (the running binary's bundle predates your materialized pack — this writes its bytes; upgrade the tool if that is not intended)"
+              : entry.direction === "body-only"
+                ? " (a body-only difference — either the running binary or your materialized pack may be newer; this writes the binary's bytes; upgrade the tool if that is not intended)"
+                : ""
+          }`,
         )
         break
       case "retired":
         lines.push(`  ⚠ ${entry.path}: no longer shipped by the running bundle — left in place, remove it by hand if the retirement is intended (drops ${entry.removed.join(", ")})`)
+        break
+      case "re-stamp":
+        lines.push(`  ✓ ${entry.path}: already byte-identical to the running bundle — re-stamped (an interrupted materialization/sync write; the file was not written)`)
         break
       case "edited":
         lines.push(`  ✋ ${entry.path}: edited after materialization${entry.onDisk ? ` (you ${entry.stampAdded.length ? `added ${entry.stampAdded.join(", ")}` : ""}${entry.stampAdded.length && entry.stampRemoved.length ? " and " : ""}${entry.stampRemoved.length ? `removed ${entry.stampRemoved.join(", ")}` : ""})` : " (deleted)"} — person-owned, never written${entry.added.length || entry.removed.length ? `; the running bundle ${entry.added.length ? `adds ${entry.added.join(", ")}` : ""}${entry.added.length && entry.removed.length ? " and " : ""}${entry.removed.length ? `drops ${entry.removed.join(", ")}` : ""}` : ""}`)
