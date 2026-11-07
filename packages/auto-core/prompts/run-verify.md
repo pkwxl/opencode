@@ -15,6 +15,12 @@ each share. In a parallel wave (your prompt names the sibling task ids live besi
 also carries those siblings' uncommitted writes, each inside its own declared scope — as tolerated as the
 gap list — and the range holds their interleaved commits: the exclusions below name both.
 
+Every commit subject below that carries the task's title carries its short form: the title's first
+clause, cut at the first `:` / `(` / em-dash (where long titles park their parenthetical detail), capped
+at four words — the title's leading words when the first clause is empty. The task id identifies the
+unit; the full title stays in the task document and the run's state files. A mechanical rule over the
+title's form, never its content; the subject, ordinal included, is truncated past 100 characters.
+
 Read first: `docs/<task id>/todo.md` — the task document (title line, `Phase:` field, `## Goal` / `## Scope` /
 `## Acceptance`). It is the standard you verify against.
 

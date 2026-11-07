@@ -85,14 +85,21 @@ specified below.
    landed, an untouched one its baseline; the nested repositories' own commits carry the two trailers alone.
    Never push, stash, reset, rebase or amend.
 
-Commit subjects and stages (T-NNN = the task, S<nn> = the two-digit subtask number):
+Commit subjects and stages (T-NNN = the task, S<nn> = the two-digit subtask number). Every subject that
+carries the task's title carries its short form `<short title>`: the title's first clause, cut at the
+first `:` / `(` / em-dash (where long titles park their parenthetical detail), capped at four words —
+the title's leading words when the first clause is empty; the task id identifies the unit, the full
+title stays in the task document and the run's state files, a mechanical rule over the title's form
+never its content. The Stage 2 share carries the item's declared short title — its checklist line's
+text before the fields, the colon of a `<title>: <description>` line being the clause cut — under the
+same four-word cap:
 
-- Stage 1: subject `T-NNN decompose <task title>`, Auto-Stage `decompose`.
+- Stage 1: subject `T-NNN decompose <short title>`, Auto-Stage `decompose`.
 - Stage 2, per subtask: subject `T-NNN S<nn> <subtask short title>`, Auto-Stage `subtask <n>`.
 - Stage 3: the wrap-up report's commit (a passing verification, the `wrapup` key true): subject
-  `T-NNN wrapup <task title>`, Auto-Stage `wrapup`; a fix round's share (Stage 3's fix loop): subject
-  `T-NNN fix <round>.<session> <task title>`, Auto-Stage `execute`; the completion commit afterwards:
-  subject `T-NNN done <task title>`, Auto-Stage `done`.
+  `T-NNN wrapup <short title>`, Auto-Stage `wrapup`; a fix round's share (Stage 3's fix loop): subject
+  `T-NNN fix <round>.<session> <short title>`, Auto-Stage `execute`; the completion commit afterwards:
+  subject `T-NNN done <short title>`, Auto-Stage `done`.
 
 Terminator discipline, checked everywhere below: every Markdown document a child session created or rewrote in full
 must end, once finished, with a line holding only `<!-- auto: eof -->` as its last line of body text (only blank
@@ -313,11 +320,11 @@ The loop — a verification round, then while gaps remain:
 4. `Verification: PASS` → the close-out:
    1. Delete `docs/T-NNN/gaps.md` when present: a fixed round's gap list is uncommitted transient state —
       removed from disk alone, landing in no commit.
-   2. WRITE only: commit the report (`T-NNN wrapup <task title>`, Auto-Stage `wrapup`). SKIP: no report, no
+   2. WRITE only: commit the report (`T-NNN wrapup <short title>`, Auto-Stage `wrapup`). SKIP: no report, no
       wrap-up commit.
    3. The completion writes: rename `docs/T-NNN/todo.md` → `done.md`, tick the task's line in the phase's
       `tasks.md` (`- [ ] T-NNN` → `- [x] T-NNN`), and if `.auto/units.json` holds a record for this task,
-      remove that record; commit these writes (`T-NNN done <task title>`, Auto-Stage `done`).
+      remove that record; commit these writes (`T-NNN done <short title>`, Auto-Stage `done`).
 5. `Verification: INCOMPLETE` → measure, then fix:
    1. Count the gap list's `### Gap N` headings — the count the progress rule measures. The loop's best count
       is the minimum its FAILs have measured; the first FAIL only seeds it. This round made progress only
@@ -364,7 +371,7 @@ The loop — a verification round, then while gaps remain:
       and report; every Markdown file it created or modified ends with the terminator. Pass → land the fix
       share: the unified commit with `docs/T-NNN/gaps.md` unstaged
       back out first (`git restore --staged docs/T-NNN/gaps.md` when it exists — the gap list stays on disk,
-      never in a commit), subject `T-NNN fix <round>.<session> <task title>` (<session> one past the highest
+      never in a commit), subject `T-NNN fix <round>.<session> <short title>` (<session> one past the highest
       `T-NNN fix <round>.<n>` subject already in the log for that round — 1 when none exists), Auto-Stage
       `execute`.
    4. Re-verify: back to step 1 — the fresh verification round judges the whole task from scratch again (the

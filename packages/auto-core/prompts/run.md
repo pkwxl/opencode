@@ -258,8 +258,11 @@ iteration.
    exists; the numbering keys on the log's highest, never on a count of landings, so sparse indices stay
    sparse — a restarted master control derives it from the log the same way). A share landed without a
    handover document carries no ordinal. The title is the task's
-   short form — its leading words, the task id identifies the unit — truncated so the subject, ordinal
-   included, stays within 100 characters; the trailers are written
+   short form — its first clause, cut at the first `:` / `(` / em-dash (where long titles park their
+   parenthetical detail) and capped at four words, the title's leading words when the first clause is
+   empty; the task id identifies the unit, the full title stays in the task document and the run's
+   state files — a mechanical rule over the title's form, never its content — truncated so the
+   subject, ordinal included, stays within 100 characters; the trailers are written
    verbatim, never omitted. Afterwards HEAD has advanced by exactly one commit per changed repository, and
    the porcelain lists only the transient gap list.
 4. Hand over or finish: when `docs/T-NNN/handoff.md` exists, tail its last body line — the status line.
@@ -609,7 +612,7 @@ next phase and every phase after it without the stops.
      The trailers are written verbatim, never omitted. Then launch the formulation child session:
      `run-plan.md` with `<task id>`, `<phase id>`, `<phase name>`, `<phase dir>` and `<round dir>` filled
      — the formulation task runs like any task child; its share lands as the task grammar's own commit
-     (`<task id> exec <title>`, `Auto-Stage: execute`), and it closes out through the same verification
+     (`<task id> exec <short title>`, `Auto-Stage: execute`), and it closes out through the same verification
      child and done state-writes as the loop's task flow. Validate mechanically: `tasks.md` lists the
      formulation task plus at least one planned `- [ ] T-NNN` line; every listed `T-NNN` has its
      `docs/T-NNN/todo.md` (title line, `Phase:` field, the three sections — the terminator its last body

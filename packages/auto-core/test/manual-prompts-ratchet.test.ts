@@ -201,9 +201,10 @@ describe("manual-driver prompt ratchet", () => {
       expect(doc, name).toContain("`## Gaps` heading")
       expect(doc, name).toContain("`docs/T-NNN/gaps.md`")
       // The fix loop: the share grammar (0148 D1, the driver's nextFixSession
-      // derivation — max+1 from the log, never a landed count), the stage,
-      // and the gap list kept out of every commit.
-      expect(doc, name).toContain("T-NNN fix <round>.<session> <task title>")
+      // derivation — max+1 from the log, never a landed count; the subject's
+      // `<short title>` form plans/0202 D1's, flipped from `<task title>` in
+      // that lockstep), the stage, and the gap list kept out of every commit.
+      expect(doc, name).toContain("T-NNN fix <round>.<session> <short title>")
       expect(doc, name).toContain("Auto-Stage `execute`")
       expect(doc, name).toContain("`git restore --staged docs/T-NNN/gaps.md`")
       expect(doc, name).toContain("the gap list stays on disk")
@@ -328,6 +329,58 @@ describe("manual-driver prompt ratchet", () => {
     expect(run).not.toContain("a round that shrank the count buys the loop another round")
     expect(run).not.toContain("the count stopped shrinking")
     expect(run).not.toContain("while the gap count shrinks")
+  })
+
+  // plans/0202 D1–D3 (0165-163 / S25-08): the manual suite's short-title
+  // grammar completed — 0148 D2's mechanical rule (the title's first clause,
+  // cut at the first `:` / `(` / em-dash, capped at four words, the leading
+  // words the fallback) taught once per commit-making companion, and every
+  // task-title-bearing subject carrying `<short title>`: the companions'
+  // decompose/wrapup/fix/done sites (0200 D1's fix subjects among them) and
+  // run.md's formulation share. 0148 D3's mirror had landed in run.md and
+  // run-verify.md alone; the companions kept the full-title placeholders, so
+  // manual history differed by title length and clause shape from driver
+  // history despite the suite's same-grammar promise.
+  test("every task-title-bearing subject is the short title, the mechanical rule taught per companion (plans/0202)", () => {
+    // The rule's mechanical terms, once per commit-making companion (each a
+    // separate session that never sees the others — run-verify's primary
+    // hands it the FULL title, so the derivation must live in its own file).
+    for (const name of ["run.md", "run-verify.md", "run-as-subtasks.md", "resume-subtasks.md"]) {
+      const doc = text(name).replaceAll("\n", " ").replace(/  +/g, " ")
+      expect(doc, name).toContain("first clause, cut at the first `:` / `(` / em-dash")
+      expect(doc, name).toContain("capped at four words")
+      expect(doc, name).toContain("the title's leading words when the first clause is empty")
+    }
+    // The companions' four subject forms, short — plus the Stage 2 note (the
+    // item's declared short title under the same cap, the driver's shortTitle
+    // over the item line landing exactly before the colon).
+    for (const name of ["run-as-subtasks.md", "resume-subtasks.md"]) {
+      const doc = text(name)
+      for (const literal of [
+        "T-NNN decompose <short title>",
+        "T-NNN wrapup <short title>",
+        "T-NNN fix <round>.<session> <short title>",
+        "T-NNN done <short title>",
+      ]) {
+        expect(doc, `${name}: ${literal}`).toContain(literal)
+      }
+      expect(doc.replaceAll("\n", " ").replace(/  +/g, " "), name).toContain("under the same four-word cap")
+      // The retired full-title subject literals must not return: they are
+      // the defect (the driver's own subjects carry shortTitle, 0148 D2).
+      for (const retired of [
+        "decompose <task title>",
+        "wrapup <task title>",
+        "done <task title>",
+        "fix <round>.<session> <task title>",
+      ]) {
+        expect(doc, `${name}: retired ${retired}`).not.toContain(retired)
+      }
+    }
+    // The formulation share lands as the task grammar's own commit — the
+    // driver lands it through the task pipeline's short-title exec subject.
+    const run = text("run.md")
+    expect(run).toContain("`<task id> exec <short title>`")
+    expect(run).not.toContain("`<task id> exec <title>`")
   })
 
   test("the trailer grammar and the stage vocabulary", () => {
@@ -611,8 +664,9 @@ describe("manual-driver prompt ratchet", () => {
       expect(plan, "run-plan.md").toContain(literal)
     }
     // The formulation construction commit is the master control's alone
-    // (plans/0095); the child's own share lands as the task grammar's exec.
-    for (const literal of ["PLAN formulate <phase id> <phase name>", "Auto-Stage: phase-formulate", "`<task id> exec <title>`"]) {
+    // (plans/0095); the child's own share lands as the task grammar's exec
+    // (the short-title form, plans/0202 D1).
+    for (const literal of ["PLAN formulate <phase id> <phase name>", "Auto-Stage: phase-formulate", "`<task id> exec <short title>`"]) {
       expect(text("run.md"), "run.md").toContain(literal)
     }
   })
