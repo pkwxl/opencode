@@ -43,9 +43,9 @@
 // `remove-fork` (plans/0139 — the deferred consumer arrived), the exact
 // inverse of what fork builds.
 import { existsSync } from "node:fs"
-import { mkdir, stat } from "node:fs/promises"
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
-import { firstLine, git, nestedShasAt, repoRoots, taskFirstCommit } from "./git"
+import { mkdir, realpath, stat } from "node:fs/promises"
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
+import { firstLine, git, nestedShasAt, physicalDir, repoRoots, taskFirstCommit } from "./git"
 import { addWorktreeAt } from "./git-worktree"
 import { localBranches, revSha } from "./git-land"
 import { liveRunLock, lockLines } from "./lock"
@@ -76,6 +76,20 @@ const within = (parent: string, child: string): boolean => {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
 }
 
+// The fork worktree path canonicalized to the extent it exists (plans/0191
+// D2, 0165-144): git registers the realpath of the worktree it adds, so a
+// lexical spelling of a symlinked prefix would disagree with git's own
+// record in every later comparison and every printed cleanup line. The tail
+// beyond the existing prefix is kept as spelled — fork requires an absent
+// path, and the person's spelling of the not-yet-created part is its name.
+// A symlink-free path is byte-identical (realpath of it is itself).
+async function realPathPrefix(path: string): Promise<string> {
+  if (await stat(path).then(() => true, () => false)) return await realpath(path).catch(() => path)
+  const parent = dirname(path)
+  if (parent === path) return path
+  return join(await realPathPrefix(parent), basename(path))
+}
+
 // A task's title from its document (done.md after completion, todo.md
 // before), for the success lines; undefined when neither doc is readable.
 async function taskTitle(dir: string, id: string): Promise<string | undefined> {
@@ -88,7 +102,14 @@ async function taskTitle(dir: string, id: string): Promise<string | undefined> {
 
 export async function forkTask(dir: string, target: string, worktreePath: string): Promise<ForkOutcome> {
   const { bin } = shellProfile()
-  const root = resolve(dir)
+  // The directory facts speak git's own path spelling (plans/0191 D2): the
+  // root and the worktree path are canonicalized before every comparison
+  // and every printed line, so the containment guards judge the directories
+  // the paths resolve to, and the cleanup line names the path git
+  // registered (realpath) — a path through a symlink both round-trips and
+  // cannot smuggle the worktree inside the project. A symlink-free path is
+  // byte-identical to its resolve() form.
+  const root = await physicalDir(resolve(dir))
   const usage = (lines: string[]): ForkOutcome => ({ type: "usage", lines })
   const blocked = (lines: string[]): ForkOutcome => ({ type: "blocked", lines })
   const task = TASK_TARGET.test(target) ? target : undefined
@@ -100,7 +121,7 @@ export async function forkTask(dir: string, target: string, worktreePath: string
   if (!worktreePath.trim()) {
     return usage([`fork requires a worktree path — the absent directory the experiment environment is created in (usage: ${shape})`])
   }
-  const path = resolve(worktreePath)
+  const path = await realPathPrefix(resolve(worktreePath))
   // The named alignments, keyed by the same repository-relative spelling the
   // enumeration below derives (`relative(root, repoRoot)`) — a forgiving
   // resolve first, so "./pkg" and "pkg/" name the repository the record would.
@@ -192,6 +213,21 @@ export async function forkTask(dir: string, target: string, worktreePath: string
       if (parent !== undefined) sha = parent
     }
     if (sha === undefined) {
+      // An empty nested repository (git init, no commit yet — the S19 seam
+      // 0165-143 folds in: nestedHeads writes an empty sha the record reader
+      // skips, so no alignment can exist): its state is not "not derivable",
+      // it is nothing, and no sha can ever be named for it — the generic
+      // remedy is unsatisfiable there. Refuse naming the one act that makes
+      // it forkable (plans/0191 D1). The exit-code reading: `--verify
+      // --quiet` exits 1 for an unresolvable HEAD (the unborn branch of an
+      // empty repository), 0 with commits; anything else (128, an unreadable
+      // repository) falls through to the generic refusal — uncertain stays
+      // generic (P12).
+      const head = await git(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(() => undefined)
+      if (head?.code === 1) {
+        problems.push(`${rel}: the repository is empty (no commits yet) — a worktree cannot be aligned on nothing; commit once in ${rel} and fork again, or settle it by hand`)
+        continue
+      }
       problems.push(
         `${rel}: its state at the fork point is not derivable — ${
           task !== undefined
@@ -203,6 +239,12 @@ export async function forkTask(dir: string, target: string, worktreePath: string
     }
     nested.push({ rel, root: repoRoot, sha, named: asNamed !== undefined })
   }
+  // A repository the fork commit's record names but today's tree does not
+  // hold is reported, never silently dropped (plans/0191 D1): the record is
+  // a past state's word about a since-changed tree — informational, not a
+  // refusal (the named-alignment form's refusal for a typo'd rel stays: a
+  // person's explicit word is checked, a record's word is reported).
+  const absentRecorded = [...recorded.keys()].filter((rel) => !seen.has(rel))
   // An entry naming no repository of this project never matched anything — a
   // typo'd rel would otherwise fall through to the record path silently.
   for (const rel of named.keys()) {
@@ -221,7 +263,16 @@ export async function forkTask(dir: string, target: string, worktreePath: string
   }
 
   // —— Pass 2: the worktrees (the root first, then each nested repository at
-  // its aligned state; a failure midway blocks naming the partial scene) ——
+  // its aligned state, shallowest first; a failure midway blocks naming the
+  // partial scene). The creation order is fork's own derived fact
+  // (plans/0191 D1, 0165-143), NOT repoRoots' commit order (deepest first —
+  // that order is the unified commit's): creation mirrors the containment,
+  // because a parent directory that already holds the deeper repository's
+  // worktree is non-empty and git refuses to populate it ("already exists",
+  // the measured mechanism) — while an empty intermediate directory (this
+  // order's own shape: the parent's worktree creates it) is no obstacle.
+  // remove-fork's teardown keeps the measured opposite: deepest first, the
+  // root last. ——
   const added = await addWorktreeAt(root, path, branch, point)
   if (!added.ok) {
     return blocked([
@@ -229,7 +280,7 @@ export async function forkTask(dir: string, target: string, worktreePath: string
       `clean up any partial state by hand: git -C ${root} worktree prune${(await revSha(root, branch)) !== undefined ? ` && git -C ${root} branch -D ${branch}` : ""}`,
     ])
   }
-  for (const repo of nested) {
+  for (const repo of [...nested].sort((a, b) => a.rel.split("/").length - b.rel.split("/").length)) {
     const at = join(path, repo.rel)
     await mkdir(dirname(at), { recursive: true })
     const ok = await addWorktreeAt(repo.root, at, branch, repo.sha)
@@ -256,6 +307,7 @@ export async function forkTask(dir: string, target: string, worktreePath: string
     lines.push(`  .: ${point.slice(0, 7)} — the named commit`)
   }
   for (const repo of nested) lines.push(`  ${repo.rel}: ${repo.sha.slice(0, 7)} (${repo.named ? "aligned as named" : "aligned at the fork point"})`)
+  for (const rel of absentRecorded) lines.push(`  ℹ ${rel}: recorded at the fork point but absent from the tree today — not forked; no worktree of the fork holds it`)
   lines.push(`run it: ${bin} run ${path}${task !== undefined ? ` --stop-after ${task}` : ""}`)
   lines.push(`cleanup when done: ${bin} remove-fork ${path} ${root} — removes every worktree of the fork and deletes ${branch} in each of its repositories`)
   return { type: "forked", lines }
@@ -285,7 +337,8 @@ async function worktreeBranches(dir: string): Promise<Map<string, string | undef
 export type RemoveForkOptions = {
   // --force: discard the uncommitted work the fork's worktrees hold (the
   // explicit bracket — without it a dirty member blocks naming its files;
-  // the branch tips stay named either way, recoverable via git reflog).
+  // the branch tips stay named either way, their printed full shas the one
+  // recovery handle until git gc prunes the objects, plans/0191 D4).
   force?: boolean
 }
 
@@ -312,11 +365,17 @@ export type RemoveForkOptions = {
 // idempotent, a re-run rediscovers what still stands).
 export async function removeFork(dir: string, worktreePath: string, opts: RemoveForkOptions = {}): Promise<ForkOutcome> {
   const { bin } = shellProfile()
-  const root = resolve(dir)
+  // The directory facts speak git's own path spelling (plans/0191 D2,
+  // 0165-144): git registers worktrees at their realpath, so the argument
+  // and the project root are canonicalized before the registry lookup and
+  // every printed line — remove-fork answers for the fork a person's shell
+  // spelling of it (a symlinked path) reaches. A path that does not resolve
+  // keeps its spelling and the lookup refuses as before.
+  const root = await physicalDir(resolve(dir))
   const usage = (lines: string[]): ForkOutcome => ({ type: "usage", lines })
   const blocked = (lines: string[]): ForkOutcome => ({ type: "blocked", lines })
   const shape = `${bin} remove-fork <worktree-path> [dir]`
-  const path = resolve(worktreePath)
+  const path = await physicalDir(resolve(worktreePath))
 
   // —— Pass 1: every refusal, before any repository's git state is touched ——
   if (path === root) {
@@ -398,14 +457,18 @@ export async function removeFork(dir: string, worktreePath: string, opts: Remove
 
   // —— Pass 2: the teardown — nested members first, the root last, each
   // branch deleted after its own worktree is gone (git refuses to delete a
-  // branch a worktree has checked out). Every step names the branch tip
-  // before deleting it, land --abandon's recoverability posture: committed
-  // work is discardable by design, the reflog keeps it until collection. ——
+  // branch a worktree has checked out). Every step names the branch tip —
+  // in full, plans/0191 D4 (0165-146): the printed sha is the ONE recovery
+  // handle, because the reflogs are already gone when the line is read (the
+  // fork's commits were made in the linked worktree, whose HEAD reflog dies
+  // with the worktree's removal, and branch -D deletes the branch's own
+  // reflog) — the object itself survives until git gc prunes it, and the
+  // closing line teaches the recipe. ——
   const lines: string[] = []
   const resumable = `the removal is resumable — settle the cause and re-run: ${bin} remove-fork ${worktreePath}`
   for (const member of [...members.slice(1), members[0]!]) {
     const swept = !existsSync(member.path)
-    const tip = (await revSha(member.repo, `refs/heads/${branch}`))?.slice(0, 7)
+    const tip = await revSha(member.repo, `refs/heads/${branch}`)
     const removed = await git(member.repo, ["worktree", "remove", ...(opts.force ? ["--force"] : []), member.path])
     if (removed.code !== 0) {
       return blocked([
@@ -429,7 +492,7 @@ export async function removeFork(dir: string, worktreePath: string, opts: Remove
     lines.push(`  ${member.rel}: worktree ${swept ? "already gone — registration dropped" : "removed"}, branch ${branch} deleted (was ${tip})`)
   }
   if (lines.some((line) => line.includes("(was "))) {
-    lines.push(`  the tips above stay recoverable via git reflog until collection`)
+    lines.push(`  the tips above stay recoverable by their printed shas until git gc prunes them (the reflogs went with the deletion) — git branch ${branch} <the (was …) sha> recreates one in its repository`)
   }
   // The retry hint names the target the branch stem carries (fork's own
   // grammar: the task id or short sha, an experiment number after it).

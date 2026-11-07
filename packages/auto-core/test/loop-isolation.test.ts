@@ -278,7 +278,7 @@ describe("runIsolationLoop (plans/0068 S2, OPENCODE_AUTO_LANE_ISOLATION)", () =>
     // The park and the branches are gone; the runtime fields cleared; the
     // main tree is clean.
     expect(await parkEntries()).toEqual([])
-    for (const id of launches) expect((await git(dir, "branch", "--list", laneBranch(id, dir))).trim()).toBe("")
+    for (const id of launches) expect((await git(dir, "branch", "--list", await laneBranch(id, dir))).trim()).toBe("")
     expect(JSON.parse(await unitsText(dir)).tasks["T-001"].worktree).toBeUndefined()
     expect(await changedFiles(dir)).toEqual([])
   })
@@ -410,7 +410,7 @@ describe("the isolation loop's failure matrix (§6.2)", () => {
     // The scene is kept: worktree, branch, registry record — and nothing
     // landed in the main tree.
     expect(await parkEntries()).toEqual(["T-001"])
-    expect((await git(dir, "branch", "--list", laneBranch("T-001", dir))).trim()).toContain(laneBranch("T-001", dir))
+    expect((await git(dir, "branch", "--list", await laneBranch("T-001", dir))).trim()).toContain(await laneBranch("T-001", dir))
     expect(JSON.parse(await unitsText(dir)).tasks["T-001"].worktree).toBe(lanePark("T-001"))
     expect(await Bun.file(join(dir, "src/widget.ts")).exists()).toBe(false)
     expect(await changedFiles(dir)).toEqual([])
@@ -458,7 +458,7 @@ describe("the isolation loop's failure matrix (§6.2)", () => {
     expect(await Bun.file(join(dir, taskStatePaths("T-001").pending)).text()).toBe("# T-001: main side\n")
     expect(await changedFiles(dir)).toEqual([])
     expect(await parkEntries()).toEqual(["T-001"])
-    expect((await git(dir, "branch", "--list", laneBranch("T-001", dir))).trim()).toContain(laneBranch("T-001", dir))
+    expect((await git(dir, "branch", "--list", await laneBranch("T-001", dir))).trim()).toContain(await laneBranch("T-001", dir))
     expect(JSON.parse(await unitsText(dir)).tasks["T-001"].worktree).toBe(lanePark("T-001"))
   })
 

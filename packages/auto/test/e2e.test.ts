@@ -5425,7 +5425,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
       // (the digest grammar's own name — an exact pattern without it could
       // never match, plans/0151 D2).
       expect(await readdir(join(isolated.dir, ".auto", "worktrees")).catch(() => [])).toEqual([])
-      expect((await isolated.git("branch", "--list", laneBranch(TASK, isolated.dir))).trim()).toBe("")
+      expect((await isolated.git("branch", "--list", await laneBranch(TASK, isolated.dir))).trim()).toBe("")
     } finally {
       await serial.agent.done()
       await isolated.agent.done()
@@ -5591,7 +5591,7 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
       expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain(`- [x] ${TASK} the widget`)
       expect((await git("status", "--porcelain")).trim()).toBe("")
       expect(await parkThere()).toBe(false)
-      expect((await git("branch", "--list", laneBranch(TASK, dir))).trim()).toBe("")
+      expect((await git("branch", "--list", await laneBranch(TASK, dir))).trim()).toBe("")
       expect((await units()).tasks[TASK]?.attempts).toBe(2)
       expect(await git("log", "--format=%B")).toContain("Auto-Stage: landing")
     } finally {
@@ -5674,7 +5674,7 @@ describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
       expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain("- [x] T-001 the widget")
       expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toContain("alpha")
       expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([])
-      expect((await git("branch", "--list", laneBranch("T-001", dir))).trim()).toBe("")
+      expect((await git("branch", "--list", await laneBranch("T-001", dir))).trim()).toBe("")
       expect((await git("log", "--format=%B")).toString()).toContain("Auto-Stage: landing")
       expect((await git("status", "--porcelain")).trim()).toBe("")
     } finally {
@@ -5712,14 +5712,14 @@ describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
       // suite's global git config (T-127), so the instruction naming it is the
       // real main-tree branch, and the literal cannot drift with the host.
       // The lane branch carries the digest grammar's full name (plans/0151 D2).
-      expect(run.out).toContain(`merge main into ${laneBranch(second, dir)}`)
+      expect(run.out).toContain(`merge main into ${await laneBranch(second, dir)}`)
       expect(run.out).toContain(`${second} is blocked`)
       expect(run.out).toContain("blocked and its landing hit a conflict")
       expect(await Bun.file(join(dir, taskStatePaths(first).complete)).exists()).toBe(true)
       expect(await Bun.file(join(dir, taskStatePaths(second).complete)).exists()).toBe(false)
       // The blocked lane's scene is kept; the main tree is clean.
       expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([second])
-      expect((await git("branch", "--list", laneBranch(second, dir))).trim()).toContain(laneBranch(second, dir))
+      expect((await git("branch", "--list", await laneBranch(second, dir))).trim()).toContain(await laneBranch(second, dir))
       expect((await git("status", "--porcelain")).trim()).toBe("")
     } finally {
       await agent.done()
@@ -6045,7 +6045,7 @@ describe("CLI: branch isolation round trip (plans/0074 U-L3)", () => {
       // isolation), while the nested repository rides the round branch — the
       // main tree's pkg and the park's copied pkg both sit on auto/R-01, the
       // original branch never moved by any of it.
-      expect((await git("branch", "--list", laneBranch("T-001", dir))).trim()).toContain(laneBranch("T-001", dir))
+      expect((await git("branch", "--list", await laneBranch("T-001", dir))).trim()).toContain(await laneBranch("T-001", dir))
       expect((await git("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(mainBranch)
       expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
       const parkPkg = gitOf(join(dir, ".auto", "worktrees", "T-001", "pkg"))

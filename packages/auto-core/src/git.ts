@@ -1903,6 +1903,20 @@ export function firstLine(text: string): string {
   return text.trim().split("\n")[0]!.slice(0, 200)
 }
 
+// The cause of a git failure over its own progress lines (plans/0191 D3,
+// 0165-145): `git worktree add` prints "Preparing worktree (…)" to stderr
+// before the fatal line, so the FIRST line names progress, not the cause.
+// The last `fatal:`/`error:` line is git's own verdict; failing that, the
+// last non-empty line (a lone progress line still beats the empty string,
+// and wholly silent failures keep the callers' `|| exit code` fallback).
+export function causeLine(text: string): string {
+  const lines = text.trim().split("\n").map((line) => line.trim()).filter(Boolean)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i]!.startsWith("fatal:") || lines[i]!.startsWith("error:")) return lines[i]!.slice(0, 200)
+  }
+  return (lines.at(-1) ?? "").slice(0, 200)
+}
+
 // The paths changed between each repository's recorded sha and HEAD
 // (committed-only, `git diff --name-only <sha>..HEAD`) — the test-lane
 // carry-forward's range (plans/0096 D5): the recorded-HEADs diff is what

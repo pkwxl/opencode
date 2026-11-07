@@ -10,7 +10,7 @@
 // module — each imports it).
 import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
-import { abortToLandResult, commitTitle, firstLine, git, identityArgs, isConflict, message, shortTitle, type LandResult, type WorktreeResult } from "./git"
+import { abortToLandResult, causeLine, commitTitle, firstLine, git, identityArgs, isConflict, message, shortTitle, type LandResult, type WorktreeResult } from "./git"
 
 // Create a lane worktree at path (the park, `.auto/worktrees/<task-id>`,
 // gitignored with the rest of `.auto/`) on the new lane branch
@@ -43,10 +43,10 @@ export async function addWorktree(dir: string, path: string, branch: string, spa
   if (sparse === undefined) {
     const added = await git(dir, ["worktree", "add", "-b", branch, path])
     if (added.code === 0) return { ok: true }
-    return { ok: false, error: firstLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
+    return { ok: false, error: causeLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
   }
   const added = await git(dir, ["worktree", "add", "--no-checkout", "-b", branch, path])
-  if (added.code !== 0) return { ok: false, error: firstLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
+  if (added.code !== 0) return { ok: false, error: causeLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
   // The cone set by reflink: each declared directory recursively, plus every
   // tracked root file (cone mode always materializes the root; `git ls-files`
   // lists the index, and the dispatch-time clean gate makes index and disk
@@ -84,7 +84,7 @@ export async function addWorktree(dir: string, path: string, branch: string, spa
 export async function addWorktreeAt(dir: string, path: string, branch: string, start: string): Promise<WorktreeResult> {
   const added = await git(dir, ["worktree", "add", "-b", branch, path, start])
   if (added.code === 0) return { ok: true }
-  return { ok: false, error: firstLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
+  return { ok: false, error: causeLine(added.err || added.out) || `git worktree add exit code ${added.code}` }
 }
 
 // Copy the cone set of a fresh `--no-checkout` worktree by reflink from the

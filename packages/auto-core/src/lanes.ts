@@ -48,12 +48,13 @@
 // whatever tier is active: it still forces the worktree lane machinery,
 // serially, under every tier (D10's closing rule).
 import { createHash } from "node:crypto"
-import { cp, mkdir, stat } from "node:fs/promises"
+import { cp, mkdir, realpath, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { parseIndex, resolveDepends, scanUnitStates, type UnitDecl } from "./document/unit"
 import { checklistPrerequisites, subtaskId } from "./document/state"
 import { repoRoots, shortTitle, type GitOps, type UnitBaseline, unitViolations } from "./git"
-import { deleteBranch, mergeBaseSha } from "./git-worktree"
+import { localBranches, revSha } from "./git-land"
+import { currentBranch, deleteBranch, mergeBaseSha } from "./git-worktree"
 import type { LaneCacheRule, ParallelLevel, TreeLanesSetting } from "./intent/types"
 import { log } from "./log"
 import { emitStatus } from "./run-status"
@@ -714,16 +715,49 @@ function reRootSplit(baseline: readonly { root: string; sha: string }[], from: s
 // —— The protocol paths (§8: all new English literals, registered) ——
 
 // The lane branch grammar: `auto-lane/<task-id>-<digest>`, where <digest> is
-// the first 8 hex of the target directory's path. Stability is per target
-// directory (D16 — a re-dispatched lane resumes on the same branch), but the
-// branch namespace belongs to the object store and fork arms of one
+// the first 8 hex of the target directory's REAL path — its identity, not
+// its spelling (plans/0191 D5, 0165-085, amending 0151 D2's "stability is
+// per target directory" from the string to the directory): a lane
+// dispatched by `run /link/proj` and recovered by `run .` from inside (the
+// shell resolves an explicit argument lexically, `.` through the physical
+// cwd) derive the same branch, so every recovery naming — the landing's
+// baseline, the cap line's inspection hint, the straggler prune — speaks
+// the branch that exists. A path realpath cannot resolve (not on disk)
+// hashes its spelling as given, the grammar's floor. Stability stays per
+// target directory (D16 — a re-dispatched lane resumes on the same branch),
+// but the branch namespace belongs to the object store and fork arms of one
 // repository share the store (plans/0129): the digest keeps two arms
 // dispatching the same unit out of each other's namespace while a
 // directory's own retries stay on one branch (plans/0151 D2). land's
 // original-branch derivation matches on the `auto-lane/` prefix, which the
-// grammar keeps.
-export const laneBranch = (unit: string, dir: string): string =>
-  `auto-lane/${unit}-${createHash("sha256").update(dir).digest("hex").slice(0, 8)}`
+// grammar keeps. Async because identity is a read of the filesystem.
+export const laneBranch = async (unit: string, dir: string): Promise<string> =>
+  `auto-lane/${unit}-${createHash("sha256").update(await realpath(dir).catch(() => dir)).digest("hex").slice(0, 8)}`
+
+// The unit's lane branch as git itself knows it (plans/0191 D5): the
+// grammar's name for this directory when that branch exists, and otherwise
+// the branch the scene names — a lane dispatched before the digest keyed
+// the directory's realpath carries the spelling's digest, and the landing
+// must not block on the upgrade seam (P20: in-flight work is never
+// destroyed). The evidence ladder, each rung read from git's own record
+// (P6): the worktree's checked-out branch (this scene's branch by
+// construction — every arm has its own park), else the single listed
+// `auto-lane/<unit>-*` branch (the straggler prune's case, its worktree
+// already gone; two listed branches are two arms' lanes and are never
+// guessed between, P12 — git's own checkout guard additionally refuses -D
+// on a branch a registered worktree holds), else the grammar's name, whose
+// non-existence the caller's existing refusal names.
+export async function resolveLaneBranch(dir: string, unit: string, worktree?: string): Promise<string> {
+  const branch = await laneBranch(unit, dir)
+  if ((await revSha(dir, `refs/heads/${branch}`)) !== undefined) return branch
+  if (worktree !== undefined) {
+    const checked = await currentBranch(worktree)
+    if (checked !== undefined && checked.startsWith(`auto-lane/${unit}-`)) return checked
+  }
+  const listed = (await localBranches(dir)).filter((name) => name.startsWith(`auto-lane/${unit}-`))
+  if (listed.length === 1) return listed[0]!
+  return branch
+}
 
 // The park path of a unit's lane, relative to the target directory: the
 // worktree lives under `.auto/worktrees/` (D16), gitignored with the rest of
@@ -855,7 +889,12 @@ export async function dispatchLane(
 ): Promise<LaneDispatch> {
   const record = (await laneRecords(dir)).find((entry) => entry.unit === task.id)
   const park = join(dir, lanePark(task.id))
-  const branch = laneBranch(task.id, dir)
+  // The branch of the scene this dispatch addresses (plans/0191 D5): the
+  // grammar's name for a fresh worktree; a re-dispatched record's worktree
+  // may predate the digest's realpath keying — resolve what git has, never
+  // re-derive blind (the instruction line names the branch the worker sits
+  // on, and the failure rollbacks delete the branch that was created).
+  const branch = record === undefined ? await laneBranch(task.id, dir) : await resolveLaneBranch(dir, task.id, join(dir, record.worktree))
   // §10's park path-length guard runs first, before any write: a worktree
   // this host cannot address would fail mid-creation (block-with-path).
   const tooLong = laneParkProblem(dir, task.id)
@@ -1086,7 +1125,13 @@ export async function landLane(
   report: LaneReport,
 ): Promise<Landing> {
   const worktree = join(dir, lanePark(task.id))
-  const branch = laneBranch(task.id, dir)
+  // The branch the scene sits on (plans/0191 D5): the grammar's name, or —
+  // for records written before the digest keyed the directory's realpath —
+  // the branch the park's worktree itself has checked out. The baseline
+  // derivation, the merge and the teardown below all use this one
+  // resolution, so the scene's own branch is landed and deleted under one
+  // name whatever spelling created it.
+  const branch = await resolveLaneBranch(dir, task.id, worktree)
   // D7's step ④ booking (the report's figures into the parent's run stats,
   // the detail folding into the phase/round buckets — the S4 roll-up) plus
   // the 0067 bus's landing event: one helper, the three call sites below
@@ -1175,7 +1220,7 @@ export async function landLane(
     // park clean) and hand the uncommitted sync to the human.
     await clearLane(dir, task.id)
     await book()
-    await teardownLane(gitOps, dir, task.id)
+    await teardownLane(gitOps, dir, task.id, branch)
     landedEvent("blocked", { detail: "the landing-sync commit failed" })
     return { type: "blocked", error: `the landing-sync commit of ${task.id} failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. The merge landed; commit the index ticks manually and re-run` }
   }
@@ -1183,7 +1228,7 @@ export async function landLane(
   await clearLane(dir, task.id)
   await book()
   // ⑤ teardown.
-  const teardown = await teardownLane(gitOps, dir, task.id)
+  const teardown = await teardownLane(gitOps, dir, task.id, branch)
   landedEvent("landed", { usage: true })
   return { type: "landed", teardown }
 }
@@ -1191,10 +1236,11 @@ export async function landLane(
 // D7's step ⑤: remove the worktree, delete the merged branch. Best-effort
 // with a warning — after a landed merge the leftovers are inert (the record
 // is cleared, the branch merged), and a blocked exit over them would strand
-// a park nothing references. Returns whether both fully succeeded.
-async function teardownLane(gitOps: GitOps, dir: string, unit: string): Promise<boolean> {
+// a park nothing references. The branch is the landing's own resolution
+// (plans/0191 D5) threaded down: the scene's branch under one name whatever
+// spelling created it. Returns whether both fully succeeded.
+async function teardownLane(gitOps: GitOps, dir: string, unit: string, branch: string): Promise<boolean> {
   const worktree = join(dir, lanePark(unit))
-  const branch = laneBranch(unit, dir)
   const removed = await gitOps.removeWorktree(dir, worktree)
   if (!removed.ok) log(`⚠ removing the lane worktree ${lanePark(unit)} failed: ${removed.error} (the lane landed; clean up manually)`)
   const deleted = await deleteBranch(dir, branch)

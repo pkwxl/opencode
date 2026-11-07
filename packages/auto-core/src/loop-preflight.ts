@@ -30,7 +30,6 @@ import {
   dispatchLane,
   docEligible,
   docScheduler,
-  laneBranch,
   laneExit,
   laneOutcome,
   lanePark,
@@ -39,6 +38,7 @@ import {
   orphanRedispatch,
   pidAlive,
   readLaneReport,
+  resolveLaneBranch,
   resolveTreeTier,
   schedulerActive,
   worktreeScheduler,
@@ -939,7 +939,12 @@ export async function recoverOrphanLanes(gitOps: GitOps, dir: string): Promise<n
     // always schedules, so a "keep" is always the cap).
     while (report === undefined) {
       if (orphanRedispatch(await unitAttempts(dir, record.unit)).type === "keep") {
-        log(`⏸ ${record.unit} hit its dispatch attempts cap (${LANE_DISPATCH_CAP}) without completing; the scene is kept at ${lanePark(record.unit)} — inspect it manually (the lane branch ${laneBranch(record.unit, dir)} holds the last attempt's commits) and re-run after fixing it`)
+        // The inspection hint names the branch git holds (plans/0191 D5):
+        // the scene may sit on a pre-realpath-digest spelling of its lane
+        // branch, and the person reading this line needs the branch that
+        // exists.
+        const branch = await resolveLaneBranch(dir, record.unit, park)
+        log(`⏸ ${record.unit} hit its dispatch attempts cap (${LANE_DISPATCH_CAP}) without completing; the scene is kept at ${lanePark(record.unit)} — inspect it manually (the lane branch ${branch} holds the last attempt's commits) and re-run after fixing it`)
         return 2
       }
       const dispatched = await dispatchLane(gitOps, dir, { id: record.unit, title: record.unit })
@@ -1032,8 +1037,14 @@ async function pruneLaneStragglers(gitOps: GitOps, dir: string, records: readonl
     const pruned = await gitOps.pruneWorktrees(dir)
     if (!pruned.ok) log(`⚠ git worktree prune failed: ${pruned.error}`)
     for (const name of prunedDirs) {
-      const deleted = await deleteBranch(dir, laneBranch(name, dir))
-      if (!deleted.ok) log(`⚠ deleting the straggler's lane branch ${laneBranch(name, dir)} failed: ${deleted.error}`)
+      // The ladder without a worktree to ask (plans/0191 D5): the grammar's
+      // name, else the single stranded spelling of the unit's lane branch —
+      // a straggler created before the digest keyed the realpath hashes the
+      // spelling, and the prune exists so the unit's next `worktree add -b`
+      // does not meet it.
+      const branch = await resolveLaneBranch(dir, name)
+      const deleted = await deleteBranch(dir, branch)
+      if (!deleted.ok) log(`⚠ deleting the straggler's lane branch ${branch} failed: ${deleted.error}`)
       log(`removed: the park straggler ${join(".auto", "worktrees", name)} (a worktree with no lane record)`)
     }
   }

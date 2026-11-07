@@ -23,11 +23,13 @@
 // live run inside the fork; the swept-directory shape; and the retry
 // round-trip the teardown exists for (the stem branch name free again).
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
-import { hostname } from "node:os"
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdtemp } from "node:fs/promises"
+import { dirname, join, sep } from "node:path"
+import { hostname, tmpdir } from "node:os"
 import { commitTree } from "../src/git"
 import { forkTask, removeFork } from "../src/fork"
+import { addWorktree, addWorktreeAt } from "../src/git-worktree"
 import { git } from "./fixtures/runner"
 import { withDirFactory } from "./fixtures/dir"
 
@@ -191,6 +193,106 @@ describe("forkTask (plans/0128: the fork command core)", () => {
         expect(existsSync(join(path, "pkg", ".git"))).toBe(true)
         expect(await fullShaOf(join(path, "pkg"), "HEAD")).toBe(pkgAfter1)
         expect(outcome.lines).toContain(`  pkg: ${pkgAfter1.slice(0, 7)} (aligned at the fork point)`)
+      } finally {
+        forks.done()
+      }
+    }),
+  )
+
+  test(
+    "nested-of-nested repositories fork shallowest-first: the parent's worktree never meets an existing directory (plans/0191 D1, 0165-143)",
+    withDir(async (dir) => {
+      const forks = forksOf(dir)
+      try {
+        // The source layout: root holding a, a holding a/b — each its own
+        // repository, a's .gitignore keeping b out of a's index.
+        await nestedRepo(dir, "a")
+        writeFileSync(join(dir, "a", ".gitignore"), "/b\n")
+        await git(join(dir, "a"), "add", "-A")
+        await git(join(dir, "a"), "commit", "-qm", "a ignores b")
+        const abSetup = await nestedRepo(dir, "a/b")
+        const aAfterIgnore = await fullShaOf(join(dir, "a"), "HEAD")
+        await initRoot(dir, "a")
+        await taskCommit(dir, "T-001", "first migration", "execute", "one.txt")
+        const rootAfter1 = await fullShaOf(dir, "HEAD")
+        const aAfter1 = await fullShaOf(join(dir, "a"), "HEAD")
+        const abAfter1 = await fullShaOf(join(dir, "a", "b"), "HEAD")
+        await taskCommit(dir, "T-002", "second migration", "execute", "two.txt")
+        // Deepest-first creation (repoRoots' commit order) meets an existing
+        // non-empty directory at a — the layout the unified commit fully
+        // supports must fork.
+        const outcome = await forkTask(dir, "T-002", forks.at("exp"))
+        expect(outcome.type).toBe("forked")
+        const path = forks.at("exp")
+        expect(await fullShaOf(path, "HEAD")).toBe(rootAfter1)
+        expect(await fullShaOf(join(path, "a"), "HEAD")).toBe(aAfter1)
+        expect(await fullShaOf(join(path, "a", "b"), "HEAD")).toBe(abAfter1)
+        expect(abAfter1).toBe(abSetup)
+        expect(aAfter1).toBe(aAfterIgnore)
+        // One coherent branch name in every repository of the fork.
+        for (const repo of [dir, join(dir, "a"), join(dir, "a", "b")]) {
+          expect(await hasBranch(repo, "auto-fork/T-002")).toBe(true)
+        }
+        expect(outcome.lines).toContain(`  a: ${aAfter1.slice(0, 7)} (aligned at the fork point)`)
+        expect(outcome.lines).toContain(`  a/b: ${abAfter1.slice(0, 7)} (aligned at the fork point)`)
+        // The teardown (deepest-first, the measured opposite) takes the whole
+        // scene down again.
+        const removed = await removeFork(dir, path)
+        expect(removed.type).toBe("removed")
+        expect(removed.lines[0]).toBe(`✓ fork at ${path} removed — 3 worktrees and the branch auto-fork/T-002 deleted`)
+        for (const repo of [dir, join(dir, "a"), join(dir, "a", "b")]) {
+          expect(await hasBranch(repo, "auto-fork/T-002")).toBe(false)
+        }
+      } finally {
+        forks.done()
+      }
+    }),
+  )
+
+  test(
+    "a repository the fork commit records but today's tree does not hold is named, never silently dropped (plans/0191 D1, 0165-143)",
+    withDir(async (dir) => {
+      const forks = forksOf(dir)
+      try {
+        await nestedRepo(dir, "pkg")
+        await initRoot(dir, "pkg")
+        const pkgSha = await fullShaOf(join(dir, "pkg"), "HEAD")
+        // A person fork commit recording pkg (present) and gone (absent
+        // today — removed after the record was written).
+        writeFileSync(join(dir, "person.txt"), "person\n")
+        await git(dir, "add", "-A")
+        await git(dir, "commit", "-qm", "person fork point", "-m", `Auto-Nested: pkg @ ${pkgSha}`, "-m", `Auto-Nested: gone @ ${pkgSha}`)
+        const point = await fullShaOf(dir, "HEAD")
+        const outcome = await forkTask(dir, point.slice(0, 7), forks.at("exp"))
+        expect(outcome.type).toBe("forked")
+        expect(outcome.lines).toContain(`  pkg: ${pkgSha.slice(0, 7)} (aligned at the fork point)`)
+        expect(outcome.lines).toContain("  ℹ gone: recorded at the fork point but absent from the tree today — not forked; no worktree of the fork holds it")
+        // Only the present repository was forked.
+        expect(existsSync(join(forks.at("exp"), "pkg", ".git"))).toBe(true)
+      } finally {
+        forks.done()
+      }
+    }),
+  )
+
+  test(
+    "an empty nested repository (no commits) is refused with the one satisfiable act — commit once — not the unsatisfiable sha remedy (plans/0191 D1)",
+    withDir(async (dir) => {
+      const forks = forksOf(dir)
+      try {
+        // pkg is a repository with no commit at all: no alignment can exist
+        // and no sha can ever be named for it.
+        mkdirSync(join(dir, "pkg"), { recursive: true })
+        await git(join(dir, "pkg"), "init", "-q")
+        await git(join(dir, "pkg"), "config", "user.email", "t@example.com")
+        await git(join(dir, "pkg"), "config", "user.name", "t")
+        await initRoot(dir, "pkg")
+        await taskCommit(dir, "T-001", "first migration", "execute", "one.txt")
+        const outcome = await forkTask(dir, "T-001", forks.at("exp"))
+        expect(outcome.type).toBe("usage")
+        expect(outcome.lines[0]).toBe("T-001: the nested repositories cannot all be aligned at this fork point:")
+        expect(outcome.lines.some((line) => line.startsWith("  pkg: the repository is empty (no commits yet) — a worktree cannot be aligned on nothing; commit once in pkg and fork again"))).toBe(true)
+        expect(outcome.lines.some((line) => line.includes("not derivable"))).toBe(false)
       } finally {
         forks.done()
       }
@@ -499,6 +601,108 @@ describe("the corpus bound (plans/0140: a task number re-issued over retained hi
   )
 })
 
+describe("symlinked paths speak git's own spelling (plans/0191 D2, 0165-144)", () => {
+  test(
+    "a fork created through a symlinked path prints the real path git registered, and remove-fork answers for either spelling",
+    withDir(async (dir) => {
+      const forks = forksOf(dir)
+      const homes: string[] = []
+      try {
+        await initRoot(dir)
+        await taskCommit(dir, "T-001", "first migration", "execute", "one.txt")
+        await taskCommit(dir, "T-002", "second migration", "execute", "two.txt")
+        // A home directory reached through a symlink — the host shape the
+        // finding measured: git registers the realpath, the shell resolves
+        // the argument lexically.
+        const realHome = await mkdtemp(join(tmpdir(), "auto-fork-home-"))
+        homes.push(realHome)
+        const link = `${realHome}-link`
+        symlinkSync(realHome, link)
+        const viaLink = join(link, "exp")
+        const real = join(realHome, "exp")
+        const outcome = await forkTask(dir, "T-002", viaLink)
+        expect(outcome.type).toBe("forked")
+        // The success lines name the path git registered — the cleanup
+        // command round-trips.
+        expect(outcome.lines[0]).toBe(`✓ fork of T-002 created at ${real} on auto-fork/T-002`)
+        expect(outcome.lines).toContain(`cleanup when done: opencode-auto remove-fork ${real} ${dir} — removes every worktree of the fork and deletes auto-fork/T-002 in each of its repositories`)
+        expect(existsSync(join(real, ".git"))).toBe(true)
+        // remove-fork through the LINK spelling — the person's shell history
+        // form of the same directory — finds the registered worktree.
+        const removed = await removeFork(dir, viaLink)
+        expect(removed.type).toBe("removed")
+        expect(removed.lines[0]).toBe(`✓ fork at ${real} removed — 1 worktree and the branch auto-fork/T-002 deleted`)
+        expect(await hasBranch(dir, "auto-fork/T-002")).toBe(false)
+      } finally {
+        forks.done()
+        for (const home of homes) {
+          rmSync(home, { recursive: true, force: true })
+          rmSync(`${home}-link`, { force: true })
+        }
+      }
+    }),
+  )
+
+  test(
+    "a worktree path that resolves INTO the project through a symlink is refused by the containment guard",
+    withDir(async (dir) => {
+      try {
+        await initRoot(dir)
+        await taskCommit(dir, "T-001", "first migration", "execute", "one.txt")
+        // A symlink beside the project pointing at it: <base>/intolink/wt is
+        // lexically outside the project but resolves to <dir>/wt — a
+        // worktree there would be misread as a nested repository by every
+        // later unified commit (the guard's own words).
+        const intoLink = join(dirname(dir), `${dir.split(sep).pop()}-into`)
+        symlinkSync(dir, intoLink)
+        const outcome = await forkTask(dir, "T-001", join(intoLink, "wt"))
+        expect(outcome.type).toBe("usage")
+        expect(outcome.lines[0]).toBe(`${join(intoLink, "wt")}: the fork worktree cannot lie inside the project — a worktree there would be misread as a nested repository by every unified commit; place it outside ${dir}`)
+        expect(existsSync(join(dir, "wt"))).toBe(false)
+      } finally {
+        rmSync(join(dirname(dir), `${dir.split(sep).pop()}-into`), { force: true })
+      }
+    }),
+  )
+})
+
+describe("worktree-creation failures report their cause, not git's progress (plans/0191 D3, 0165-145)", () => {
+  test("addWorktree over an existing non-empty directory, and over an existing branch name — both name the fatal line", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-fork-cause-"))
+    try {
+      await git(dir, "init", "-q")
+      await git(dir, "config", "user.email", "t@example.com")
+      await git(dir, "config", "user.name", "t")
+      writeFileSync(join(dir, "a.txt"), "a\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // An existing non-empty directory: git prints its progress line first,
+      // the fatal "already exists" after — the cause is the fatal line.
+      const taken = join(dir, "wt-taken")
+      mkdirSync(taken)
+      writeFileSync(join(taken, "x.txt"), "x\n")
+      const existing = await addWorktree(dir, taken, "cause-b1")
+      expect(existing.ok).toBe(false)
+      expect(existing.error).toContain("already exists")
+      expect(existing.error).not.toContain("Preparing worktree")
+      // An existing branch name: a different cause, the same shape.
+      const fresh = await addWorktree(dir, join(dir, "wt-fresh"), "master")
+      expect(fresh.ok).toBe(false)
+      expect(fresh.error).toContain("a branch named")
+      expect(fresh.error).not.toContain("Preparing worktree")
+      // addWorktreeAt (fork's form) shares the helper.
+      const atTaken = await addWorktreeAt(dir, join(dir, "wt-at"), "cause-b2", "HEAD")
+      expect(atTaken.ok).toBe(true)
+      const atBranch = await addWorktreeAt(dir, join(dir, "wt-at2"), "cause-b2", "HEAD")
+      expect(atBranch.ok).toBe(false)
+      expect(atBranch.error).toContain("a branch named")
+      expect(atBranch.error).not.toContain("Preparing worktree")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("removeFork (plans/0139: the teardown of what fork builds)", () => {
   // A planted live run lock inside the fork's tree — the experiment running
   // there, whose work the teardown must not destroy mid-run. The pid is 1's,
@@ -522,8 +726,10 @@ describe("removeFork (plans/0139: the teardown of what fork builds)", () => {
         const forked = await forkTask(dir, "T-002", forks.at("exp"))
         expect(forked.type).toBe("forked")
         const path = forks.at("exp")
-        // The experiment commits on the fork's branch: discardable by design
-        // (the reflog keeps the tips), so no --force is asked for.
+        // The experiment commits on the fork's branch: discardable by design —
+        // the printed full shas are the one recovery handle until git gc
+        // prunes the objects (plans/0191 D4: the reflogs die with the
+        // worktree removal and the branch -D).
         writeFileSync(join(path, "exp.txt"), "experiment\n")
         await git(path, "add", "-A")
         await git(path, "commit", "-qm", "experiment")
@@ -533,9 +739,13 @@ describe("removeFork (plans/0139: the teardown of what fork builds)", () => {
         const outcome = await removeFork(dir, path)
         expect(outcome.type).toBe("removed")
         expect(outcome.lines[0]).toBe(`✓ fork at ${path} removed — 2 worktrees and the branch auto-fork/T-002 deleted`)
-        expect(outcome.lines).toContain(`  pkg: worktree removed, branch auto-fork/T-002 deleted (was ${pkgTip.slice(0, 7)})`)
-        expect(outcome.lines).toContain(`  .: worktree removed, branch auto-fork/T-002 deleted (was ${rootTip.slice(0, 7)})`)
-        expect(outcome.lines).toContain("  the tips above stay recoverable via git reflog until collection")
+        expect(outcome.lines).toContain(`  pkg: worktree removed, branch auto-fork/T-002 deleted (was ${pkgTip})`)
+        expect(outcome.lines).toContain(`  .: worktree removed, branch auto-fork/T-002 deleted (was ${rootTip})`)
+        expect(outcome.lines).toContain(`  the tips above stay recoverable by their printed shas until git gc prunes them (the reflogs went with the deletion) — git branch auto-fork/T-002 <the (was …) sha> recreates one in its repository`)
+        // The recipe is true: the object is still present after the teardown,
+        // and no reflog names it (the claim the old line made falsely).
+        expect((await git(dir, "cat-file", "-t", rootTip)).trim()).toBe("commit")
+        expect((await git(dir, "reflog", "show", "--all", "--grep=experiment")).trim()).toBe("")
         expect(outcome.lines).toContain(`retry: opencode-auto fork T-002 ${path} ${dir}`)
         expect(existsSync(path)).toBe(false)
         expect(await hasBranch(dir, "auto-fork/T-002")).toBe(false)
@@ -686,7 +896,7 @@ describe("removeFork (plans/0139: the teardown of what fork builds)", () => {
         const outcome = await removeFork(dir, path)
         expect(outcome.type).toBe("removed")
         expect(outcome.lines.some((line) => line.startsWith("  pkg: worktree already gone — registration dropped, branch auto-fork/T-001 deleted (was "))).toBe(true)
-        expect(outcome.lines).toContain(`  .: worktree already gone — registration dropped, branch auto-fork/T-001 deleted (was ${rootTip.slice(0, 7)})`)
+        expect(outcome.lines).toContain(`  .: worktree already gone — registration dropped, branch auto-fork/T-001 deleted (was ${rootTip})`)
         expect(await hasBranch(dir, "auto-fork/T-001")).toBe(false)
         expect(await hasBranch(join(dir, "pkg"), "auto-fork/T-001")).toBe(false)
       } finally {

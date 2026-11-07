@@ -18,6 +18,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { readdirSync, readFileSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
 import { hostname, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import {
@@ -33,6 +34,7 @@ import {
   parseLaneReport,
   readyUnits,
   relayLaneOutput,
+  resolveLaneBranch,
   streamUnitOf,
   streamUnits,
   syncIndexTicks,
@@ -393,18 +395,62 @@ async function laneProject(text = "## T-001: the widget [pending]\nBuild the wid
 
 // —— The park path-length guard (§10's S6 hardening) —— //
 
-describe("laneBranch (the branch grammar, plans/0151 D2)", () => {
-  test("carries the target directory's digest: two arms of one object store dispatching the same unit land on distinct branches", () => {
-    const main = laneBranch("T-042", "/ws/cleanroom/baseline")
-    const arm = laneBranch("T-042", "/ws/cleanroom/forks/baseline-t042-forkA")
+describe("laneBranch (the branch grammar, plans/0151 D2; the digest keys the directory's identity since plans/0191 D5)", () => {
+  test("carries the target directory's digest: two arms of one object store dispatching the same unit land on distinct branches", async () => {
+    const main = await laneBranch("T-042", "/ws/cleanroom/baseline")
+    const arm = await laneBranch("T-042", "/ws/cleanroom/forks/baseline-t042-forkA")
     expect(main).toMatch(/^auto-lane\/T-042-[0-9a-f]{8}$/)
     expect(arm).toMatch(/^auto-lane\/T-042-[0-9a-f]{8}$/)
     expect(main).not.toBe(arm)
   })
 
-  test("stable within one target directory — a re-dispatched lane resumes on the same branch (D16)", () => {
-    expect(laneBranch("T-042", "/ws/cleanroom/baseline")).toBe(laneBranch("T-042", "/ws/cleanroom/baseline"))
-    expect(laneBranch("T-042", "/ws/cleanroom/baseline")).not.toBe(laneBranch("T-043", "/ws/cleanroom/baseline"))
+  test("stable within one target directory — a re-dispatched lane resumes on the same branch (D16)", async () => {
+    expect(await laneBranch("T-042", "/ws/cleanroom/baseline")).toBe(await laneBranch("T-042", "/ws/cleanroom/baseline"))
+    expect(await laneBranch("T-042", "/ws/cleanroom/baseline")).not.toBe(await laneBranch("T-043", "/ws/cleanroom/baseline"))
+  })
+
+  test("the digest keys the directory's identity, not its spelling (plans/0191 D5, 0165-085): run /link/proj and run . derive the same branch", async () => {
+    const real = await mkdtemp(join(tmpdir(), "auto-lane-id-"))
+    const link = `${real}-link`
+    await symlink(real, link)
+    try {
+      expect(await laneBranch("T-001", real)).toBe(await laneBranch("T-001", link))
+      // Identity still separates directories: a different directory (the
+      // parent) keeps its own digest.
+      expect(await laneBranch("T-001", real)).not.toBe(await laneBranch("T-001", dirname(real)))
+    } finally {
+      await rm(real, { recursive: true, force: true })
+      await rm(link, { force: true })
+    }
+  })
+})
+
+describe("resolveLaneBranch (plans/0191 D5: the scene's branch as git itself knows it)", () => {
+  test("the ladder: the grammar's name when it exists, the worktree's checked-out branch when not, the single listed branch with no worktree, never a guess between two", async () => {
+    await git(dir, "init", "-q")
+    await Bun.write(join(dir, "a.txt"), "a\n")
+    await git(dir, "add", "-A")
+    await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    const derived = await laneBranch("T-001", dir)
+    // Nothing exists yet: the grammar's name — the caller's refusal names it.
+    expect(await resolveLaneBranch(dir, "T-001")).toBe(derived)
+    // A scene on a pre-0191 spelling (records written before the digest
+    // keyed the realpath): the worktree's own checked-out branch.
+    const legacy = `auto-lane/T-001-${"0".repeat(8)}`
+    const park = join(dir, "wt-scene")
+    const added = await createGitOps().addWorktree(dir, park, legacy)
+    if (!added.ok) throw new Error(added.error)
+    expect(await resolveLaneBranch(dir, "T-001", park)).toBe(legacy)
+    // The worktree gone, its branch left: the single listed branch (the
+    // straggler prune's case — the branch would block the next worktree add).
+    await git(dir, "worktree", "remove", park)
+    expect(await resolveLaneBranch(dir, "T-001")).toBe(legacy)
+    // Two listed: two arms' lanes — never a guess (P12); the grammar's name.
+    await git(dir, "branch", `auto-lane/T-001-${"1".repeat(8)}`)
+    expect(await resolveLaneBranch(dir, "T-001")).toBe(derived)
+    // The derived branch existing wins over everything (the normal path).
+    await git(dir, "branch", derived)
+    expect(await resolveLaneBranch(dir, "T-001")).toBe(derived)
   })
 })
 
@@ -444,7 +490,7 @@ describe("dispatchLane (§6.5 ①–⑤)", () => {
     expect(await Bun.file(join(lane.worktree, "opencode.json")).exists()).toBe(true)
     expect(await Bun.file(join(lane.worktree, ".gitignore")).text()).toContain(".auto/")
     expect(await Bun.file(join(lane.worktree, ".opencode", "agent", "auto.md")).exists()).toBe(true)
-    expect((await git(lane.worktree, "rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(laneBranch("T-001", dir))
+    expect((await git(lane.worktree, "rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(await laneBranch("T-001", dir))
     // The registry records the dispatch; attempts booked through begin.
     expect(JSON.parse(await unitsText(dir)).tasks["T-001"]).toEqual({
       status: "in_progress",
@@ -550,7 +596,7 @@ describe("landLane (D7's five steps)", () => {
     expect(units.tasks["T-001"].worktree).toBeUndefined()
     expect(units.tasks["T-001"].pid).toBeUndefined()
     expect(await dirExists(join(dir, lanePark("T-001")))).toBe(false)
-    expect((await git(dir, "branch", "--list", laneBranch("T-001", dir))).trim()).toBe("")
+    expect((await git(dir, "branch", "--list", await laneBranch("T-001", dir))).trim()).toBe("")
     const stats = JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text())
     expect(stats.lanes["T-001"]).toEqual({ tokens: 100, wallMs: 1000, sessions: 2 })
   })
@@ -571,7 +617,7 @@ describe("landLane (D7's five steps)", () => {
     expect(await Bun.file(join(dir, "docs", "T-001", "todo.md")).text()).toBe("# T-001: main side\n")
     expect(await changedFiles(dir)).toEqual([])
     expect(await dirExists(join(dir, lanePark("T-001")))).toBe(true)
-    expect((await git(dir, "branch", "--list", laneBranch("T-001", dir))).trim()).toContain(laneBranch("T-001", dir))
+    expect((await git(dir, "branch", "--list", await laneBranch("T-001", dir))).trim()).toContain(await laneBranch("T-001", dir))
     expect(JSON.parse(await unitsText(dir)).tasks["T-001"].worktree).toBe(lanePark("T-001"))
   })
 
@@ -853,7 +899,7 @@ ${run.lines.join("\n")}
     expect(await changedFiles(dir)).toEqual([])
     // The blocked lane's scene is kept: worktree, branch, registry record.
     expect(await parkEntries()).toEqual(["T-002"])
-    expect((await git(dir, "branch", "--list", laneBranch("T-002", dir))).trim()).toContain(laneBranch("T-002", dir))
+    expect((await git(dir, "branch", "--list", await laneBranch("T-002", dir))).trim()).toContain(await laneBranch("T-002", dir))
     expect(JSON.parse(await unitsText(dir)).tasks["T-002"].worktree).toBe(lanePark("T-002"))
   })
 
@@ -1280,7 +1326,7 @@ describe("the lane loop's observability (D13/§6.7, S4)", () => {
 // dead worker the record names).
 async function crashScene(unit: SchedUnit, pid: number, report?: LaneReport): Promise<void> {
   const park = join(dir, lanePark(unit.id))
-  const added = await createGitOps().addWorktree(dir, park, laneBranch(unit.id, dir))
+  const added = await createGitOps().addWorktree(dir, park, await laneBranch(unit.id, dir))
   if (!added.ok) throw new Error(added.error)
   // The scaffolding a real dispatch copies in (the report written later under
   // .auto/ must be ignored dirt, not a landing violation).
@@ -1332,6 +1378,38 @@ describe("recoverOrphanLanes (D14)", () => {
     expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
     expect(await parkEntries()).toEqual([])
     await worker.exited
+  })
+
+  test("a scene created under a pre-0191 spelling (the digest of a symlinked alias) is recovered and landed — the ladder reads git's own branch (plans/0191 D5, 0165-085)", async () => {
+    await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
+    // The pre-0191 grammar hashed the spelling the run was invoked with; a
+    // dispatch through the alias carried the alias's digest into the branch,
+    // and the physical-spelling recovery would re-derive a name that does
+    // not exist (the finding's blocked landing).
+    const alias = `${dir}-alias`
+    await symlink(dir, alias)
+    try {
+      const legacy = `auto-lane/T-001-${createHash("sha256").update(alias).digest("hex").slice(0, 8)}`
+      const park = join(dir, lanePark("T-001"))
+      const added = await createGitOps().addWorktree(dir, park, legacy)
+      if (!added.ok) throw new Error(added.error)
+      await writeScaffolding(park)
+      await completeUnit(park, { id: "T-001", title: "the widget", file: "src/widget.ts" })
+      await writeLaneReport(park, reportOf("T-001"))
+      await begin(dir, "T-001")
+      await setLane(dir, "T-001", { worktree: lanePark("T-001"), pid: await deadPid() })
+      // The recovery runs from the physical spelling (the shell's `run .`).
+      const code = await recoverOrphanLanes(createGitOps(), dir)
+      expect(code).toBeUndefined()
+      expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
+      expect(await Bun.file(join(dir, "src/widget.ts")).text()).toContain("T-001")
+      expect(await Bun.file(join(dir, phase.dir, "tasks.md")).text()).toContain("- [x] T-001 the widget")
+      expect(await parkEntries()).toEqual([])
+      // The scene's own branch came down with the teardown.
+      expect((await git(dir, "branch", "--list", legacy)).trim()).toBe("")
+    } finally {
+      await rm(alias, { force: true })
+    }
   })
 
   test("the attempts cap blocks naming the park path", async () => {
@@ -1387,7 +1465,7 @@ describe("recoverOrphanLanes (D14)", () => {
     await schedulerProject([{ id: "T-001", title: "the widget", touches: ["src/"], file: "src/widget.ts" }])
     const unit = "T-001.S01"
     const park = join(dir, lanePark(unit))
-    const added = await createGitOps().addWorktree(dir, park, laneBranch(unit, dir))
+    const added = await createGitOps().addWorktree(dir, park, await laneBranch(unit, dir))
     if (!added.ok) throw new Error(added.error)
     await writeScaffolding(park)
     // The stream's completion, the real lane shape: its own state file
@@ -1423,7 +1501,7 @@ describe("recoverOrphanLanes (D14)", () => {
     // A straggler git knows about (the dispatch died between the worktree's
     // creation and the registry write)…
     const stray = join(dir, lanePark("T-009"))
-    const added = await createGitOps().addWorktree(dir, stray, laneBranch("T-009", dir))
+    const added = await createGitOps().addWorktree(dir, stray, await laneBranch("T-009", dir))
     expect(added.ok).toBe(true)
     // …and one that only exists as a directory holding a live run lock.
     const locked = join(dir, lanePark("T-010"))
@@ -1442,7 +1520,7 @@ describe("recoverOrphanLanes (D14)", () => {
     }
     expect(code).toBeUndefined()
     expect(await dirExists(stray)).toBe(false)
-    expect((await git(dir, "branch", "--list", laneBranch("T-009", dir))).trim()).toBe("")
+    expect((await git(dir, "branch", "--list", await laneBranch("T-009", dir))).trim()).toBe("")
     expect(lines.some((line) => line.includes("removed: the park straggler"))).toBe(true)
     expect(await dirExists(locked)).toBe(true)
     expect(lines.some((line) => line.includes("leaving it alone"))).toBe(true)
