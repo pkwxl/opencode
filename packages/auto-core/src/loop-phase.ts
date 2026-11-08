@@ -17,7 +17,7 @@ import { ANALYSIS_DOC, reportForUserPath, roundDirName } from "./docpaths"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { awaitingFormulation } from "./formulate"
-import { banner, dirtyStopLines, log } from "./log"
+import { banner, dirtyStopLines, log, unreadableStopLines } from "./log"
 import { sessionOpts } from "./opts"
 import { appendPlan, appendWithStep } from "./loop-append"
 import { planWithStep } from "./loop-plan"
@@ -221,8 +221,12 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       },
     )
     if (distilled !== true) {
-      if (distilled.type === "dirty") {
-        for (const line of dirtyStopLines("worktree not clean before starting the handover distillation session", distilled.files)) log(line)
+      if (distilled.type === "dirty" || distilled.type === "unreadable") {
+        // The unreadable arm (plans/0236 D4) teaches investigation, never
+        // commit/clean.
+        for (const line of distilled.type === "unreadable"
+          ? unreadableStopLines("the repository state cannot be read before starting the handover distillation session", distilled.files)
+          : dirtyStopLines("worktree not clean before starting the handover distillation session", distilled.files)) log(line)
       } else if (collectIssue !== undefined) {
         // Fail-closed after one re-distill (D14a): Part I's remediation owns
         // the decision instead of a raw blockage.
@@ -310,6 +314,24 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       return 2
     }
   }
+  // The survey release's other half (plans/0081 D15.2), ordered AHEAD of the
+  // completion rename (plans/0236 D6, 0165-072): the person's `Clarified:
+  // yes` approved the proposed `## Project brief` section with the forks —
+  // the driver installs it before the phase is renamed done, so every kill
+  // point re-derives. The old order (rename → install) left one window no
+  // path covered: a kill between them reads the phase done, routing moves
+  // past the survey and the next phase's formulation plans over the old
+  // brief — the person's approval silently dropped. Ahead of the rename the
+  // phase still reads pending and the re-run redoes the whole handover (the
+  // install idempotent: an equal brief writes nothing, 0209 D2); after it
+  // the brief is already committed under its own pathspec (0207 D1) and the
+  // rename, transition commit and formulation follow as before. A
+  // completePhase re-check failure after the install (the narrow race the
+  // pre-check above just cleared) holds the phase on its repair/stop path
+  // with the approved brief installed — the approval act was real (the
+  // Clarified mark the install itself re-checks), and the repair round
+  // re-derives the handover over it.
+  if (gates.includes("human")) await installApprovedBrief(ctx, phase)
   // The completion rename goes through completePhase's own gate re-check
   // (the round-report self-heal that once ran here retired with the
   // report's mandate, plans/0109 D3).
@@ -343,10 +365,6 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     await logGateStop(directory, phase, gated, acceptance)
     return 2
   }
-  // The survey release's other half (plans/0081 D15.2): the person's
-  // `Clarified: yes` approved the proposed `## Project brief` section with
-  // the forks — the driver installs it now, its own commit through protect.
-  if (gates.includes("human")) await installApprovedBrief(ctx, phase)
   // The phase's unit transition (P2b, src/run-status.ts): completePhase's
   // rename (todo.md → done.md inside the phase directory) is the fact; this
   // is the push of the same fact, keyed by the qualified phase id the stats
@@ -731,13 +749,16 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
         const extracted = await extractKnowledge(serverHandle, directory, sessionOpts(ctx, { site: "knowledge" }), route.phase)
         if (extracted.type === "ok") log(`✓ migration knowledge document produced: ${extracted.file}`)
         else if (extracted.type === "skipped") log(`↻ migration knowledge document already produced (${extracted.file}); skipping extraction, going straight to handover`)
-        else if (extracted.type === "dirty") {
+        else if (extracted.type === "dirty" || extracted.type === "unreadable") {
           // dirty (plans/0021-commit-boundary-design.md ④ generalization): an
           // unclean worktree (leftover from an abandoned extraction, make-up
           // commit failure or unified commit failure) must stop for the
           // human — handing over anyway would start the next unit on an
-          // unclean baseline, breaking the commit boundary.
-          for (const line of dirtyStopLines("migration knowledge extraction could not complete or post on a clean baseline", extracted.files)) log(line)
+          // unclean baseline, breaking the commit boundary. The unreadable
+          // arm (plans/0236 D4) teaches investigation, never commit/clean.
+          for (const line of extracted.type === "unreadable"
+            ? unreadableStopLines("migration knowledge extraction could not read the repository", extracted.files)
+            : dirtyStopLines("migration knowledge extraction could not complete or post on a clean baseline", extracted.files)) log(line)
           return 2
         } else {
           log(

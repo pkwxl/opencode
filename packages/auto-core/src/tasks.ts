@@ -34,6 +34,7 @@ import type { UnitBaseline } from "./git"
 import { checkArtifactSpecs, taskArtifactSpecs, taskTodoSpec } from "./document/spec"
 import { effectiveDone, scanSubtaskStates, subtaskId } from "./document/state"
 import { emitStatus } from "./run-status"
+import { log } from "./log"
 import type { PlanView, TaskView } from "./prompt"
 import {
   isUnitId,
@@ -455,26 +456,67 @@ export function forkBaseFor(record: Task["forkBase"], agent: string | undefined)
   return typeof value === "string" ? value : undefined
 }
 
-async function readUnits(dir: string): Promise<Units> {
-  const text = await Bun.file(join(dir, UNITS_FILE)).text().catch(() => undefined)
-  if (text === undefined) return { tasks: {} }
+// The two fields every consumer reads raw (plans/0236 D1, 0165-042): the
+// registry's other fields all sanitize at their reads (parseForkBase,
+// parseSplitPoint, parseLeadUsed, parkedOf, laneRecords) — status and
+// attempts sanitize here instead, at the one home every consumer loads
+// through (loadPlan, begin/bookAttempt's increments, unitAttempts, and
+// updateTask's spread of the prior entry): only the two live status words
+// survive (a hand-written "done" reads pending — a task's status is done
+// exactly when done.md exists, 0047 R1, P3), and only a finite non-negative
+// integer counts as attempts (anything else reads 0, never a string that
+// would concatenate at the next begin). Identity on every well-formed file.
+const sanitizedRuntime = (entry: Runtime): Runtime => ({
+  ...entry,
+  ...(entry.status !== undefined ? { status: entry.status === "in_progress" || entry.status === "blocked" ? entry.status : undefined } : {}),
+  ...(entry.attempts !== undefined ? { attempts: typeof entry.attempts === "number" && Number.isInteger(entry.attempts) && entry.attempts >= 0 ? entry.attempts : 0 } : {}),
+})
+
+// One ⚠ per registry file for an unparseable read (plans/0236 D2,
+// 0165-151): the read is hot (loadPlan, every driver write) and the person
+// needs one line, not one per read — keyed by the file so a fresh directory
+// (a lane worktree, a test) notes its own.
+const corruptNoted = new Set<string>()
+type UnitsRead = { units: Units; corrupt: boolean }
+async function readUnitsState(dir: string): Promise<UnitsRead> {
+  const file = join(dir, UNITS_FILE)
+  const text = await Bun.file(file).text().catch(() => undefined)
+  if (text === undefined) return { units: { tasks: {} }, corrupt: false }
   try {
     const parsed = JSON.parse(text) as Partial<Units>
-    return { tasks: parsed && typeof parsed.tasks === "object" && parsed.tasks ? parsed.tasks : {} }
+    const tasks = parsed && typeof parsed.tasks === "object" && parsed.tasks ? parsed.tasks : {}
+    return { units: { tasks: Object.fromEntries(Object.entries(tasks).map(([id, entry]) => [id, sanitizedRuntime(entry ?? {})])) }, corrupt: false }
   } catch {
-    // Unreadable runtime state is not fatal: it only carries counters and
-    // flags, and every one of them has a safe default.
-    return { tasks: {} }
+    // Unreadable runtime state is not fatal: it only carries counters, flags
+    // and records, and every one of them has a safe default (0047 R1 — the
+    // rationale restated for the fields it now covers since 0047 wrote it:
+    // the lane registry and dispatch cap of 0068 D6/D14, the park of 0096
+    // D7, the split point of 0059 D5, the digests of 0097/0171). What the
+    // defaults cannot give back is named: the read degrades, and the next
+    // write moves the corrupt bytes aside instead of replacing them (P20).
+    if (!corruptNoted.has(file)) {
+      corruptNoted.add(file)
+      log(`⚠ ${UNITS_FILE} is unparseable and reads as empty for this run — its lane records, parks and split points are lost to the run (every field takes its safe default); the corrupt bytes are preserved beside the next write (${UNITS_FILE}.corrupt-<timestamp>)`)
+    }
+    return { units: { tasks: {} }, corrupt: true }
   }
 }
 
-// Serialized read-modify-write with an atomic replace.
+async function readUnits(dir: string): Promise<Units> {
+  return (await readUnitsState(dir)).units
+}
+
+// Serialized read-modify-write with an atomic replace. A corrupt file is
+// moved aside (never silently replaced — plans/0236 D2, 0165-151) inside the
+// queue, before the write: the evidence survives at .corrupt-<timestamp> for
+// hand recovery, and the fresh state starts from the safe defaults.
 let queue: Promise<unknown> = Promise.resolve()
 function updateUnits(dir: string, change: (units: Units) => void): Promise<void> {
   const run = queue.then(async () => {
-    const units = await readUnits(dir)
-    change(units)
     const file = join(dir, UNITS_FILE)
+    const { units, corrupt } = await readUnitsState(dir)
+    if (corrupt) await rename(file, `${file}.corrupt-${Date.now()}`).catch(() => {})
+    change(units)
     await mkdir(dirname(file), { recursive: true })
     const tmp = `${file}.${process.pid}.tmp`
     await Bun.write(tmp, JSON.stringify(units, null, 2) + "\n")

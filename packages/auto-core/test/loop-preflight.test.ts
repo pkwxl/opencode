@@ -9,6 +9,7 @@
 // 1 naming the cause; with no registry preflight is unchanged. The operator
 // layer stays out of these tests (test/preload.ts empties XDG_CONFIG_HOME).
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test"
+import { statSync } from "node:fs"
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -244,6 +245,74 @@ describe("the start clean gate's interrupted-unit exemption (plans/0149)", () =>
     const { lines, result } = await capture(dir)
     expect("exit" in result).toBe(false)
     expect(lines).toEqual([])
+  })
+
+  // plans/0236 D4 (0165-074): the unreadable verdict is a distinct word the
+  // exemption never consumes — 0149 exempts an interrupted unit's resumable
+  // DIRT, never a repository whose close-out commit is already doomed.
+  test("a corrupt index with an active record still blocks: the exemption consumes dirt, never the unreadable sentinel", async () => {
+    const dir = await project()
+    await saveProgress(dir, { task: "T-001", at: 1_000, active: true })
+    await Bun.write(join(dir, ".git", "index"), "not an index\n")
+    const { lines, result } = await capture(dir)
+    expect(result).toEqual({ exit: 2 })
+    // The unreadable block teaches investigation; neither the exemption
+    // line nor the commit-or-clean remedy appears over a corrupt index.
+    expect(lines.some((line) => line.includes("the repository state cannot be read; the start clean gate cannot judge the worktree"))).toBe(true)
+    expect(lines.some((line) => line.includes("investigate the repository state (the lines below name the cause git reported) and re-run"))).toBe(true)
+    expect(lines.some((line) => line.includes("interrupted mid-flight"))).toBe(false)
+    expect(lines.some((line) => line.includes("commit or clean"))).toBe(false)
+  })
+
+  test("a corrupt index without a record blocks with the investigate teaching, never 'commit or clean'", async () => {
+    const dir = await project()
+    await Bun.write(join(dir, ".git", "index"), "not an index\n")
+    const { lines, result } = await capture(dir)
+    expect(result).toEqual({ exit: 2 })
+    expect(lines.some((line) => line.includes("the repository state cannot be read; the start clean gate cannot judge the worktree"))).toBe(true)
+    expect(lines.some((line) => line.includes("commit or clean"))).toBe(false)
+  })
+
+  // plans/0236 D3 (0165-073): every post-protect exit restores writability —
+  // driveRun's finally (the only other unprotect) never runs for a preflight
+  // exit. The capture helper's compensating unprotect would mask the defect,
+  // so this test spies without it and reads the mode straight after.
+  test("the dirty-gate exit unprotects the driver-owned files (protect.ts's own header promise)", async () => {
+    const dir = await project()
+    await Bun.write(join(dir, "seed.txt"), "seed\nperson dirt\n")
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    const printed = spyOn(console, "log").mockImplementation(() => {})
+    try {
+      const result = await preflight(dir, {})
+      expect(result).toEqual({ exit: 2 })
+      expect((await statSync(join(dir, "AGENTS.md"))).mode & 0o777).toBe(0o644)
+    } finally {
+      printed.mockRestore()
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+  })
+
+  // plans/0236 D5 (0165-078): the start-gate block names the driver's own
+  // record-less writes per family — the knowledge partial (whose committed
+  // truncation existingKnowledge would ratify) and the background receipt.
+  test("the dirty block teaches per family for the driver's interrupted knowledge write and regression receipt", async () => {
+    const dir = await project()
+    await mkdir(join(dir, "docs/R-01/P03-knowledge"), { recursive: true })
+    await Bun.write(join(dir, "docs/R-01/P03-knowledge/kb.md"), "# Knowledge (half-writ")
+    await mkdir(join(dir, "docs/R-01/regression"), { recursive: true })
+    await Bun.write(join(dir, "docs/R-01/regression/3-verify-full.md"), "# Receipt (uncommitted)\n")
+    const { lines, result } = await capture(dir)
+    expect(result).toEqual({ exit: 2 })
+    expect(lines).toEqual([
+      "⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:",
+      "  docs/R-01/P03-knowledge/kb.md",
+      "  docs/R-01/regression/3-verify-full.md",
+      "  docs/R-01/P03-knowledge/kb.md is the driver's interrupted knowledge write — delete it and re-run (the extraction writes it anew; a partial document must not become the phase's committed knowledge)",
+      "  docs/R-01/regression/3-verify-full.md is the driver's background regression receipt — safe to commit as-is (the run's record is the evidence); deleted, the lane re-runs at the next boundary",
+    ])
   })
 })
 

@@ -15,7 +15,7 @@ import { awaitingFormulation, constructFormulation, formulationAcceptance, formu
 import { floorBlocks, formulationParts, previewFormulationDocument, readFormulationSources } from "./formulate-parts"
 import { floorDigest, protocolFrameText, renderLedger, synthesizeFormulation, type LedgerSource } from "./formulate-synthesis"
 import { PromptGuaranteeError, resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
-import { dirtyStopLines, log } from "./log"
+import { dirtyStopLines, log, unreadableStopLines } from "./log"
 import { runSerialUnit, type LoopCtx } from "./loop-task"
 import { taskNumber, taskNumberFloor } from "./numbering"
 import { REQUIRED_TYPE, phaseType } from "./phases/registry"
@@ -395,8 +395,12 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           digest: composed.digest,
           ...(prefix?.length ? { prefix } : {}),
         })
-        if (landed.type === "dirty") {
-          for (const line of dirtyStopLines("worktree not clean before constructing the formulation task", landed.files)) log(line)
+        if (landed.type === "dirty" || landed.type === "unreadable") {
+          // The unreadable arm (plans/0236 D4) teaches investigation, never
+          // commit/clean.
+          for (const line of landed.type === "unreadable"
+            ? unreadableStopLines("the repository state cannot be read before constructing the formulation task", landed.files)
+            : dirtyStopLines("worktree not clean before constructing the formulation task", landed.files)) log(line)
           return 2
         }
         if (landed.type === "failed") {

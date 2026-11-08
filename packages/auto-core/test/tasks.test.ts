@@ -2,7 +2,7 @@
 // tasks from tasks.md + docs/T-NNN/todo.md|done.md, runtime state in
 // .auto/units.json, the driver's completion (rename + index tick), the
 // subtask checklist from subtasks.md, and the planning-session checks.
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -14,6 +14,7 @@ import {
   doneTaskIds,
   countSubtasks,
   forkBaseFor,
+  laneRecords,
   loadPlan,
   markDone,
   newTaskProblems,
@@ -26,12 +27,14 @@ import {
   resetPlanning,
   setForkBase,
   setLane,
+  setParked,
   subtasks,
   syncChecklistTicks,
   takenTaskIds,
   taskBody,
   taskStatePaths,
   tickSubtask,
+  unitAttempts,
   UNITS_FILE,
 } from "../src/tasks"
 import { seedUnits } from "./fixtures/units"
@@ -580,6 +583,66 @@ describe("runtime state (.auto/units.json)", () => {
     await seedUnits(dir, SAMPLE)
     await Bun.write(join(dir, UNITS_FILE), "{broken")
     expect((await loadPlan(dir, phase)).tasks[1]).toMatchObject({ status: "pending", attempts: 0 })
+  })
+
+  // plans/0236 D1 (0165-042): the two fields every consumer once read raw.
+  test("a hand-edited runtime \"done\" and a string attempts read as pending/0 — done stays done.md's alone (0047 R1), and begin books a number, never \"71\"", async () => {
+    await seedUnits(dir, SAMPLE)
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    // T-002's blocked entry kept as the seed wrote it; T-003's is the
+    // hand-edit under test.
+    await Bun.write(join(dir, UNITS_FILE), JSON.stringify({ tasks: { "T-002": { status: "blocked", attempts: 1 }, "T-003": { status: "done", attempts: "7" } } }))
+    // T-003's unit file is todo.md: the runtime "done" cannot close it —
+    // the task runs, its dependents wait for the real thing.
+    const plan = await loadPlan(dir, phase)
+    expect(plan.tasks[2]).toMatchObject({ status: "pending", attempts: 0 })
+    // The well-formed sibling keeps its live word (identity on valid input).
+    expect(plan.tasks[1]).toMatchObject({ status: "blocked", attempts: 1 })
+    expect(await unitAttempts(dir, "T-003")).toBe(0)
+    await begin(dir, "T-003")
+    const after = (await loadPlan(dir, phase)).tasks[2]!
+    expect(after).toMatchObject({ status: "in_progress" })
+    expect(after.attempts).toBe(1)
+    expect(typeof after.attempts).toBe("number")
+    // The sanitized shape persisted: the next read sees the healed entry
+    // (the well-formed sibling untouched).
+    expect(JSON.parse(await Bun.file(join(dir, UNITS_FILE)).text())).toEqual({
+      tasks: { "T-002": { status: "blocked", attempts: 1 }, "T-003": { status: "in_progress", attempts: 1 } },
+    })
+  })
+
+  // plans/0236 D2 (0165-151): the parse failure names itself and the next
+  // write preserves the evidence instead of silently replacing it.
+  test("an unparseable units.json notes one ⚠ line and the next write moves the corrupt bytes aside — the lane records survive for hand recovery", async () => {
+    await seedUnits(dir, SAMPLE)
+    await setLane(dir, "T-003", { worktree: join(".auto", "worktrees", "T-003"), pid: 4242 })
+    await setParked(dir, "T-002", "T-001")
+    const corrupt = await Bun.file(join(dir, UNITS_FILE)).text()
+    await Bun.write(join(dir, UNITS_FILE), `${corrupt},,`)
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    try {
+      // The read degrades: no lane record, no park (the safe defaults).
+      expect(await laneRecords(dir)).toEqual([])
+      expect((await loadPlan(dir, phase)).tasks[1]!.parked).toBeUndefined()
+      // One ⚠ names the file and what its loss means — once, not per read.
+      await loadPlan(dir, phase)
+      await unitAttempts(dir, "T-001")
+      const warnings = lines.filter((line) => line.includes("is unparseable and reads as empty"))
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain("lane records, parks and split points are lost")
+      expect(warnings[0]).toContain("units.json.corrupt-<timestamp>")
+    } finally {
+      printed.mockRestore()
+    }
+    // The next write starts fresh — and the corrupt bytes survive beside it.
+    await begin(dir, "T-003")
+    expect(JSON.parse(await Bun.file(join(dir, UNITS_FILE)).text())).toEqual({ tasks: { "T-003": { status: "in_progress", attempts: 1 } } })
+    const aside = Array.from(new Bun.Glob(".auto/units.json.corrupt-*").scanSync({ cwd: dir }))
+    expect(aside).toHaveLength(1)
+    expect(await Bun.file(join(dir, aside[0]!)).text()).toBe(`${corrupt},,`)
   })
 })
 

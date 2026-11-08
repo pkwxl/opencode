@@ -31,6 +31,16 @@ export function knowledgeFile(phase: PhaseUnit): string {
   return phaseArtifacts(phase)[0]!.path
 }
 
+// The path-shape recognizer of that artifact (plans/0236 D5, 0165-078): the
+// start clean gate names an interrupted knowledge write by its family —
+// knowledgeFile needs a PhaseUnit, the gate holds only dirty paths. Spelled
+// from the registry's own knowledge entry (type id "knowledge", artifact
+// "kb.md", phases/registry.ts) and pinned beside it in test; the knowledge
+// phase's directory is the only one whose standard artifact is kb.md.
+export function isKnowledgeDoc(rel: string): boolean {
+  return /^docs\/R-\d+\/P\d{2,}-knowledge\/kb\.md$/.test(rel.replaceAll("\\", "/"))
+}
+
 // Idempotence check: a non-empty knowledge document for this phase means
 // already extracted. Once the phase is done the extraction hook does not fire
 // anyway (routePhase routes incomplete phases only).
@@ -65,7 +75,7 @@ export async function extractKnowledge(
   opts: Opts,
   phase: PhaseUnit,
 ): Promise<
-  { type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "failed"; question: string }
+  { type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "unreadable"; files: string[] } | { type: "failed"; question: string }
 > {
   const task = { id: "PLAN", title: "migration knowledge distillation (k phase)", status: "in_progress" as const, attempts: 0, body: "" }
   const commit = { stage: "knowledge", subject: "PLAN knowledge migration knowledge distillation" }
@@ -123,7 +133,7 @@ export async function extractKnowledge(
     await statsKnowledgePhase(dir)
     return { type: "ok", file }
   }
-  if (produced.type === "dirty") return { type: "dirty", files: produced.files }
+  if (produced.type === "dirty" || produced.type === "unreadable") return { type: produced.type, files: produced.files }
   // If the worktree is already dirty after a blocked session / no output
   // (typically: commit failure), likewise halt as dirty.
   if (!opts.dryrun) {
@@ -218,7 +228,7 @@ export async function extractPriorKnowledge(
   dir: string,
   opts: Opts,
   brief?: string,
-): Promise<{ type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "failed"; question: string }> {
+): Promise<{ type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "unreadable"; files: string[] } | { type: "failed"; question: string }> {
   const round = await currentRound(dir)
   const task = { id: "PLAN", title: "prior-knowledge extraction (retrospective of existing migration results)", status: "in_progress" as const, attempts: 0, body: "" }
   const commit = { stage: "prior-knowledge", subject: "PLAN prior-kb prior-knowledge extraction" }
@@ -272,7 +282,7 @@ export async function extractPriorKnowledge(
     },
   })
   if (produced !== true) {
-    if (produced.type === "dirty") return { type: "dirty", files: produced.files }
+    if (produced.type === "dirty" || produced.type === "unreadable") return { type: produced.type, files: produced.files }
     return { type: "failed", question: produced.question }
   }
   // ② Closing mark confirmed → rename to the formal artifact and unified

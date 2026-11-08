@@ -14,7 +14,7 @@ import { requireArtifact } from "./artifact"
 import type { BlockMapEntry } from "./blockage"
 import { BRIEF_FILE, projectBriefText } from "./brief"
 import { earlierHandovers } from "./formulate-parts"
-import { dirtyStopLines, log } from "./log"
+import { dirtyStopLines, log, unreadableStopLines } from "./log"
 import { taskNumber, taskNumberFloor } from "./numbering"
 import { sessionOpts } from "./opts"
 import { admissionWarn, planDuties, planFacts, verifyPlanStep } from "./plan-gate"
@@ -361,8 +361,12 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
     },
   )
   if (!Array.isArray(appended)) {
-    if (appended.type === "dirty") {
-      for (const line of dirtyStopLines("worktree not clean before starting the task-append session", appended.files)) log(line)
+    if (appended.type === "dirty" || appended.type === "unreadable") {
+      // The unreadable arm (plans/0236 D4) teaches investigation, never
+      // commit/clean.
+      for (const line of appended.type === "unreadable"
+        ? unreadableStopLines("the repository state cannot be read before starting the task-append session", appended.files)
+        : dirtyStopLines("worktree not clean before starting the task-append session", appended.files)) log(line)
     } else {
       log(`⏸ task-append session blocked (implicit block, investigate and re-run):\n${appended.question}`)
     }

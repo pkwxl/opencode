@@ -73,7 +73,9 @@ import { testLanesProblem } from "./intent/test-lanes"
 import type { LanesConfig, ParallelLevel } from "./intent/types"
 import { block, laneRecords, loadPlan, resetInProgress, unitAttempts } from "./tasks"
 import { recoverRegression } from "./regression"
-import { protect } from "./protect"
+import { isKnowledgeDoc } from "./knowledge"
+import { roleOf } from "./document/roles"
+import { protect, unprotect } from "./protect"
 import { peekProgress } from "./resume"
 import { findWallCommit, wallDeclared } from "./wall"
 import type { AgentHost } from "./agent/types"
@@ -598,6 +600,19 @@ export async function preflight(
   // the driver's own files; an undeclared or never-closed wall contributes
   // nothing (the floor, re-derived from git at every run start).
   await protect(directory, wallDeclared(directory) ? ((await findWallCommit(directory))?.sealed ?? []) : [])
+  // Every exit from here on returns after protect() ran: the stops below
+  // close progress and the watcher AND restore writability (plans/0236 D3,
+  // 0165-073) — driveRun's finally, the only other unprotect, never runs for
+  // a preflight exit (runLocked returns before it), and protect.ts's own
+  // header promises the person their files back when the driver stops. The
+  // success return at the end keeps protect active into the run — the reason
+  // this is a helper at preflight's home, not a region finally.
+  const stopBlocked = async (code: number): Promise<{ exit: number }> => {
+    progress.close()
+    watcher?.close()
+    await unprotect(directory)
+    return { exit: code }
+  }
   // on-site restoration of handover documents (test handover interruption
   // recovery F3, plans/0023-test-handover-early-design.md §I): must precede
   // the start clean gate — the previous run may have deleted an
@@ -635,9 +650,7 @@ export async function preflight(
     if (executed.type === "reblocked" && !executed.stale) {
       log(`⏸ remediation re-blocked: ${executed.reason}`)
       log(`next: resolve what it names, then re-run: ${bin} run ${directory}`)
-      progress.close()
-      watcher?.close()
-      return { exit: 2 }
+      return stopBlocked(2)
     }
     for (const line of executionLines(executed)) log(line)
   }
@@ -671,6 +684,16 @@ export async function preflight(
   let exemptResume = false
   if (!opts.dryrun) {
     const gate = await run.git.beginUnit(directory, opts, { id: "PLAN", title: "pre-run baseline close-out" })
+    if (gate.type === "unreadable") {
+      // The strict verdict no exemption consumes (plans/0236 D4, 0165-074):
+      // 0149's exemption covers an interrupted unit's resumable DIRT; a
+      // repository whose status cannot be read (0155 D1) is not dirt — its
+      // close-out commit is already doomed, and the block teaches
+      // investigation, never "commit or clean".
+      log(`⏸ the repository state cannot be read; the start clean gate cannot judge the worktree — investigate the repository state (the lines below name the cause git reported) and re-run:`)
+      for (const file of gate.files) log(`  ${file}`)
+      return stopBlocked(2)
+    }
     if (gate.type === "dirty") {
       const interrupted = await peekProgress(directory)
       if (interrupted?.active === true) {
@@ -702,9 +725,16 @@ export async function preflight(
           log("⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:")
         }
         for (const file of gate.files) log(`  ${file}`)
-        progress.close()
-        watcher?.close()
-        return { exit: 2 }
+        // The driver's own record-less writes named per family (plans/0236
+        // D5, 0165-078): the two kill windows no progress record and no
+        // re-derivation guard covers — the knowledge extraction (its
+        // idempotence is a non-empty test, so a committed partial would be
+        // ratified as the phase's knowledge) and the background regression
+        // receipt (committed only at the next boundary). Teaching lines only
+        // — the person's moment enforces (P8); the generic line above stays
+        // the whole teaching when no family matches (the floor).
+        for (const line of driverLeftoverLines(gate.files)) log(line)
+        return stopBlocked(2)
       }
     }
   }
@@ -733,9 +763,7 @@ export async function preflight(
   if (!opts.dryrun && !opts.lane && worktreeScheduler(opts.maxSessions, treeTier)) {
     const recovered = await recoverOrphanLanes(run.git, directory)
     if (recovered !== undefined) {
-      progress.close()
-      watcher?.close()
-      return { exit: recovered }
+      return stopBlocked(recovered)
     }
   }
   // The regression lane's orphan (plans/0098 D4): a background copy or its
@@ -810,9 +838,7 @@ export async function preflight(
     })
     if (!settled.ok) {
       log(`⏸ pre-run baseline close-out commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}, handle git manually and re-run`)
-      progress.close()
-      watcher?.close()
-      return { exit: 2 }
+      return stopBlocked(2)
     }
   }
   return { agentName, watcher, progress, registry, services: run, treeTier }
@@ -928,6 +954,29 @@ export async function removeRetiredNumberingRecord(dir: string): Promise<boolean
   if (!(await Bun.file(file).exists())) return false
   await rm(file, { force: true })
   return true
+}
+
+// The start-gate block's per-family teaching for the driver's own record-less
+// writes (plans/0236 D5, 0165-078): a kill inside the knowledge extraction or
+// between a background receipt and its commit leaves dirt no progress record
+// covers (0149's exemption) and no collect guard re-derives — the person's
+// stop must say which files are the driver's and each family's safe remedy.
+// Exactly the two measured families: the handover distillation's partial is
+// rejected by its collect and rewritten (its commit rides the same step), the
+// wall's opencode.json deny rides the wall commit — neither carries a
+// ratification harm, and their windows close inside one driver step. Empty
+// for every list holding neither shape (the generic line stays the whole
+// teaching — the floor, byte-identical output).
+export function driverLeftoverLines(files: readonly string[]): string[] {
+  const lines: string[] = []
+  for (const file of files) {
+    if (isKnowledgeDoc(file)) {
+      lines.push(`  ${file} is the driver's interrupted knowledge write — delete it and re-run (the extraction writes it anew; a partial document must not become the phase's committed knowledge)`)
+    } else if (roleOf(file) === "regression") {
+      lines.push(`  ${file} is the driver's background regression receipt — safe to commit as-is (the run's record is the evidence); deleted, the lane re-runs at the next boundary`)
+    }
+  }
+  return lines
 }
 
 // —— The tier probe (plans/0096 D10, Stage 5) —— //

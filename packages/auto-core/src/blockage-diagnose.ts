@@ -39,7 +39,7 @@ import {
 } from "./blockage"
 import { executeBlockageChoice } from "./blockage-execute"
 import type { Interactive } from "./interactive"
-import { dirtyStopLines, log } from "./log"
+import { dirtyStopLines, log, unreadableStopLines } from "./log"
 import type { ClientSource, Opts } from "./opts"
 import { roundDirName } from "./docpaths"
 import { currentRound } from "./phases"
@@ -200,6 +200,10 @@ export async function openBlockage(site: BlockageSite, call: BlockageCall): Prom
   if ("type" in diagnosed) {
     if (diagnosed.type === "dirty") {
       return { status: "dirty", lines: dirtyStopLines("worktree not clean before the blockage diagnosis session", diagnosed.files) }
+    }
+    if (diagnosed.type === "unreadable") {
+      // The strict verdict (plans/0236 D4): investigation, never commit/clean.
+      return { status: "dirty", lines: unreadableStopLines("the repository state cannot be read before the blockage diagnosis session", diagnosed.files) }
     }
     return failClosed(site, round, file, diagnosed.question)
   }

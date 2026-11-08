@@ -65,13 +65,17 @@ export type Outcome =
   | { type: "blocked"; question: string; repair?: { reason?: string } }
   | { type: "incomplete"; reason: string }
   | { type: "dirty"; files: string[] }
+  | { type: "unreadable"; files: string[] }
   | { type: "parked"; blocker: string }
 
 // Unit stop exits (blocked = status recorded in .auto/units.json + a sweeping
 // commit of the interrupted state; dirty = no write and no sweep, re-run after
-// the human handles git). Referenced by the return unions of the execution
-// functions, replacing the former `Outcome & {type:"blocked"}`.
-export type UnitStop = { type: "blocked"; question: string } | { type: "dirty"; files: string[] }
+// the human handles git; unreadable = the repository state itself cannot be
+// read — beginUnit's strict arms, plans/0236 D4: no exemption consumes it and
+// its block teaches investigation, never commit/clean). Referenced by the
+// return unions of the execution functions, replacing the former
+// `Outcome & {type:"blocked"}`.
+export type UnitStop = { type: "blocked"; question: string } | { type: "dirty"; files: string[] } | { type: "unreadable"; files: string[] }
 
 // Completion-condition gate (plans/0021-commit-boundary-design.md P2): returns
 // SessionCommit — unified commit failure, or (when a baseline is given) the

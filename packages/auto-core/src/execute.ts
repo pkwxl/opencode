@@ -1042,7 +1042,7 @@ export async function runSubtask(
     if (!opts.dryrun) baseline = await git.unitBaseline(dir)
   } else {
     const gate = await git.beginUnit(dir, opts, task)
-    if (gate.type === "dirty") return { type: "dirty", files: gate.files }
+    if (gate.type !== "ok") return { type: gate.type, files: gate.files }
     baseline = gate.baseline
   }
   anchorBaseline(chain, baseline)

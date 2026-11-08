@@ -432,18 +432,19 @@ describe("the git seam's doc-lane decorator (plans/0099 stage B, D4–D6)", () =
     }
   })
 
-  test("the decorator's gate blocks on an unreadable repository (0155 D1 held under doc lanes, plans/0175 D4)", async () => {
+  test("the decorator's gate blocks on an unreadable repository (0155 D1 held under doc lanes, plans/0175 D4 — the distinct unreadable verdict since plans/0236 D4)", async () => {
     const repo = await freshRepo()
     try {
       await Bun.write(join(repo, "src.ts"), "// baseline\n")
       await git(repo, "add", "-A")
       await git(repo, "commit", "-qm", "init")
       // A corrupt index: the old hand copy read base.changedFiles' legacy
-      // empty answer and passed; the shared gate's strict read blocks.
+      // empty answer and passed; the shared gate's strict read blocks —
+      // with the base gate's own verdict word, carried through untouched.
       await Bun.write(join(repo, ".git", "index"), "not an index")
       const laneGit = createDocLaneGit(createGitOps(), createDocLaneRegistry())
       const gate = await laneGit.beginUnit(repo, {}, { id: "T-001", ...one })
-      expect(gate.type).toBe("dirty")
+      expect(gate.type).toBe("unreadable")
     } finally {
       await rm(repo, { recursive: true, force: true })
     }

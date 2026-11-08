@@ -1290,8 +1290,15 @@ export async function rollbackUnit(
 // Unit start gate result: ok = the baseline is recorded (baseline undefined
 // means the gate idled — dryrun here, or the no-commit double on the seam,
 // and the close-out check skips with it); dirty = the dirty area cannot
-// self-heal, hand it to a human.
-export type UnitGate = { type: "ok"; baseline: UnitBaseline | undefined } | { type: "dirty"; files: string[] }
+// self-heal, hand it to a human; unreadable = the clean question itself
+// cannot be answered (a work tree git refuses, a status read that failed —
+// plans/0155 D1's strict arms, retyped by plans/0236 D4, 0165-074): a
+// distinct verdict the interrupted-unit exemptions never consume — 0149's
+// run-start exemption exempts resumable DIRT, never a repository whose
+// close-out commit is already doomed — and whose block teaches
+// investigation, never "commit or clean" (a remedy that cannot work over a
+// corrupt index or a refused work tree).
+export type UnitGate = { type: "ok"; baseline: UnitBaseline | undefined } | { type: "dirty"; files: string[] } | { type: "unreadable"; files: string[] }
 
 // The doc-lane seam decorator's relaxation of the unit start gate (plans/
 // 0099 D5, made a parameter of the free gate by plans/0175 D4, 0165-139 —
@@ -1324,7 +1331,7 @@ export async function beginUnit(dir: string, opts: { dryrun?: boolean }, task: {
   const refused = (await workTree(dir)).problem
   if (refused) {
     return {
-      type: "dirty",
+      type: "unreadable",
       files: [`.: git refuses the work tree (${refused}) — the tree's cleanliness cannot be judged; run the same git command directly to see its remedy (an ownership refusal teaches its safe.directory fix)`],
     }
   }
@@ -1332,12 +1339,14 @@ export async function beginUnit(dir: string, opts: { dryrun?: boolean }, task: {
   // 0155 D1): the clean question cannot be answered, and a gate that passed
   // would hand the unit a tree whose close-out commit is already doomed —
   // the block line names the root (P12: the uncertain read resolves toward
-  // dirty). One extra status pass per unit start buys the gate its own
-  // strictness; the reads below keep their shapes.
+  // blocked). One extra status pass per unit start buys the gate its own
+  // strictness; the reads below keep their shapes. Since plans/0236 D4 the
+  // verdict is `unreadable`, not `dirty`: the exemptions keyed on 0149
+  // consume resumable dirt alone and no exemption consumes this.
   for (const root of await repoRoots(dir)) {
     if ((await statusEntriesRead(dir, root)) === undefined) {
       return {
-        type: "dirty",
+        type: "unreadable",
         files: [`${relative(dir, root) || "."}: git status unreadable (repo missing or index corrupt) — the tree's cleanliness cannot be judged; investigate the repository state`],
       }
     }

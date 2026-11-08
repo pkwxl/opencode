@@ -1527,7 +1527,7 @@ describe("the git seam's failure direction (plans/0155 D1: a nonzero read is nev
     }
   })
 
-  test("beginUnit blocks on an unreadable status: the gate returns dirty naming the root and the anomaly", async () => {
+  test("beginUnit blocks on an unreadable status: the gate returns the distinct unreadable verdict (plans/0236 D4) naming the root and the anomaly", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "a.txt"), "a\n")
@@ -1538,7 +1538,10 @@ describe("the git seam's failure direction (plans/0155 D1: a nonzero read is nev
         gate = await beginUnit(dir, {}, task)
         return 0
       })
-      expect(gate).toEqual({ type: "dirty", files: [".: git status unreadable (repo missing or index corrupt) — the tree's cleanliness cannot be judged; investigate the repository state"] })
+      // Not dirty: the unreadable verdict is the one no exemption consumes
+      // (0149's run-start exemption consumes resumable dirt alone) and
+      // whose blocks teach investigation, never commit-or-clean.
+      expect(gate).toEqual({ type: "unreadable", files: [".: git status unreadable (repo missing or index corrupt) — the tree's cleanliness cannot be judged; investigate the repository state"] })
       expect(out.lines.some((line) => line.includes("git status unreadable"))).toBe(true)
       expect(out.lines.some((line) => line.includes("index file"))).toBe(true)
     } finally {
@@ -1978,7 +1981,7 @@ describe("the subdirectory target (plans/0174 — the target inside a larger rep
 })
 
 describe("the work-tree probe (plans/0174 D1, 0165-036 — a refused read never idles the commit boundary)", () => {
-  test("a refused work tree (dubious ownership) blocks the gates: no roots, beginUnit dirty, commitTree failed, bootstrap refused", async () => {
+  test("a refused work tree (dubious ownership) blocks the gates: no roots, beginUnit unreadable (plans/0236 D4), commitTree failed, bootstrap refused", async () => {
     const repo = await mkdtemp(join(tmpdir(), "auto-owned-"))
     const pkg = join(repo, "pkg")
     const hadKey = "GIT_TEST_ASSUME_DIFFERENT_OWNER" in process.env
@@ -2001,7 +2004,7 @@ describe("the work-tree probe (plans/0174 D1, 0165-036 — a refused read never 
       expect(read.problem).toContain("dubious ownership")
       expect(await repoRoots(pkg)).toEqual([])
       const gate = await beginUnit(pkg, {}, task)
-      expect(gate.type).toBe("dirty")
+      expect(gate.type).toBe("unreadable")
       const committed = await commitTree(pkg, task, { stage: "implement", subject: "T-001 implement the migration" })
       expect(committed.ok).toBe(false)
       expect(committed.failures[0]!.error).toContain("refuses the work tree")

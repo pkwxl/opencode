@@ -11,6 +11,7 @@ import {
   existingPriorKnowledge,
   extractKnowledge,
   extractPriorKnowledge,
+  isKnowledgeDoc,
   knowledgeFile,
   priorKnowledgeComplete,
   priorKnowledgeDigest,
@@ -44,6 +45,24 @@ describe("knowledgeFile / priorKnowledgeFile (output paths)", () => {
   test("priorKnowledgeFile = docs/R-NN/prior-kb.md", () => {
     expect(priorKnowledgeFile(1)).toBe(join("docs", "R-01", "prior-kb.md"))
     expect(priorKnowledgeFile(3)).toBe(join("docs", "R-03", "prior-kb.md"))
+  })
+
+  // plans/0236 D5: the start clean gate's leftover classifier recognizes the
+  // knowledge artifact by path shape — pinned against the same constructed
+  // path knowledgeFile builds (the registry's knowledge entry), so the two
+  // spellings cannot drift apart; near shapes stay unrecognized.
+  test("isKnowledgeDoc matches exactly the constructed knowledge paths (the classifier and knowledgeFile pinned together)", async () => {
+    const dir = tempDir()
+    try {
+      expect(isKnowledgeDoc(await knowledgeFile(await knowledgePhase(dir, 2)))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+    expect(isKnowledgeDoc("docs/R-01/P03-knowledge/kb.md")).toBe(true)
+    expect(isKnowledgeDoc("docs\\R-01\\P03-knowledge\\kb.md")).toBe(true)
+    expect(isKnowledgeDoc("docs/R-01/P03-implement/kb.md")).toBe(false)
+    expect(isKnowledgeDoc("docs/R-01/P03-knowledge/notes.md")).toBe(false)
+    expect(isKnowledgeDoc("docs/R-01/regression/3-verify-full.md")).toBe(false)
   })
 })
 

@@ -14,6 +14,7 @@ import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
 import { captureRun } from "./fixtures/capture"
 import { establishRound } from "../src/phases"
 import { runTransfer } from "../src/transfer"
+import { services } from "../src/services"
 
 const made: LoopFixture[] = []
 afterEach(() => {
@@ -250,6 +251,50 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(false)
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
     expect(analysisBlocks).toEqual(["survey"])
+  })
+
+  // plans/0236 D6 (0165-072): the approved brief installs AHEAD of the
+  // completion rename — observed mid-flight at the install's own commit, the
+  // one moment the kill window lived around. Before the fix the rename had
+  // already happened when the brief landed, and a kill between the two lost
+  // the install for good (the phase read done, no other path installs a
+  // survey proposal).
+  test("the released survey installs the approved brief while the phase is still pending — the kill window between install and rename closed", async () => {
+    const analysisBlocks: string[] = []
+    const f = await fixture(analysisBlocks)
+    const held = await f.run({ boundary: "flow" })
+    expect(held.code).toBe(2)
+    const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
+    writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "Clarified: yes\n\n<!-- auto: eof -->"))
+    await f.commit("clarify the survey")
+    // A wrapper over the production git service records, at each
+    // brief-install commit, whether the survey phase's unit file is still
+    // the pending todo.md — the reorder's observable.
+    const todoStandingAtInstall: boolean[] = []
+    const base = services().git
+    const observing = {
+      ...base,
+      commitTree: async (dir: string, task: { id: string; title: string }, info: { stage: string; subject: string }, paths?: readonly string[]) => {
+        if (info.stage === "brief-install") {
+          todoStandingAtInstall.push(existsSync(join(dir, "docs/R-01/P01-survey/todo.md")))
+        }
+        return base.commitTree(dir, task, info, paths)
+      },
+    }
+    const released = await f.run({ boundary: "flow", git: observing })
+    expect(released.code).toBe(0)
+    // The install ran exactly once, with the phase pending (todo.md
+    // standing) — the pre-fix order recorded false here.
+    expect(todoStandingAtInstall).toEqual([true])
+    // And the close-out booking is unchanged: the transition commit holds
+    // the rename, after the install's own commit (git log is newest-first,
+    // so the install's commit sits below the transition's).
+    const log = await f.git("log", "--format=%s")
+    expect(log).toContain("PLAN brief install the approved project brief (from docs/R-01/P01-survey/survey.md)")
+    expect(log).toContain("PLAN transition P01-survey Survey → P02-implement Implementation")
+    expect(log.indexOf("PLAN brief install")).toBeGreaterThan(log.indexOf("PLAN transition P01-survey"))
+    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
+    expect((await f.git("status", "--porcelain")).trim()).toBe("")
   })
 
   test("the held boundary is the designed amendment moment: the stop names the reshape channel, and the released advance re-derives the tail (plans/0101 D6)", async () => {

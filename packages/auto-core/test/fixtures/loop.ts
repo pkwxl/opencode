@@ -327,8 +327,10 @@ export type LoopFixture = {
   // ctx, not the opts; opts.stopBefore is plan's stop condition). routing is
   // the LoopCtx field runAll fills from the loaded registry — the harness
   // takes it the same way for the cases that need one (the plan verifier's
-  // deep planning-route entry, plans/0080 §5 as amended by plans/0113).
-  run: (opts?: Partial<RunAllOpts> & { routing?: RoutingFacts; repl?: Interactive }) => Promise<LoopRunResult>
+  // deep planning-route entry, plans/0080 §5 as amended by plans/0113); git
+  // overrides the run's git service the same way (a wrapper over
+  // services().git observing a commit seam, plans/0236 D6).
+  run: (opts?: Partial<RunAllOpts> & { routing?: RoutingFacts; repl?: Interactive; git?: LoopCtx["git"] }) => Promise<LoopRunResult>
 }
 
 const OPENCODE_AUTO = /^OPENCODE_AUTO_/
@@ -382,7 +384,7 @@ export async function loopFixture(
       await git(dir, "commit", "-qm", subject)
     },
     async run(opts = {}) {
-      const { planInput, append, routing, repl, ...rest } = opts
+      const { planInput, append, routing, repl, git, ...rest } = opts
       const ctx: LoopCtx = {
         directory: dir,
         opts: { phases, ...rest },
@@ -409,8 +411,9 @@ export async function loopFixture(
         // The run's git service (loop.ts fills the field the same way from
         // the installed services): the harness runs on a real git
         // repository precisely so the commit boundary stays live, so the
-        // production instance is the right member here.
-        git: services().git,
+        // production instance is the right member here — a case observing a
+        // commit seam passes its wrapper (plans/0236 D6).
+        git: git ?? services().git,
         // plan --append rides the ctx (loop.ts seeds it from RunAllOpts).
         ...(append ? { append: true } : {}),
       }

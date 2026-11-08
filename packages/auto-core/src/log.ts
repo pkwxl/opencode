@@ -142,6 +142,15 @@ export function dirtyStopLines(what: string, files: readonly string[]): string[]
   return [`⏸ ${what}; handle it manually (commit/clean) and re-run:`, ...files.map((file) => `  ${file}`)]
 }
 
+// The unreadable-repository stop-line pair (plans/0236 D4, 0165-074):
+// beginUnit's strict arms — a work tree git refuses, a status read that
+// failed (plans/0155 D1) — are not dirt, and "commit/clean" is a remedy
+// that cannot work over a corrupt index. The sibling shape over the same
+// indented file list, teaching investigation alone.
+export function unreadableStopLines(what: string, files: readonly string[]): string[] {
+  return [`⏸ ${what}; the repository state cannot be read — investigate it (the lines below name the cause git reported) and re-run:`, ...files.map((file) => `  ${file}`)]
+}
+
 // ===== Stats/message formatters (pure functions, not interfering with the
 // output machinery above) =====
 // Serving the stats messages (plans/STATS_PLAN.md §4) and the consolidation

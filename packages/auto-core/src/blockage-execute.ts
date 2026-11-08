@@ -88,8 +88,13 @@ export async function executeBlockageChoices(dir: string, round: number): Promis
   }
   // The executor's edits are this row's first write: the tree must be clean
   // first (driver-state leftovers self-heal through beginUnit's gate, like
-  // every unit start).
+  // every unit start). The unreadable verdict (plans/0236 D4) teaches
+  // investigation — never commit/clean, a remedy that cannot work over a
+  // repository that will not read.
   const gate = await beginUnit(dir, {}, { id: "PLAN", title: `remediation (${roundDirName(round)})` })
+  if (gate.type === "unreadable") {
+    return { type: "reblocked", landed: [], reason: `the repository state cannot be read before executing a Choice mark; investigate the repository state (the lines name what git reported) and re-run: ${gate.files.join(", ")}` }
+  }
   if (gate.type === "dirty") {
     return { type: "reblocked", landed: [], reason: `the worktree is not clean before executing a Choice mark; handle it manually (commit/clean) and re-run: ${gate.files.join(", ")}` }
   }

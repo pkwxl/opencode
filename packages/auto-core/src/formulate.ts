@@ -109,6 +109,7 @@ type ConstructedFormulation =
   | { type: "constructed"; id: string; numberStart: number }
   | { type: "current"; id: string; numberStart: number }
   | { type: "dirty"; files: string[] }
+  | { type: "unreadable"; files: string[] }
   | { type: "failed"; question: string }
 
 export async function constructFormulation(
@@ -129,7 +130,7 @@ export async function constructFormulation(
   }
   const task = { id: "PLAN", title: `phase formulate (${phaseText(phase)})` }
   const gate = await beginUnit(dir, {}, task)
-  if (gate.type === "dirty") return gate
+  if (gate.type === "dirty" || gate.type === "unreadable") return { type: gate.type, files: gate.files }
   // The number: a re-entry keeps the formulation task's own id (the index
   // line and any audit trail already name it); a fresh construction takes
   // the deterministic floor (plans/0150: the surviving files are the whole

@@ -213,7 +213,7 @@ export async function requireArtifact<T>(
       baseline = await git.unitBaseline(opts.dir)
     } else {
       const gate = await git.beginUnit(opts.dir, opts, task)
-      if (gate.type === "dirty") return { type: "dirty", files: gate.files }
+      if (gate.type !== "ok") return { type: gate.type, files: gate.files }
       baseline = gate.baseline
     }
   }

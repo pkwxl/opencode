@@ -33,7 +33,7 @@ import type { RunAllOpts } from "./loop-preflight"
 import { waitBetweenTasks } from "./loop-progress"
 import type { PlanInput } from "./plan-input"
 import { taskEndLines, taskResolveLines } from "./conclusion"
-import { banner, dirtyStopLines, formatDuration, log } from "./log"
+import { banner, dirtyStopLines, formatDuration, log, unreadableStopLines } from "./log"
 import { sessionOpts } from "./opts"
 import { block, loadPlan, next, requireTask, resetUnitInProgress, strandedParks, taskStatePaths, unitAttempts, type Plan, type Task } from "./tasks"
 import { phaseKey, routePhase, type PhaseUnit } from "./phases"
@@ -518,6 +518,14 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
       if (!opts.dryrun) taskBaseline = await ctx.git.unitBaseline(directory)
     } else {
       const gate = await ctx.git.beginUnit(directory, opts, task)
+      if (gate.type === "unreadable") {
+        // The strict verdict (plans/0236 D4): the repository cannot be read —
+        // investigation, never commit/clean, and the event carries the
+        // vocabulary's own distinct word.
+        for (const line of unreadableStopLines(`${task.id} cannot start`, gate.files)) log(line)
+        emitStatus({ type: "task-end", task: task.id, outcome: gate.type, detail: gate.files.join("; ") })
+        return 2
+      }
       if (gate.type === "dirty") {
         for (const line of dirtyStopLines(`${task.id} worktree not clean before startup; to ensure the execution unit starts on a clean baseline`, gate.files)) log(line)
         emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: gate.files.join("; ") })
@@ -553,12 +561,15 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
     // undefined and the charter words its inspection without a range).
     ...(taskBaseline ? { baseline: taskBaseline } : {}),
   })
-  if (outcome.type === "dirty") {
+  if (outcome.type === "dirty" || outcome.type === "unreadable") {
     // Unit-startup clean gate failure (runTask inner layer): no state
     // write, no sweep-up commit — the git state decision belongs to the
-    // human (plans/0021-commit-boundary-design.md).
-    for (const line of dirtyStopLines(`${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes)`, outcome.files)) log(line)
-    emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: outcome.files.join("; ") })
+    // human (plans/0021-commit-boundary-design.md). The unreadable arm
+    // (plans/0236 D4) teaches investigation, never commit/clean.
+    for (const line of outcome.type === "unreadable"
+      ? unreadableStopLines(`${task.id} cannot start`, outcome.files)
+      : dirtyStopLines(`${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes)`, outcome.files)) log(line)
+    emitStatus({ type: "task-end", task: task.id, outcome: outcome.type, detail: outcome.files.join("; ") })
     return 2
   }
   if (outcome.type === "parked") {
@@ -1580,6 +1591,12 @@ async function runDocUnit(
       if (!opts.dryrun) taskBaseline = await ctx.git.unitBaseline(directory)
     } else {
       const gate = await ctx.git.beginUnit(directory, opts, task)
+      if (gate.type === "unreadable") {
+        // The strict verdict (plans/0236 D4): investigation, never commit/clean.
+        for (const line of unreadableStopLines(`${task.id} cannot start`, gate.files)) log(line)
+        emitStatus({ type: "task-end", task: task.id, outcome: gate.type, detail: gate.files.join("; ") })
+        return { kind: "stop", code: 2 }
+      }
       if (gate.type === "dirty") {
         for (const line of dirtyStopLines(`${task.id} worktree not clean before startup; to ensure the execution unit starts on a clean baseline`, gate.files)) log(line)
         emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: gate.files.join("; ") })
@@ -1603,9 +1620,13 @@ async function runDocUnit(
     ...(input.drain !== undefined ? { drain: input.drain } : {}),
     ...(input.siblingScopes !== undefined ? { siblingScopes: input.siblingScopes } : {}),
   })
-  if (outcome.type === "dirty") {
-    for (const line of dirtyStopLines(`${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes)`, outcome.files)) log(line)
-    emitStatus({ type: "task-end", task: task.id, outcome: "dirty", detail: outcome.files.join("; ") })
+  if (outcome.type === "dirty" || outcome.type === "unreadable") {
+    // The unreadable arm (plans/0236 D4) teaches investigation, never
+    // commit/clean.
+    for (const line of outcome.type === "unreadable"
+      ? unreadableStopLines(`${task.id} cannot start`, outcome.files)
+      : dirtyStopLines(`${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes)`, outcome.files)) log(line)
+    emitStatus({ type: "task-end", task: task.id, outcome: outcome.type, detail: outcome.files.join("; ") })
     return { kind: "stop", code: 2 }
   }
   if (outcome.type === "parked") {
@@ -1775,9 +1796,13 @@ export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
     // (plans/0083 D1) — the lane worker's own worktree, its own range.
     { baseline: taskBaseline },
   )
-  if (outcome.type === "dirty") {
-    for (const line of dirtyStopLines(`${unit} worktree not clean before the execution unit starts`, outcome.files)) log(line)
-    emitStatus({ type: "task-end", task: unit, outcome: "dirty", detail: outcome.files.join("; ") })
+  if (outcome.type === "dirty" || outcome.type === "unreadable") {
+    // The unreadable arm (plans/0236 D4) teaches investigation, never
+    // commit/clean.
+    for (const line of outcome.type === "unreadable"
+      ? unreadableStopLines(`${unit} cannot start`, outcome.files)
+      : dirtyStopLines(`${unit} worktree not clean before the execution unit starts`, outcome.files)) log(line)
+    emitStatus({ type: "task-end", task: unit, outcome: outcome.type, detail: outcome.files.join("; ") })
     return 2
   }
   if (outcome.type === "parked") {

@@ -106,8 +106,12 @@ export type UnitStatus = (typeof UNIT_STATUSES)[number]
 // closed its lane unit without completing the task (the bracket's task goes
 // on in other lanes). `parked` since plans/0096 D7: the whole-task session
 // parked on another task's work — the unit waits for its blocker, the run
-// keeps scheduling around it.
-const TASK_OUTCOMES = ["completed", "unit-done", "blocked", "incomplete", "dirty", "parked"] as const
+// keeps scheduling around it. `unreadable` since plans/0236 D4 (0165-074):
+// the repository state could not be read at the unit's start gate — a
+// no-write stop like dirty, its cause in the detail, the distinct word so
+// the journal never conflates a corrupt repository with resumable dirt (the
+// exact consumption this ruling removed from the exemptions).
+const TASK_OUTCOMES = ["completed", "unit-done", "blocked", "incomplete", "dirty", "unreadable", "parked"] as const
 
 export type TaskOutcome = (typeof TASK_OUTCOMES)[number]
 
