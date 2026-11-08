@@ -83,10 +83,15 @@ Lanes (parallel execution, `plans/0068`):
 | 中文 | English | Code / notes |
 |---|---|---|
 | 泳道 | lane | One schedulable unit executing in isolation: a worker child process + its worktree + its branch (`src/lanes.ts`). *Taken* while in flight, *landed* when merged back |
+| 宽度 | width | `--max-sessions`: the maximum number of concurrent lanes (0068); documentation waves run at the width out of the box, code parallelism the deliberate `--tree-lanes` choice (0126); width ≥ 2 under a `parallel` level is true concurrency |
+| 工作树泳道 | tree lanes | Worktree-isolated lanes: `--tree-lanes` `on` (a full worktree per lane) / `auto` (sparse CoW worktrees materialized over the unit's `Touches`, the reflink probe deciding) / off (process parallelism, one tree — the default) — the code-depth key beside `--parallel` (`treeTiers`, `src/lanes.ts`, plans/0126) |
+| 泳道工作进程启动器 | lane worker launcher | The shell profile's `laneLauncher` (`src/shell.ts`, plans/0068 §6.4 D2): spawns the child that runs one lane's unit-scoped runAll in its worktree — absent = the default, re-invoking this shell's CLI (`_lane <dir> --unit <id>`), the self-invocation derived per process shape (`selfInvoke`: a Bun-compiled binary re-invokes itself, plans/0213 D1) |
+| 约束启动器 | confinement launcher | The daemon's per-project sandbox entry (`serve --launch <script>`, `packages/auto-server/docs/daemon.md`, plans/0162 D4): the worker and its lane children run inside the launcher's confinement; its environment overlay is the one lawful env route to a run (the daemon's spawn filter drops the ambient `OPENCODE_AUTO_*` layer by design) |
 | 工作树停放区 | park | `.auto/worktrees/` — where lane worktrees live (gitignored, skipped by the repo walk) |
 | 合入 | landing | The parent's serialized merge of a lane's branch into the main tree's branch (`Auto-Stage: landing` + `landing-sync`); **not** *merge back* (合回), which is this repository's branch flow into `auto-core` and never a target-repo operation |
 | 泳道报告 | lane report | `.auto/lane.json` in the worktree: the structured outcome the parent reads at lane exit |
 | 文档泳道 | doc lanes | Same-tree concurrency for `docs/`-scoped units (`plans/0099`): `docEligible`, the doc-scheduler branch of the task loop |
+| 回归泳道 | regression lane | The complete tier of the two-level pass (`src/regression.ts`, plans/0098): a `Cost: regression` row's full-gate suite run as one background lane at unit boundaries, over a disposable reflink copy of the clean tree — the preliminary tier (cheap lanes, the anchor, the verify session) closes tasks and releases dependents; the phase-close hold awaits a covering green receipt |
 | 回归收据 | regression receipt | `docs/R-NN/regression/<seq>-<lane>.md`: the complete-pass evidence of a `Cost: regression` lane (`plans/0098`); "receipt" alone also names a test-lane `testhands/` receipt |
 | 主进程 / 父进程 | parent | The `run` process in the target directory: preflight, phase loop, planning sessions, scheduler, landings, phase/round close |
 
@@ -217,6 +222,8 @@ Lanes (parallel execution, `plans/0068`):
 | 人工门 | human gate | `plans/0049` |
 | 阶段门 | phase gate | `plans/0036` |
 | 验收门 | acceptance gate | `Gate: acceptance`, config `acceptanceGate` |
+| 知识边界 | knowledge boundary | The working-directory boundary (`src/external-dirs.ts`, plans/0122; 0147): an out-of-tree read denies in unattended runs unless the person's `external_directory` allow covers it — every top-level root symlink contributes the allow, and the reference target stays read-only (an `edit` deny in every form the live tools ask, 0188 D3); the sealed reference wall builds on it |
+| 密封引用墙 | sealed reference wall | The cleanroom wall closed as a machine boundary at the person's advance (`src/wall.ts`, plans/0132; amended 0189, 0190): declared by a phase type's `Wall:` field, closed by one wall commit at the sealing threshold (the door removal, the self-stamped allows retired), its closed predicate re-derived from disk and git at every boundary — reference knowledge stays out of the deliverable |
 
 ## Recovery and handover
 
@@ -237,6 +244,7 @@ Lanes (parallel execution, `plans/0068`):
 | 认领 | claim | A session is claimed for reuse |
 | 锚点 | anchor | The message a fork starts from |
 | 归档 | archive | `testhandoff-<n>.md` |
+| 采纳(外来提交) | adoption (foreign-commit adoption) | A resume that finds the person's commits in an interrupted unit's range adopts them — readable drift alone (plans/0145; 0183 D3's bound), the close-out re-anchoring at the current HEAD so the range still contains only driver commits; never a stop or a rollback (P4's derivation wording, 0225 D1) |
 
 ## Model routing and failures
 
@@ -253,6 +261,8 @@ Lanes (parallel execution, `plans/0068`):
 | 路由覆盖 | route override | The registry's `routes`: key → tier name or list (precedence role > type id > preset letter) |
 | 窗口 | window | An entry's `avoid` / `only` list, `[days ]HH:MM-HH:MM` in the registry `tz`; gates dispatches, never running turns |
 | 密钥环 | key ring | Per provider, references only; rotation = a managed server restart |
+| 密钥保持 | key hold | The hold a key failure without a stated reset carries (plans/0163 D1): five minutes (`UNSTATED_KEY_HOLD_MS`, `src/keyring.ts`) — small against 30–90-minute sessions, so the new-session walk re-checks a recovered key at the first session after the hold; a stated reset holds to its instant |
+| 新会话走查 | new-session walk | Every new session tries a ring's keys in declared order, restarting the managed server onto the earliest key whose mark has passed (`RingWalk`, `src/keyring.ts`, plans/0163 D2) — order-first like the rotation, but marking nothing (the from key did not fail); a ring with no recoverable earlier key stays on the current key |
 | 降级标记 | down mark | In memory, per model and per provider key; cleared at the failback boundaries, `/failback`, or its `until` |
 | 上下文步进 | context step | An entry's `wider` ids: one model under several windows that share a cache; one entry is one routing unit |
 | 步进点 | step-up point | The context size that steps a session up: window − max(48k, window/5) |
@@ -328,7 +338,7 @@ Lanes (parallel execution, `plans/0068`):
 | 先校验后写盘 | validate, then write | `init` finishes every check before its first write (`plans/0052` D7) |
 | 增量修订 | amend | Change the named config keys, keep the rest: the `amend` command (`plans/0052` D25); `init --amend` and the `continue` command retired with P3c (`plans/0053`) |
 | 配置修复 | config fix | The `fix` command: repair the config layer by rule, never resetting a key (`src/config-fix.ts`, `plans/0052` D10–D11) |
-| 可修复 / 需人工 | fixable / manual | The two classes of a config-fix finding: deterministic and meaning-preserving, applied by `fix` / reported only, left to a person (`FixFinding.class`) |
+| 可修复 / 需人工 / 信息 | fixable / manual / info | The three classes of a config-fix finding: deterministic and meaning-preserving, applied by `fix` / reported only, left to a person / an expected posture with nothing to repair — a note, exit 0 (plans/0135; 0136's divergence-only trigger; P8's recorded-state class, 0225 D2) (`FixFinding.class`) |
 | 强制关闭 | force-close | `plan --force-close <ref> --reason <text>`: close a unit inside `plan`, then continue planning in the same process (`plans/0053` D28) |
 | 已关闭(单元) | closed (unit) | A `done.md` whose field block carries `Closed: <reason>`: done for scheduling, not delivered (`closeUnit`, `src/close.ts`, `plans/0053` D16); not the same as round close or close-out |
 | 机械交接桩 | mechanical handover | The driver-written `handover.md` of a closed phase: the four sections, no session (`src/close.ts`, `plans/0053` D18) |
@@ -336,6 +346,8 @@ Lanes (parallel execution, `plans/0068`):
 | 停止条件 | stop condition | `RunAllOpts.stopBefore: "execute" \| "formulate"`: "execute" stops after a successful planning step or where an execute route would start (`plan`); "formulate" stops inside the planning step at the construction's review seam, never dispatching a task session (`transfer`) (`src/loop-phase.ts`, `plans/0053` D6; 0101 D2) |
 | 规划输入 | planning input | A phase's `plan-input.md` (role `planningInput`): the latest input verbatim, committed on its own before the planning unit and rendered into the planning prompt; a changed text restarts an open planning step in a new session; `plan -p` / `--file` supply it (`src/plan-input.ts`, `plans/0053` D9–D11) |
 | 追加规划 | append planning | `plan --append`: add tasks after the current phase's existing ones; step kind `phase-append` (`appendPlan`, `src/loop-plan.ts`, `plans/0053` D23–D27) |
+| 澄清 | clarify | The person's release command (`src/clarify.ts`, plans/0116): writes the whole-line `Clarified: yes` into the one document a gate awaits and commits it — byte-identical to a correct hand edit plus its commit; two surfaces, each at its own moment (the unreleased project analysis only while no round is established; a held survey's release region — plans/0204 D1), the command printing what the mark accepts before it writes |
+| 代理简报 | driver-helper | The person-proxy brief (`driver-helper [dir]`, `src/driver-helper.ts`, plans/0105): renders, read-only on stdout, the brief a coding-agent session holding the person's pen needs at a boundary `run` cannot cross — the third rendered role beside the manual suite's driver and the work order's guest session; takes no run lock (a live lock reported, never refused on) |
 | 并行编排 | parallel orchestration | Landed (`plans/0068`): lanes — one worker process + worktree per unit, landed by the parent; the declaration half is `plans/0046`, the superseded executional design `plans/0036` |
 | 声明面 | declaration surface | `--parallel`, `--max-sessions` (`plans/0046`; live since `plans/0068`) |
 | 调度器 | scheduler | `readyUnits` over declared facts (`src/lanes.ts`, 0068 D5) |
