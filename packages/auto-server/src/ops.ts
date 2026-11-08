@@ -47,7 +47,7 @@
 // the clean-tree gate answers 409 with `gate: "cleanTree"`); 423 a live run
 // lock; 428 the confirmation gate unanswered (`gate: "confirm"`, the exact
 // question included); 501 a route this version refuses (agent planning needs
-// the interactive transport of P3; the models probe is not exposed).
+// the interactive transport of P3).
 import { Readable, Writable } from "node:stream"
 import { join } from "node:path"
 import { checkCleanTree } from "@opencode-ai/auto-core/clean"

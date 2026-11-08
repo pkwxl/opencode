@@ -4265,7 +4265,7 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
         [["plan", dir, "--dryrun"], "--dryrun is a run option"],
         [["plan", dir, "--wait-between", "2"], "--wait-between is a run option"],
         [["plan", dir, "--max-sessions", "1"], "--max-sessions is a run option"],
-        [["plan", dir, "-f"], "-f/--force is an init/reset/fix option"],
+        [["plan", dir, "-f"], "-f/--force is an init/reset/fix/sync option"],
         // --append is plan's alone (D23): no input is a usage error; every
         // other command points at plan.
         [["plan", dir, "--append"], "--append requires a planning input"],
@@ -5421,7 +5421,7 @@ describe("CLI: reset de-initialization", () => {
       expect(reset.code).toBe(0)
       expect(reset.out).toContain("the following cleanup will run in")
       expect(reset.out).toContain(".opencode/auto/config.json")
-      expect(reset.out).toContain("restored to the uninitialized state")
+      expect(reset.out).toContain("✓ config layer removed (docs/, .auto/ runtime state and tmp/ untouched")
 
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "opencode.json")).exists()).toBe(false)
@@ -5627,7 +5627,7 @@ describe("CLI: the worktree cleanliness gate", () => {
       expect(amend.err).toContain("--amend is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>")
       const force = await runCli(["run", dir, "-f"])
       expect(force.code).toBe(1)
-      expect(force.err).toContain("is an init/reset/fix option")
+      expect(force.err).toContain("is an init/reset/fix/sync option")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -228,7 +228,7 @@ driver's unified commit is the completion condition.
 | `fix [dir] [-f] [--dryrun]` | repair the config layer by rule |
 | `sync [dir] [-f] [--dryrun] [--from-bundle]` | upgrade a materialized intent bundle to the running binary's (never writes person-edited files, never deletes extras; `--from-bundle` overwrites differing unstamped files) |
 | `release [dir]` | the release gate: certify a destination repository (nested git repository) stands alone — the task-id/out-of-root/process-path findings the rounds recorded now block, beside a clean-tree check (read-only; fix with your agent, commit, re-run) |
-| `reset [dir] [-f]` | de-initialize (remove exactly init's artifacts) |
+| `reset [dir] [-f]` | de-initialize: remove exactly the config-layer artifacts init wrote (the project brief and a materialized bundle's landed files are kept — delete by hand) |
 | `transfer [dir] [--resynthesize]` | advance one boundary: open the round, or close the finished phase and construct the next one's plan task (stops for review) |
 | `clarify [dir]` | release the awaiting gate: write `Clarified: yes` into the unreleased analysis / held survey and commit it (prints the defaults it accepts) |
 | `plan [dir]` | dispatch the reviewed plan task (m mode: also establishes and plans) |
@@ -239,7 +239,10 @@ driver's unified commit is the completion condition.
 | `plan [dir] --force-close <ref> --reason "…"` | close a unit, then keep planning |
 | `run [dir] [--boundary stop\|flow]` | execute the phase's tasks; stop at its clean end (flow crosses) |
 | `close <ref> [dir] --reason "…"` | close a unit without delivering |
+| `fork <T-NNN \| sha> <worktree-path> [dir]` | build a retry experiment environment in a new worktree — at the state before a task first started (`T-NNN`) or at an exact commit; the main tree and its history never touched (runs beside a live run) |
+| `remove-fork <worktree-path> [dir] [--force]` | tear down a fork: every worktree removed and its `auto-fork/*` branch deleted per repository (uncommitted work blocks; `--force` discards it) |
 | `land [dir] [--keep \| --abandon \| --merge]` | return isolated round branches |
 | `status [dir]` | read-only progress tree |
 | `models [dir] [--probe]` | print the effective model routing |
 | `install-prompts [dir] [--check]` | resync the manual-driver prompt suite (the runbooks for a coding-agent session acting as the driver) into `prompts/` byte-identically and write `prompts/MANIFEST` pinning the vintage — extras reported, never deleted; no run lock, no git (you review and commit); `--check` compares without writing, exit 1 on drift |
+| `driver-helper [dir]` | render the person-proxy brief: the six-block context (role pin, the driver's working model, the live state and the stop's own lines, the open person-owned channels, the assist policy, the exact recovery commands) to paste into a coding-agent session acting with your pen at a boundary the run cannot cross |

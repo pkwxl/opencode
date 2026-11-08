@@ -18,6 +18,7 @@ The canonical English term for each concept we discuss in Chinese. Code, comment
 | 外壳、壳 | shell | A CLI package that depends on the core one way |
 | 通用壳 | general shell | `packages/auto`, bin `opencode-auto` |
 | 简易壳 | simple shell | `packages/auto-migrate` (frozen `migrate` branch) |
+| 服务壳 | service shell | `packages/auto-server`, bin `opencode-auto-server` (headless daemon + worker, on the auto-core branch; the daemon/hub/bridge vocabulary lives in its `docs/daemon.md`) |
 | 外壳画像 | shell profile | `setShellProfile` (`src/shell.ts`) |
 | 差异注入 | difference injection | Only through extension points |
 | 扩展点 | extension point | `setShellProfile` / `registerTemplate` / parameter passing |

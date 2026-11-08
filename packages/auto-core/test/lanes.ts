@@ -165,6 +165,10 @@ export const UNIT_LANE: readonly string[] = [
   // docs/glossary.md, docs/principles.md and docs/releases.md — no repository,
   // no spawn.
   "test/docs-registers-reconciliation.test.ts",
+  // The docs-truth reconciliation pin (plans/0227): file reads over
+  // docs/shell-contract.md, docs/glossary.md and src/reset.ts's header — no
+  // repository, no spawn.
+  "test/docs-truth-reconciliation.test.ts",
   // The intent-bundle surface (plans/0079 §3): parse/materialize over temp
   // directories, no repository, no spawn.
   "test/bundle.test.ts",

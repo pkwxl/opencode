@@ -901,7 +901,10 @@ the general shell), stated once and plainly: `clarify` (the one-command
 release act — the daemon's own stop texts teach the manual path, "add the
 line and commit yourself"), `sync` (the intent-bundle upgrade),
 `land` (branch isolation's return path), `fork`/`remove-fork` (the retry
-experiment environment) and `driver-helper` (the person-proxy brief).
+experiment environment), `release` (the person's release gate — the
+containment findings a round records block at that CLI-side moment),
+`install-prompts` (the manual-driver prompt suite's resync into the
+target's `prompts/`) and `driver-helper` (the person-proxy brief).
 Materializing an intent bundle into a target (`init --intent <bundle>`) is
 CLI-side too — the API revises the `intent` key against packs the target
 already holds.

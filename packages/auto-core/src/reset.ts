@@ -1,7 +1,14 @@
-// De-initialization (the inverse of init): precisely removes the config-layer
-// artifacts init wrote, restoring the worktree to the uninitialized state and
-// clearing config leftovers that would interfere with the opencode host
-// program and other extension components.
+// De-initialization: precisely removes the config-layer artifacts init wrote
+// (the enumerated whitelist below), clearing config leftovers that would
+// interfere with the opencode host program and other extension components.
+// Not a restoration of the uninitialized worktree: what the whitelist does not
+// name survives, and one class of init's own output deliberately does — a
+// materialized intent bundle's landed files (plans/0079 §3: the pack, mode and
+// phase files under .opencode/auto/; plans/0100's provenance.json sidecar)
+// are the project's own surfaces once landed, read like a hand-written
+// overlay and still reported by fix/sync/status; they reach this list only
+// through PRUNE_DIRS' rmdir-if-empty, which skips non-empty directories by
+// design. Person-owned once landed — delete them by hand if you mean to.
 //
 // Boundaries (design points, read them all before changing anything):
 //   1. Clears the config layer only. .auto/'s runtime state (logs,
@@ -12,8 +19,8 @@
 //   3. Directory reclamation always uses rmdir (throws on non-empty, skipped)
 //      and never rm -r. This is the mechanism that protects
 //      .opencode/auto/prompts/ (the user's own prompt overlay directory, read
-//      by template.ts) and the user's other agent contracts under
-//      .opencode/agent/.
+//      by template.ts), the user's other agent contracts under
+//      .opencode/agent/, and a materialized bundle's files.
 //   4. Files shared with the host program are touched only after a
 //      byte-for-byte comparison: opencode.json is deleted only while its
 //      content equals the template, kept once modified; AGENTS.md only has

@@ -437,9 +437,9 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   ],
   [
     "reset",
-    "reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, " +
+    "reset de-initialization: removes exactly the config-layer artifacts init wrote (.opencode/auto/config.json, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, " +
       "the .gitignore entries init wrote (tmp/, .auto/, the local-only files and nested git repositories), plus opencode.json if unmodified); the project brief .opencode/auto/brief.md is kept " +
-      "(an installed approved proposal or a person's amend --brief write — delete it by hand if you mean to); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)",
+      "(an installed approved proposal or a person's amend --brief write — delete it by hand if you mean to), and so is a materialized intent bundle's landed files (the pack, mode and phase files under .opencode/auto/ and provenance.json — person-owned once landed, delete them by hand); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/, a materialized bundle's files and your other agent contracts)",
   ],
   [
     "phases",
@@ -482,7 +482,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   ],
   [
     "tree-lanes",
-    "--tree-lanes off|auto|on the execution tier of concurrent runs (default off): off = tier 0, process parallelism in one tree — task sessions run serially in the main tree while the project's test suites run as parallel driver processes " +
+    "--tree-lanes off|auto|on the execution tier of concurrent runs (default off): off = tier 0, process parallelism in one tree — documentation-scoped task sessions run side by side as doc lanes (their declared Depends/Touches the admission) while code task sessions run serially in the main tree and the project's test suites run as parallel driver processes " +
       "(and parallel session lanes) against it, no extra checkouts; on = tier 2, the full git worktree per concurrent task (each lane holds the whole checkout, merged back serially); " +
       "auto = the run's preflight probes the filesystem and the declared lanes.treeBudgetMB budget — reflink-capable (btrfs/XFS) and within budget it runs tier 1, sparse CoW worktree lanes (a --no-checkout worktree materialized over the unit's Touches: by reflink, " +
       "with the project's declared lanes.caches cache homes injected per lane), else it falls through to tier 0 with the reason logged. " +
@@ -516,7 +516,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   [
     "repair",
     "--repair [1-10] run option (auto-core plans/0079 §4): the bounded repair budget — how many automatic repair rounds a task report's Result: FAIL (or a held verdict gate) may drive before blocking for the human: " +
-      "the failed task is closed and an appending session adds rework tasks over the report's evidence, which then run and re-verify. Acceptance gates never auto-repair — the human's sign alone; serial runs only, never persisted",
+      "the failed task is closed and an appending session adds rework tasks over the report's evidence, which then run and re-verify. Acceptance gates never auto-repair — the human's sign alone; repair rounds open wherever the FAIL or held gate is judged with no lane in flight (the serial path, the lane loops' post-drain degrades, the doc loop's finishBlocked, the phase-level gates — never a lane worker's own blocked exit, never under a stop condition); per run, never persisted",
   ],
   [
     "stop-after",
@@ -681,7 +681,7 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   {
     name: "reset",
-    summary: "de-initialize: remove the config-layer artifacts init wrote and restore the uninitialized state",
+    summary: "de-initialize: remove the config-layer artifacts init wrote (the project brief and a materialized intent bundle's landed files are kept)",
     synopsis: "opencode-auto reset [dir] [-f|--force]",
     options: ["reset", "force", "run-lock"],
   },
@@ -715,7 +715,7 @@ const OPTION_TEXT: ReadonlyMap<string, string> = new Map<string, string>([
   ...OPTION_HELP.map(([key, text]) => [key, text] as const),
 ])
 const COMMAND_BY_NAME: ReadonlyMap<string, CommandHelp> = new Map(COMMANDS.map((entry) => [entry.name, entry]))
-// The words that name a command: the public sixteen plus `_lane` — the
+// The words that name a command: the public eighteen plus `_lane` — the
 // hidden lane-worker entry is a real command (the parent run's launcher
 // invokes this CLI with it) but never appears in any help surface; its own
 // option ladder below answers everything it is passed, --help included.
@@ -2084,11 +2084,11 @@ function refuseFrozenFlags(command: "run" | "plan" | "transfer" | "_lane") {
       process.exit(1)
     }
   }
-  // -f/--force belongs to init/reset/fix alone (it skips the overwrite
+  // -f/--force belongs to init/reset/fix/sync (it skips the overwrite
   // confirmation and the worktree cleanliness gate); run and plan write no
   // config and do no destructive overwrite, so it is meaningless there.
   if (flags.has("force")) {
-    console.error(`-f/--force is an init/reset/fix option (skips the confirmation and the worktree cleanliness check); ${command} does not accept it`)
+    console.error(`-f/--force is an init/reset/fix/sync option (skips the confirmation and the worktree cleanliness check); ${command} does not accept it`)
     process.exit(1)
   }
   // --continue is no command's option: opening the next round is not a
@@ -2543,7 +2543,9 @@ if (command === "init" || command === "amend") {
   // step; each keeps one read-only prefix-guard check below, so a --phases
   // change that keeps the completed phases is allowed and surfaces as a
   // drift for plan to reconcile instead of a silent index rewrite.
-  // opencode.json, .gitignore and the brief stub are left to init and `fix`.
+  // opencode.json and .gitignore are left to init and `fix`; the project
+  // brief's channels are the analysis's approved proposals and amend's
+  // --brief/--brief-file (the stub model retired, plans/0081 D11).
   // (The `continue` subcommand that shared this block — amend semantics plus
   // the round establishment at round start — retired with plans/0053 D33:
   // plan's prelude runs the round-close checks and opens the next round.)
@@ -2790,9 +2792,9 @@ if (command === "init" || command === "amend") {
   process.exit(0)
 }
 
-// reset subcommand (de-initialization / uninstall): the inverse of init —
-// remove exactly the config-layer artifacts init wrote and restore the
-// worktree to the uninitialized state, so leftover config stops interfering
+// reset subcommand (de-initialization / uninstall): removes exactly the
+// config-layer artifacts init wrote (the enumerated whitelist), so leftover
+// config stops interfering
 // with the opencode main program and other extension components. The checklist
 // and its execution live in auto-core/reset.ts (the boundary is stated in that
 // file's header comment): it clears the config layer only, never .auto/
@@ -2831,7 +2833,7 @@ if (command === "reset") {
     console.error(`reset failed: ${error instanceof Error ? error.message : String(error)}`)
     process.exit(1)
   }
-  console.log(`✓ restored to the uninitialized state (docs/, .auto/ runtime state and tmp/ untouched)`)
+  console.log(`✓ config layer removed (docs/, .auto/ runtime state and tmp/ untouched; the project brief and a materialized bundle's landed files kept)`)
   process.exit(0)
 }
 
