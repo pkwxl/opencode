@@ -247,6 +247,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/prompt-template.test.ts",
   "test/protect.test.ts",
   "test/quota-windows.test.ts",
+  // The due-cut reconciliation pin (plans/0230): file reads over
+  // docs/releases.md — no repository, no spawn.
+  "test/release-due-reconciliation.test.ts",
   "test/replay.test.ts",
   // The session-role registry's completeness and totality (U-R5): pure
   // descriptor lookups over in-memory tables — the template-library check
