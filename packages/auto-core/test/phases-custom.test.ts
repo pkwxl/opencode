@@ -158,6 +158,25 @@ describe("typeNameProblem", () => {
   test("role words are rejected by the driver for project types only (phaseTypeRoleProblems)", () => {
     expect(phaseTypeRoleProblems(["review", "wrapup", "final-plan"])).toHaveLength(2)
     expect(phaseTypeRoleProblems(["review"])).toEqual([])
+    expect(phaseTypeRoleProblems(["wrapup"])).toEqual([
+      'phase type "wrapup" is a model-routing role word (OPENCODE_AUTO_MODEL keys); rename .opencode/auto/phases/wrapup.md',
+    ])
+  })
+
+  test("retired role words are tombstones a project type cannot take either (plans/0231, 0165-134)", () => {
+    // The custom-type door is the id-reuse door: a phase type named after a
+    // retired word would resurrect it into the routing grammar (P13 — a
+    // tombstoned id never returns). Pre-0231 the five words M3.6's table missed
+    // (understand, verify-generate, verify-exec, review-planfix, number-recovery)
+    // were accepted here.
+    expect(phaseTypeRoleProblems(["understand", "number-recovery"])).toEqual([
+      'phase type "understand" is a retired model-routing role word (plans/0030 D12 — the understand session merged into decompose); rename .opencode/auto/phases/understand.md',
+      'phase type "number-recovery" is a retired model-routing role word (plans/0150 D2 — the numbering recovery session was removed; task numbers are derived from the surviving artifacts); rename .opencode/auto/phases/number-recovery.md',
+    ])
+    for (const role of ["verify-generate", "verify-exec", "review-planfix", "verify-judge", "review-fixrun", "final-plan"]) {
+      expect(phaseTypeRoleProblems([role])).toHaveLength(1)
+      expect(phaseTypeRoleProblems([role])[0]).toMatch(/is a retired model-routing role word \(plans\/0044 D1/)
+    }
   })
 })
 

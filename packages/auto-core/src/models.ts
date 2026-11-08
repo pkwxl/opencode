@@ -80,7 +80,7 @@ import {
 } from "./models-schema"
 import { PHASE_LETTERS, TIERS } from "./phases/registry"
 import { registeredAdapterNames, shellProfile } from "./shell"
-import { MODEL_ROLES, SWITCH_ENV, type ModelPolicy } from "./switches"
+import { MODEL_ROLES, RETIRED_MODEL_ROLES, SWITCH_ENV, type ModelPolicy } from "./switches"
 
 // The project layer, relative to the target directory.
 export const MODELS_FILE = join(".opencode", "auto", "models.json")
@@ -793,6 +793,12 @@ class Validator {
       const where = this.field("routes", key)
       if (key === "*") {
         this.fail(layer, where, "* is not a route key: the tier lists already are the default")
+        continue
+      }
+      // A retired role word is a tombstone (plans/0231): the refusal names the
+      // retirement and the remedy, never the generic unknown-word line.
+      if (RETIRED_MODEL_ROLES[key] !== undefined) {
+        this.fail(layer, where, `is a retired role word (${RETIRED_MODEL_ROLES[key]}); remove the route entry`)
         continue
       }
       if (!vocabulary.includes(key)) {

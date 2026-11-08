@@ -1289,7 +1289,7 @@ plans/0057 §4) where the profile changes how the agent retries, e.g. a claude p
 Sessions come in two tiers: **deep** (deep reasoning needed) and **simple** (reports, distillation,
 extraction). Listing a model in a tier *is* its classification; the same model may appear in both. The
 program's default table: phase planning, the `m`-mode planning scan and decompose are deep; wrap-up, phase
-handover, knowledge/prior-knowledge, numbering recovery and one-shot bypass sessions are simple; task
+handover, knowledge/prior-knowledge and one-shot bypass sessions are simple; task
 sessions (whole-task, subtask) use the **phase type's execute tier** — among the builtin types a analysis /
 d design / v acceptance are deep, m implementation / t test / k knowledge distillation are simple, and a
 custom type reads its type file's `Reasoning: deep|simple` field (default deep, versioned with the
@@ -1297,7 +1297,9 @@ project). **Borrowing** is one-way: a simple session whose simple list has nothi
 the deep list (availability beats cost); a deep session never borrows simple — it waits, because depth is
 the reason it exists. `routes` is the operator's override: keys are role words / phase type ids / preset
 letters (precedence as in `OPENCODE_AUTO_MODEL`'s key syntax; `*` is not allowed — the tier lists themselves
-are the default), values are a tier name or an ordered list of internal names.
+are the default), values are a tier name or an ordered list of internal names. A retired role word is a
+permanent tombstone: it is refused with the ruling that retired it, and the remedy is removing the route
+entry.
 
 Every dispatch takes the **first entry available right now** from the candidate list: past the agent
 filter, inside its window, not down-marked, its provider's key ring (if any) still has a key that is not
@@ -1705,7 +1707,10 @@ one verdict on the completion side:
   wrap-up and rewrites the result line.
 
 Retired options are exit code 1 on any command (with a retirement notice); config `verify: true` fails
-strictly; the model-routing verify-*/review-*/final-plan role keys error the same way. Existing PLAN.md
+strictly; the model-routing role keys retired over the versions (`understand`, merged into decompose; the
+verify-*/review-*/final-plan family; `number-recovery`) are permanent tombstones — in the registry's
+`routes` and the `OPENCODE_AUTO_MODEL` entry list alike they fail with the ruling that retired them and the
+remedy (remove the entry). Existing PLAN.md
 files (with their `verify:`/`verified:`/`final:` field lines and `T-F<k>` tasks) have not been read since
 M3.4; leftover `.auto/verify.md`, `.auto/review.md`, `tmp/verify.*` are not cleaned up.
 
@@ -1999,8 +2004,8 @@ pre-phases) splits a long migration-style flow into phases. The value takes two 
   only the string `"m"` is a single run — the list `implement` is a phased flow with a planning session.
 
 **Custom phase types**: define one type per file under `.opencode/auto/phases/<type>.md` (the file name is
-the type id; it must not collide with a builtin type, a preset letter form, or a model-routing role word)
-and reference it by id in the type list:
+the type id; it must not collide with a builtin type, a preset letter form, or a model-routing role word —
+live or retired) and reference it by id in the type list:
 
 ```markdown
 # Security review

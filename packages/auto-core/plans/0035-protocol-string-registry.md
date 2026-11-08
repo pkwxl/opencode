@@ -552,4 +552,23 @@ inline is simply prose now; `docs/glossary.md` drops them from the protocol-lite
 list in the same change. The §4 row and the M3.8 amendment entry that still name
 them are history, not live registration. The other M3.8 flips stand unchanged.
 
+## Amendment (2026-11-09, plans/0231): the retired model-route words are registered tombstones
+
+The route/role key vocabulary (the `OPENCODE_AUTO_MODEL` entry list's role keys and the
+registry `routes` section's keys) is a registered protocol face in its own right, and its
+retired words stay on it: per D3's scope (registered = a literal a driver parser matches),
+the tombstones match — to refuse. `RETIRED_MODEL_ROLES` in `src/switches.ts` (exported,
+beside `MODEL_ROLES`) is the one table: every word that ever left the role vocabulary
+(`understand` — 0030 D12; `verify-generate`/`verify-exec`/`verify-judge`/`verify-fix`/
+`review-audit`/`review-planfix`/`review-fixrun`/`final-plan` — 0044 D1; `number-recovery`
+— 0150 D2), each entry the ruling citation and teaching tail. Every parse surface composes
+its refusal from the table: the registry routes validator (`is a retired role word
+(<ruling>); remove the route entry`), the `OPENCODE_AUTO_MODEL` entry-list parse (the
+tombstone refusal at parse time — a retired word is never read as a phase type id), and the
+custom phase-type collision guard (`phaseTypeRoleProblems`, which keeps a project type from
+resurrecting a tombstoned id). Entries are never removed and words are never reused — the
+0225 D3 two-track rule's vocabulary track, enacted (a future retirement lands its row in
+the same lockstep change). 0030 D12/0044 D1/0150 D2's strict-failure premise stands; the
+refusal's wording is the tombstone these pages now register.
+
 <!-- auto: eof -->

@@ -172,12 +172,9 @@ export type FailbackScope = "phase" | "task" | "subtask" | "session"
 // C.1): fixed for the experiment period, no free naming; one-to-one with the B.5
 // execution-chain roles, `bypass` as the fallback for bypass sessions given no explicit
 // role. Exported as the shared source of truth, for the later P2 (resolveModel / roleOf)
-// and the bypass rework to reuse. Since M1.0 the understand/decompose sessions are one
-// (plans/0030 D12): the vocabulary no longer contains understand — the merged session
-// routes under the decompose role, an understand= key in old config fails strictly as an
-// invalid key; verify-*/review-*/final-plan left the table with the three mechanisms'
-// retirement (plans/0044 D1), equally strict failures; number-recovery left with the
-// numbering record (plans/0150), the same way.
+// and the bypass rework to reuse. Every word that ever left this table lives in
+// RETIRED_MODEL_ROLES below — a permanent parse-time tombstone, never a silent
+// disappearance and never reusable as a key or a phase type id.
 export const MODEL_ROLES = [
   "decompose",
   "whole",
@@ -218,9 +215,29 @@ const INTERNAL_NAME = /^[a-z][a-z0-9.-]*$/
 // synthesizes from, so the run start feeds this only when layers exist.
 export type SwitchModelRegistry = { names: ReadonlySet<string>; tiers: string }
 
-// Role words of retired sessions (plans/0044 D1): still a strict parse failure,
-// not read as phase type ids. Custom type ids may not take them either.
-const RETIRED_MODEL_ROLES = ["verify-judge", "verify-fix", "review-audit", "review-fixrun", "final-plan"] as const
+// Role words of retired sessions — the route vocabulary's permanent tombstones
+// (plans/0231, enacting 0225 D3's rule: a vocabulary's tombstone IS its
+// retirement, a parse-time teaching refusal). Each entry maps the word to the
+// ruling that retired it and the teaching tail; every parse surface (registry
+// routes in src/models.ts, the OPENCODE_AUTO_MODEL entry list here) composes its
+// refusal from this one table, and custom phase type ids may not take a word
+// either — a tombstoned id never returns with a new meaning (P13). Entries are
+// never removed; a future retirement lands its row in the same lockstep change.
+export const RETIRED_MODEL_ROLES: Readonly<Record<string, string>> = {
+  // plans/0030 D12 (M1.0): the understand/decompose sessions merged into one.
+  understand: "plans/0030 D12 — the understand session merged into decompose",
+  // plans/0044 D1 (M2.2): the verify/review/final-review mechanisms were removed.
+  "verify-generate": "plans/0044 D1 — the verify mechanism was removed",
+  "verify-exec": "plans/0044 D1 — the verify mechanism was removed",
+  "verify-judge": "plans/0044 D1 — the verify mechanism was removed",
+  "verify-fix": "plans/0044 D1 — the verify mechanism was removed",
+  "review-audit": "plans/0044 D1 — the review mechanism was removed",
+  "review-planfix": "plans/0044 D1 — the review mechanism was removed",
+  "review-fixrun": "plans/0044 D1 — the review mechanism was removed",
+  "final-plan": "plans/0044 D1 — the final-review loop was removed; the v (acceptance) phase plans its tasks",
+  // plans/0150 D2: the numbering record and its recovery session were removed.
+  "number-recovery": "plans/0150 D2 — the numbering recovery session was removed; task numbers are derived from the surviving artifacts",
+}
 
 // Custom (project) phase type ids that are role words (live or retired; the
 // builtin knowledge type shares its id with the knowledge role by design): as an
@@ -228,10 +245,14 @@ const RETIRED_MODEL_ROLES = ["verify-judge", "verify-fix", "review-audit", "revi
 // be routed by id. The driver checks this where it loads project types (config
 // load, run preflight); [] = none.
 export function phaseTypeRoleProblems(types: readonly string[]): string[] {
-  const words: readonly string[] = [...MODEL_ROLES, ...RETIRED_MODEL_ROLES]
-  return types
-    .filter((type) => words.includes(type))
-    .map((type) => `phase type "${type}" is a model-routing role word (${SWITCH_ENV.model} keys); rename .opencode/auto/phases/${type}.md`)
+  const lines: string[] = []
+  for (const type of types) {
+    if ((MODEL_ROLES as readonly string[]).includes(type))
+      lines.push(`phase type "${type}" is a model-routing role word (${SWITCH_ENV.model} keys); rename .opencode/auto/phases/${type}.md`)
+    else if (RETIRED_MODEL_ROLES[type] !== undefined)
+      lines.push(`phase type "${type}" is a retired model-routing role word (${RETIRED_MODEL_ROLES[type]}); rename .opencode/auto/phases/${type}.md`)
+  }
+  return lines
 }
 
 // Phase-type keys of a model policy that name no known type (run preflight,
@@ -501,7 +522,14 @@ function parseModelPolicy(
         if (key === "*") policy.wildcard = value
         else if ((MODEL_LETTERS as readonly string[]).includes(key)) policy.byLetter[key as ModelLetter] = value
         else if ((MODEL_ROLES as readonly string[]).includes(key)) policy.byRole[key as ModelRole] = value
-        else if (TYPE_KEY.test(key) && !(RETIRED_MODEL_ROLES as readonly string[]).includes(key)) policy.byType[key] = value
+        // A retired role word is a tombstone (plans/0231): refused here, at the
+        // surface where it appears — never silently read as a phase type id.
+        else if (RETIRED_MODEL_ROLES[key] !== undefined) {
+          throw new Error(
+            `env ${SWITCH_ENV.model} invalid key: "${key}" (a retired role word, ${RETIRED_MODEL_ROLES[key]}; remove the entry)`,
+          )
+        }
+        else if (TYPE_KEY.test(key)) policy.byType[key] = value
         else {
           throw new Error(
             `env ${SWITCH_ENV.model} invalid key: "${key}" (expected *, a phase letter ${MODEL_LETTERS.join("|")}, a role word ${MODEL_ROLES.join("|")}, or a phase type id; example ${modelExample})`,

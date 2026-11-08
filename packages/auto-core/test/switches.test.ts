@@ -5,6 +5,7 @@ import {
   modelTypeProblems,
   nonDefaultSwitches,
   parseSwitches,
+  RETIRED_MODEL_ROLES,
   RETIRED_SWITCHES,
   retiredSwitchNotes,
   setSwitchModelRegistry,
@@ -285,9 +286,43 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
     })
   })
 
-  test("model: the retired session role keys (verify-*/review-*/final-plan, plans/0044 D1) fail strictly as out-of-range keys", () => {
-    for (const role of ["verify-judge", "verify-fix", "review-audit", "review-fixrun", "final-plan"]) {
+  test("model: every retired role word is a tombstone — the refusal names the retirement and the remedy (plans/0231)", () => {
+    // The measured set: every word that ever left MODEL_ROLES (0030 D12, 0044 D1,
+    // 0150 D2), one entry per ruling citation and teaching tail. The five words
+    // M3.6's table missed (understand, verify-generate, verify-exec,
+    // review-planfix, number-recovery) previously slipped into byType; the five it
+    // held failed the generic invalid-key line — both now the tombstone line.
+    expect(Object.keys(RETIRED_MODEL_ROLES).sort()).toEqual(
+      [
+        "understand",
+        "verify-generate",
+        "verify-exec",
+        "verify-judge",
+        "verify-fix",
+        "review-audit",
+        "review-planfix",
+        "review-fixrun",
+        "final-plan",
+        "number-recovery",
+      ].sort(),
+    )
+    for (const [role, entry] of Object.entries(RETIRED_MODEL_ROLES)) {
       expect(() => parseSwitches({ [SWITCH_ENV.model]: `${role}=kimi/k2` })).toThrow(/invalid key/)
+      expect(() => parseSwitches({ [SWITCH_ENV.model]: `${role}=kimi/k2` })).toThrow(/a retired role word/)
+      expect(() => parseSwitches({ [SWITCH_ENV.model]: `${role}=kimi/k2` })).toThrow(new RegExp(entry.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+      expect(() => parseSwitches({ [SWITCH_ENV.model]: `${role}=kimi/k2` })).toThrow(/remove the entry/)
+    }
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "number-recovery=kimi/k2" })).toThrow(
+      `env ${SWITCH_ENV.model} invalid key: "number-recovery" (a retired role word, plans/0150 D2 — the numbering recovery session was removed; task numbers are derived from the surviving artifacts; remove the entry)`,
+    )
+  })
+
+  test("model: a retired role word is never parsed as a phase type key (the byType slip, 0165-134)", () => {
+    // Pre-0231 the five words missing from M3.6's table matched the type-id shape
+    // and parsed into byType, failing only later at preflight under "names no
+    // phase type" — the retired word re-entering the live vocabulary.
+    for (const role of ["understand", "verify-generate", "verify-exec", "review-planfix", "number-recovery"]) {
+      expect(() => parseSwitches({ [SWITCH_ENV.model]: `${role}=kimi/k2` })).toThrow(/a retired role word/)
     }
   })
 

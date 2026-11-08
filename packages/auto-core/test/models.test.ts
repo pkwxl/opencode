@@ -281,6 +281,28 @@ describe("parsing", () => {
     expect([...registry.routes.keys()]).toEqual(Object.keys(routes))
   })
 
+  test("route keys: every retired role word is a tombstone — the refusal names the retirement and the remedy (plans/0231, 0165-134)", async () => {
+    // The measured set: every word that ever left MODEL_ROLES, each refused with
+    // its ruling citation and 0150 D2's remedy sentence — never the generic
+    // unknown-word line a typo gets.
+    const retired = {
+      understand: "plans/0030 D12 — the understand session merged into decompose",
+      "verify-generate": "plans/0044 D1 — the verify mechanism was removed",
+      "verify-exec": "plans/0044 D1 — the verify mechanism was removed",
+      "verify-judge": "plans/0044 D1 — the verify mechanism was removed",
+      "verify-fix": "plans/0044 D1 — the verify mechanism was removed",
+      "review-audit": "plans/0044 D1 — the review mechanism was removed",
+      "review-planfix": "plans/0044 D1 — the review mechanism was removed",
+      "review-fixrun": "plans/0044 D1 — the review mechanism was removed",
+      "final-plan": "plans/0044 D1 — the final-review loop was removed; the v (acceptance) phase plans its tasks",
+      "number-recovery": "plans/0150 D2 — the numbering recovery session was removed; task numbers are derived from the surviving artifacts",
+    }
+    await writeOperator({ ...EXAMPLE, routes: retired })
+    expect(await problems()).toEqual(
+      Object.entries(retired).map(([key, entry]) => `${OPERATOR()}: routes.${key}: is a retired role word (${entry}); remove the route entry`),
+    )
+  })
+
   test("the adapter list is a parameter, so a registered adapter is accepted", async () => {
     await writeOperator(fleet({ k: { agent: "kimi", model: "k3" } }, { agents: { kimi: { adapter: "kimi" } } }))
     expect(await problems()).toEqual([
