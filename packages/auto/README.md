@@ -1441,6 +1441,53 @@ conclusion stay byte-identical.
 
 The registry's effective table: see [Model registry overview (models)](#model-registry-overview-models).
 
+### Experiment switches (`OPENCODE_AUTO_*`)
+
+The run reads one layer of environment-variable switches: per-run experiments, never persisted to
+disk, parsed once at run start (an invalid value is a usage error, exit code 1; the empty string
+counts as unset). This table is the complete person-facing reference — it follows the core's switch
+registry, so a switch added there lands a row here in the same change (this package's docs-truth
+census holds the two together). Run start lists the non-default switches on one `⚙` line; `--verbose`
+shows the full set. Switches whose `off` is an emergency exit say so.
+
+| Variable | Default | Governs |
+| --- | --- | --- |
+| `OPENCODE_AUTO_AGENT` | unset | Per-run coding-agent override (`opencode` / `claude`) over the config's `agent` key |
+| `OPENCODE_AUTO_ANALYSIS` | on | The first-run assisted project analysis; `off` establishes `docs/R-01/` directly (the scripted-flow escape hatch) |
+| `OPENCODE_AUTO_ASK` | off | Question policy: `off` decides autonomously and marks divergences AUTO-RESOLVE; `on` asks the person at decision points |
+| `OPENCODE_AUTO_DECOMPOSE_FINE` | off | Fine-grained decompose criteria in the decompose templates |
+| `OPENCODE_AUTO_DOC_LANES` | on | Doc lanes — concurrent documentation-scoped pipelines at tier 0; `off` runs the serial loop (the emergency exit) |
+| `OPENCODE_AUTO_FORK` | on | The fork pipeline behind `subtask: auto` (the understand session and the split); `off` runs each task as one whole session |
+| `OPENCODE_AUTO_FORK_BASE` | digest | The fork base: `session` (the understand session's tail) or `digest` (a fresh base session over the context digest) |
+| `OPENCODE_AUTO_HIBERNATE` | unset | A daily UTC high-tariff window `HH:MM+H`; inside it the run sleeps at the next safe boundary |
+| `OPENCODE_AUTO_LANE_ISOLATION` | off | Full worktree isolation, one lane at a time — the whole landing machinery, zero concurrency |
+| `OPENCODE_AUTO_MODEL` | unset | Model override / staged routing for this run (key syntax; internal names under a registry) |
+| `OPENCODE_AUTO_MODEL_FALLBACK` | unset | Failover candidates (no registry); under a registry a **usage error** — the tier list is the failover order |
+| `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE` | task | Where failback resets to the preferred model (`phase` / `task` / `subtask` / `session`) |
+| `OPENCODE_AUTO_PARK` | on | The dependency park (`Status: park <blocker>`); `off` reads the park line as the invalid-handoff case it was (the emergency exit) |
+| `OPENCODE_AUTO_PLAN_VERIFY` | off | The plan-step charter verifier on the deep planning route (a pack must declare the charter) |
+| `OPENCODE_AUTO_RECOVERY_WAIT` | 30 | Wait-and-probe interval in minutes for session failures that exhaust the ladder |
+| `OPENCODE_AUTO_REGRESSION` | on | The regression lane and its phase-close hold where the pack declares a regression-cost row; `off` launches nothing (the emergency stop) |
+| `OPENCODE_AUTO_REMEDIATE` | on | Consented remediation (the blockage dossier and the `Choice:` executor); `off` returns the static behavior (the emergency exit) |
+| `OPENCODE_AUTO_RETRY_WAITS` | 0,1,2,4,8 | The retry ladder for transient session errors, waits in minutes, the element count the cap; `off` = no retries |
+| `OPENCODE_AUTO_STEER` | on | Session-handover context management (usage notices, `docs/T-NNN/handoff.md`); `off` is the floor — no notices, no handover demand |
+| `OPENCODE_AUTO_STEP` | off | Step mode: hard-pause at `phase` / `task` / `subtask` boundaries, waiting for Enter |
+| `OPENCODE_AUTO_STRICT_RESUME` | on | Interruption-recovery fidelity gates (baseline and model verified at resume); `off` is the emergency-off |
+| `OPENCODE_AUTO_STUCK` | on | Stuck-loop detection (repeated-action hints, at most three per session) |
+| `OPENCODE_AUTO_SYNTHESIS` | on | Formulation synthesis where the pack declares a plan charter; `off` forces the deterministic Stage-1 floor (the emergency exit) |
+| `OPENCODE_AUTO_SYNTHESIS_TIMEOUT` | 15 | The formulation constructor's one-shot wall in minutes (a timeout degrades to the floor, never a failure) |
+
+Retired variables (permanent tombstones): `OPENCODE_AUTO_REF_CHECK`, `OPENCODE_AUTO_REUSE_SESSION`,
+`OPENCODE_AUTO_HANDOVER_CONCURRENT` and `OPENCODE_AUTO_TASK_CONTEXT` — a set variable prints one
+`⚠ … is retired` notice at run start and changes nothing; a notice, never a usage error, so a stale
+shell profile cannot cost an unattended run.
+
+Two registered names are not switches: `OPENCODE_AUTO_MODELS` (the registry's operator layer — a
+file path, named by the registry's own startup lines) and `OPENCODE_AUTO_SERVER` (the external
+server URL, `--server`'s env form). And two `OPENCODE_AUTO_*` names are the agent's own, not the
+driver's: `OPENCODE_AUTO_SHARE` and `OPENCODE_AUTO_HEAP_SNAPSHOT` configure the opencode server
+itself — the driver never parses them and its environment scrub passes them through.
+
 ## Execution pipeline
 
 The driver runs a pipeline for every task, and **index ticks, the `todo.md` → `done.md` rename and

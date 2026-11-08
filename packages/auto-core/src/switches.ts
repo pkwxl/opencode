@@ -15,6 +15,10 @@ import { displayUrl } from "./agent/urls"
 import { PHASE_LETTERS, type PhaseLetter } from "./phases/registry"
 
 // Env-var names of the switches (parsing, startup log and tests reference one source).
+// The person-facing switch reference is the shell README's switch table, which follows
+// this registry one-for-one and is held to it by the shell's docs-truth census (plans/
+// 0229 D1/D2): a new switch lands its registry entry, its parse and its README row in
+// the same change, and a retired name's tombstone row likewise.
 export const SWITCH_ENV = {
   fork: "OPENCODE_AUTO_FORK",
   forkBase: "OPENCODE_AUTO_FORK_BASE",

@@ -5,10 +5,23 @@
 // bottom. A concern owns exactly one slice of the turn state: its own slice
 // mutable, every other slice read-only through the view, so a second writer
 // is a type error (the runtime half of the confinement is the spine's audit).
-// All I/O goes through the TurnFx, which the spine wraps to enforce the
-// queue discipline's invariants: no kernel call after a steer in the same
-// idle quiet point, no second steer there, and nothing but log/vlog from a
-// synthetic input.
+// The fx is the audited seam for the effects the arbitration orders: every
+// I/O a concern performs while handling or finalizing an input goes through
+// the TurnFx, which the spine wraps to enforce the queue discipline's
+// invariants — no kernel call after a steer in the same idle quiet point, no
+// second steer there, and nothing but log/vlog from a synthetic input.
+// Four effects stay outside the seam by design, each with its reason (plans/
+// 0229 D3; neither the audit nor the replay sees these four — that is the
+// boundary, not a gap in it): the classifier ask's own model call
+// (recovery.ts — the call bypasses the fx, but its answer re-enters as the
+// synthetic `answer` input, so the arbitration and the replay still see it);
+// the question lifecycle's journal writes (questions.ts's emitStatus —
+// run-status events, best-effort beside the committed trail and silenced so
+// a journal failure never touches a turn); the router's usage-window log
+// line (windows.ts's noteWindows — the logged windows are the router's run
+// state; only the recorder's half rides fx.onLimit); and the cache-claim
+// arming (step-up.ts's awaitCacheClaim — router run state that must survive
+// a watch ending before the first step-finish reads it).
 //
 // Types only — a leaf over type imports with no runtime edge, so any layer
 // may depend on it without closing a cycle.
@@ -103,7 +116,12 @@ export type TurnView = { readonly [K in SliceKey]: Readonly<TurnState[K]> }
 // steer and test protocol inputs, the bound pattern classifier and the
 // failure-message classifier's handle, the steer context, the switches, the
 // usage source, the services and the session's start timestamp. Everything a
-// handler reads that is not a slice write or an fx call lives here.
+// handler reads that is not a slice write or an fx call lives here. One
+// field is deliberately not immutable: `test` carries the test-handover
+// protocol's own cross-turn record (TestRun) — the run's mutable state the
+// test concern writes mid-turn (`test.pending`, `resumeWrapup`, the handover
+// count and sequence); the context references the record, the record is the
+// protocol's, and its lifetime is the run's, not the turn's.
 export type TurnContext = {
   // The session under watch and its client (the capabilities, retry policy
   // and error patterns are read off the client).
@@ -114,7 +132,10 @@ export type TurnContext = {
   readonly opts: Opts
   // The session-handover steer (absent = the protocol off).
   readonly steer?: Steer
-  // The test-handover protocol's run record (absent = no test protocol).
+  // The test-handover protocol's run record (absent = no test protocol) —
+  // the context's one mutable field: the protocol's own cross-turn state
+  // (pending, resumeWrapup, the counts), written by the test concern
+  // mid-turn; see the context's header for the boundary.
   readonly test?: TestRun
   // The stuck-loop tracker (dispatch lifetime; its slice is empty).
   readonly stuck?: StuckTracker

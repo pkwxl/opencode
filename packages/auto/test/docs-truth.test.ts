@@ -11,6 +11,7 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { formatSwitches, parseSwitches, RETIRED_SWITCHES, SWITCH_ENV } from "@opencode-ai/auto-core/switches"
 
 const readme = readFileSync(join(import.meta.dir, "..", "README.md"), "utf8")
 const manual = readFileSync(join(import.meta.dir, "..", "MANUAL.md"), "utf8")
@@ -89,5 +90,94 @@ describe("docs truth (0227)", () => {
   test("the pin tables themselves are non-empty and named", () => {
     expect(TRUTH_PINS.length).toBe(24)
     expect(RETIRED.length).toBe(12)
+  })
+})
+
+// The switch census (auto-core plans/0229 D2, finding 0165-200/S17-09): the
+// README's switch table is the complete person-facing reference over the
+// core's frozen OPENCODE_AUTO_* layer, and it is a pinned mirror of the
+// registry — never a second source. Every expectation below is derived from
+// the registry at run time (the declared subpath seam; the core never knows
+// this package), so a switch that lands in the registry without its README
+// row, a row the registry does not own, or a default that moves in code
+// without the table all go red here rather than the reference silently
+// outrunning the code — the census shape of agent-env.test.ts's prefix
+// check, applied to the person-facing table.
+
+// The README's switch section (from its heading to the next `## ` heading).
+const SWITCH_SECTION_START = "### Experiment switches (`OPENCODE_AUTO_*`)"
+const switchSection = (() => {
+  const at = readme.indexOf(SWITCH_SECTION_START)
+  if (at < 0) return ""
+  const rest = readme.slice(at)
+  const next = rest.indexOf("\n## ")
+  return next < 0 ? rest : rest.slice(0, next)
+})()
+
+// The registry's own names: the parsed switches (everything SWITCH_ENV owns
+// except the two env-only non-switches) and the retired tombstones.
+const parsedSwitches = Object.values(SWITCH_ENV).filter((name) => name !== SWITCH_ENV.models && name !== SWITCH_ENV.server)
+const retiredSwitches = Object.keys(RETIRED_SWITCHES)
+
+// Names the section may state that the driver never parses: the two env-only
+// registrations and opencode's own two flags (the X1 scrub passes them
+// through; src/agent/env.ts's AGENT_FLAGS).
+const NON_DRIVER_NAMES = [SWITCH_ENV.models, SWITCH_ENV.server, "OPENCODE_AUTO_SHARE", "OPENCODE_AUTO_HEAP_SNAPSHOT"]
+
+// The registry's defaults as one name→value map — formatSwitches renders
+// every parsed switch's default in `NAME=value` form over an empty
+// environment; the empty render is the table's "unset".
+const defaultOf = new Map(
+  formatSwitches(parseSwitches({}))
+    .split(", ")
+    .map((item) => {
+      const eq = item.indexOf("=")
+      const value = item.slice(eq + 1)
+      return [item.slice(0, eq), value === "" ? "unset" : value]
+    }),
+)
+
+describe("the switch census (0229)", () => {
+  test("the section exists", () => {
+    expect(switchSection).not.toBe("")
+    expect(switchSection.length).toBeGreaterThan(0)
+  })
+
+  test("every parsed switch has its row", () => {
+    for (const name of parsedSwitches) {
+      expect(switchSection.includes(name), name).toBe(true)
+    }
+  })
+
+  test("every retired tombstone is stated", () => {
+    for (const name of retiredSwitches) {
+      expect(switchSection.includes(name), name).toBe(true)
+    }
+  })
+
+  test("no dead rows: every OPENCODE_AUTO_* token in the section is parsed, retired or a stated non-driver name", () => {
+    const owned = new Set([...parsedSwitches, ...retiredSwitches, ...NON_DRIVER_NAMES])
+    const tokens = new Set(switchSection.match(/OPENCODE_AUTO_[A-Z_]+/g) ?? [])
+    expect(tokens.size).toBeGreaterThan(0)
+    for (const token of tokens) {
+      expect(owned.has(token), token).toBe(true)
+    }
+  })
+
+  test("every default the table states is the registry's own render", () => {
+    for (const name of parsedSwitches) {
+      const expected = defaultOf.get(name)!
+      // The table row: `| `NAME` | default | …` — the default cell between
+      // the variable cell and the next pipe.
+      const row = switchSection.split("\n").find((line) => line.includes(`\`${name}\``) && line.startsWith("|"))
+      const stated = row?.split("|")[2]?.trim()
+      expect(stated, `${name}: no table row`).toBeDefined()
+      expect(stated!, `${name}: stated ${stated}, registry ${expected}`).toBe(expected)
+    }
+  })
+
+  test("the registry and the census agree on the counts", () => {
+    expect(parsedSwitches.length).toBe(24)
+    expect(retiredSwitches.length).toBe(4)
   })
 })

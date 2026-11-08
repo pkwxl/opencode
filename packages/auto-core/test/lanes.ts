@@ -277,6 +277,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/turn-recovery.test.ts",
   "test/turn-stuck.test.ts",
   "test/turn-step-up.test.ts",
+  // The sources' own wiring invariants (0229 D4): the scenario clock's timer
+  // queue and the fake agent — in-memory, no repository, no spawn.
+  "test/turn-sources.test.ts",
   "test/turn-transcript.test.ts",
   "test/turn-usage.test.ts",
   "test/turn-windows.test.ts",

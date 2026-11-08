@@ -1,8 +1,12 @@
-// The production TurnFx (plans/0061 §4.2/§4.3): the one I/O path of a turn,
-// over the AgentClient, the testrun module, the git service's freeze commit,
-// the in-flight handover record, the per-model stats counter and the human
-// question. watch() builds it once per turn from the turn's context and hands
-// it to the spine, which wraps it with the audit (the queue discipline's
+// The production TurnFx (plans/0061 §4.2/§4.3): the audited seam of the
+// effects the arbitration orders — every I/O a concern performs while
+// handling or finalizing an input goes through it (the seam's exact
+// boundary, with the four effects that stay outside and their reasons, is
+// contract.ts's header, plans/0229 D3) — over the AgentClient, the testrun
+// module, the git service's freeze commit, the in-flight handover record,
+// the per-model stats counter and the human question. watch() builds it once
+// per turn from its context and hands it to the spine, which wraps it with
+// the audit (the queue discipline's
 // invariants, §4.4 rule 4) — so every member below is the exact call the
 // pre-consolidation watch body made, and nothing more: the policy of when to
 // call stays with the concerns.
