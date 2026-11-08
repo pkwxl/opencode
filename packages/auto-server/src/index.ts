@@ -16,6 +16,7 @@
 // the server is self-contained on Bun.serve with zero added runtime
 // dependencies. test/isolation.test.ts holds that line as an assertion.
 import { resolve } from "node:path"
+import { accessSync, constants, statSync } from "node:fs"
 import { applyServerProfile } from "./profile"
 import { DEFAULT_HOSTNAME, DEFAULT_PORT, deriveWorkerCommand, startDaemon } from "./daemon"
 import { defaultDataDir, DaemonStore, SCOPES, StoreError } from "./store"
@@ -412,6 +413,32 @@ if (command === "serve") {
       at++
     } else {
       refuse(`unknown serve argument "${flag}" (serve takes --port, --host, --data-dir and --launch)`)
+    }
+  }
+  // The launcher resolves and is checked HERE, at the operator's own act
+  // (plans/0223 D3, the 0165-172 finding): verbatim, a relative --launch
+  // reached the spawn, where it resolved against the spawn cwd — the
+  // package's src/ in the source layout (every run died bash's 127), the
+  // operator's cwd compiled; nothing checked the script exists. One truth:
+  // the path resolves against the serve command's working directory, and a
+  // launcher that is not a readable file is refused now, at the banner that
+  // would otherwise announce it active (exit 1, the usage convention) —
+  // never discovered missing at the first spawned run.
+  if (launch !== undefined) {
+    launch = resolve(launch)
+    let isFile = false
+    let readable = false
+    try {
+      isFile = statSync(launch).isFile()
+      if (isFile) {
+        accessSync(launch, constants.R_OK)
+        readable = true
+      }
+    } catch {
+      // stat/access spoke: not a file / not readable — refused below.
+    }
+    if (!isFile || !readable) {
+      refuse(`--launch takes the confinement launcher script — a readable file: ${launch} (resolved against the serve command's working directory) is ${isFile ? "not readable" : "not a file"}`)
     }
   }
   const store = new DaemonStore(dataDir)

@@ -116,6 +116,34 @@ export const KNOWN_SWITCHES = new Set([
 // is present; the lane launcher strips it (a lane child carries no channel).
 export const BRIDGE_TOKEN_ENV = "OPENCODE_AUTO_BRIDGE_TOKEN"
 
+// The spawn carriage bound (plans/0223 D1, the 0165-055 finding): the run
+// request rides the worker's argv as ONE token, and the kernel caps a single
+// argument string at 128 KiB (MAX_ARG_STRLEN — past it the spawn itself
+// throws E2BIG, no process ever exists). The bound is half that: every honest
+// request (directory, the options, switch overrides, the transport URL) is
+// kilobytes; the one unbounded field is the plan payload's input, and a
+// planning document that large already has its channel — the CLI's plan -p,
+// read in-process with no carriage at all. A served route is not a terminal
+// (the probe rate window's own asymmetry): the served surface bounds what the
+// CLI does not.
+export const REQUEST_BYTE_LIMIT = 64 * 1024
+
+// The refusal when a serialized run request exceeds the carriage bound. The
+// daemon answers it as a 400 before registering anything (startRun measures
+// the payload it is about to spawn); the worker entry answers it as its
+// stderr usage refusal for a hand-spawned token — the same text either way,
+// the shared-validator pattern's own rule.
+export function requestTooLarge(serialized: string): string | undefined {
+  const bytes = Buffer.byteLength(serialized)
+  if (bytes <= REQUEST_BYTE_LIMIT) return undefined
+  return (
+    `the run request serializes to ${bytes} bytes, over the ${REQUEST_BYTE_LIMIT}-byte spawn carriage: ` +
+    `the worker's request rides one argv token, and the kernel caps a single argument string at 128 KiB ` +
+    `(the spawn would fail E2BIG before any process exists). ` +
+    `A planning document that large is the CLI's plan -p <text> (read in-process, no carriage); split or trim the input`
+  )
+}
+
 // The frozen-key refusal, the API-side equivalent of the CLI's
 // refuseFrozenFlags line (packages/auto test/e2e.test.ts pins its shape):
 // "was frozen by init", the config file, the revision clause from the core's

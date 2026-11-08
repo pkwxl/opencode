@@ -19,7 +19,7 @@ import { join } from "node:path"
 import { CONFIG_DEFAULTS, type ProjectConfig } from "@opencode-ai/auto-core/config"
 import { loadModes } from "@opencode-ai/auto-core/mode"
 import { runOptions } from "../src/worker"
-import { BRIDGE_TOKEN_ENV, KNOWN_SWITCHES, parseOptions, parseSwitches, parseTransport, runOptionDefaults } from "../src/request"
+import { BRIDGE_TOKEN_ENV, KNOWN_SWITCHES, parseOptions, parseSwitches, parseTransport, requestTooLarge, runOptionDefaults } from "../src/request"
 import { fakeAgent, fixtureProject, gitOf, scrubbedEnv, TASK } from "./fixtures/project"
 
 const PACKAGE_ROOT = join(import.meta.dir, "..")
@@ -467,4 +467,43 @@ describe("worker: the config and run options the core gained reach the run verba
       await rm(dir, { recursive: true, force: true })
     }
   }, 120_000)
+})
+
+// The spawn carriage bound (plans/0223 D1, the 0165-055 finding): the run
+// request rides ONE argv token under the kernel's 128 KiB per-string cap —
+// the daemon refuses an oversized request as a 400 before spawning anything
+// (pinned in daemon.test.ts), and the entry refuses a hand-spawned token
+// between the bound and the kernel cap with the same teaching.
+describe("worker: the spawn carriage bound (plans/0223)", () => {
+  test("requestTooLarge measures UTF-8 bytes and teaches the real remedy; under the bound it stays silent", () => {
+    // The floor: an honest request (directory, options, a switch override)
+    // is kilobytes — the bound never speaks for it.
+    expect(requestTooLarge(JSON.stringify({ directory: "/some/target", options: { verbose: true }, switches: { OPENCODE_AUTO_STUCK: "loop" } }))).toBeUndefined()
+    // Over the bound: the byte count, the kernel cap, and the CLI's
+    // in-process channel as the remedy.
+    const over = requestTooLarge(`{"switches":{"OPENCODE_AUTO_STUCK":"${"x".repeat(70_000)}"}}`)
+    expect(over).toContain("over the 65536-byte spawn carriage")
+    expect(over).toContain("128 KiB")
+    expect(over).toContain("plan -p <text>")
+    // Byte-honest, not char-honest: a CJK char is 3 UTF-8 bytes, so 25_000
+    // of them clear the bound in bytes while counting 25_000 chars.
+    expect(requestTooLarge(`{"plan":{"input":"${"規".repeat(25_000)}"}}`)).toContain("over the 65536-byte spawn carriage")
+  })
+
+  test("a hand-spawned token past the bound is a usage error teaching the carriage, before any write", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-carriage-entry-"))
+    try {
+      // The value passes field validation (a known switch, a string) —
+      // pre-fix the entry ran on toward the run (its exit-1 refusal named
+      // anything but the carriage); post-fix the bound refuses the token at
+      // the door with the shared teaching.
+      const run = await spawnWorker(JSON.stringify({ directory: dir, switches: { OPENCODE_AUTO_STUCK: "x".repeat(70_000) } })).done
+      expect(run.code).toBe(1)
+      expect(run.err).toContain("over the 65536-byte spawn carriage")
+      expect(run.err).toContain("plan -p <text>")
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })

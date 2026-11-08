@@ -105,8 +105,16 @@ server URL's env form: the operator's channels are the XDG config root the
 worker inherits and the confinement launcher's environment overlay, never a
 run request), and `options.server` takes a **loopback URL only**
 (`127.0.0.1`, `::1`, `localhost` — the daemon's v1 boundary is one machine;
-an off-machine server rides the confinement launcher's environment overlay);
-anything else, notably any
+an off-machine server rides the confinement launcher's environment overlay).
+A third rule bounds the carriage itself (plans/0223 D1, the 0165-055
+finding): the serialized run request may not exceed **64 KiB** — it rides
+the worker's argv as one token, the kernel caps a single argument string at
+128 KiB, and a request past the bound is refused as a **400** before
+anything is registered (the spawn would fail E2BIG before any process
+exists). Every honest request is kilobytes; a planning document that large
+is the CLI's `plan -p <text>` (read in-process, no carriage) — the refusal
+teaches it.
+Anything else, notably any
 constitutional config key (`intent`, `treeLanes`, `isolate` and the
 hand-edited `lanes` table included), is refused with the frozen-flag
 message ("frozen by init … revise with amend") as a **400**. Width is
@@ -143,7 +151,14 @@ projects execute in parallel, each in its own worker child.
 ```
 
 - `state`: `starting` (spawned, the lock not yet observed) → `running` (the
-  worker holds `.auto/run.lock`) → one terminal state.
+  worker holds `.auto/run.lock`) → one terminal state. A spawn that throws
+  (E2BIG past the kernel's per-string cap — prevented by the carriage bound
+  above; ENOENT for a missing `bash` under `--launch` or a removed worker
+  binary) never enters `starting` as a wedge: the record settles `failed`
+  with `code: null` and the cause in the tail at the throw, and the route
+  answers a **500** naming the cause with the settled run view (plans/0223
+  D1) — the project's surface stays free, never 409-locked behind a run
+  with no process.
 - Terminal mapping of the run's own exit vocabulary (the draft's table with the
   assessment's correction — exit 3 was missing):
 
@@ -539,6 +554,14 @@ second worker connection is refused (one error frame, then a close) — the
 worker's own reconnect always arrives after its predecessor's close, so
 nothing legitimate is refused.
 
+The transport URL's host is formatted for a URL (plans/0223 D2, the
+0165-169 finding): an IPv6 bind writes the literal bracketed
+(`ws://[::1]:<port>/…` — bare `::1` makes the port read as scheme junk and
+no parser accepts it), and a wildcard bind names the loopback it covers
+(`0.0.0.0` → `127.0.0.1`, `::` → `::1`) in every URL this daemon hands out
+— the bridge transport and the daemon's own URL alike, since both are
+connect-back addresses, not bind addresses.
+
 Frames (JSON, one per message; `v` on every one):
 
 - **question channel** (`answer` scope): the worker's `question {id, text,
@@ -868,6 +891,15 @@ name) resolve from it, so the daemon must be started from an environment
 that carries them. The worker bridge URL must be reachable from inside the
 launcher's environment (host-network containers reach a loopback-bound
 daemon; wide runs carry no bridge at all).
+
+The launcher path resolves at the serve command's own act and is refused
+unless it is a readable file (plans/0223 D3, the 0165-172 finding):
+`--launch` resolves against the serve command's working directory — one
+truth for the source and compiled layouts alike (a verbatim relative path
+used to resolve against the spawn cwd, the package's `src/` in the source
+layout, where every run died bash's 127) — and a path that is not a
+readable file is refused with exit 1 before the daemon serves, never
+discovered missing at the first spawned run.
 
 ## Supervision and the daemon's lifetime
 

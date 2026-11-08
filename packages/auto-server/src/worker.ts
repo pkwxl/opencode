@@ -48,7 +48,7 @@ import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { legacyLayoutProblem } from "@opencode-ai/auto-core/phases"
 import { runTransfer } from "@opencode-ai/auto-core/transfer"
 import type { Interactive } from "@opencode-ai/auto-core/control-types"
-import { BRIDGE_TOKEN_ENV, CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseLane, parsePlan, parseSwitches, parseTransfer, parseTransport, type LanePayload, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
+import { BRIDGE_TOKEN_ENV, CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseLane, parsePlan, requestTooLarge, parseSwitches, parseTransfer, parseTransport, type LanePayload, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
 import { wsInteractive } from "./worker-interactive"
 
 // The run request (the payload the daemon sends; the transport — here one
@@ -164,6 +164,17 @@ export async function runWorker(argv: string[]): Promise<void> {
   }
   if (typeof document !== "object" || document === null || Array.isArray(document)) {
     refuse("the run request must be a JSON object: { \"directory\": \"<dir>\", \"options\"?: { … }, \"switches\"?: { … }, \"transport\"?: { … }, \"plan\"?: { … }, \"transfer\"?: { … }, \"lane\"?: { … } }")
+  }
+  // The carriage bound (plans/0223 D1, the 0165-055 finding): the request
+  // rides ONE argv token, and the kernel caps a single argument string at
+  // 128 KiB — the daemon refuses an oversized request as a 400 before
+  // spawning anything; here the same rule answers a hand-spawned token
+  // between the bound and the kernel cap with the same teaching (a token
+  // past the kernel cap cannot reach a process at all — the spawn itself
+  // fails E2BIG).
+  {
+    const tooLarge = requestTooLarge(argv[0]!)
+    if (tooLarge !== undefined) refuse(tooLarge)
   }
   const request = document as Record<string, unknown>
   for (const key of Object.keys(request)) {

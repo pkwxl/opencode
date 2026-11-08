@@ -24,7 +24,8 @@ import { realpathSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
 import { basename, join } from "node:path"
 import { hostname, tmpdir } from "node:os"
-import { startDaemon, terminalOf, type DaemonHandle } from "../src/daemon"
+import { connectHost, startDaemon, terminalOf, type DaemonHandle } from "../src/daemon"
+import { parseTransport } from "../src/request"
 import { DaemonStore, defaultDataDir } from "../src/store"
 import { fakeAgent, fixtureProject, scrubbedEnv, TASK } from "./fixtures/project"
 
@@ -942,5 +943,152 @@ describe("daemon: the store stays outside the projects", () => {
     expect(defaultDataDir({ XDG_CONFIG_HOME: "/xdg" }, home)).toBe(join("/xdg", "opencode-auto", "server"))
     expect(defaultDataDir({ XDG_CONFIG_HOME: "relative" }, home)).toBe(join(home, ".config", "opencode-auto", "server"))
     expect(defaultDataDir({}, home)).toBe(join(home, ".config", "opencode-auto", "server"))
+  })
+})
+
+// The spawn boundary's failure shapes (plans/0223, the 0165-055/169/172
+// findings): a spawn that throws settles its record and answers a named 500
+// (never the `starting` wedge that 409-locked the project forever with a
+// DELETE that lied), the URLs this daemon hands out format the bound host
+// for a URL (an IPv6 literal bracketed, a wildcard named by its loopback —
+// pre-fix the daemon wrote a transport its own worker validator refused),
+// and an oversized request is a 400 before anything is registered (the
+// carriage bound — the spawn rides one argv token under the kernel's
+// 128 KiB per-string cap).
+describe("daemon: the spawn boundary's failure shapes (plans/0223)", () => {
+  test("a throwing spawn (ENOENT) settles the run failed with the cause, answers a named 500, and never wedges the project (0165-055)", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "auto-server-spawnthrow-"))
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-spawnthrow-run-"))
+    // A worker command that does not exist: Bun.spawn throws ENOENT
+    // synchronously — the finding's second throw class (a missing bash
+    // under --launch lands here too, one argv element earlier).
+    const store = new DaemonStore(dataDir)
+    store.register(dir)
+    const control = store.issueToken("control", "controller").token
+    const read = store.issueToken("read", "reader").token
+    const daemon = await startDaemon({ dataDir, port: 0, worker: { command: join(dataDir, "no-such-worker-binary"), prefix: [] } })
+    const request = (method: string, path: string, token: string = control, body?: unknown) =>
+      fetch(`${daemon.url}${path}`, { method, headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) }, body: body === undefined ? undefined : JSON.stringify(body) })
+    try {
+      // Pre-fix: Bun's generic 500 (a non-JSON "Something went wrong!")
+      // over a run registered `starting` with no process behind it.
+      const started = await request("POST", "/runs", control, { project: basename(dir) })
+      expect(started.status).toBe(500)
+      const body = (await started.json()) as { error: string; run: RunView }
+      expect(body.error).toContain("the worker process could not be spawned for run run-000001")
+      expect(body.error).toMatch(/enoent/i)
+      expect(body.run.state).toBe("failed")
+      expect(body.run.live).toBe(false)
+      expect(body.run.code).toBe(null)
+      // The record is observable in its settled shape, the cause in the tail.
+      const view = (await (await request("GET", "/runs/run-000001", read)).json()) as RunView
+      expect(view.state).toBe("failed")
+      expect(view.live).toBe(false)
+      expect(view.tail).toContain("the worker process could not be spawned")
+      // The wedge's own assertion: the project accepts another spawn attempt
+      // (pre-fix every later POST answered the 409 whose remedy could not
+      // come), and the DELETE answers 409 already-terminal (pre-fix: a 202
+      // "kill requested" over a record with no process, nothing changing).
+      const again = await request("POST", "/runs", control, { project: basename(dir) })
+      expect(again.status).toBe(500)
+      expect(((await again.json()) as { error: string }).error).toContain("run run-000002")
+      const killed = await request("DELETE", "/runs/run-000001", control)
+      expect(killed.status).toBe(409)
+      expect(((await killed.json()) as { error: string }).error).toContain("already terminal")
+    } finally {
+      await daemon.stop()
+      await rm(dataDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  test("an oversized request is a 400 naming the carriage bound, and nothing is registered (0165-055's E2BIG class)", async () => {
+    await withHarness(async (h) => {
+      // A 70 KB switch value through a live switch name: validation passes
+      // (the name is known, the value a string), and the serialized payload
+      // passes the kernel's per-string cap on the way IN — the bound is what
+      // refuses it, before any registry entry exists. Pre-fix this POST was
+      // the finding's verbatim scene: the spawn threw E2BIG, the answer a
+      // generic 500, the run wedged `starting`. The bound sits at startRun —
+      // after the whitelist — so the project must be registered.
+      const dir = await mkdtemp(join(tmpdir(), "auto-server-bound-"))
+      try {
+        await withHarness(
+          async (h) => {
+            const started = await h.request("POST", "/runs", h.control, { project: basename(dir), switches: { OPENCODE_AUTO_STUCK: "x".repeat(70_000) } })
+            expect(started.status).toBe(400)
+            const error = ((await started.json()) as { error: string }).error
+            expect(error).toContain("over the 65536-byte spawn carriage")
+            expect(error).toContain("128 KiB")
+            expect(error).toContain("plan -p")
+            // No run exists for the refused request — the registry stays empty
+            // (pre-fix: one wedged `starting` run).
+            const runs = (await (await h.request("GET", "/runs", h.read)).json()) as { runs: RunView[] }
+            expect(runs.runs).toEqual([])
+          },
+          [dir],
+        )
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    })
+  })
+
+  test("an IPv6 bind writes a bracketed transport URL the worker's own validator accepts (0165-169)", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "auto-server-ipv6-"))
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-ipv6-run-"))
+    // The stand-in dumps the payload token it received; the transport inside
+    // is what the daemon wrote, and parseTransport (the worker's shared
+    // validator) is what refused the pre-fix URL.
+    const dump = join(dataDir, "worker-facts.json")
+    const standIn = join(dataDir, "stand-in.ts")
+    await Bun.write(
+      standIn,
+      [
+        `const payload = process.argv.slice(2).find((token) => token.startsWith("{"))`,
+        `await Bun.write(${JSON.stringify(dump)}, JSON.stringify({ payload }) + "\\n")`,
+        `process.exit(0)`,
+        ``,
+      ].join("\n"),
+    )
+    const store = new DaemonStore(dataDir)
+    store.register(dir)
+    const control = store.issueToken("control", "controller").token
+    const daemon = await startDaemon({ dataDir, port: 0, hostname: "::1", worker: { command: process.execPath, prefix: [standIn] } })
+    try {
+      // The handle's own URL formats the literal too (pre-fix:
+      // http://::1:<port> — the serve banner printed it that way).
+      expect(daemon.url).toBe(`http://[::1]:${daemon.port}`)
+      const started = await fetch(`${daemon.url}/runs`, { method: "POST", headers: { authorization: `Bearer ${control}`, "content-type": "application/json" }, body: JSON.stringify({ project: basename(dir) }) })
+      expect(started.status).toBe(202)
+      const id = ((await started.json()) as RunView).id
+      const deadline = Date.now() + 30_000
+      for (;;) {
+        const run = daemon.runs().find((view) => view.id === id)
+        if (run && !run.live) break
+        if (Date.now() > deadline) throw new Error("the stand-in run never settled")
+        await Bun.sleep(100)
+      }
+      const facts = (await (await Bun.file(dump).json())) as { payload: string }
+      const transport = (JSON.parse(facts.payload) as { transport: { run: string; url: string } }).transport
+      // The pin: the URL is bracketed and the worker's own validator accepts
+      // it — pre-fix the transport held ws://::1:<port>/… and parseTransport
+      // refused exactly it (the finding's observed verbatim).
+      expect(transport.url).toBe(`ws://[::1]:${daemon.port}/runs/${id}/worker`)
+      expect(parseTransport(transport)).toEqual({ run: id, url: transport.url })
+    } finally {
+      await daemon.stop()
+      await rm(dataDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  test("connectHost brackets IPv6 literals and names the wildcard binds by their loopback (the D2 unit)", () => {
+    expect(connectHost("127.0.0.1")).toBe("127.0.0.1")
+    expect(connectHost("localhost")).toBe("localhost")
+    expect(connectHost("::1")).toBe("[::1]")
+    expect(connectHost("::")).toBe("[::1]")
+    expect(connectHost("0.0.0.0")).toBe("127.0.0.1")
+    expect(connectHost("[::1]")).toBe("[::1]")
   })
 })

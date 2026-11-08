@@ -69,7 +69,7 @@
 // (src/question-journal.ts) — never under a target's `.auto/`.
 import { readFileSync } from "node:fs"
 import { createHash, timingSafeEqual } from "node:crypto"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { liveRunLock, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { createHub, freshRunSecret, interactiveHandlers, settleOpenQuestions, type InteractiveHub, type SocketData } from "./interactive-ws"
 import { appendJournal, compactJournal, foldJournal, journalRunFloor, readJournal } from "./question-journal"
@@ -78,12 +78,24 @@ import { OP_DEFINITIONS, type OpOutcome } from "./ops"
 import { CLIENT_APP_JS, CLIENT_INDEX_HTML } from "./web/client"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
 import { applyServerProfile } from "./profile"
-import { BRIDGE_TOKEN_ENV, CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parsePlan, RequestError, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
+import { BRIDGE_TOKEN_ENV, CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parsePlan, REQUEST_BYTE_LIMIT, requestTooLarge, RequestError, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
 import { PROTOCOL_VERSION } from "./ws-protocol"
 import { workerCommand } from "./worker-command"
 
 export const DEFAULT_PORT = 4770
 export const DEFAULT_HOSTNAME = "127.0.0.1"
+
+// The URL host for the daemon's own bound address (plans/0223 D2, the
+// 0165-169 finding): an IPv6 literal must be bracketed inside a URL ("::1"
+// bare makes the port read as scheme junk — new URL refuses it, and so does
+// the worker's own parseTransport over the transport this daemon wrote), and
+// a wildcard bind is an address to BIND, not one to CONNECT to — the URLs
+// this daemon hands out (the worker bridge transport, the handle's own URL)
+// name the loopback the wildcard covers. Pure; exported for the pin.
+export function connectHost(hostname: string): string {
+  const host = hostname === "0.0.0.0" ? "127.0.0.1" : hostname === "::" ? "::1" : hostname
+  return host.startsWith("[") || !host.includes(":") ? host : `[${host}]`
+}
 
 // The run states: starting (spawned, the run lock not yet observed), running
 // (the worker holds .auto/run.lock), and the terminal states the exit-code
@@ -148,6 +160,20 @@ type RunRecord = {
   proc: Bun.Subprocess | undefined
   tail: string
   watcher: ReturnType<typeof setInterval> | undefined
+}
+
+// The spawn itself threw (plans/0223 D1, the 0165-055 finding): no process
+// exists, ever — Bun.spawn answers E2BIG (the argv or env past the kernel's
+// per-string cap), ENOENT (a missing bash under --launch, a removed worker
+// binary) or its kin synchronously. spawnWorker has already settled the
+// record as failed by the time this propagates; the message names the cause
+// and the run, and the catching route answers it as a 500 with the settled
+// view — never the generic wedge the finding caught (a `starting` record
+// with no process behind it).
+class SpawnError extends Error {
+  constructor(message: string, readonly runId: string) {
+    super(message)
+  }
 }
 
 export type RunView = Omit<RunRecord, "proc" | "watcher"> & { live: boolean }
@@ -217,6 +243,15 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // — in a compiled binary import.meta.dir sits on Bun's virtual $bunfs,
   // which no child process can be spawned in (posix_spawn answers ENOENT).
   const spawnCwd = import.meta.dir.includes("$bunfs") ? process.cwd() : import.meta.dir
+  // The confinement launcher's path, absolute from the first moment
+  // (plans/0223 D3, the 0165-172 finding): verbatim, a relative --launch
+  // resolved against the spawn cwd — the package's src/ in the source
+  // layout, the operator's cwd compiled — and the two layouts disagreed
+  // (every source-layout run died bash's 127). Resolved here against THIS
+  // process's cwd: the serve entry has already resolved and checked its own
+  // copy before starting the daemon; an embedding host passing a relative
+  // path gets its own cwd's truth, stated. The spawn never re-resolves.
+  const launch = options.launch === undefined ? undefined : resolve(options.launch)
   const runs = new Map<string, RunRecord>()
   // One interactive hub per run (P3b, src/interactive-ws.ts): the run
   // secret the spawn payload carries, the worker bridge socket, the client
@@ -385,7 +420,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       }
       try {
         const holder = JSON.parse(readFileSync(join(run.directory, ".auto", "run.lock"), "utf8"))
-        if (options.launch ? typeof holder?.started === "string" && holder.started >= spawnAt : holder?.pid === proc.pid) run.state = "running"
+        if (launch ? typeof holder?.started === "string" && holder.started >= spawnAt : holder?.pid === proc.pid) run.state = "running"
       } catch {
         // No lock yet (or the run refused before taking it).
       }
@@ -405,23 +440,24 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // XDG_CONFIG_HOME included (one operator, one agent tooling, one model
   // registry). The directory is the registry's absolute path, so the cwd is
   // only the spawn's working directory, never the run's target. The payload
-  // carries the P3b interactive transport (the worker bridge URL) whenever
-  // the daemon is serving it, while the per-run secret rides the spawn
-  // environment as OPENCODE_AUTO_BRIDGE_TOKEN — never argv, which any local
-  // user reads from /proc/<pid>/cmdline (plans/0222 D1); the OPENCODE_AUTO_
-  // prefix keeps the credential out of every agent child through the agent
-  // domain's X1 scrub. The worker entry builds its Interactive
-  // implementation from the pair and injects it through RunAllOpts.interactive
-  // (the P3a seam), so a question raised inside the run is answerable from
-  // outside the process. The plan payload (P3c) and the transfer payload
-  // (the plans/0101 absorb) name the command the worker performs: runAll
-  // under stopBefore "execute", or runTransfer.
-  const spawnWorker = (project: RegisteredProject, run: RunRecord, runOptions: RunOptions, switches: Record<string, string>, transport?: TransportPayload, bridgeSecret?: string, plan?: PlanPayload, transfer?: TransferPayload): void => {
+  // (serialized by startRun, measured against the carriage bound there —
+  // plans/0223 D1) carries the P3b interactive transport (the worker bridge
+  // URL) whenever the daemon is serving it, while the per-run secret rides
+  // the spawn environment as OPENCODE_AUTO_BRIDGE_TOKEN — never argv, which
+  // any local user reads from /proc/<pid>/cmdline (plans/0222 D1); the
+  // OPENCODE_AUTO_ prefix keeps the credential out of every agent child
+  // through the agent domain's X1 scrub. The worker entry builds its
+  // Interactive implementation from the pair and injects it through
+  // RunAllOpts.interactive (the P3a seam), so a question raised inside the
+  // run is answerable from outside the process. The plan payload (P3c) and
+  // the transfer payload (the plans/0101 absorb) name the command the worker
+  // performs: runAll under stopBefore "execute", or runTransfer.
+  const spawnWorker = (project: RegisteredProject, run: RunRecord, payload: string, transport?: TransportPayload, bridgeSecret?: string): void => {
     const env: Record<string, string | undefined> = Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key)),
     )
     if (transport !== undefined && bridgeSecret !== undefined) env[BRIDGE_TOKEN_ENV] = bridgeSecret
-    const argv = [worker.command, ...worker.prefix, "worker", JSON.stringify({ directory: project.directory, options: runOptions, switches, ...(transport ? { transport } : {}), ...(plan ? { plan } : {}), ...(transfer ? { transfer } : {}) })]
+    const argv = [worker.command, ...worker.prefix, "worker", payload]
     // The confinement launcher (plans/0162): the one seam every spawned run
     // rides — plain runs, planning runs, transfer advances — wrapped as
     // `bash <launch> <project-dir> -- <command...>`. The launcher owns the
@@ -434,13 +470,34 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // the watcher's freshness floor (above) accepts this run's lock and no
     // earlier one.
     const spawnAt = new Date().toISOString()
-    const proc = Bun.spawn(options.launch ? ["bash", options.launch, project.directory, "--", ...argv] : argv, {
-      cwd: spawnCwd,
-      env,
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    })
+    let proc: Bun.Subprocess
+    try {
+      proc = Bun.spawn(launch ? ["bash", launch, project.directory, "--", ...argv] : argv, {
+        cwd: spawnCwd,
+        env,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+    } catch (error) {
+      // A synchronous spawn throw means NO process exists (plans/0223 D1):
+      // E2BIG past the kernel's per-string cap, ENOENT for a missing bash
+      // or worker binary. The record settles first — failed, code null,
+      // the cause in the tail — so the registry never holds a live run
+      // with nothing behind it (the finding's wedge: every later request
+      // on the project answered a 409 whose remedy could not come, DELETE
+      // a 202 over nothing). No bridge ever connected and no question was
+      // ever raised, so settle's open-question retirement is a no-op; the
+      // journal's `opened` record is inert at replay without one. The
+      // rethrow carries the named cause to the route's 500.
+      const cause = error instanceof Error ? error.message : String(error)
+      const named = /E2BIG/i.test(cause)
+        ? `${cause} — the request document is bounded at ${REQUEST_BYTE_LIMIT} bytes at validation, so an E2BIG here points at the daemon's own inherited environment (the spawn's environment rides the same kernel per-string limit)`
+        : cause
+      appendTail(run, `the worker process could not be spawned: ${named}\n`)
+      settle(run, null, null)
+      throw new SpawnError(`the worker process could not be spawned for run ${run.id}: ${named}`, run.id)
+    }
     run.pid = proc.pid
     run.proc = proc
     watch(run, spawnAt)
@@ -452,9 +509,36 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // (journal `opened` written before the worker can raise anything, so a
   // restart mid-question reconstructs the run), the transport payload, the
   // spawn. The caller owns the guards (the whitelist, the conflicts) and
-  // the response.
+  // the response. Two failures are this function's own to prevent
+  // (plans/0223 D1): an oversized payload is refused as a RequestError
+  // BEFORE anything is registered (the carriage bound — a request past it
+  // could only ever die at the spawn), and a spawn that throws settles the
+  // record inside spawnWorker before the error reaches the route.
   const startRun = (project: RegisteredProject, runOptions: RunOptions, switches: Record<string, string>, server: Bun.Server<SocketData>, plan?: PlanPayload, transfer?: TransferPayload): RunRecord => {
     const id = `run-${String(++counter).padStart(6, "0")}`
+    // The transport URL names this daemon's own bound address (the worker
+    // connects back on the loopback or whatever host the operator bound;
+    // the spawn and the bridge are the same machine in v1), the host
+    // formatted for a URL — an IPv6 literal bracketed, a wildcard bind
+    // named by the loopback it covers (plans/0223 D2). The secret never
+    // rides the payload: the spawn environment carries it
+    // (OPENCODE_AUTO_BRIDGE_TOKEN, plans/0222 D1). Under width (plans/0162)
+    // no transport is attached at all: the core refuses a channel under
+    // maxSessions ≥ 2 (one channel cannot serve concurrent sessions — the
+    // CLI's own rule), so the daemon never offers one and a wide run's
+    // questions take the stdin-closed degradation path. The hub and the
+    // journal entry exist for every run regardless — uniform lifecycle, and
+    // nothing connects to a wide run's.
+    const transport: TransportPayload | undefined = runOptions.maxSessions >= 2 ? undefined : { run: id, url: `ws://${connectHost(server.hostname ?? DEFAULT_HOSTNAME)}:${server.port}/runs/${id}/worker` }
+    // The serialized payload — the exact token the spawn will carry,
+    // measured against the carriage bound before ANY of the run's state
+    // exists (registry, hub, journal): over it, a RequestError with the
+    // teaching; the caller's route answers it as a 400 (the plan and
+    // transfer spawned routes the same way), and no wedge can form because
+    // nothing was registered (plans/0223 D1, the 0165-055 finding).
+    const payload = JSON.stringify({ directory: project.directory, options: runOptions, switches, ...(transport ? { transport } : {}), ...(plan ? { plan } : {}), ...(transfer ? { transfer } : {}) })
+    const tooLarge = requestTooLarge(payload)
+    if (tooLarge !== undefined) throw new RequestError(tooLarge)
     const run: RunRecord = {
       id,
       project: project.name,
@@ -481,19 +565,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     const secret = freshRunSecret()
     hubs.set(id, createHub(secret))
     appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run: id, event: "opened", project: project.name, directory: project.directory, secret, started: run.started, request: { options: runOptions as unknown as Record<string, unknown>, switches } })
-    // The transport URL names this daemon's own bound address (the worker
-    // connects back on the loopback or whatever host the operator bound;
-    // the spawn and the bridge are the same machine in v1). The secret never
-    // rides the payload: the spawn environment carries it
-    // (OPENCODE_AUTO_BRIDGE_TOKEN, plans/0222 D1). Under width (plans/0162)
-    // no transport is attached at all: the core refuses a channel under
-    // maxSessions ≥ 2 (one channel cannot serve concurrent sessions — the
-    // CLI's own rule), so the daemon never offers one and a wide run's
-    // questions take the stdin-closed degradation path. The hub and the
-    // journal entry exist for every run regardless — uniform lifecycle, and
-    // nothing connects to a wide run's.
-    const transport: TransportPayload | undefined = runOptions.maxSessions >= 2 ? undefined : { run: id, url: `ws://${server.hostname ?? DEFAULT_HOSTNAME}:${server.port}/runs/${id}/worker` }
-    spawnWorker(project, run, runOptions, switches, transport, secret, plan, transfer)
+    spawnWorker(project, run, payload, transport, secret)
     return run
   }
 
@@ -671,7 +743,24 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         hint: "another driver process holds the directory's run lock; wait for it to finish or stop it (the CLI's exit-1 refusal is the same rule; if no such process exists, delete .auto/run.lock by hand — cross-host locks cannot be probed from here)",
       })
     }
-    const id = startRun(project, options, switches, server).id
+    // startRun's two refusals (plans/0223 D1): the carriage bound answers a
+    // 400 with its teaching (nothing was registered — the request itself is
+    // the problem), and a spawn that threw arrives as a SpawnError with the
+    // record already settled — a 500 naming the cause and carrying the
+    // failed run view, so the client learns both the failure and that the
+    // project's surface is free again (the finding's wedge answered a bare
+    // generic 500 and left the project 409-locked forever).
+    let id: string
+    try {
+      id = startRun(project, options, switches, server).id
+    } catch (error) {
+      if (error instanceof RequestError) return json(400, { error: error.message })
+      if (error instanceof SpawnError) {
+        const failed = runs.get(error.runId)
+        return json(500, { error: error.message, ...(failed ? { run: view(failed) } : {}) })
+      }
+      throw error
+    }
     // A wide run carries no interactive channel (the transport skip above),
     // so its 202 points at the observation surfaces alone — the interactive
     // pointer is the width-1 run's.
@@ -714,6 +803,20 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       })
     }
     const proc = run.proc
+    if (run.state === "starting" && proc === undefined) {
+      // A `starting` record with no process behind it (plans/0223 D1): the
+      // spawn's own throw settles the record at the throw, so this arm is
+      // the belt under it — whatever path left a registered-but-processless
+      // run, the delete settles it instead of answering "kill requested"
+      // over nothing (the finding's 202-that-does-nothing). The note states
+      // what actually happened and what is true now.
+      appendTail(run, "DELETE arrived on a starting run with no worker process (the spawn never succeeded or the process handle was lost); the record was settled as failed by the delete\n")
+      settle(run, null, null)
+      return json(202, {
+        ...view(run),
+        note: "the run was registered as starting but no worker process existed (its spawn never succeeded or its process handle was already lost); the record has been settled as failed by this delete — the project's surface is free again",
+      })
+    }
     if (proc) {
       proc.kill("SIGINT")
       setTimeout(() => {
@@ -726,7 +829,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     }
     return json(202, {
       ...view(run),
-      note: options.launch
+      note: launch
         ? "kill requested — the SIGINTs go to the confinement launcher's wrapper process, and what a kill means under the launcher is the launcher's own (a container launcher's run may outlive its wrapper; the run lock arbitrates any successor, and the core's interruption recovery heals the directory on the next run); observe GET /runs/<id> for the terminal state"
         : "kill requested (double SIGINT, the force-terminate path); observe GET /runs/<id> for the terminal state (the vocabulary maps it to killed/130)",
     })
@@ -968,7 +1071,17 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
               },
             }
           }
-          const run = startRun(project, parseOptions(undefined), {}, server, plan)
+          // The carriage bound answers as the op's own 400 (plans/0223 D1);
+          // a spawn that threw rides the dispatch catch as a SpawnError —
+          // its message names the run, and the record is settled inside the
+          // spawn either way (never a `starting` wedge behind a 500).
+          let run: RunRecord
+          try {
+            run = startRun(project, parseOptions(undefined), {}, server, plan)
+          } catch (error) {
+            if (error instanceof RequestError) return { status: 400, body: { error: error.message } }
+            throw error
+          }
           return {
             status: 202,
             body: {
@@ -998,7 +1111,17 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
               },
             }
           }
-          const run = startRun(project, parseOptions(undefined), {}, server, undefined, transfer)
+          // The carriage bound answers as the op's own 400 (plans/0223 D1);
+          // a spawn that threw rides the dispatch catch as a SpawnError —
+          // its message names the run, and the record is settled inside the
+          // spawn either way (never a `starting` wedge behind a 500).
+          let run: RunRecord
+          try {
+            run = startRun(project, parseOptions(undefined), {}, server, undefined, transfer)
+          } catch (error) {
+            if (error instanceof RequestError) return { status: 400, body: { error: error.message } }
+            throw error
+          }
           return {
             status: 202,
             body: {
@@ -1069,7 +1192,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const handle: DaemonHandle = {
     port: server.port ?? options.port ?? DEFAULT_PORT,
     hostname: server.hostname ?? options.hostname ?? DEFAULT_HOSTNAME,
-    url: `http://${server.hostname ?? options.hostname ?? DEFAULT_HOSTNAME}:${server.port ?? options.port ?? DEFAULT_PORT}`,
+    // The handle's URL formats the bound host for a URL too (plans/0223 D2):
+    // an IPv6 literal bracketed, a wildcard named by its loopback — the
+    // serve banner and the web client link read this string.
+    url: `http://${connectHost(server.hostname ?? options.hostname ?? DEFAULT_HOSTNAME)}:${server.port ?? options.port ?? DEFAULT_PORT}`,
     store,
     runs: () => [...runs.values()].map(view),
     stop: async () => {
