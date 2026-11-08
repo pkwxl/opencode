@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, registerIntentBundle, registeredIntentBundles, resolveIntentBundle, type IntentBundleFiles } from "../src/bundle"
 import { loadIntents, packSubsection, parseIntentFile, planningInputScaffold } from "../src/intent/load"
-import { parseGuaranteeAsserts } from "../src/intent/guarantees"
+import { guaranteesProblem, parseGuaranteeAsserts } from "../src/intent/guarantees"
 import { parseTestLanes, testLanesProblem } from "../src/intent/test-lanes"
 import { loadModes } from "../src/mode"
 import { loadPhaseTypes } from "../src/phases/custom"
@@ -85,6 +85,23 @@ function tempDir() {
   return mkdtempSync(join(tmpdir(), "auto-bundle-"))
 }
 
+// The pack's nested semantic grammars ride the bundle parse (plans/0221 D1):
+// a pack carrying a malformed asserts line, an unknown phase qualifier, a
+// bogus verify-plan key or a malformed lane row previously materialized
+// clean and failed only at every later run's preflight — the finding's own
+// deferred-failure scene. The helpers append a `## guarantees` body (or a
+// lane table under the fixture's existing `## quality`) to the fixture pack.
+const withGuarantees = (body: string): IntentBundleFiles => ({
+  ...CLEANROOM,
+  "intents/cleanroom.md": [CLEANROOM["intents/cleanroom.md"]!, "", "## guarantees", "", body, ""].join("\n"),
+})
+const withTestLanes = (body: string): IntentBundleFiles => ({
+  ...CLEANROOM,
+  // The lane table lives under `## quality` (packSubsection's home), so the
+  // rows are spliced in ahead of the next section rather than appended.
+  "intents/cleanroom.md": CLEANROOM["intents/cleanroom.md"]!.replace("## phase duties", ["### test-lanes", "", body, "", "## phase duties"].join("\n")),
+})
+
 // A copy of the fixture without one file (the replace-a-name cases need the
 // original gone, not overridden beside).
 const without = (files: IntentBundleFiles, key: string): IntentBundleFiles =>
@@ -120,8 +137,49 @@ describe("parseIntentBundle", () => {
       // The per-surface parsers still rule their own files: a phase type
       // with an unknown field fails through parsePhaseTypeFile.
       [{ ...CLEANROOM, "phases/spec-read.md": "# Spec read\n\nOwner: me\n\n## plan duties\n\nx\n" }, /unknown field\(s\) owner/],
+      // The pack's nested semantic grammars judge at the same moment
+      // (plans/0221 D1, 0165-159): each malformed body previously parsed
+      // clean here and failed only at a materialized project's preflight.
+      [withGuarantees("### asserts\n\nwhole: must nope"), /asserts literals must be double-quoted and comma-separated; got: nope/],
+      [withGuarantees("### asserts\n\nphase-plan(nosuch): must \"spec-notes.md\""), /unknown phase qualifier "nosuch"/],
+      [withGuarantees("### verify-plan-nosuch\n\nThe verdict comes from the findings."), /declares "### verify-plan-nosuch"/],
+      [withTestLanes("lint:\nCommand: make lint\nCost: cheap\nSurfaces: src/\nExclusive: yes\nBogus: x"), /malformed test-lanes line: Bogus: x/],
+      [withTestLanes("lint:\nCost: cheap\nSurfaces: src/\nExclusive: yes"), /missing its Command line/],
     ]
     for (const [files, pattern] of cases) expect(() => parseIntentBundle(files)).toThrow(pattern)
+  })
+
+  test("a pack's nested grammars validate against the bundle's own vocabulary: the own-type qualifier and key parse clean, the template half stays with preflight (plans/0221 D1)", () => {
+    // spec-read and audit are the bundle's own custom types — the qualifiers
+    // and the verify-plan key resolve through them; the asserts' template
+    // targets are NOT judged here (no library exists at the bundle layer;
+    // preflight holds that half over the materialized project, the split
+    // plans/0220 D3 ruled).
+    const files = withGuarantees([
+      "### asserts",
+      "",
+      "phase-plan(spec-read): must \"spec-notes.md\"",
+      "",
+      "### verify-plan-audit",
+      "",
+      "The audit verdict comes from the findings, never from optimism.",
+    ].join("\n"))
+    const bundle = parseIntentBundle(files)
+    expect(bundle.name).toBe("cleanroom")
+    expect(bundle.files.pack).toContain("### asserts")
+  })
+
+  test("the shipped family's nested grammars pass the parse's own validators: cleanroom's own-type qualifiers, the family's builtin letters, the lane table's taught floor (plans/0221 D1)", async () => {
+    for (const name of ["cleanroom", "faithful", "faithful-lean"] as const) {
+      const files = await resolveIntentBundle(name)
+      const pack = parseIntentFile(name, files![`intents/${name}.md`]!)
+      const types = parseIntentBundle(files!).types.map((entry) => entry.type)
+      expect(guaranteesProblem(pack, types), name).toBeUndefined()
+      expect(testLanesProblem(pack), name).toBeUndefined()
+      // And the parse itself — the validators ride it, so a shipped typo
+      // would throw here, not only at a materialized project's preflight.
+      expect(() => parseIntentBundle(files!), name).not.toThrow()
+    }
   })
 })
 

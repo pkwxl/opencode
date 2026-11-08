@@ -4,8 +4,12 @@
 // --append half, plans/0053 D23–D27, unchanged by 0095). The former planning
 // templates (phase-plan.md / implement-plan.md) retired with their renderers:
 // the composed block stack became the formulation todo's Scope, assembled
-// here as data. Rendering of the surviving prompt surfaces goes through
-// prompt.ts's single exit (renderPrompt) and its intent-pack helpers.
+// here as data — the assembly's protocol prose is driver document-grammar
+// teaching, consciously renderer-owned under P15's named boundary
+// (plans/0095 D4; plans/0221 D2), while the policy content it joins flows
+// from the packs and partials as always. Rendering of the surviving prompt
+// surfaces goes through prompt.ts's single exit (renderPrompt) and its
+// intent-pack helpers.
 // Off the driver with E2 (plans/0061 §6.3): the phase entry and the duty
 // paragraph arrive as data (the caller renders the registry's duty text),
 // and every render takes the PromptFacts value the caller built.

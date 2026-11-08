@@ -158,6 +158,9 @@ export function resolvedVerifyPlan(pack: IntentPack, entry?: PhaseTypeEntry): Re
 // The composed charter text of a resolution: the global charter, then — when
 // present — the phase charter under a lead-in naming its key. undefined when
 // neither is declared (the zero-intent floor: no verifier, no synthesis).
+// The lead-in is a serialization join whose load-bearing content is the key
+// id itself (0100 D11's audit spelling) — the renderer-owned class P15's
+// named boundary covers (plans/0221 D2).
 export function verifyPlanCharterText(resolved: ResolvedVerifyPlan): string | undefined {
   if (resolved.global === undefined && resolved.phase === undefined) return undefined
   const parts: string[] = []

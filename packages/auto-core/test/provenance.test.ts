@@ -106,9 +106,13 @@ describe("the three-state comparison (plans/0100 D2)", () => {
   test("the binary gains a charter section: stale, binary-newer, the delta naming the missing heading", async () => {
     // Materialize from the older binary (the pack lacks the charter), then
     // run the comparison against the current binary (which has it) — the
-    // incident's exact shape, reversed in time.
+    // incident's exact shape, reversed in time. The older binary's spelling
+    // is the legacy preset letter (plans/0100 D9) — a historically real pack
+    // the parse's nested validators accept (an invented key like
+    // verify-plan-OLD is a strict parse error since plans/0221 D1, so the
+    // fixture can no longer simulate one).
     const { dir } = await materialized((files) => {
-      files["intents/faithful.md"] = files["intents/faithful.md"]!.replace("### verify-plan-test\n", "### verify-plan-OLD\n")
+      files["intents/faithful.md"] = files["intents/faithful.md"]!.replace("### verify-plan-test\n", "### verify-plan-t\n")
     })
     try {
       const stamp = readStamp(dir)
@@ -119,7 +123,7 @@ describe("the three-state comparison (plans/0100 D2)", () => {
         expect(state.direction).toBe("diverged")
         expect(state.inBinary).toBe(true)
         expect(state.added).toContain("### verify-plan-test")
-        expect(state.removed).toContain("### verify-plan-OLD")
+        expect(state.removed).toContain("### verify-plan-t")
       }
     } finally {
       rmSync(dir, { recursive: true, force: true })

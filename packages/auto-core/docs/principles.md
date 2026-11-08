@@ -306,7 +306,7 @@ Thirteen principles: removal degrades how the tool runs without changing what th
 
 ### P15 — Policy is data; renderers assemble; governance text stays pinned in committed state
 
-**Statement.** Prompt copy lives in templates, judgment and quality content in intent packs and bundles; code assembles data and never authors copy; the runtime reads only the surfaces a bundle materializes and never interprets intent; committed governance text never floats with whichever binary passes through.
+**Statement.** Prompt copy lives in templates, judgment and quality content in intent packs and bundles; code assembles data and never authors copy — the two named renderer-owned classes excepted (0221): driver document-grammar teaching (the durable documents the driver itself writes and parses, first the formulation todo's protocol) and dynamic driver feedback (sentences naming measured run state); the runtime reads only the surfaces a bundle materializes and never interprets intent; committed governance text never floats with whichever binary passes through.
 
 **Rationale.** Copy in code is unreviewable and un-overridable; floating governance breaks the record. "The runtime never interprets 'intent'… Intent is an init-time packaging and deployment concept for policy, entirely upstream of the mechanism" (0079).
 
@@ -316,13 +316,14 @@ Thirteen principles: removal degrades how the tool runs without changing what th
 - Intent packs and bundles as the carrier of judgment content; "the key selects; it never composes" — `src/intent/`, `src/bundle.ts`; 0031–0034, 0079.
 - Provenance stamps and `sync`: detection everywhere, propagation one explicit command; runtime layering rejected — "governance text stays pinned in the repo… the committed record must keep explaining the rules each phase ran under" — `src/provenance.ts`, `src/sync.ts`; 0100 D6; person-edited files authoritative and never written.
 - The mode layer as registered data ("a new mode = one protocol-complete .md file, zero source changes") — `src/mode.ts`; 0005/0029. The manual suite: no runtime code renders it; the ratchet binds it — 0093 D4.
+- The renderer-owned boundary named (0221): driver document-grammar teaching — the durable documents the driver itself writes and parses, first the formulation todo's protocol (0095 D4's consciously code-built assembly, its pack-carried policy channels — duties, precedence, round-brief rules — flowing from the packs/partials as always) — and dynamic driver feedback — state-naming joins over measured run state (0083 D11's violation lines, 0053 D16's prerequisite notes; 0080 §8 scoped them out of the gate) — stay in src; their authority is the driver's own grammar and measurement. A named boundary, never an open door: any third class of code-authored session-facing prose remains a defect of this principle — `src/prompt-plan.ts`, `src/prompt.ts`, `src/intent/guarantees.ts`, `src/formulate.ts`; 0221.
 
 **Provenance.** The M1.x intent externalization (0031–0034); 0079 and 0100.
 
-**Known tensions.** Person-edited packs freeze the tool's last-written bytes (upgrade convenience vs person ownership — 0100 D2); embedded prompt templates float precisely because they were never committed project state (0100 D6's own line).
+**Known tensions.** Person-edited packs freeze the tool's last-written bytes (upgrade convenience vs person ownership — 0100 D2); embedded prompt templates float precisely because they were never committed project state (0100 D6's own line); the two renderer-owned classes are un-overridable and reviewable only in source — the cost this principle's rationale names, accepted for grammar authority (0221).
 
 **Choice.** Person ownership of materialized packs versus upgrade convenience (T6).
-**Chosen default.** Copy in templates, judgment in packs and bundles; code assembles, never authors; the runtime reads materialized surfaces and never interprets intent; person-edited files authoritative and never written; propagation one explicit confirmed command.
+**Chosen default.** Copy in templates, judgment in packs and bundles; code assembles, never authors (the two named renderer-owned classes of 0221 excepted); the runtime reads materialized surfaces and never interprets intent; person-edited files authoritative and never written; propagation one explicit confirmed command.
 **Revisit trigger.** A security-critical charter fix blocked by a stale pack (T6).
 
 ### P16 — Genericity: no environment-specific facts in tool source

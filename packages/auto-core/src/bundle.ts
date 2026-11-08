@@ -13,14 +13,18 @@
 // registerTemplate pattern — a shell ships bundles without the core
 // embedding template files). Parsing validates every piece through the
 // existing per-surface parsers (parsePhaseTypeFile, parseIntentFile,
-// parseModeFile) and resolves the manifest's phase sequence against the
-// builtins plus the bundle's own types, so a refused parse writes nothing;
-// materialization then writes the original file texts verbatim.
+// parseModeFile) plus the pack's nested semantic grammars (guaranteesProblem,
+// testLanesProblem — plans/0221 D1) and resolves the manifest's phase
+// sequence against the builtins plus the bundle's own types, so a refused
+// parse writes nothing; materialization then writes the original file texts
+// verbatim.
 import { readFileSync } from "node:fs"
 import { chmod, mkdir, readdir, rename, rmdir } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { PROVENANCE_FILE, compareProvenance, parseProvenanceStamp, provenanceStampOf, renderProvenanceStamp, type ProvenanceComparison } from "./provenance"
 import { parseIntentFile } from "./intent/load"
+import { guaranteesProblem } from "./intent/guarantees"
+import { testLanesProblem } from "./intent/test-lanes"
 import type { ParallelLevel } from "./intent/types"
 import { parseModeFile } from "./mode"
 import { SUBTASK_MODES, type SubtaskMode } from "./opts"
@@ -140,7 +144,21 @@ export function parseIntentBundle(files: IntentBundleFiles): IntentBundle {
   }
   const packName = packPaths[0]!.slice("intents/".length, -".md".length)
   if (packName !== name) throw new Error(`the intent pack intents/${packName}.md must be named like the bundle ("${name}") — the config's intent key selects it by that name`)
-  parseIntentFile(name, layout.get(packPaths[0]!)!)
+  const pack = parseIntentFile(name, layout.get(packPaths[0]!)!)
+  // The pack's nested semantic grammars judged at the parse's own moment
+  // (plans/0221 D1): parseIntentFile rules the section/subsection shapes but
+  // reads the guarantees and test-lanes bodies as prose — without this the
+  // malformed class passed init's validate-before-write boundary and failed
+  // only at every later run's preflight, after materialization. The assert
+  // phase qualifiers and verify-plan-* keys validate against the builtin
+  // letters plus the bundle's OWN custom types (a bundle is a self-contained
+  // policy unit; the template half of guaranteesProblem stays with run
+  // preflight — no library exists at this layer, the split plans/0220 D3
+  // ruled). A clean pack changes nothing: both return undefined.
+  const guaranteeProblem = guaranteesProblem(pack, custom.map((entry) => entry.type))
+  if (guaranteeProblem !== undefined) throw new Error(guaranteeProblem)
+  const laneProblem = testLanesProblem(pack)
+  if (laneProblem !== undefined) throw new Error(laneProblem)
   // The mode: at most one, also named like the bundle.
   const modePaths = [...layout.keys()].filter((key) => key.startsWith("modes/"))
   if (modePaths.length > 1) throw new Error(`an intent bundle carries at most one mode (modes/${name}.md, named like the bundle); found ${modePaths.length}`)

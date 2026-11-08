@@ -521,3 +521,26 @@ describe("plan-verify template (plans/0080 §5)", () => {
     }
   })
 })
+
+// The renderer-owned boundary P15 names (plans/0221 D2, finding 0165-047):
+// the constitution's statement and this package's navigation line stay in
+// lockstep with the conscious rulings the boundary restates (0095 D4's
+// code-built formulation todo, 0083 D11's and 0053 D16's feedback lines) —
+// the 0216 D3 single-owner pattern: if either text drifts (a wording edit
+// dropping the carve-out, a navigation line reclaiming the totality), this
+// pin goes red rather than the letter silently outrunning the code again.
+describe("the renderer-owned prose boundary (P15's named classes, 0221)", () => {
+  test("P15's statement carries the named boundary and AGENTS.md's prompt-copy line names the two classes", () => {
+    const principles = readFileSync(join(import.meta.dir, "..", "docs", "principles.md"), "utf8")
+    const statement = /### P15 —[\s\S]*?\*\*Statement\.\*\*([\s\S]*?)\*\*Rationale\.\*\*/.exec(principles)
+    expect(statement, "P15's statement block in docs/principles.md").toBeDefined()
+    expect(statement![1]).toContain("the two named renderer-owned classes excepted (0221)")
+    expect(statement![1]).toContain("driver document-grammar teaching")
+    expect(statement![1]).toContain("dynamic driver feedback")
+    const agents = readFileSync(join(import.meta.dir, "..", "AGENTS.md"), "utf8")
+    const line = /^(- Prompt copy →.*)$/m.exec(agents)
+    expect(line, "AGENTS.md's prompt-copy navigation line").toBeDefined()
+    expect(line![1]).toContain("renderer-owned")
+    expect(line![1]).toContain("0221")
+  })
+})

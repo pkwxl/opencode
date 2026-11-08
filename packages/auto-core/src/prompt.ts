@@ -298,7 +298,9 @@ export type ScriptRun = {
 export type TestRunInfo = ScriptRun & { seq: number }
 
 // One side-effect violation as one line for the steered-back result (the
-// caller-side join the template syntax has no loops for, plans/0083 D11).
+// caller-side join the template syntax has no loops for, plans/0083 D11 —
+// dynamic driver feedback, the renderer-owned class P15's named boundary
+// covers, plans/0221 D2).
 function scriptViolationLine(violation: ScriptViolation): string {
   if (violation.kind === "head") {
     return `the script ran a git state command and moved HEAD (${violation.moved.map((move) => `${move.root}: ${move.from} → ${move.to}`).join("; ")}) — a driver-run script is an observation, never that`
@@ -1022,7 +1024,9 @@ function formatTokens(n: number): string {
 // effective prerequisite (explicit or implicit) that was closed, so the
 // session does not build on deliverables that never landed. Empty without
 // closures, keeping the task block byte-identical. The prerequisite ids are
-// the task view's (tasks.ts resolves them when it builds the view).
+// the task view's (tasks.ts resolves them when it builds the view). Dynamic
+// driver feedback — the renderer-owned class P15's named boundary covers
+// (plans/0221 D2).
 function closedPrerequisiteNotes(plan: PlanView, task: TaskView): string {
   return task.prerequisites
     .filter((id) => plan.closed.has(id))

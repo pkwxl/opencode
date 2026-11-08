@@ -215,7 +215,9 @@ export async function restoreFormulationRow(dir: string, phase: PlanPhase, id: s
 // builtin's preset letter a legacy spelling still resolved, plans/0100 D9;
 // m mode passes no entry and gets the pack-global charter alone, plans/0097
 // D10). The wrap-up session judges these by inspection of the unit's commit
-// range.
+// range. The charter prose is driver document-grammar teaching over the
+// durable todo the driver parses — renderer-owned under P15's named boundary
+// (plans/0221 D2).
 const FORMULATION_CHARTER = [
   "- every obligation the Scope's inputs name — the planning input's asks, the round brief's goals, the phase duties, and what the prior phases' handovers mark as required reading or as open — is covered by some planned task's scope, or explicitly deferred with the reason recorded in that task's document;",
   "- every planned task's `## Acceptance` states criteria a later session can verify by inspecting the work (named evidence, observable outcomes, the executable checks that apply), never a bare \"done\";",
