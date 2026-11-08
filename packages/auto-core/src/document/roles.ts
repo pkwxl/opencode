@@ -150,11 +150,16 @@ const DRIVER_STATE_PATHS = ["opencode.json", ".opencode/auto/config.json", ".ope
 // test/document-roles.test.ts.
 export const PROTECTED_FILES = ["opencode.json", ".opencode/auto/config.json", ".opencode/auto/brief.md"] as const
 
-// The session handoff family by file name, wherever it sits: the task-level
-// handoff.md, the per-stream handoff.md of docs/T-NNN/S<nn>/ (plans/0068 S5
-// — classification is by name, so the per-stream document already read as
-// this role the day the family gained it), testhandoff.md and the archived
-// testhandoff-<n>.md.
+// The session handoff family by file name, under the task family's own
+// directories alone (ruling 0228 D1, enacting 0165-041): the task-level
+// docs/T-NNN/handoff.md, the per-stream handoff.md of docs/T-NNN/S<nn>/
+// (plans/0068 S5 — classification is by name, so the per-stream document
+// already read as this role the day the family gained it), testhandoff.md
+// and the archived testhandoff-<n>.md — every constructed path of the family
+// lives under docs/T-NNN/. A same-named file anywhere else (a nested
+// destination repository's handoff.md, a workspace-root one) is freeform:
+// the name test once ran before the docs/ gate and exempted such deliverable
+// files from the P1 scan and the eof scan with it.
 const HANDOFF_NAME = /^(?:test)?handoff(?:-\d+)?\.md$/
 
 // Phase index: docs/R-NN/phases.md (M3.3).
@@ -212,14 +217,16 @@ const PLANNING_INPUT = new RegExp(`^docs/${PHASE_DIR}/${PLAN_INPUT_NAME.replace(
 // with their state files, task index tasks.md and standard artifacts included).
 const PROCESS_DOCS = /^docs\/(?:T-\d+|R-\d+)(?:\/|$)/
 
+// A task directory docs/T-NNN (…/S<nn>/ below it included): the one prefix
+// the handoff family's name test binds to (0228 D1).
+const TASK_DOCS = /^docs\/T-\d+(?:\/|$)/
+
 // The role of a path relative to the target directory. Pure: classification
 // is by path shape only, never by content or existence.
 export function roleOf(rel: string): DocumentRole {
   const path = rel.replaceAll("\\", "/").replace(/^\.\//, "")
   if (path === ".auto" || path.startsWith(".auto/")) return "driverState"
   if (DRIVER_STATE_PATHS.includes(path)) return "driverState"
-  const name = path.split("/").at(-1) ?? path
-  if (HANDOFF_NAME.test(name)) return "handoff"
   if (!path.startsWith("docs/")) return "freeform"
   if (LEDGER.test(path)) return "ledger"
   if (PHASE_HANDOVER.test(path)) return "handoff"
@@ -232,6 +239,8 @@ export function roleOf(rel: string): DocumentRole {
   if (ANALYSIS_DOC_RE.test(path)) return "analysisDoc"
   if (COVERAGE_DOC.test(path)) return "coverage"
   if (REGRESSION_RECEIPT.test(path)) return "regression"
+  const name = path.split("/").at(-1) ?? path
+  if (TASK_DOCS.test(path) && HANDOFF_NAME.test(name)) return "handoff"
   if (PROCESS_DOCS.test(path)) return "artifact"
   return "freeform"
 }

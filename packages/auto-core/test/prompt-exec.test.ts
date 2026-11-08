@@ -114,6 +114,21 @@ describe("renderDecompose", () => {
     expect(plain).not.toContain("parallelism")
   })
 
+  // The block's field homes (ruling 0228 D3, enacting 0165-153/S21-05): the
+  // old wording taught `Depends:` "to the checklist items" — a decompose
+  // session following it wrote the line-level form the pipeline never reads
+  // (silently serial). The reworded block says where each field goes:
+  // `Depends:` in the S<nn>/todo.md field block, only `Artifacts:` on the
+  // checklist item line.
+  test("the parallelism block names each field's home: Depends in the todo.md field block, only Artifacts on the line (0228 D3)", () => {
+    const wide = decOf(plan, task, { parallel: "high" })
+    expect(wide).toContain("each S<nn>/todo.md's field block (its first lines, before `## Scope`) carries `Depends:` naming only")
+    expect(wide).toContain("the checklist item line carries only")
+    expect(wide).toContain("`Artifacts:`, listing every file the subtask will change")
+    // the retired mis-teaching is gone
+    expect(wide).not.toContain("level's discipline below to the checklist items — `Depends:` names only real prerequisites")
+  })
+
   test("includes the already-done tasks, the current task and the state-file read-only rules; no longer restates PLAN.md blockage notes", () => {
     const text = decOf(plan, task)
     expect(text).toContain("[done] T-001: build the schema")

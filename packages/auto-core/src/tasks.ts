@@ -48,7 +48,9 @@ import {
   unitProblems,
   unitStatePaths,
   UNIT_COMPLETE,
+  UNIT_FIELD_LINE,
   UNIT_PENDING,
+  fieldBlockProblems,
   type DecomposeMode,
   type UnitDecl,
   type UnitRef,
@@ -295,7 +297,10 @@ export function taskBody(text: string): string {
     i = 1
     while (i < lines.length && lines[i]!.trim() === "") i++
   }
-  while (i < lines.length && /^[A-Za-z][A-Za-z-]*:/.test(lines[i]!.trim())) i++
+  // The block-boundary shape is the unit grammar's own constant (0228 D2):
+  // one shape for parseUnitDoc's walk, this skip and the near-miss scan — a
+  // `Key：` line is a field to all of them or none.
+  while (i < lines.length && UNIT_FIELD_LINE.test(lines[i]!.trim())) i++
   const body = lines.slice(i)
   for (let last = body.length - 1; last >= 0; last--) {
     const line = body[last]!.trim()
@@ -1076,8 +1081,20 @@ export async function newTaskProblems(
   if (fields.closed !== undefined) problems.push(`${paths.pending} carries a \`Closed:\` field — the closure record belongs to a done.md; remove the field line`)
   if (fields.prefix !== undefined) problems.push(`${paths.pending} carries a \`Prefix:\` field — the driver's record of the formulation unit's pre-existing tasks; remove the field line`)
   if (fields["floor-digest"] !== undefined) problems.push(`${paths.pending} carries a \`Floor-Digest:\` field — the driver's record of the formulation unit's floor assembly; remove the field line`)
+  // The field block's near-miss scan (0228 D2, enacting 0165-152): a blank
+  // line, a comment or a near-miss colon form between the title and the body
+  // silently ended the block and dropped the declaration — the shapes above
+  // guard only what parsed. The vocabulary is the task grammar's own fields
+  // (the marker guards' names included: S08-08's near-miss home).
+  for (const problem of fieldBlockProblems(doc, TASK_FIELD_SCAN)) problems.push(`${paths.pending} ${problem}`)
   return { problems, decl: taskDecl(id, doc) }
 }
+
+// The task document's field vocabulary for the near-miss scan (0228 D2):
+// the mandatory `Phase:`, the dependency/execution fields of the unit
+// grammar, the whole-task consumables declaration (0096 D6) and the driver's
+// own markers a session must never carry (0171 D6 / 0205 D2).
+const TASK_FIELD_SCAN = ["Phase", "Depends", "Touches", "Decompose", "Artifacts", "Formulate", "Closed", "Prefix", "Floor-Digest"] as const
 
 // Plan-time inversion detection (plans/0096 D6): the soft warns the
 // formulation collect logs when a task's `## Scope` references a consumable

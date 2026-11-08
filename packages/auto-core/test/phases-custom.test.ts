@@ -105,6 +105,37 @@ describe("parsePhaseTypeFile", () => {
       expect(() => parsePhaseTypeFile("review", text)).toThrow(join(PHASE_TYPE_DIR, "review.md"))
     }
   })
+
+  // The field block's near-miss scan (ruling 0228 D2, enacting 0165-077 /
+  // S04-08): the file is hand-edited by design (0132 D1's person-owned fill),
+  // and a near-miss that ends the block silently dropped `Wall:` (the
+  // cleanroom boundary) or `Gate:` (the person's gate) — the load now throws
+  // with the line, instead of strictness covering only a misspelt key inside
+  // the contiguous block.
+  test("a near-miss that would silently drop a field throws naming the file and the line (0228 D2)", () => {
+    const cases: Array<[string, RegExp]> = [
+      // a blank line between fields: Wall never parsed
+      ["# R\n\nGate: none\n\nWall: seal linux\n\n## plan duties\n\nx\n", /line 5 names the field `Wall:` outside the field block/],
+      // a comment after the title: the block never started, Gate and Wall dropped
+      ["# R\n\n<!-- doors are the person's fill -->\nWall: seal linux\n\n## plan duties\n\nx\n", /line 4 names the field `Wall:` outside the field block/],
+      // near-miss colon forms: space before the colon, bold key
+      ["# R\n\nWall : seal linux\n\n## plan duties\n\nx\n", /line 3 names the field `Wall:` outside the field block/],
+      ["# R\n\n**Wall:** seal linux\n\n## plan duties\n\nx\n", /line 3 names the field `Wall:` outside the field block/],
+      // a repeated key: last-wins is no longer silent
+      ["# R\n\nGate: none\nGate: human\n\n## plan duties\n\nx\n", /line 3's `gate:` is repeated at line 4/],
+    ]
+    for (const [text, pattern] of cases) {
+      expect(() => parsePhaseTypeFile("review", text)).toThrow(pattern)
+      expect(() => parsePhaseTypeFile("review", text)).toThrow(join(PHASE_TYPE_DIR, "review.md"))
+    }
+  })
+
+  // The colon tolerance's floor (0228 D2): the fullwidth form inside the block
+  // parses like every other driver protocol line — same entry, no throw.
+  test("`Wall：` in block position parses — the `：` tolerance, not a near-miss", () => {
+    const entry = parsePhaseTypeFile("review", "# R\n\nWall： seal linux\n\n## plan duties\n\nx\n")
+    expect(entry.wall).toEqual({ doors: ["linux"] })
+  })
 })
 
 describe("typeNameProblem", () => {

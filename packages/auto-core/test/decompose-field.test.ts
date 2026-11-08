@@ -219,6 +219,75 @@ describe("runTask consults the Decompose field under --subtask auto", () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  // The decompose collect's near-miss scan and one-home rule (ruling 0228
+  // D2+D3, enacting 0165-152/S21-04 and 0165-153/S21-05): a session following
+  // the old parallelRules wording writes `Depends:` on the checklist line
+  // (silently unread — the item serial) and breaks a scope file's field block
+  // with a blank line (the Touches declaration silently dropped). The collect
+  // now reports both in the retry feedback, the retry fixes its own
+  // documents, and the pipeline completes.
+  test("the collect reports a line-level `Depends:` and a broken S<nn> field block; the retry fixes both (0228 D2+D3)", async () => {
+    const dir = await freshRepo()
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await seedUnits(dir, "## T-001: sample task [pending]\nBody.\n")
+    await Bun.write(
+      join(dir, "docs/T-001/todo.md"),
+      (await Bun.file(join(dir, "docs/T-001/todo.md")).text()).replace("Phase: R-01.P01\n", "Phase: R-01.P01\nDecompose: pipeline\n"),
+    )
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-q", "-m", "init")
+    const plan = await reloadUnits(dir)
+    const doc = (head: string) => `${head}\n\n${"Background the subtasks rely on. ".repeat(6)}\n\n<!-- auto: eof -->\n`
+    const badChecklist =
+      "- [ ] alpha: the alpha module in src/alpha.ts, with its constant and a check that reads it back Artifacts: src/alpha.ts\n" +
+      "- [ ] beta: the beta helper in src/beta.ts Depends: S01 Artifacts: src/beta.ts\n\n<!-- auto: eof -->\n"
+    const fixedChecklist =
+      "- [ ] alpha: the alpha module in src/alpha.ts, with its constant and a check that reads it back Artifacts: src/alpha.ts\n" +
+      "- [ ] beta: the beta helper in src/beta.ts Artifacts: src/beta.ts\n\n<!-- auto: eof -->\n"
+    const scope = (name: string, path: string) => doc(`## Scope\n\nThe ${name} module.\n\n## Artifacts\n\n- ${path}`)
+    const agent = fakeAgent({
+      turn: (ctx) => {
+        if (ctx.n === 1) {
+          for (const s of ["S01", "S02"]) mkdirSync(join(dir, `docs/T-001/${s}`), { recursive: true })
+          writeFileSync(join(dir, "docs/T-001/context.md"), doc("## Relevant files and key symbols\n- src/alpha.ts")
+          )
+          writeFileSync(join(dir, "docs/T-001/shared.md"), doc("- src/index.ts: the module index the items extend"))
+          writeFileSync(join(dir, "docs/T-001/subtasks.md"), badChecklist)
+          writeFileSync(join(dir, "docs/T-001/S01/todo.md"), scope("alpha", "src/alpha.ts"))
+          // the broken field block: the blank line ends it, `Touches:` sits outside
+          writeFileSync(join(dir, "docs/T-001/S02/todo.md"), `Depends: S01\n\nTouches: src/beta.ts\n\n${scope("beta", "src/beta.ts")}`)
+        }
+        if (ctx.n === 2) {
+          // the retry takes its own feedback: the line-level Depends moves into
+          // S02's todo.md, the field block contiguous
+          writeFileSync(join(dir, "docs/T-001/subtasks.md"), fixedChecklist)
+          writeFileSync(join(dir, "docs/T-001/S02/todo.md"), `Depends: S01\nTouches: src/beta.ts\n\n${scope("beta", "src/beta.ts")}`)
+        }
+        if (ctx.text.includes("item 1 of that list only")) writeFileSync(join(dir, "src/alpha.ts"), "export const alpha = 1\n")
+        if (ctx.text.includes("item 2 of that list only")) writeFileSync(join(dir, "src/beta.ts"), "export const beta = 2\n")
+        return undefined
+      },
+    })
+    try {
+      mkdirSync(join(dir, "src"), { recursive: true })
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, wrapup: false, subtask: "auto", router: services().router })
+      expect(outcome).toEqual({ type: "completed" })
+      const prompts = agent.prompts.map((prompt) => prompt.text)
+      // decompose, the retry (carrying the feedback), the digest base, then the two subtasks
+      expect(prompts).toHaveLength(5)
+      expect(prompts[1]).toContain(
+        "docs/T-001/S02/todo.md line 3 names the field `Touches:` outside the field block (a blank line, a comment or a near-miss colon form ended the block early) — keep the field lines contiguous right after the title line",
+      )
+      expect(prompts[1]).toContain(
+        "docs/T-001/subtasks.md item 2 carries a line-level `Depends:` — the decompose checklist's item line declares only `Artifacts:`; the subtask dependency field belongs in docs/T-001/S02/todo.md's field block (its first lines, before `## Scope`); remove it from the checklist line",
+      )
+      expect(prompts[3]).toContain("You are responsible for item 1 of that list only")
+      expect(prompts[4]).toContain("You are responsible for item 2 of that list only")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 // —— The conclusion line (plans/0075 §2.4): mode + provenance per task ——

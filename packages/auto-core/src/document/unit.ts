@@ -248,11 +248,22 @@ const listValue = (value: string): string[] =>
     .map((token) => token.replace(/^`+|`+$/g, ""))
     .filter(Boolean)
 
-// The field block is the run of `Key: value` lines right after the title line
-// (blank lines between the title and the first field allowed); the first
-// other line ends it, so body text like `Owner: …` under a section is never a
-// field. Without a title line the block starts at the top.
-export function parseUnitDoc(text: string): UnitDoc {
+// The field-line shape, one grammar shared by every reader of the block's
+// boundary (ruling 0228 D2): `Key: value`, the key a single English word of
+// letters/hyphens, the colon half- or fullwidth — the `：` tolerance every
+// other driver protocol line already has (plans/0035; the field block was the
+// last reader without it, 0165-152). parseUnitDoc's walk, taskBody's skip and
+// the near-miss scan below all read the same shape, so a `Key：` line is a
+// field to all of them or none.
+export const UNIT_FIELD_LINE = /^([A-Za-z][A-Za-z-]*)[:：](.*)$/
+
+// One walk over the document's head: the title line (if line 0 is one), blank
+// lines between it and the first field, then the contiguous run of
+// field-shaped lines — [start, end) is that run's extent, the one boundary
+// every field-block question is answered from.
+type FieldBlockWalk = { title?: string; start: number; end: number; fields: Record<string, string> }
+
+function walkFieldBlock(text: string): FieldBlockWalk {
   const lines = text.split("\n")
   let i = 0
   let title: string | undefined
@@ -264,17 +275,88 @@ export function parseUnitDoc(text: string): UnitDoc {
     while (i < lines.length && lines[i]!.trim() === "") i++
   }
   const fields: Record<string, string> = {}
+  const start = i
   for (; i < lines.length; i++) {
-    const m = /^([A-Za-z][A-Za-z-]*):(.*)$/.exec(lines[i]!.trim())
+    const m = UNIT_FIELD_LINE.exec(lines[i]!.trim())
     if (!m) break
     fields[m[1]!.toLowerCase()] = m[2]!.trim()
   }
+  return { ...(title !== undefined ? { title } : {}), start, end: i, fields }
+}
+
+// The field block is the run of `Key: value` lines right after the title line
+// (blank lines between the title and the first field allowed); the first
+// other line ends it, so body text like `Owner: …` under a section is never a
+// field. Without a title line the block starts at the top.
+export function parseUnitDoc(text: string): UnitDoc {
+  const { title, fields } = walkFieldBlock(text)
   const doc: UnitDoc = { fields }
   if (title !== undefined) doc.title = title
   if ("depends" in fields) doc.depends = /^none$/i.test(fields.depends!) ? "none" : listValue(fields.depends!)
   if ("touches" in fields) doc.touches = listValue(fields.touches!)
   if ("decompose" in fields) doc.decompose = fields.decompose!
   return doc
+}
+
+// The field block's near-miss scan (ruling 0228 D2, enacting 0165-077 and
+// 0165-152): the block was the strictest grammar with the weakest near-miss
+// discipline — a blank line between fields, a comment, `Key :`, `Key：` or
+// `**Key:**` ended the block and dropped the declaration silently (the
+// analysis/roadmap grammars got near-miss scans with 0084 and 0158; this one
+// had none). The scan names the shapes. Its region is the pre-body document:
+// line 0 through the line before the first `## ` heading (body text under a
+// section is content, never a field — the block reader's own boundary). Two
+// problem kinds, `known` the caller's field vocabulary (P7: the grammar's own
+// names, never content judgment):
+//   - a line naming a known field in any colon-bearing shape — the exact
+//     `Key:` form, spaces before the colon, the fullwidth `：`, emphasis
+//     wrapping — that sits outside the contiguous block (the block ended
+//     early at a blank line, a comment, or the near-miss form itself);
+//   - a repeated known-field key inside the block (the later line silently
+//     replaced the earlier one).
+// Every problem teaches the remedy. Consumers are the moments the document is
+// judged as just-written output (P8): the planning collect, the decompose
+// collect, and the phase-type load (which throws); the load-time readers keep
+// the byte-identical floor (P10) — see the ruling's D2 item 4.
+export function fieldBlockProblems(text: string, known: readonly string[]): string[] {
+  const lines = text.split("\n")
+  const { start, end } = walkFieldBlock(text)
+  const problems: string[] = []
+  // The region ends at the first `## ` heading — the body's own start.
+  let regionEnd = lines.length
+  for (let k = 0; k < lines.length; k++) {
+    if (/^##\s/.test(lines[k]!.trim())) {
+      regionEnd = k
+      break
+    }
+  }
+  // A known field's name in any of the shapes a hand writes it: emphasis-
+  // wrapped (`**Key:**`), the exact form, spaces around the colon, fullwidth.
+  // Line-anchored, so prose that merely mentions a field name is never one.
+  const matchers = known.map((name) => ({ name, re: new RegExp(`^(?:\\*{1,2}|__)?\\s*${name}\\s*(?:\\*{1,2}|__)?\\s*[:：]`, "i") }))
+  const inBlock = (k: number): boolean => k >= start && k < end
+  for (let k = 0; k < regionEnd; k++) {
+    if (inBlock(k)) continue
+    const line = lines[k]!.trim()
+    const hit = matchers.find(({ re }) => re.test(line))
+    if (hit) {
+      problems.push(
+        `line ${k + 1} names the field \`${hit.name}:\` outside the field block (a blank line, a comment or a near-miss colon form ended the block early) — keep the field lines contiguous right after the title line`,
+      )
+    }
+  }
+  const seen = new Map<string, number>()
+  for (let k = start; k < end; k++) {
+    const key = UNIT_FIELD_LINE.exec(lines[k]!.trim())?.[1]?.toLowerCase()
+    if (key === undefined || !known.some((name) => name.toLowerCase() === key)) continue
+    const first = seen.get(key)
+    if (first !== undefined) {
+      problems.push(`line ${first + 1}'s \`${key}:\` is repeated at line ${k + 1} — the later line silently replaced the earlier; declare each field once`)
+    } else {
+      seen.set(key, k)
+    }
+  }
+  return problems
 }
 
 // —— Dependencies (G3–G5) ——

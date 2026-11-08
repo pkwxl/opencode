@@ -58,8 +58,9 @@ This session completes the task-background understanding and the subtask decompo
 
 
 Subtask parallelism (high): this project runs independent subtasks side by side, each in its own isolated execution lane. Apply the
-level's discipline below to the checklist items — `Depends:` names only real prerequisites, `Artifacts:` lists every file the item will change,
-and two items that would change the same file are ordered with `Depends:` instead:
+level's discipline below to the subtasks — each S<nn>/todo.md's field block (its first lines, before `## Scope`) carries `Depends:` naming only
+real prerequisites, and two subtasks that would change the same file are ordered with `Depends:` instead; the checklist item line carries only
+`Artifacts:`, listing every file the subtask will change:
 
 Optimize for the largest number of tasks that can proceed side by side: split aggressively along file and module
 boundaries, move changes to shared files (common headers, build files, registries) into short tasks that come first

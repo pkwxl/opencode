@@ -10,6 +10,7 @@ import {
   type UnitDecl,
   type UnitRef,
   DECOMPOSE_MODES,
+  fieldBlockProblems,
   nextReady,
   parseDecompose,
   parseIndex,
@@ -258,6 +259,70 @@ describe("parseUnitDoc", () => {
     expect(parseDecompose("")).toBeUndefined()
     // Absent field stays undefined.
     expect(parseUnitDoc("# T-015: x\nPhase: R-01.P03\n").decompose).toBeUndefined()
+  })
+
+  // The colon tolerance (ruling 0228 D2, enacting 0165-152): the `：` form
+  // every other driver protocol line already reads (handoffStatus,
+  // CHECKLIST_FIELD); the field block was the one reader without it.
+  test("fullwidth `：` reads as the field colon, in block and in value position", () => {
+    const doc = parseUnitDoc("# T-005: x\nPhase： R-01.P02\nDepends：S01")
+    expect(doc.fields).toEqual({ phase: "R-01.P02", depends: "S01" })
+    expect(doc.depends).toEqual(["S01"])
+    expect(parseUnitDoc("# S02: x\nTouches： a.md").touches).toEqual(["a.md"])
+  })
+})
+
+describe("fieldBlockProblems (the near-miss scan, ruling 0228 D2; 0165-152/S21-04)", () => {
+  const scan = ["Depends", "Touches", "Phase"]
+
+  test("a clean block is silent, blank-after-title included; the body under the first `##` is out of the region", () => {
+    expect(fieldBlockProblems("# T-005: x\nPhase: R-01.P02\nDepends: none\n\n## Goal\n\nDepends: not a field\n", scan)).toEqual([])
+    expect(fieldBlockProblems("# T-005: x\n\nPhase: R-01.P02\n", scan)).toEqual([])
+    // no title: the block from the top
+    expect(fieldBlockProblems("Depends: S01\n\n## Scope\n", scan)).toEqual([])
+  })
+
+  test("a blank line between fields: the later declaration is a problem naming the line", () => {
+    const problems = fieldBlockProblems("# T-005: x\nPhase: R-01.P02\n\nDepends: S03\n\n## Goal\ng\n", scan)
+    expect(problems).toEqual([
+      "line 4 names the field `Depends:` outside the field block (a blank line, a comment or a near-miss colon form ended the block early) — keep the field lines contiguous right after the title line",
+    ])
+  })
+
+  test("a comment before the fields: every field line after it is a problem (the block never started)", () => {
+    const problems = fieldBlockProblems("# spec\n<!-- the doors are the person's fill -->\nWall: seal linux\n\n## plan duties\nd\n", ["Wall"])
+    expect(problems).toEqual([
+      "line 3 names the field `Wall:` outside the field block (a blank line, a comment or a near-miss colon form ended the block early) — keep the field lines contiguous right after the title line",
+    ])
+  })
+
+  test("near-miss colon forms outside the block: space-colon, fullwidth and bold key are problems (0165-077's shapes)", () => {
+    // each form after the blank that ended the block; the fullwidth form IN
+    // block position parses since the `[:：]` tolerance — only the
+    // outside-block placement is the near-miss
+    for (const [shape, line] of [
+      ["space-colon", "Wall : seal linux"],
+      ["fullwidth", "Wall： seal linux"],
+      ["bold", "**Wall:** seal linux"],
+    ] as const) {
+      const problems = fieldBlockProblems(`# spec\nGate: none\n\n${line}\n\n## plan duties\nd\n`, ["Wall", "Gate"])
+      expect(problems, shape).toHaveLength(1)
+      expect(problems[0], shape).toContain("line 4 names the field `Wall:` outside the field block")
+    }
+  })
+
+  test("a repeated known key inside the block names both lines (last-wins is no longer silent)", () => {
+    const problems = fieldBlockProblems("# T-005: x\nDepends: T-003\nDepends: none\n\n## Goal\ng\n", scan)
+    expect(problems).toEqual(["line 2's `depends:` is repeated at line 3 — the later line silently replaced the earlier; declare each field once"])
+  })
+
+  test("prose and unknown keys are never near-misses (P7/P19: the confirmed shapes only)", () => {
+    // an unknown key in exact shape inside the region ends the block but names no known field
+    expect(fieldBlockProblems("# T-005: x\nPhase: R-01.P02\nOwner: someone\n\n## Goal\ng\n", scan)).toEqual([])
+    // prose mentioning a field name is not line-anchored on it
+    expect(fieldBlockProblems("# T-005: x\nPhase: R-01.P02\n(no Depends: needed here)\n\n## Goal\ng\n", scan)).toEqual([])
+    // case-insensitive names, like the field reader
+    expect(fieldBlockProblems("# T-005: x\nPHASE : R-01.P02\n", scan)).toHaveLength(1)
   })
 })
 

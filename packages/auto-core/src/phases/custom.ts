@@ -32,7 +32,7 @@
 // result to the registry lookups, and a phase unit carries its entry.
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
-import { parseUnitDoc } from "../document/unit"
+import { fieldBlockProblems, parseUnitDoc } from "../document/unit"
 import { BUILTIN_PHASE_TYPES, PHASE_GATES, PRESET_FORM, TIERS, type PhaseGate, type PhaseTypeEntry, type Tier } from "./registry"
 
 export const PHASE_TYPE_DIR = join(".opencode", "auto", "phases")
@@ -42,6 +42,10 @@ export const PHASE_TYPE_DIR = join(".opencode", "auto", "phases")
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
 
 const FIELDS = ["tasks", "gate", "reasoning", "code-work", "wall", "phase-artifacts", "task-artifacts"] as const
+
+// The near-miss scan's vocabulary (0228 D2): FIELDS in its display casing —
+// the grammar's own names, matched case-insensitively like the field reader.
+const FIELD_SCAN = ["Tasks", "Gate", "Reasoning", "Code-work", "Wall", "Phase-artifacts", "Task-artifacts"] as const
 const SECTIONS: Record<string, "planDuties" | "decomposeDuties"> = {
   "plan duties": "planDuties",
   "decompose duties": "decomposeDuties",
@@ -86,6 +90,14 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
   if (unknown.length) {
     throw new Error(`${where} has unknown field(s) ${unknown.join(", ")} (available: Tasks, Gate, Reasoning, Code-work, Wall, Phase-artifacts, Task-artifacts)`)
   }
+  // The field block's near-miss scan (0228 D2, enacting 0165-077): a blank
+  // line between fields, a comment after the title, `Wall :`, `Wall：` or
+  // `**Wall:**` ended the block and silently dropped `Wall:` (the cleanroom
+  // boundary) or `Gate:` (the person's gate) — strictness covered only a
+  // misspelt key inside the contiguous block. The file is hand-edited by
+  // design (0132 D1's person-owned fill), so the load throws with the line.
+  const nearMiss = fieldBlockProblems(text, FIELD_SCAN)
+  if (nearMiss.length) throw new Error(`${where}: ${nearMiss.join("; ")}`)
   const tasks = (doc.fields.tasks ?? "yes").toLowerCase()
   if (tasks === "no") {
     throw new Error(`${where}: Tasks: no is not supported (a custom phase type always plans and runs tasks; task-less phases are builtin only)`)

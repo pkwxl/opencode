@@ -27,8 +27,21 @@ describe("roleOf", () => {
     ["docs/T-001/handoff.md", "handoff"],
     ["docs/T-001/S02/testhandoff-3.md", "handoff"],
     // the per-stream session handoff of lane streams (plans/0068 S5): the
-    // family reads by file name, wherever under docs/ it sits
+    // family reads by file name, under the task family's docs/T-NNN/
+    // directories alone (0228 D1 — every constructed path of the family
+    // lives there; a same-named file anywhere else is freeform, the rows
+    // below)
     ["docs/T-001/S02/handoff.md", "handoff"],
+    ["docs/T-001/S02/testhandoff.md", "handoff"],
+    // the name test's escape, closed (0228 D1, enacting 0165-041): a
+    // deliverable file in a nested destination repository, a workspace-root
+    // file and a docs/ path outside the task family are freeform — P1-scoped
+    // and eof-scanned, never the process handoff role by collision
+    ["dest/kernel/handoff.md", "freeform"],
+    ["handoff.md", "freeform"],
+    ["dest/testhandoff-2.md", "freeform"],
+    ["docs/guide/handoff.md", "freeform"],
+    ["docs/R-01/handoff.md", "artifact"], // a round-dir document; no machinery constructs it
     ["docs/R-02/P02-design/handover.md", "handoff"], // phase handover
     ["docs/R-100/P12-custom-type/handover.md", "handoff"],
     ["docs/R-01/P05-acceptance/acceptance.md", "phaseAcceptance"],
@@ -236,6 +249,19 @@ describe("processReferenceScan", () => {
       { nested: ["dest"] },
     )
     expect(problems).toEqual([])
+  })
+
+  // The name collision the handoff role once granted is closed (0228 D1,
+  // enacting 0165-041): a deliverable file named handoff.md in a nested
+  // destination repository is freeform — P1-scoped, so its process references
+  // count during rounds and itemize at the person's release moment.
+  test("a nested destination handoff.md is scanned (the name collision closed, 0228 D1)", () => {
+    const added = new Map([["dest/kernel/handoff.md", lines("See docs/T-012/report.md for the rationale.")]])
+    const rounds = processReferenceScan(added, [], { nested: ["dest"] })
+    expect(rounds.deferredCount).toBe(1)
+    const release = processReferenceScan(added, [], { nested: ["dest"], release: true })
+    expect(release.problems).toHaveLength(1)
+    expect(release.problems[0]).toContain('dest/kernel/handoff.md:1 references "docs/T-012/report.md"')
   })
 
   test("the working directory's own files are never scanned — process workspace, whatever they reference (plans/0108)", () => {

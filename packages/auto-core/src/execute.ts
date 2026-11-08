@@ -23,6 +23,7 @@ import { anchorBaseline, coldStart, consumeNote, nameSubject, resetRoute } from 
 import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
 import { handoffFile, subtaskDoc, taskDoc, taskDocPaths, testHandoffFile } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
+import { fieldBlockProblems } from "./document/unit"
 import { eofScanExempt, handoffStatus, parkDirective } from "./document/roles"
 import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, directoryArtifactSpecs, subtaskStateSpec, taskArtifactSpecs } from "./document/spec"
 import { checklistPrerequisites, checklistProblems, renameTodoToDone, restoreTodoFromDone, subtaskId } from "./document/state"
@@ -47,6 +48,7 @@ import { handoffSteer, removeHandoffChain, type Steer } from "./testrun"
 import { liveUsage, sessionHandoverDue, splitUsageReached } from "./usage"
 import { commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
 import {
+  CHECKLIST_FIELD,
   checklistTitle,
   forkBaseFor,
   promptViews,
@@ -906,8 +908,35 @@ async function decomposeArtifactProblems(dir: string, taskId: string): Promise<s
   if (items.length) {
     for (const problem of checklistProblems(await readChecklist(dir, taskId))) problems.push(`docs/${taskId}/S<nn>/todo.md: ${problem}`)
   }
+  // The field block's near-miss scan over each S<nn>/todo.md (0228 D2,
+  // enacting 0165-152): a blank line, a comment or a near-miss colon form in
+  // the session's scope file silently dropped the subtask's declared
+  // `Depends:`/`Touches:` — the item ran serial / "touches everything" with
+  // no problem line. The vocabulary is the subtask pair of the unit grammar.
+  for (const [i, item] of items.entries()) {
+    const raw = await Bun.file(join(dir, subtaskDoc(taskId, i + 1, "todo"))).text().catch(() => "")
+    for (const problem of fieldBlockProblems(raw, SUBTASK_FIELD_SCAN)) {
+      problems.push(`docs/${taskId}/${subtaskId(i + 1)}/todo.md ${problem}`)
+    }
+    // One home for the decompose pipeline's `Depends:` (0228 D3, enacting
+    // 0165-153): this checklist's item line declares only `Artifacts:`; the
+    // dependency field belongs in the S<nn>/todo.md field block, and a
+    // line-level one was silently unread (the split's checklist is its own
+    // declaration surface, 0059 D5 — read there by splitItem, never here).
+    // CHECKLIST_FIELD is the split's own grammar, so the problem fires on
+    // exactly what the split would have read.
+    if ([...item.text.matchAll(CHECKLIST_FIELD)].some((m) => m[1]!.toLowerCase() === "depends")) {
+      problems.push(
+        `docs/${taskId}/subtasks.md item ${i + 1} carries a line-level \`Depends:\` — the decompose checklist's item line declares only \`Artifacts:\`; the subtask dependency field belongs in docs/${taskId}/${subtaskId(i + 1)}/todo.md's field block (its first lines, before \`## Scope\`); remove it from the checklist line`,
+      )
+    }
+  }
   return problems
 }
+
+// The subtask scope file's field vocabulary for the near-miss scan (0228 D2):
+// the subtask pair of the unit grammar (_partials.md subtask-depends).
+const SUBTASK_FIELD_SCAN = ["Depends", "Touches"] as const
 
 // The fork base of a stream of auto's taken split (plans/0059 D5): the lead
 // session recorded when the split was taken, read for the chain's agent under

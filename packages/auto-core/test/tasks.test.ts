@@ -721,6 +721,56 @@ describe("planning output", () => {
     expect(wrongPhase.decl).toEqual({ id: "T-007" })
   })
 
+  // The field block's near-miss scan (ruling 0228 D2, enacting 0165-152 /
+  // S21-04): a blank line, a comment or a near-miss colon form between the
+  // title and the body silently ended the block — a planned task's declared
+  // Depends/Touches/Decompose/Artifacts vanished with no problem line
+  // (Depends fell to the previous sibling, the marker guards of 0171 D6 /
+  // 0205 D2 covered only what parsed). The collect now reports the line.
+  test("near-miss field-block shapes are planning problems with the contiguity remedy (0228 D2)", async () => {
+    // a blank line between fields: Depends sat outside the block, silently dropped
+    await mkdir(join(dir, "docs/T-010"), { recursive: true })
+    await Bun.write(
+      join(dir, "docs/T-010/todo.md"),
+      "# T-010: a\nPhase: R-01.P01\n\nDepends: none\n\n## Goal\n\ng\n\n## Scope\n\nsrc/a.ts only\n\n## Acceptance\n\nbun test passes\n\n<!-- auto: eof -->\n",
+    )
+    const blank = await newTaskProblems(dir, phase, "T-010", { before: new Set() })
+    expect(blank.problems).toContain(
+      "docs/T-010/todo.md line 4 names the field `Depends:` outside the field block (a blank line, a comment or a near-miss colon form ended the block early) — keep the field lines contiguous right after the title line",
+    )
+    // the decl still rides (only a spec failure withholds it) — the graph
+    // check consumes the parsed fields while the retry feedback fixes the doc
+    expect(blank.decl).toEqual({ id: "T-010" })
+    // a `Closed:` in near-miss shape: the marker guard's outside-block arm
+    await mkdir(join(dir, "docs/T-011"), { recursive: true })
+    await Bun.write(
+      join(dir, "docs/T-011/todo.md"),
+      "# T-011: a\nPhase: R-01.P01\n\n**Closed:** superseded\n\n## Goal\n\ng\n\n## Scope\n\nsrc/a.ts only\n\n## Acceptance\n\nbun test passes\n\n<!-- auto: eof -->\n",
+    )
+    const closed = await newTaskProblems(dir, phase, "T-011", { before: new Set() })
+    expect(closed.problems).toContain(
+      "docs/T-011/todo.md line 4 names the field `Closed:` outside the field block (a blank line, a comment or a near-miss colon form ended the block early) — keep the field lines contiguous right after the title line",
+    )
+    // a repeated key: last-wins is no longer silent
+    await mkdir(join(dir, "docs/T-012"), { recursive: true })
+    await Bun.write(
+      join(dir, "docs/T-012/todo.md"),
+      "# T-012: a\nPhase: R-01.P01\nDepends: T-003\nDepends: none\n\n## Goal\n\ng\n\n## Scope\n\nsrc/a.ts only\n\n## Acceptance\n\nbun test passes\n\n<!-- auto: eof -->\n",
+    )
+    const dup = await newTaskProblems(dir, phase, "T-012", { before: new Set() })
+    expect(dup.problems).toContain("docs/T-012/todo.md line 3's `depends:` is repeated at line 4 — the later line silently replaced the earlier; declare each field once")
+    // the colon tolerance's floor: the fullwidth form in block position parses
+    // (no problem, the field read) — same behavior as `Depends: none`
+    await mkdir(join(dir, "docs/T-013"), { recursive: true })
+    await Bun.write(
+      join(dir, "docs/T-013/todo.md"),
+      "# T-013: a\nPhase: R-01.P01\nDepends： none\n\n## Goal\n\ng\n\n## Scope\n\nsrc/a.ts only\n\n## Acceptance\n\nbun test passes\n\n<!-- auto: eof -->\n",
+    )
+    const fullwidth = await newTaskProblems(dir, phase, "T-013", { before: new Set() })
+    expect(fullwidth.problems).toEqual([])
+    expect(fullwidth.decl).toEqual({ id: "T-013", depends: "none" })
+  })
+
   test("taken ids = other phases' indexes and completed tasks; resetPlanning clears only this phase's own output", async () => {
     const [p1, p2] = await syncPhaseIndex(dir, 1, "adm")
     await Bun.write(join(dir, p1!.dir, "tasks.md"), renderTaskIndex("R-01.P01", [{ id: "T-001", title: "a" }]))
