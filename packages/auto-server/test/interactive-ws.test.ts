@@ -15,12 +15,15 @@
 //     still answers an authenticated 404 for a run this daemon never had);
 //   - an authenticated client's hello answers hello with the run's registry
 //     state.
-// The run under test is a real spawned worker over an empty directory (it
-// dies fast at preflight with exit 1 — the registry entry and the hub live
-// on, which is all these cases need).
+// The run under test is a real spawned worker that STAYS live for the suite
+// (a stand-in that sleeps — plans/0224 D2 closed the terminal side: a
+// terminal run's hub dies with it, its client endpoint answering the
+// terminal 409 and its bridge the secret-invalidating 401, both pinned in
+// test/daemon.test.ts's end-of-life suite; these guard rails need the open
+// channel).
 import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
-import { join, basename } from "node:path"
+import { basename, join } from "node:path"
 import { tmpdir } from "node:os"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
@@ -38,33 +41,31 @@ type Harness = {
   request: (method: string, path: string, token?: string) => Promise<Response>
 }
 
-// One daemon, one fast-dying run (an empty directory: preflight's own exit
-// 1), and the three tokens of the scope matrix.
+// One daemon, one stand-in worker run that stays live (it never takes the
+// lock, so the entry reads `starting`), and the three tokens of the scope
+// matrix. The finally kills the stand-in through the daemon's own DELETE
+// (the double-SIGINT path — the stand-in installs no handler) so no child
+// outlives the suite.
 async function withHarness(fn: (h: Harness) => Promise<void>): Promise<void> {
   const dataDir = await mkdtemp(join(tmpdir(), "auto-server-ws-data-"))
   const dir = await mkdtemp(join(tmpdir(), "auto-server-ws-"))
   try {
+    const standIn = join(dataDir, "stand-in.ts")
+    await Bun.write(standIn, ["await Bun.sleep(60_000)", "", ""].join("\n"))
     const store = new DaemonStore(dataDir)
     store.register(dir)
     const answer = store.issueToken("answer", "answerer").token
     const control = store.issueToken("control", "controller").token
     const read = store.issueToken("read", "reader").token
-    const daemon = await startDaemon({ dataDir, port: 0 })
+    const daemon = await startDaemon({ dataDir, port: 0, worker: { command: process.execPath, prefix: [standIn] } })
     const request = (method: string, path: string, token?: string, body?: unknown) =>
       fetch(`${daemon.url}${path}`, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "content-type": "application/json" }) }, body: body === undefined ? undefined : JSON.stringify(body) })
     const started = await request("POST", "/runs", control, { project: basename(dir) })
     const runId = ((await started.json()) as { id: string }).id
-    // Wait the run out so the terminal entry is what the sockets see.
-    const deadline = Date.now() + 60_000
-    for (;;) {
-      const run = (await (await request("GET", `/runs/${runId}`, read)).json()) as { live: boolean }
-      if (!run.live) break
-      if (Date.now() > deadline) throw new Error("the probe run never settled")
-      await Bun.sleep(100)
-    }
     try {
       await fn({ daemon, answer, control, read, runId, request })
     } finally {
+      await request("DELETE", `/runs/${runId}`, control).catch(() => {})
       await daemon.stop()
     }
   } finally {
@@ -117,8 +118,8 @@ describe("the daemon's interactive endpoints: auth, scopes and the registry", ()
       const wrong = await fetch(`${h.daemon.url}/runs/${h.runId}/worker?token=oar_wrong`)
       expect(wrong.status).toBe(401)
       // The connect a client actually makes: hello names the run and its
-      // registry state (the probe run settled failed/1; no bridge — the
-      // empty directory's worker never built one).
+      // registry state (the stand-in run stays `starting` — it never takes
+      // the lock — and no bridge exists: the stand-in never builds one).
       const base = `${h.daemon.url.replace("http", "ws")}/runs/${h.runId}/interactive`
       const client = wsClient(`${base}?token=${h.answer}`)
       try {
@@ -126,7 +127,7 @@ describe("the daemon's interactive endpoints: auth, scopes and the registry", ()
         // handshake resolves — await the frame itself, never frames[0] at
         // `opened` (the ws-protocol suite's same fix).
         const hello = await client.nextOf((frame) => frame.type === "hello", "the client's hello")
-        expect(hello).toMatchObject({ type: "hello", run: h.runId, state: "failed", worker: false })
+        expect(hello).toMatchObject({ type: "hello", run: h.runId, state: "starting", worker: false })
         // A control frame with no bridge connected is refused, not lost —
         // from a client of the control tier (the answer-tier client would
         // be refused on the scope alone).

@@ -178,6 +178,22 @@ projects execute in parallel, each in its own worker child.
   onto the run's own graceful-exit request (see the interactive transport
   below), while the kill remains the force-terminate path beside it.
 
+**A terminal run's channel and record are bounded** (plans/0224 D2): the
+interactive hub — the per-run bridge secret, the sockets, the open
+questions — dies with the run, at the one settle seam every terminal
+transition flows through. Still-connected clients receive the
+`settled`/`closed` frames first; after that the worker bridge no longer
+upgrades (its route answers the same **401** the unknown secret always did),
+the client endpoint answers a plain **409** stating the channel closed with
+the run, and a socket that outlives its hub is refused on its next frame —
+never silently routed (a forged `question` frame on a dead run's bridge is
+refused instead of journaled). The registry keeps the newest **50** terminal
+records (insertion order — a dashboard page of recent history); past that
+count the oldest evict with their hubs, and a GET on an evicted id answers
+the same **404** a post-restart GET always did — the run's truth lives in
+its own committed output, never in this process's memory. Live and
+`restored` runs never count toward the bound.
+
 ### Lock conflicts
 
 One run per directory, with `.auto/run.lock` as the arbiter — the same rule for
@@ -434,9 +450,19 @@ One response, assembled per poll:
   self-report is never trusted), a phase likewise, and the tree's verdicts are
   settled only over a clean worktree. `in_progress`/`blocked` come from the
   runtime state the driver writes (`.auto/units.json`), never from the log.
-- `git` — dirty/clean **per worktree** (the project tree's every repository,
-  nested ones included; entries as `XY <path>` relative to the project
-  directory), plus the overall verdict. The status is read with git's
+  The `worktree` verdict carries a third state (plans/0224 D3): **`unknown`**
+  when git could not report on a repository of the project and nothing is
+  dirty — a settled dirty fact outranks an unsettled read (`dirty` →
+  `unknown` → `clean`), and each unreadable repository adds one line to
+  `verdicts.problems` naming git's own error (a corrupted `.git/index` makes
+  `git status` exit 128; the verdict never resolves that to clean).
+- `git` — clean/dirty/unknown **per worktree** (the project tree's every
+  repository, nested ones included; entries as `XY <path>` relative to the
+  project directory), plus the overall verdict — `clean` is false whenever
+  any worktree is unknown (the conservative aggregate). A repository git
+  cannot read reports `clean: false` with no entries and the additive
+  `unknown` field carrying git's own stderr line (the error named, never
+  swallowed). The status is read with git's
   `--no-optional-locks`: a concurrent poller must never take `.git/index.lock`
   — without the flag, a poll can collide with the observed run's own
   `git add` and block the run it is watching.
@@ -694,16 +720,34 @@ its hub (the journaled secret, the journaled questions). Then:
   that stays gone leaves the run to reach its own exit vocabulary
   (blocked/exit 2 under `humanQuestions`).
 
+**The retire rule** (plans/0224 D1): a journal-pending run is restored only
+when the disk still holds evidence a worker can reconnect — the replay reads
+`liveRunLock` of the journaled directory before creating the stub. A worker
+holds `.auto/run.lock` for its whole run, so no lock (or a stale holder —
+its process gone) means the orphan worker is dead: no bridge will ever
+reconnect, and the run **retires right there** — one journaled `closed`
+settle per still-open question (durable even if the compaction that follows
+cannot write, so the next restart's fold drops the run on its own), no
+registry entry, no hub. The stub cannot return at every restart forever: every
+replay re-derives from the lock. An **unreadable** lock keeps the stub
+(liveRunLock's conservative reading — the daemon cannot prove no live run);
+a live holder that is not the orphan (a successor run took the directory)
+keeps it too, deferring the retire to the next restart whose replay finds
+the lock gone — the stub's worst life is one daemon generation, bounded by
+real runs, never immortal.
+
 A `restored` run is not live and never terminal: its worker is not this
-daemon's child (no process to supervise, no exit to observe — `DELETE
-/runs/<id>` answers **409** naming that), the on-disk lock arbitrates its
-directory exactly as for any other driver process, and the run's own state
-lives on the disk it writes. One documented edge: a worker that dies in a
-restart window without ever reconnecting leaves its journaled questions
-pending in the daemon's view (answers get the honest "bridge not connected"
-refusal; the P2b stream carries the true lifecycle). Run **history** still
-does not survive a restart (P1's own decision, unchanged) — only the pending
-set does.
+daemon's child (no process to supervise, no exit to observe), the on-disk
+lock arbitrates its directory exactly as for any other driver process, and
+the run's own state lives on the disk it writes. `DELETE /runs/<id>` re-reads
+the lock: with **no live holder the delete IS the retire** (the person's
+in-band remedy) — a **200** carrying the retired view with a note stating
+exactly that, the open questions settled `closed` and journaled, the hub and
+registry entry dropped. A live holder (or an unreadable lock) keeps the
+**409**, its hint teaching the real path: stop the holder, then this same
+DELETE retires the restored view — the hand-edited-journal cure is never
+needed. Run **history** still does not survive a restart (P1's own decision,
+unchanged) — only the pending set does, and only behind live evidence.
 
 ## The Web client (P4)
 

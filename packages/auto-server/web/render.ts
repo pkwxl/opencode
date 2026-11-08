@@ -170,7 +170,7 @@ export type TaskVerdict = {
   attempts: number
   subtasks: { text: string; done: boolean }[]
 }
-export type Verdicts = { rule: string; worktree: "clean" | "dirty"; phases: PhaseVerdict[]; tasks: TaskVerdict[]; problems: string[] }
+export type Verdicts = { rule: string; worktree: "clean" | "dirty" | "unknown"; phases: PhaseVerdict[]; tasks: TaskVerdict[]; problems: string[] }
 
 // One rendered row of the verdict table. `mark` is the completion mark and it
 // has exactly one source: the read model's commit verdicts (done.md inside
@@ -215,9 +215,15 @@ export function verdictRows(verdicts: Verdicts): VerdictRow[] {
 // The banner the verdict table carries: the completion rule itself, and —
 // when the worktree is dirty — the honest "verdicts unsettled" state (the
 // read model settles verdicts only over a clean worktree; git is the record).
+// The third state (plans/0224 D3): git could not report — a repository of
+// the project is unreadable, the verdict table's ⚠ rows name git's own
+// error, and the verdicts are unsettled the same way.
 export function verdictBanner(verdicts: Verdicts): string {
   if (verdicts.worktree === "dirty") {
     return "worktree dirty — verdicts unsettled (a unit is done when its closing commit landed and the tree is clean; git is the record)"
+  }
+  if (verdicts.worktree === "unknown") {
+    return "git could not report — verdicts unsettled (a repository of this project could not be read; the table's ⚠ rows name git's own error; git is the record)"
   }
   return "completion = commit verdicts (done.md renamed inside the driver's closing commit; agent self-report is never trusted)"
 }

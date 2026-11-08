@@ -34,7 +34,10 @@ export type RunView = {
   request?: RunRequest
 }
 
-export type WorktreeVerdict = { root: string; clean: boolean; changed: string[] }
+// The additive third state (plans/0224 D3): `unknown` names a repository git
+// could not report on (the error in git's own words); absent on every
+// readable one.
+export type WorktreeVerdict = { root: string; clean: boolean; changed: string[]; unknown?: string }
 export type StatusModel = {
   directory: string
   generated: string
@@ -43,7 +46,7 @@ export type StatusModel = {
   status: string[]
   verdicts: {
     rule: string
-    worktree: "clean" | "dirty"
+    worktree: "clean" | "dirty" | "unknown"
     phases: { id: string; label: string; done: boolean; closed: string | null; current: boolean }[]
     tasks: {
       id: string

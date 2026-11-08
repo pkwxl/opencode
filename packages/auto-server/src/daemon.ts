@@ -146,6 +146,36 @@ export function terminalOf(exitCode: number | null, signalCode: string | null): 
   }
 }
 
+// The registry's terminal bound (plans/0224 D2, the 0165-170 finding —
+// 0160's named deferral "run-registry eviction in a long-lived daemon",
+// discharged): every terminal record keeps its 8 KiB tail and request for
+// the daemon's life, so past this count the oldest terminal records (Map
+// insertion order — the registry's natural start order) evict WITH their
+// hubs. A count, not an age: no consumer asks by age, and a restart clears
+// the registry whole ("run history does not survive a restart", P1's
+// decision 0160 restated) — the bound only caps THIS process's memory.
+// Live and `restored` runs never count or evict: a live run is the
+// machine's own business, and a restored stub retires on the lock's
+// evidence (plans/0224 D1), not by this bound. A GET on an evicted id
+// answers the same 404 a post-restart GET always did — the run's truth
+// lives in its own committed output, never in this process's memory.
+// AUTO-DECISION (50): the record's own measure (8 KiB per tail) bounds the
+// kept history near half a megabyte — a dashboard page of recent runs.
+export const MAX_TERMINAL_RUNS = 50
+
+// Pure over the two maps (exported for its pin); called at every settle.
+export function evictTerminalRuns(runs: Map<string, { state: string }>, hubs: Map<string, unknown>, bound: number = MAX_TERMINAL_RUNS): void {
+  let terminals = 0
+  for (const run of runs.values()) if (TERMINAL_STATES.includes(run.state as TerminalState)) terminals++
+  for (const [id, run] of runs) {
+    if (terminals <= bound) break
+    if (!TERMINAL_STATES.includes(run.state as TerminalState)) continue
+    runs.delete(id)
+    hubs.delete(id)
+    terminals--
+  }
+}
+
 type RunRecord = {
   id: string
   project: string
@@ -265,14 +295,27 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // —— the persistent pending-question queue (P3c, src/question-journal.ts) ——
   //
   // Replay the daemon's own journal at start: every run it left with an
-  // open question comes back as a `restored` registry stub beside its hub
-  // (the journaled secret re-authenticates the orphan worker's bridge
-  // reconnect, the journaled questions redeliver to the first client that
-  // connects), and the journal is compacted down to that pending set —
-  // history does not survive a restart (P1's own decision, unchanged); the
-  // pending state does. This is daemon-owned state in the daemon's own data
-  // directory, never under a target directory's `.auto/` (the
-  // driver-exclusive-writes constitution).
+  // open question AND whose directory still holds evidence a worker can
+  // reconnect comes back as a `restored` registry stub beside its hub (the
+  // journaled secret re-authenticates the orphan worker's bridge reconnect,
+  // the journaled questions redeliver to the first client that connects),
+  // and the journal is compacted down to that pending set — history does
+  // not survive a restart (P1's own decision, unchanged); the pending state
+  // does. This is daemon-owned state in the daemon's own data directory,
+  // never under a target directory's `.auto/` (the driver-exclusive-writes
+  // constitution).
+  //
+  // The journal's append side, as the interactive handlers and the run
+  // supervision call it (best-effort inside: a journal that cannot be
+  // written degrades durability, never serving). Defined ahead of the
+  // replay below because the replay's retire arm writes the same durable
+  // `closed` settles every other retire does (plans/0224 D1).
+  const journalRaise = (run: string, question: { id: string; text: string; minutes?: number }): void => {
+    appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run, event: "raised", id: question.id, text: question.text, ...(question.minutes !== undefined ? { minutes: question.minutes } : {}) })
+  }
+  const journalSettle = (run: string, id: string, how: "answered" | "timeout" | "transport" | "closed"): void => {
+    appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run, event: "settled", id, how })
+  }
   const { events: journalEvents, skipped: journalSkipped } = readJournal(options.dataDir)
   if (journalSkipped > 0) {
     console.error(`the question journal under ${options.dataDir} holds ${journalSkipped} record(s) this version does not read (a torn crash tail or a newer format); they were skipped at replay`)
@@ -281,6 +324,28 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const restoredRuns = foldJournal(journalEvents)
   for (const restored of restoredRuns.values()) {
     if (runs.has(restored.run)) continue
+    // The retire gate (plans/0224 D1, the 0165-168 finding): the journal
+    // says a question is open, but the disk arbitrates whether any process
+    // can still answer it. A worker holds .auto/run.lock for its whole
+    // run, so liveRunLock answering undefined (no lock, or a holder whose
+    // process is gone) means the orphan worker is dead — no bridge will
+    // ever reconnect, and restoring the stub would only immortalize it
+    // (the finding's shape: the stub returning at EVERY restart, its
+    // questions pending forever). The retire is durable and idempotent:
+    // one journaled `closed` settle per still-open question (the same
+    // event the run-terminal retire writes — even a compaction that
+    // cannot write leaves the next restart's fold dropping the run on its
+    // own), and the run leaves the restored set compaction keeps. An
+    // UNREADABLE lock keeps the stub (liveRunLock's conservative reading —
+    // the daemon cannot prove no live run); a live holder keeps it too,
+    // whether it is the orphan (the P3c reconnect path, byte-identical)
+    // or a successor that took the directory (the stub then retires at
+    // the next restart whose replay finds the lock gone).
+    if (liveRunLock(restored.directory) === undefined) {
+      for (const question of restored.questions) journalSettle(restored.run, question.id, "closed")
+      restoredRuns.delete(restored.run)
+      continue
+    }
     runs.set(restored.run, {
       id: restored.run,
       project: restored.project,
@@ -301,16 +366,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     hubs.set(restored.run, hub)
   }
   compactJournal(options.dataDir, journalEvents, restoredRuns)
-
-  // The journal's append side, as the interactive handlers and the run
-  // supervision call it (best-effort inside: a journal that cannot be
-  // written degrades durability, never serving).
-  const journalRaise = (run: string, question: { id: string; text: string; minutes?: number }): void => {
-    appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run, event: "raised", id: question.id, text: question.text, ...(question.minutes !== undefined ? { minutes: question.minutes } : {}) })
-  }
-  const journalSettle = (run: string, id: string, how: "answered" | "timeout" | "transport" | "closed"): void => {
-    appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run, event: "settled", id, how })
-  }
 
   // The P1d operation surface runs in this process (library calls into the
   // core, never a worker child: an operation is a synchronous
@@ -394,11 +449,25 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // `closed` — a durable settlement (journaled, unlike a bridge blip),
     // because the process that held the ask has ended. Usually the bridge
     // socket's own close already settled them for the clients; this covers
-    // the ordering race and journals the ids either way.
+    // the ordering race and journals the ids either way. The broadcast above
+    // is the clients' notice: what follows takes the hub away.
     const hub = hubs.get(run.id)
     if (hub !== undefined) {
       for (const id of settleOpenQuestions(hub, "closed")) journalSettle(run.id, id, "closed")
     }
+    // The hub dies with its run (plans/0224 D2, the 0165-170 finding): the
+    // per-run secret's lifetime is the run's non-terminal life exactly, so a
+    // terminal run's worker bridge can no longer upgrade — the worker route's
+    // hub-undefined arm below answers the same 401 the unknown secret always
+    // did (auth stays indistinguishable), and a forged raise on a dead run's
+    // bridge is refused instead of journaled. A still-connected client got
+    // its settled/closed frames just above; its next frame is refused ("not
+    // in this daemon's registry"), never silently routed.
+    hubs.delete(run.id)
+    // The registry's terminal bound (above): past MAX_TERMINAL_RUNS terminal
+    // records the oldest evict with their hubs — the tail memory this
+    // process holds for closed history stays bounded.
+    evictTerminalRuns(runs, hubs)
   }
 
   const watch = (run: RunRecord, spawnAt: string): void => {
@@ -792,14 +861,33 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     if (run.state === "restored") {
       // A restored run is not this daemon's child: there is no process here
       // to signal, and pretending a kill was requested would be a 202 that
-      // does nothing. The worker is an orphan of the restart — if it still
-      // runs, the directory's lock (and the machine's process table) is
-      // where it lives; if it is gone, the lock is stale and the next run's
-      // own next-acquirer cleanup handles it.
+      // does nothing. Whether the DELETE can act is the lock's own evidence
+      // (plans/0224 D1, the 0165-168 finding): a worker holds .auto/run.lock
+      // for its whole run, so with no live holder the orphan worker is dead
+      // — no bridge will ever reconnect — and this DELETE IS the retire
+      // (the person's in-band remedy; the hand-edited-journal cure the
+      // finding found taught nowhere is never needed). A live holder (or an
+      // unreadable lock — liveRunLock's conservative reading, the daemon
+      // cannot prove no live run) keeps the 409, its hint teaching the real
+      // path: stop the holder, then this same DELETE retires the view.
+      const holder = liveRunLock(run.directory)
+      if (holder === undefined) {
+        const hub = hubs.get(run.id)
+        if (hub !== undefined) {
+          for (const id of settleOpenQuestions(hub, "closed")) journalSettle(run.id, id, "closed")
+        }
+        hubs.delete(run.id)
+        runs.delete(run.id)
+        return json(200, {
+          ...view(run),
+          note: `the restored view was retired by this delete: no live holder holds ${run.directory}/.auto/run.lock, so the orphan worker can never reconnect — its open questions settled closed (journaled), and the run left the registry (GET /runs no longer lists it)`,
+        })
+      }
       return json(409, {
         error: `run ${run.id} was restored from the question journal after a daemon restart: its worker is not this daemon's child, so there is nothing here to kill`,
         run: view(run),
-        hint: "stop the worker process on this machine directly if it still runs (its pid was in the previous daemon's registry; .auto/run.lock names it), or — if no such process exists — delete .auto/run.lock by hand",
+        ...(holder === "unreadable" ? {} : { holder }),
+        hint: `stop the process that holds ${run.directory}/.auto/run.lock (the lock names it; a lock that cannot be read counts as held); once no live holder remains, this same DELETE retires the restored view — its open questions settle closed (journaled) and the run leaves the registry`,
       })
     }
     const proc = run.proc
@@ -957,6 +1045,19 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       }
       const run = findRun(segments[1]!)
       if (!run) return json(404, { error: `no run ${segments[1]} (runs are identified by the id POST /runs returned)` })
+      // A terminal run's channel closed with the run (plans/0224 D2, the
+      // 0165-170 finding): settle dropped the hub — its open questions
+      // settled `closed` — so no socket serves this run anymore, neither a
+      // bridge nor a client. The plain 409 states the close (a state check
+      // beside the credential, as the record asks — the hub's lifetime is
+      // the one mechanism) instead of upgrading into a socket that would
+      // only be refused on its first frame.
+      if (TERMINAL_STATES.includes(run.state as TerminalState)) {
+        return json(409, {
+          error: `run ${run.id} is ${run.state} (terminal): the interactive channel closed with the run — its open questions settled closed when it ended, and no bridge or client socket serves it anymore`,
+          run: view(run),
+        })
+      }
       // A wide run carries no channel (plans/0162): the transport skip at
       // spawn time is the rule, and this endpoint answers it plainly
       // instead of upgrading into a socket nothing will ever speak on —

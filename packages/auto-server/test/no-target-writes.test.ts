@@ -45,15 +45,19 @@ const ASK = "enter your answer (Enter to confirm, no timeout and no automatic an
 
 // The previous daemon life, as the daemon itself journals it: one run, one
 // hard-wait ask still open (the seed of test/question-queue.test.ts — the
-// replay path this guard drives needs a pending question to redeliver).
-function seed(dataDir: string): void {
+// replay path this guard drives needs a pending question to redeliver). The
+// seeded run's directory must hold a LIVE lock (the same-lockstep fixture
+// repair of plans/0224 D1): a journal-pending run whose directory no process
+// holds is the retire scene, retired at replay before any surface could
+// serve it.
+function seed(dataDir: string, directory: string): void {
   const opened: JournalEvent = {
     v: 1,
     at: new Date().toISOString(),
     run: RUN,
     event: "opened",
     project: "proj",
-    directory: "/tmp/seeded",
+    directory,
     secret: SECRET,
     started: new Date().toISOString(),
     request: { options: {}, switches: {} },
@@ -142,10 +146,16 @@ describe("the daemon writes nothing inside a registered target (the P3c snapshot
   test("every non-driver surface leaves the project byte-identical; the daemon's own writes stay in its data dir", async () => {
     const project = await fixtureProject("auto-server-writes-")
     const dataDir = await mkdtemp(join(tmpdir(), "auto-server-writes-data-"))
-    seed(dataDir)
     // A genuinely-live lock holder (not this process): every lock read the
     // daemon makes probes the pid and must never repair or remove the file.
     const holderProc = Bun.spawn(["sleep", "60"])
+    // The seeded run's directory with its live lock, outside the project
+    // (plans/0224 D1's replay retire gate reads it at start): the restored
+    // run's surfaces this guard drives stay served.
+    const seededDir = await mkdtemp(join(tmpdir(), "auto-server-writes-seed-"))
+    await mkdir(join(seededDir, ".auto"), { recursive: true })
+    await Bun.write(join(seededDir, ".auto", "run.lock"), `${JSON.stringify({ pid: holderProc.pid, host: hostname(), command: "run", started: new Date().toISOString() })}\n`)
+    seed(dataDir, seededDir)
     const daemon = await startDaemon({ dataDir, port: 0 })
     try {
       const store = daemon.store
@@ -278,6 +288,7 @@ describe("the daemon writes nothing inside a registered target (the P3c snapshot
       holderProc.kill()
       await daemon.stop()
       await rm(dataDir, { recursive: true, force: true })
+      await rm(seededDir, { recursive: true, force: true })
       await rm(project, { recursive: true, force: true })
     }
   }, 60_000)

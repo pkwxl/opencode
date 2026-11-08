@@ -336,6 +336,67 @@ describe("observe: the status read model", () => {
       await rm(dir, { recursive: true, force: true })
     }
   }, 20_000)
+
+  test("a repository git cannot read serves the unknown verdict — never clean (plans/0224 D3, 0165-173)", async () => {
+    const dir = await fixtureProject("auto-server-unknown-")
+    try {
+      // The finding's scene: a corrupted .git/index makes `git status` exit
+      // 128 (rev-parse still answers) — pre-fix this served the finding's
+      // observed verbatim: {clean: true, changed: []} and the aggregate
+      // verdict "clean", the opposite of the completion-truth stance the
+      // same response states.
+      await Bun.write(join(dir, ".git", "index"), "corrupted index bytes")
+      await withObserve(async (h) => {
+        const project = h.register(dir)
+        const model = await h.status(h.read, project)
+        expect(model.status).toBe(200)
+        const worktree = ((model.body.git as Body).worktrees as Body[])[0]!
+        expect(worktree.clean).toBe(false)
+        expect(worktree.changed).toEqual([])
+        expect(typeof worktree.unknown).toBe("string")
+        expect(String(worktree.unknown)).toContain("index")
+        expect((model.body.git as Body).clean).toBe(false)
+        expect((model.body.verdicts as Body).worktree).toBe("unknown")
+        // The teaching beside the banner: one problem line naming the root
+        // and git's own error.
+        const problems = (model.body.verdicts as Body).problems as string[]
+        expect(problems.some((line) => line.includes("git could not report on") && line.includes(String(worktree.unknown)))).toBe(true)
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  test("the floors: a readable repository clean and dirty, a directory with no repository at all overall clean (plans/0224 D3)", async () => {
+    const dir = await fixtureProject("auto-server-unknown-floor-")
+    const bare = await mkdtemp(join(tmpdir(), "auto-server-unknown-bare-"))
+    try {
+      await withObserve(async (h) => {
+        // A readable repository: clean reads clean (byte-identical — no
+        // unknown field on the verdict), dirty reads dirty with entries.
+        const project = h.register(dir)
+        const clean = await h.status(h.read, project)
+        expect((clean.body.git as Body).clean).toBe(true)
+        expect((clean.body.verdicts as Body).worktree).toBe("clean")
+        expect(((clean.body.git as Body).worktrees as Body[])[0]!).not.toHaveProperty("unknown")
+        expect((clean.body.verdicts as Body).problems).toEqual([])
+        await Bun.write(join(dir, "stray.txt"), "leftover\n")
+        const dirty = await h.status(h.read, project)
+        expect((dirty.body.git as Body).clean).toBe(false)
+        expect((dirty.body.verdicts as Body).worktree).toBe("dirty")
+        // A no-repository directory never reaches a worktree read: no
+        // worktrees, overall clean, unchanged.
+        const noRepo = h.register(bare)
+        const model = await h.status(h.read, noRepo)
+        expect((model.body.git as Body).worktrees).toEqual([])
+        expect((model.body.git as Body).clean).toBe(true)
+        expect((model.body.verdicts as Body).worktree).toBe("clean")
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(bare, { recursive: true, force: true })
+    }
+  }, 30_000)
 })
 
 // —— the SSE log tail ——

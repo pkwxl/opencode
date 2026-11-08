@@ -202,65 +202,22 @@ describe("worker: the run request's usage vocabulary", () => {
     }
   })
 
-  test("malformed requests and unknown or invalid fields are usage errors on stderr, exit 1", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-server-usage-"))
+  // The malformed-requests case was ONE test looping every row below — ~40
+  // worker spawns (a full bun child each), deterministically past bun's 5 s
+  // per-test default (0165-058, plans/0224 D4). The repair is the split,
+  // never a raised timeout: every [name, request, pattern] row is retained
+  // verbatim, one family per test — a family that grows past the budget
+  // splits again the same way (the rule, not a one-time repair). The frozen-
+  // key half of the usage vocabulary (the config-key refusals above) and the
+  // frozen-key case of the CLI-facing suites stay where they are (step 073
+  // owns 0165-223's own split).
+  test("malformed documents and request-field grammar are usage errors on stderr, exit 1", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-usage-doc-"))
     try {
       const cases: [string, unknown, RegExp][] = [
         ["a non-object document", [dir], /must be a JSON object/],
         ["missing directory", { options: {} }, /requires "directory"/],
         ["unknown request field", { directory: dir, run: true }, /unknown request field "run"/],
-        ["unknown option", { directory: dir, options: { wait: 1 } }, /options\.wait is not a run option/],
-        // The refreshed teaching (plans/0197 D1): interactivity is the
-        // daemon's own attachment, never a per-run option — the old text
-        // sent the caller to the CLI's -i for a transport every served
-        // width-1 run already carries.
-        ["interactive", { directory: dir, options: { interactive: true } }, /options\.interactive is refused: the interactive transport is the daemon's own attachment, never a per-run option/],
-        ["bad permission", { directory: dir, options: { permission: "yolo" } }, /options\.permission takes/],
-        ["waitAnswer out of range", { directory: dir, options: { waitAnswer: 90 } }, /options\.waitAnswer takes an integer 0\.\.60/],
-        ["maxSessions not an integer", { directory: dir, options: { maxSessions: 1.5 } }, /options\.maxSessions takes a positive integer/],
-        // Width ≥ 2 is served (plans/0162, the plans/0069 §6 item 5 reserved
-        // call made): what stays refused are the width pairs the core itself
-        // refuses at run start, surfaced here as usage errors instead.
-        ["stopAfter riding width", { directory: dir, options: { maxSessions: 2, stopAfter: "T-001" } }, /options\.stopAfter is a serial-path option/],
-        ["waitAnswer riding width", { directory: dir, options: { maxSessions: 3, waitAnswer: 5 } }, /options\.waitAnswer cannot ride maxSessions 3/],
-        ["verbose not a boolean", { directory: dir, options: { verbose: "yes" } }, /options\.verbose takes true\|false/],
-        ["unknown switch", { directory: dir, switches: { OPENCODE_AUTO_NOPE: "on" } }, /is not a known switch/],
-        ["switch name without the prefix", { directory: dir, switches: { STEP: "task" } }, /OPENCODE_AUTO_\*/],
-        ["switch value not a string", { directory: dir, switches: { OPENCODE_AUTO_STEP: 1 } }, /takes a string value/],
-        // The plan payload (P3c, daemon-written — the plan operation's loop
-        // route): the vocabulary the entry enforces on its own half.
-        ["plan not an object", { directory: dir, plan: "soon" }, /plan must be an object/],
-        ["unknown plan field", { directory: dir, plan: { force: true } }, /plan\.force is not a plan field/],
-        ["plan input not text", { directory: dir, plan: { input: { text: "nested" } } }, /plan\.input takes the planning input text/],
-        ["plan append without input", { directory: dir, plan: { append: true } }, /plan\.append rides a planning input/],
-        ["plan append not a boolean", { directory: dir, plan: { input: "x", append: "yes" } }, /plan\.append takes true\|false/],
-        // The run-side widths the CLI's run gained (plans/0160 D4b):
-        // validated like the CLI's own parse* helpers.
-        ["repair out of range", { directory: dir, options: { repair: 11 } }, /options\.repair takes 0\.\.10/],
-        ["repair not an integer", { directory: dir, options: { repair: 1.5 } }, /options\.repair takes 0\.\.10/],
-        ["stopAfter not a task id", { directory: dir, options: { stopAfter: "T-1" } }, /options\.stopAfter takes a task id/],
-        ["boundary not the enum", { directory: dir, options: { boundary: "fast" } }, /options\.boundary takes stop or flow/],
-        // The transfer payload (the plans/0101 absorb, daemon- or
-        // transfer-command-written): its own vocabulary, exclusive with plan.
-        ["transfer not an object", { directory: dir, transfer: "go" }, /transfer must be an object/],
-        ["unknown transfer field", { directory: dir, transfer: { force: true } }, /transfer\.force is not a transfer field/],
-        ["resynthesize not a boolean", { directory: dir, transfer: { resynthesize: "yes" } }, /transfer\.resynthesize takes true\|false/],
-        ["plan and transfer together", { directory: dir, plan: { input: "x" }, transfer: {} }, /mutually exclusive/],
-        ["repair under a plan payload", { directory: dir, plan: { input: "x" }, options: { repair: 3 } }, /options\.repair is a plain run's option/],
-        ["stopAfter under a transfer payload", { directory: dir, transfer: {}, options: { stopAfter: "T-001" } }, /options\.stopAfter is a plain run's option/],
-        ["boundary under a transfer payload", { directory: dir, transfer: {}, options: { boundary: "flow" } }, /options\.boundary is a plain run's option/],
-        // The lane payload (plans/0162, the lane launcher's own channel): its
-        // grammar and exclusivities, the machine shape of the CLI's hidden
-        // _lane entry.
-        ["lane not an object", { directory: dir, lane: "T-001" }, /lane must be an object/],
-        ["unknown lane field", { directory: dir, lane: { unit: "T-001", force: true } }, /lane\.force is not a lane field/],
-        ["lane unit not a task id", { directory: dir, lane: { unit: "task-1" } }, /lane\.unit takes the unit id/],
-        ["lane merge not a branch name", { directory: dir, lane: { unit: "T-001", merge: " " } }, /lane\.merge takes the branch name/],
-        ["lane with plan", { directory: dir, lane: { unit: "T-001" }, plan: { input: "x" } }, /mutually exclusive with plan and transfer/],
-        ["lane with transfer", { directory: dir, lane: { unit: "T-001" }, transfer: {} }, /mutually exclusive with plan and transfer/],
-        ["lane with transport", { directory: dir, lane: { unit: "T-001" }, transport: { run: "run-000001", url: "ws://127.0.0.1:1/runs/run-000001/worker" } }, /a lane run carries no transport/],
-        ["width under a lane payload", { directory: dir, lane: { unit: "T-001" }, options: { maxSessions: 2 } }, /cannot ride a lane run/],
-        ["repair under a lane payload", { directory: dir, lane: { unit: "T-001" }, options: { repair: 2 } }, /options\.repair is a plain run's option/],
       ]
       for (const [name, request, pattern] of cases) {
         const run = await runWorker(request)
@@ -281,6 +238,126 @@ describe("worker: the run request's usage vocabulary", () => {
       expect(retired.code).toBe(1)
       expect(retired.err).not.toContain("is not a known switch")
       expect(retired.out).toContain("OPENCODE_AUTO_REUSE_SESSION is retired")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the options vocabulary: unknown, mistyped, range-refused and width-paired options are usage errors, exit 1", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-usage-options-"))
+    try {
+      const cases: [string, unknown, RegExp][] = [
+        ["unknown option", { directory: dir, options: { wait: 1 } }, /options\.wait is not a run option/],
+        // The refreshed teaching (plans/0197 D1): interactivity is the
+        // daemon's own attachment, never a per-run option — the old text
+        // sent the caller to the CLI's -i for a transport every served
+        // width-1 run already carries.
+        ["interactive", { directory: dir, options: { interactive: true } }, /options\.interactive is refused: the interactive transport is the daemon's own attachment, never a per-run option/],
+        ["bad permission", { directory: dir, options: { permission: "yolo" } }, /options\.permission takes/],
+        ["waitAnswer out of range", { directory: dir, options: { waitAnswer: 90 } }, /options\.waitAnswer takes an integer 0\.\.60/],
+        ["maxSessions not an integer", { directory: dir, options: { maxSessions: 1.5 } }, /options\.maxSessions takes a positive integer/],
+        // Width ≥ 2 is served (plans/0162, the plans/0069 §6 item 5 reserved
+        // call made): what stays refused are the width pairs the core itself
+        // refuses at run start, surfaced here as usage errors instead.
+        ["stopAfter riding width", { directory: dir, options: { maxSessions: 2, stopAfter: "T-001" } }, /options\.stopAfter is a serial-path option/],
+        ["waitAnswer riding width", { directory: dir, options: { maxSessions: 3, waitAnswer: 5 } }, /options\.waitAnswer cannot ride maxSessions 3/],
+        ["verbose not a boolean", { directory: dir, options: { verbose: "yes" } }, /options\.verbose takes true\|false/],
+        // The run-side widths the CLI's run gained (plans/0160 D4b):
+        // validated like the CLI's own parse* helpers.
+        ["repair out of range", { directory: dir, options: { repair: 11 } }, /options\.repair takes 0\.\.10/],
+        ["repair not an integer", { directory: dir, options: { repair: 1.5 } }, /options\.repair takes 0\.\.10/],
+        ["stopAfter not a task id", { directory: dir, options: { stopAfter: "T-1" } }, /options\.stopAfter takes a task id/],
+        ["boundary not the enum", { directory: dir, options: { boundary: "fast" } }, /options\.boundary takes stop or flow/],
+      ]
+      for (const [name, request, pattern] of cases) {
+        const run = await runWorker(request)
+        expect(run.code, name).toBe(1)
+        expect(run.err, name).toMatch(pattern)
+      }
+      // Refused before any write
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the switches carrier: unknown, unprefixed and mistyped switch entries are usage errors, exit 1", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-usage-switches-"))
+    try {
+      const cases: [string, unknown, RegExp][] = [
+        ["unknown switch", { directory: dir, switches: { OPENCODE_AUTO_NOPE: "on" } }, /is not a known switch/],
+        ["switch name without the prefix", { directory: dir, switches: { STEP: "task" } }, /OPENCODE_AUTO_\*/],
+        ["switch value not a string", { directory: dir, switches: { OPENCODE_AUTO_STEP: 1 } }, /takes a string value/],
+      ]
+      for (const [name, request, pattern] of cases) {
+        const run = await runWorker(request)
+        expect(run.code, name).toBe(1)
+        expect(run.err, name).toMatch(pattern)
+      }
+      // Refused before any write
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the plan and transfer payload grammars and their exclusivities are usage errors, exit 1", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-usage-plan-"))
+    try {
+      const cases: [string, unknown, RegExp][] = [
+        // The plan payload (P3c, daemon-written — the plan operation's loop
+        // route): the vocabulary the entry enforces on its own half.
+        ["plan not an object", { directory: dir, plan: "soon" }, /plan must be an object/],
+        ["unknown plan field", { directory: dir, plan: { force: true } }, /plan\.force is not a plan field/],
+        ["plan input not text", { directory: dir, plan: { input: { text: "nested" } } }, /plan\.input takes the planning input text/],
+        ["plan append without input", { directory: dir, plan: { append: true } }, /plan\.append rides a planning input/],
+        ["plan append not a boolean", { directory: dir, plan: { input: "x", append: "yes" } }, /plan\.append takes true\|false/],
+        // The transfer payload (the plans/0101 absorb, daemon- or
+        // transfer-command-written): its own vocabulary, exclusive with plan.
+        ["transfer not an object", { directory: dir, transfer: "go" }, /transfer must be an object/],
+        ["unknown transfer field", { directory: dir, transfer: { force: true } }, /transfer\.force is not a transfer field/],
+        ["resynthesize not a boolean", { directory: dir, transfer: { resynthesize: "yes" } }, /transfer\.resynthesize takes true\|false/],
+        ["plan and transfer together", { directory: dir, plan: { input: "x" }, transfer: {} }, /mutually exclusive/],
+        ["repair under a plan payload", { directory: dir, plan: { input: "x" }, options: { repair: 3 } }, /options\.repair is a plain run's option/],
+        ["stopAfter under a transfer payload", { directory: dir, transfer: {}, options: { stopAfter: "T-001" } }, /options\.stopAfter is a plain run's option/],
+        ["boundary under a transfer payload", { directory: dir, transfer: {}, options: { boundary: "flow" } }, /options\.boundary is a plain run's option/],
+      ]
+      for (const [name, request, pattern] of cases) {
+        const run = await runWorker(request)
+        expect(run.code, name).toBe(1)
+        expect(run.err, name).toMatch(pattern)
+      }
+      // Refused before any write
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the lane payload's grammar and exclusivities are usage errors, exit 1", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-usage-lane-"))
+    try {
+      const cases: [string, unknown, RegExp][] = [
+        // The lane payload (plans/0162, the lane launcher's own channel): its
+        // grammar and exclusivities, the machine shape of the CLI's hidden
+        // _lane entry.
+        ["lane not an object", { directory: dir, lane: "T-001" }, /lane must be an object/],
+        ["unknown lane field", { directory: dir, lane: { unit: "T-001", force: true } }, /lane\.force is not a lane field/],
+        ["lane unit not a task id", { directory: dir, lane: { unit: "task-1" } }, /lane\.unit takes the unit id/],
+        ["lane merge not a branch name", { directory: dir, lane: { unit: "T-001", merge: " " } }, /lane\.merge takes the branch name/],
+        ["lane with plan", { directory: dir, lane: { unit: "T-001" }, plan: { input: "x" } }, /mutually exclusive with plan and transfer/],
+        ["lane with transfer", { directory: dir, lane: { unit: "T-001" }, transfer: {} }, /mutually exclusive with plan and transfer/],
+        ["lane with transport", { directory: dir, lane: { unit: "T-001" }, transport: { run: "run-000001", url: "ws://127.0.0.1:1/runs/run-000001/worker" } }, /a lane run carries no transport/],
+        ["width under a lane payload", { directory: dir, lane: { unit: "T-001" }, options: { maxSessions: 2 } }, /cannot ride a lane run/],
+        ["repair under a lane payload", { directory: dir, lane: { unit: "T-001" }, options: { repair: 2 } }, /options\.repair is a plain run's option/],
+      ]
+      for (const [name, request, pattern] of cases) {
+        const run = await runWorker(request)
+        expect(run.code, name).toBe(1)
+        expect(run.err, name).toMatch(pattern)
+      }
+      // Refused before any write
+      expect(await readdir(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -103,40 +103,66 @@ async function readJsonFile(directory: string, rel: string): Promise<JsonRead> {
   }
 }
 
-// —— the git verdicts (dirty / clean per worktree) ——
+// —— the git verdicts (clean / dirty / unknown per worktree) ——
 
-export type WorktreeVerdict = { root: string; clean: boolean; changed: string[] }
+// The additive third state (plans/0224 D3, the 0165-173 finding): a git that
+// cannot report on a repository is not a git that reports clean. `unknown`
+// carries git's own error — its stderr line, piped and read (never ignored,
+// never swallowed); a git that fails with EMPTY stderr gets the exit-code
+// sentence instead, never an empty teaching. Absent on every readable
+// repository (the served JSON's existing fields verbatim — the additive
+// vocabulary rule).
+export type WorktreeVerdict = { root: string; clean: boolean; changed: string[]; unknown?: string }
 
-// `git status --porcelain` per worktree, entries as `XY <path>` with the path
-// relative to the project directory — the same shape and conversion as the
-// core's own statusEntries (auto-core src/git.ts:703-719; it is private, and
-// the core's exported changedFiles flattens the worktrees away), with the
-// discovery shared: repoRoots is the core's own traversal (the project tree's
-// every .git, nested repos included). Read-only — but a CONCURRENT reader must
-// say so: `git status` opportunistically refreshes the index, taking
-// .git/index.lock, and a poller colliding with the observed run's own
-// `git add` blocks the run (found empirically: "Unable to create
-// .git/index.lock: File exists" → the run's unified commit failed → blocked).
-// `--no-optional-locks` is git's own flag for exactly this — a background
-// process that must never take the lock. The core's own reads need no such
-// flag: they run inside the run's own process, sequential with its writes.
+// Both failure arms report the conservative reading (`clean: false` with no
+// entries — not-known-clean, never clean) and are treated alike on purpose:
+// every root repoRoots hands this function was discovered to hold a
+// repository (a `.git` entry, or the target's own inside-repository
+// placement), so a git that cannot speak about it is an UNREADABLE
+// repository, never a non-git directory (the no-repository-at-all project
+// never reaches this function — `worktrees: []`, overall clean, unchanged).
 async function worktreeVerdict(directory: string, root: string): Promise<WorktreeVerdict> {
   const phys = await physicalDir(directory)
-  const top = Bun.spawn(["git", "-C", root, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "ignore" })
-  const toplevel = (await new Response(top.stdout).text()).trim()
-  if ((await top.exited) !== 0 || !toplevel) return { root, clean: true, changed: [] }
+  const top = Bun.spawn(["git", "-C", root, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "pipe" })
+  const [toplevel, topErr] = await Promise.all([new Response(top.stdout).text(), new Response(top.stderr).text()])
+  const topCode = await top.exited
+  if (topCode !== 0 || !toplevel.trim()) {
+    const line = topErr.trim().split("\n")[0] ?? ""
+    return { root, clean: false, changed: [], unknown: line !== "" ? line : `git rev-parse --show-toplevel exited ${topCode}${topCode === 0 ? " naming no toplevel" : ""}` }
+  }
+  // `git status --porcelain` per worktree, entries as `XY <path>` with the path
+  // relative to the project directory — the same shape and conversion as the
+  // core's own statusEntries (auto-core src/git.ts:703-719; it is private, and
+  // the core's exported changedFiles flattens the worktrees away), with the
+  // discovery shared: repoRoots is the core's own traversal (the project tree's
+  // every .git, nested repos included). Read-only — but a CONCURRENT reader must
+  // say so: `git status` opportunistically refreshes the index, taking
+  // .git/index.lock, and a poller colliding with the observed run's own
+  // `git add` blocks the run (found empirically: "Unable to create
+  // .git/index.lock: File exists" → the run's unified commit failed → blocked).
+  // `--no-optional-locks` is git's own flag for exactly this — a background
+  // process that must never take the lock. The core's own reads need no such
+  // flag: they run inside the run's own process, sequential with its writes.
   const proc = Bun.spawn(["git", "--no-optional-locks", "-C", root, "status", "--porcelain", "-z", "--no-renames", "-uall", "--", "."], {
     stdout: "pipe",
-    stderr: "ignore",
+    stderr: "pipe",
   })
-  const output = await new Response(proc.stdout).text()
-  if ((await proc.exited) !== 0) return { root, clean: true, changed: [] }
+  const [output, procErr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+  const code = await proc.exited
+  if (code !== 0) {
+    // The finding's scene: a corrupted .git/index makes `git status` exit
+    // 128 — pre-fix this arm (and the rev-parse arm above) served
+    // `{clean: true, changed: []}`, the opposite of the completion-truth
+    // stance the same response states.
+    const line = procErr.trim().split("\n")[0] ?? ""
+    return { root, clean: false, changed: [], unknown: line !== "" ? line : `git status exited ${code}` }
+  }
   // The one collapsed form `-uall` still emits — a nested repository
   // directory — is skipped: that repository's own status lists its files.
   const changed = output
     .split("\0")
     .filter((entry) => entry && !(entry.startsWith("?? ") && entry.endsWith("/")))
-    .map((entry) => `${entry.slice(0, 2)} ${relative(phys, join(toplevel, entry.slice(3)))}`)
+    .map((entry) => `${entry.slice(0, 2)} ${relative(phys, join(toplevel.trim(), entry.slice(3)))}`)
   return { root, clean: changed.length === 0, changed }
 }
 
@@ -160,8 +186,10 @@ export type StatusModel = {
   // Lock visibility: the statusLine of a live run lock (auto-core
   // src/lock.ts:95), with its holder — null when no live lock holds.
   lock: { statusLine: string; holder?: LockHolder } | null
-  // The git verdicts: clean overall, and per worktree (the project tree's
-  // every repository, nested ones included).
+  // The git verdicts: clean overall (false whenever any worktree is unknown
+  // — the conservative aggregate over the third state, plans/0224 D3), and
+  // per worktree (the project tree's every repository, nested ones
+  // included).
   git: { clean: boolean; worktrees: WorktreeVerdict[] }
   // The core's own tree renderer, called as-is (a pure read that takes no
   // lock by design, auto-core src/status.ts:24 / src/lock.ts:5) — the daemon
@@ -173,7 +201,11 @@ export type StatusModel = {
   // and the verdicts are settled only over a clean worktree.
   verdicts: {
     rule: string
-    worktree: "clean" | "dirty"
+    // The additive third state (plans/0224 D3): "unknown" when git could not
+    // report and nothing is dirty — a settled dirty fact outranks an
+    // unsettled read, so any entries → "dirty", else any unknown →
+    // "unknown", else "clean".
+    worktree: "clean" | "dirty" | "unknown"
     phases: PhaseVerdict[]
     tasks: TaskVerdict[]
     problems: string[]
@@ -198,12 +230,18 @@ const COMPLETION_RULE =
 export async function readStatusModel(directory: string): Promise<StatusModel> {
   const holder = liveRunLock(directory)
   const worktrees = await Promise.all((await repoRoots(directory)).map((root) => worktreeVerdict(directory, root)))
-  const git = { clean: worktrees.every((worktree) => worktree.clean), worktrees }
+  const git = { clean: worktrees.every((worktree) => worktree.clean && worktree.unknown === undefined), worktrees }
 
   // The human tree first (the core's own renderer, problems included as ⚠
   // lines — its views never fail), then the same reads as data.
   const status = await renderStatus(directory)
   const problems: string[] = []
+  // Each unreadable repository teaches beside the banner (plans/0224 D3):
+  // the root and git's own error, one line — the verdict table carries the
+  // remedy-bearing fact the aggregate states.
+  for (const worktree of worktrees) {
+    if (worktree.unknown !== undefined) problems.push(`git could not report on ${worktree.root}: ${worktree.unknown}`)
+  }
   const phases: PhaseVerdict[] = []
   const tasks: TaskVerdict[] = []
   try {
@@ -271,7 +309,13 @@ export async function readStatusModel(directory: string): Promise<StatusModel> {
     lock: holder === undefined ? null : { statusLine: lockStatusLine(holder), ...(holder === "unreadable" ? {} : { holder }) },
     git,
     status,
-    verdicts: { rule: COMPLETION_RULE, worktree: git.clean ? "clean" : "dirty", phases, tasks, problems },
+    verdicts: {
+      rule: COMPLETION_RULE,
+      worktree: worktrees.some((worktree) => worktree.changed.length > 0) ? "dirty" : worktrees.some((worktree) => worktree.unknown !== undefined) ? "unknown" : "clean",
+      phases,
+      tasks,
+      problems,
+    },
     state: { units: read(units), stats: read(stats), windows: read(windows), progress: read(progress) },
     unparsable,
     logFile: newestRunLog(directory) ?? null,

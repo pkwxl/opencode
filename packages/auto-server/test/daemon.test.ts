@@ -24,10 +24,12 @@ import { realpathSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
 import { basename, join } from "node:path"
 import { hostname, tmpdir } from "node:os"
-import { connectHost, startDaemon, terminalOf, type DaemonHandle } from "../src/daemon"
+import { connectHost, evictTerminalRuns, MAX_TERMINAL_RUNS, startDaemon, terminalOf, type DaemonHandle } from "../src/daemon"
+import { appendJournal, journalPath, type JournalEvent } from "../src/question-journal"
 import { parseTransport } from "../src/request"
 import { DaemonStore, defaultDataDir } from "../src/store"
 import { fakeAgent, fixtureProject, scrubbedEnv, TASK } from "./fixtures/project"
+import { wsClient } from "./fixtures/ws"
 
 const PACKAGE_ROOT = join(import.meta.dir, "..")
 
@@ -1090,5 +1092,237 @@ describe("daemon: the spawn boundary's failure shapes (plans/0223)", () => {
     expect(connectHost("::")).toBe("[::1]")
     expect(connectHost("0.0.0.0")).toBe("127.0.0.1")
     expect(connectHost("[::1]")).toBe("[::1]")
+  })
+})
+
+// The registry's end of life (plans/0224, the 0165-168/170 findings): a
+// daemon process outlives its runs, and everything it holds for a run must
+// answer when the run's own evidence ends — the journal-reconstructed stub
+// retires on the lock's evidence (at replay and at DELETE, never returning at
+// every restart forever), the hub dies with its run (the per-run secret's
+// lifetime is the run's non-terminal life exactly — a terminal run's bridge
+// no longer upgrades, a forged raise is refused instead of journaled), and
+// terminal records evict past a count.
+describe("daemon: the registry's end of life (plans/0224)", () => {
+  const SEED_SECRET = "oar_seed0000000000000000000000000000000000000000"
+  const ASK = "enter your answer (Enter to confirm, no timeout and no automatic answer under plan): "
+
+  // The previous daemon life, as the daemon itself journals it (the
+  // question-queue suite's seed shape): one run, one ask still open.
+  function seed(dataDir: string, directory: string, run = "run-000007"): void {
+    const opened: JournalEvent = {
+      v: 1,
+      at: new Date().toISOString(),
+      run,
+      event: "opened",
+      project: "proj",
+      directory,
+      secret: SEED_SECRET,
+      started: new Date().toISOString(),
+      request: { options: {}, switches: {} },
+    }
+    appendJournal(dataDir, opened)
+    appendJournal(dataDir, { v: 1, at: new Date().toISOString(), run, event: "raised", id: "q1", text: ASK })
+  }
+
+  // A live lock planted the way the core writes it (a genuinely-live holder
+  // that is not this process — the core's pid-reuse guard treats this
+  // process's own pid on an unheld lock as a dead predecessor).
+  async function plantLiveLock(dir: string, pid: number): Promise<void> {
+    const record = { pid, host: hostname(), command: "run", started: new Date().toISOString() }
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await Bun.write(join(dir, ".auto", "run.lock"), `${JSON.stringify(record)}\n`)
+  }
+
+  test("a journal-pending run whose directory holds no live lock retires at the first replay — the finding's three-restart probe inverted (0165-168)", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "auto-server-retire-"))
+    // The finding's shape: a directory whose worker is long gone (here: a
+    // path that never existed — no lock, no process can ever reconnect).
+    seed(dataDir, join(dataDir, "gone"))
+    try {
+      const read = new DaemonStore(dataDir).issueToken("read", "reader").token
+      for (let cycle = 1; cycle <= 3; cycle++) {
+        const daemon = await startDaemon({ dataDir, port: 0 })
+        try {
+          const listed = (await (await fetch(`${daemon.url}/runs`, { headers: { authorization: `Bearer ${read}` } })).json()) as { runs: unknown[] }
+          expect(listed.runs).toEqual([])
+          expect((await fetch(`${daemon.url}/runs/run-000007`, { headers: { authorization: `Bearer ${read}` } })).status).toBe(404)
+          // The retire's closed settles were appended (durable), and the
+          // start's own compaction folded them away — the journal is the
+          // empty pending set, so no later restart can rebuild the stub.
+          expect(await Bun.file(journalPath(dataDir)).text()).toBe("")
+        } finally {
+          await daemon.stop()
+        }
+      }
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  test("DELETE on a restored run: the live-lock floor replays byte-identically and 409s with the taught retire; the lock gone stale makes the DELETE the retire (0165-168)", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "auto-server-delete-retire-"))
+    const seededDir = await mkdtemp(join(tmpdir(), "auto-server-delete-retire-dir-"))
+    const holder = Bun.spawn(["sleep", "60"])
+    await plantLiveLock(seededDir, holder.pid)
+    seed(dataDir, seededDir, "run-000001")
+    try {
+      const store = new DaemonStore(dataDir)
+      const answer = store.issueToken("answer", "answerer").token
+      const read = store.issueToken("read", "reader").token
+      const control = store.issueToken("control", "controller").token
+      const daemon = await startDaemon({ dataDir, port: 0 })
+      try {
+        // The floor (the P3c replay path byte-identical under a live lock):
+        // the stub reads `restored` and a client is replayed the question.
+        const view = (await (await fetch(`${daemon.url}/runs/run-000001`, { headers: { authorization: `Bearer ${read}` } })).json()) as { state: string; live: boolean }
+        expect(view).toMatchObject({ state: "restored", live: false })
+        const client = wsClient(`${daemon.url.replace("http", "ws")}/runs/run-000001/interactive?token=${answer}`)
+        try {
+          const hello = await client.nextOf((frame) => frame.type === "hello", "the restored hello")
+          expect(hello).toMatchObject({ type: "hello", run: "run-000001", state: "restored" })
+          const replayed = await client.nextOf((frame) => frame.type === "question" && frame.id === "q1", "the journal replay")
+          expect(replayed).toMatchObject({ type: "question", id: "q1", text: ASK })
+        } finally {
+          await client.close().catch(() => {})
+        }
+        // Under the live lock the DELETE keeps today's 409, its hint now
+        // teaching the real path (the finding's old hint sent the person to
+        // delete .auto/run.lock by hand — a remedy touching nothing the
+        // daemon views).
+        const refused = await fetch(`${daemon.url}/runs/run-000001`, { method: "DELETE", headers: { authorization: `Bearer ${control}` } })
+        expect(refused.status).toBe(409)
+        const body = (await refused.json()) as { error: string; hint: string; holder: { pid: number } }
+        expect(body.error).toContain("not this daemon's child")
+        expect(body.hint).toContain("this same DELETE retires the restored view")
+        expect(body.holder?.pid).toBe(holder.pid)
+        // The lock goes stale (the holder dies): the delete IS the retire —
+        // 200 with the retired view and its note, the question settled
+        // closed in the journal, the registry entry gone.
+        holder.kill()
+        await holder.exited
+        const retired = await fetch(`${daemon.url}/runs/run-000001`, { method: "DELETE", headers: { authorization: `Bearer ${control}` } })
+        expect(retired.status).toBe(200)
+        const retiredBody = (await retired.json()) as { state: string; note: string }
+        expect(retiredBody.state).toBe("restored")
+        expect(retiredBody.note).toContain("retired by this delete")
+        const journal = await Bun.file(journalPath(dataDir)).text()
+        expect(journal).toContain('"event":"settled"')
+        expect(journal).toContain('"how":"closed"')
+        expect((await fetch(`${daemon.url}/runs/run-000001`, { headers: { authorization: `Bearer ${read}` } })).status).toBe(404)
+        const listed = (await (await fetch(`${daemon.url}/runs`, { headers: { authorization: `Bearer ${read}` } })).json()) as { runs: unknown[] }
+        expect(listed.runs).toEqual([])
+        // A restart restores nothing: the pending set is empty.
+        await daemon.stop()
+        const restarted = await startDaemon({ dataDir, port: 0 })
+        try {
+          const again = (await (await fetch(`${restarted.url}/runs`, { headers: { authorization: `Bearer ${read}` } })).json()) as { runs: unknown[] }
+          expect(again.runs).toEqual([])
+        } finally {
+          await restarted.stop()
+        }
+      } catch (error) {
+        holder.kill()
+        throw error
+      } finally {
+        await daemon.stop().catch(() => {})
+      }
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+      await rm(seededDir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  test("the hub dies with its run: a settled run's bridge secret no longer upgrades, the interactive endpoint answers the terminal 409, and a forged raise is refused (0165-170)", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "auto-server-hubdeath-"))
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-hubdeath-run-"))
+    // A stand-in worker that outlives the bridge probe and exits cleanly:
+    // the run is real (registry entry, hub, journal), its exit is observed,
+    // and no real worker ever competes for the bridge latch.
+    const standIn = join(dataDir, "stand-in.ts")
+    await Bun.write(standIn, [`await Bun.sleep(4000)`, `process.exit(0)`, ``].join("\n"))
+    const store = new DaemonStore(dataDir)
+    store.register(dir)
+    const control = store.issueToken("control", "controller").token
+    const read = store.issueToken("read", "reader").token
+    const daemon = await startDaemon({ dataDir, port: 0, worker: { command: process.execPath, prefix: [standIn] } })
+    try {
+      const started = await fetch(`${daemon.url}/runs`, { method: "POST", headers: { authorization: `Bearer ${control}`, "content-type": "application/json" }, body: JSON.stringify({ project: basename(dir) }) })
+      expect(started.status).toBe(202)
+      const id = ((await started.json()) as RunView).id
+      // The per-run secret is the journal's own `opened` record (0600, the
+      // daemon's data directory).
+      const secret = (JSON.parse((await Bun.file(journalPath(dataDir)).text()).split("\n").find((line) => line.includes('"event":"opened"'))!) as { secret: string }).secret
+      // While the run is live the secret works: this probe IS the bridge
+      // (the stand-in never connects one), hello answers it.
+      const bridge = wsClient(`${daemon.url.replace("http", "ws")}/runs/${id}/worker?token=${secret}`)
+      try {
+        const hello = await bridge.nextOf((frame) => frame.type === "hello", "the bridge hello")
+        expect(hello).toMatchObject({ type: "hello", run: id, worker: true })
+        // The run settles (the stand-in's exit 0 → completed).
+        const deadline = Date.now() + 30_000
+        for (;;) {
+          const run = daemon.runs().find((view) => view.id === id)
+          if (run && !run.live) break
+          if (Date.now() > deadline) throw new Error("the stand-in run never settled")
+          await Bun.sleep(100)
+        }
+        expect(daemon.runs().find((view) => view.id === id)!.state).toBe("completed")
+        // The forged-raise scene refused: the still-open bridge socket
+        // sends a question frame on the dead run — the hub is gone, so the
+        // frame is refused by name and nothing is journaled (pre-fix the
+        // raise was journaled and resurrected the run as `restored` at the
+        // next restart).
+        bridge.send({ type: "question", id: "forged-1", text: "a forged raise on a dead run" })
+        const refused = await bridge.nextOf((frame) => frame.type === "error", "the forged raise refused")
+        if (refused.type === "error") expect(refused.message).toContain("not in this daemon's registry")
+        const journal = await Bun.file(journalPath(dataDir)).text()
+        expect(journal).not.toContain('"event":"raised"')
+        expect(journal).not.toContain("forged-1")
+      } finally {
+        await bridge.close().catch(() => {})
+      }
+      // The worker route answers the same 401 the unknown secret always
+      // did — the secret that worked moments before, auth indistinguishable.
+      const deadBridge = await fetch(`${daemon.url}/runs/${id}/worker?token=${secret}`)
+      expect(deadBridge.status).toBe(401)
+      expect(((await deadBridge.json()) as { error: string }).error).toContain("unknown run secret")
+      // The interactive client endpoint states the close plainly.
+      const deadClient = await fetch(`${daemon.url}/runs/${id}/interactive?token=${control}`)
+      expect(deadClient.status).toBe(409)
+      expect(((await deadClient.json()) as { error: string }).error).toContain("the interactive channel closed with the run")
+      // The registry entry itself is observable as terminal history.
+      expect((await fetch(`${daemon.url}/runs/${id}`, { headers: { authorization: `Bearer ${read}` } })).status).toBe(200)
+    } finally {
+      await daemon.stop()
+      await rm(dataDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  test("evictTerminalRuns keeps the newest 50 terminal records by insertion order with their hubs; live and restored never count (the D2 unit)", () => {
+    const runs = new Map<string, { state: string }>()
+    const hubs = new Map<string, unknown>()
+    // 55 terminal records in start order, then a live and a restored run.
+    for (let i = 1; i <= 55; i++) {
+      runs.set(`t-${String(i).padStart(2, "0")}`, { state: i % 2 === 0 ? "completed" : "failed" })
+      hubs.set(`t-${String(i).padStart(2, "0")}`, { secret: `s${i}` })
+    }
+    runs.set("live-1", { state: "running" })
+    hubs.set("live-1", { secret: "live" })
+    runs.set("restored-1", { state: "restored" })
+    hubs.set("restored-1", { secret: "restored" })
+    evictTerminalRuns(runs, hubs)
+    expect([...runs.keys()]).toEqual([...Array.from({ length: 50 }, (_, i) => `t-${String(i + 6).padStart(2, "0")}`), "live-1", "restored-1"])
+    expect(hubs.has("t-05")).toBe(false)
+    expect(hubs.has("t-06")).toBe(true)
+    expect(runs.get("live-1")).toEqual({ state: "running" })
+    expect(runs.get("restored-1")).toEqual({ state: "restored" })
+    // Under the bound nothing is removed.
+    const small = new Map<string, { state: string }>(Array.from({ length: MAX_TERMINAL_RUNS }, (_, i) => [`t-${i}`, { state: "blocked" }]))
+    const smallHubs = new Map<string, unknown>([...small.keys()].map((id) => [id, {}]))
+    evictTerminalRuns(small, smallHubs)
+    expect(small.size).toBe(MAX_TERMINAL_RUNS)
+    expect(smallHubs.size).toBe(MAX_TERMINAL_RUNS)
   })
 })

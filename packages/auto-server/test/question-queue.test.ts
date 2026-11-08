@@ -27,9 +27,9 @@
 // The full flow over a REAL spawned worker (a between-tasks pause answered
 // across a restart, the run completing) lives in test/question-queue-e2e.test.ts.
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
-import { tmpdir } from "node:os"
+import { hostname, tmpdir } from "node:os"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { appendJournal, journalPath, type JournalEvent } from "../src/question-journal"
 import { DaemonStore } from "../src/store"
@@ -46,14 +46,20 @@ const ASK = "enter your answer (Enter to confirm, no timeout and no automatic an
 // The previous daemon life, as the daemon itself journals it: one run, one
 // hard-wait ask still open. Seeding by hand is precise here — the format is
 // the daemon's own (src/question-journal.ts, documented in docs/daemon.md).
-function seed(dataDir: string): void {
+// The seeded run's directory must hold a LIVE lock (the same-lockstep fixture
+// repair of plans/0224 D1): the replay's retire gate reads the lock, and the
+// seed shape without one — a journal-pending run whose directory no process
+// holds — is exactly the retire scene (the daemon retires it at replay; the
+// retire pins live in test/daemon.test.ts). This suite pins the LIVE-lock
+// half: the orphan's bridge reconnect, the P3c primary path.
+function seed(dataDir: string, directory: string): void {
   const opened: JournalEvent = {
     v: 1,
     at: new Date().toISOString(),
     run: RUN,
     event: "opened",
     project: "proj",
-    directory: "/tmp/seeded",
+    directory,
     secret: SECRET,
     started: new Date().toISOString(),
     request: { options: {}, switches: {} },
@@ -75,7 +81,14 @@ type Harness = {
 // project, the three tokens), on a port the restart reuses.
 async function withQueue(fn: (h: Harness) => Promise<void>): Promise<void> {
   const dataDir = await mkdtemp(join(tmpdir(), "auto-server-queue-data-"))
-  seed(dataDir)
+  // The seeded run's directory with its live lock (a genuinely-live holder
+  // that is not this process): the evidence a worker can reconnect, which
+  // keeps the stub through every start this suite performs.
+  const seededDir = await mkdtemp(join(tmpdir(), "auto-server-queue-seed-"))
+  const holder = Bun.spawn(["sleep", "120"])
+  await mkdir(join(seededDir, ".auto"), { recursive: true })
+  await Bun.write(join(seededDir, ".auto", "run.lock"), `${JSON.stringify({ pid: holder.pid, host: hostname(), command: "run", started: new Date().toISOString() })}\n`)
+  seed(dataDir, seededDir)
   const project = await fixtureProject("auto-server-queue-proj-")
   const store = new DaemonStore(dataDir)
   store.register(project)
@@ -88,7 +101,10 @@ async function withQueue(fn: (h: Harness) => Promise<void>): Promise<void> {
   } finally {
     // A test may already have stopped (and restarted over) this handle.
     await first.stop().catch(() => {})
+    holder.kill()
+    await holder.exited
     await rm(dataDir, { recursive: true, force: true })
+    await rm(seededDir, { recursive: true, force: true })
     await rm(project, { recursive: true, force: true })
   }
 }

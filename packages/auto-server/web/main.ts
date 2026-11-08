@@ -269,8 +269,15 @@ function renderGit(model: StatusModel): void {
   overall.className = model.git.clean ? "banner" : "banner warn"
   ui.git.append(overall)
   for (const worktree of model.git.worktrees) {
-    const row = el("div", `${worktree.clean ? "✓ clean" : "✗ dirty"} — ${worktree.root}`)
-    if (!worktree.clean) {
+    // The third state (plans/0224 D3): a repository git could not report on
+    // renders its own row naming git's own error — never a "clean" over a
+    // repository whose state git cannot speak about.
+    const row = el("div", worktree.unknown !== undefined ? `⚠ unknown — ${worktree.root}` : `${worktree.clean ? "✓ clean" : "✗ dirty"} — ${worktree.root}`)
+    if (worktree.unknown !== undefined) {
+      const err = el("pre", worktree.unknown)
+      err.className = "box"
+      row.append(err)
+    } else if (!worktree.clean) {
       const list = el("pre", worktree.changed.join("\n"))
       list.className = "box"
       row.append(list)
