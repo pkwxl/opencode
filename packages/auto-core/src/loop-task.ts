@@ -415,8 +415,8 @@ async function handleLaneExit(ctx: LoopCtx, phase: PhaseUnit, task: Pick<Task, "
 // and verdict-gate repair). What stays caller-side: the eligibility that
 // names the evidence a repair may trade on (a blocked outcome's repair fact,
 // a verdict-prefixed gate problem) and, on the two gate sites, the append
-// driving itself (appendPlan lives in loop-plan, above this module in the
-// import direction — the input this helper sets is what that append
+// driving itself (appendPlan lives in loop-append, above this module in
+// the import direction — the input this helper sets is what that append
 // consumes).
 //   "task": closeUnit the failed task (done for scheduling, the Closed:
 // field recording the round), then hand the phase loop the evidence as an

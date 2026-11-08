@@ -178,7 +178,7 @@ export function verifyAuditEntry(step: string, outcome: Exclude<PlanVerifyOutcom
 
 // The round's prompt-audit append (plans/0080 §5, the 0102 complexity-17
 // dedup): the one write+commit behind every audit entry — the verifier
-// verdicts (loop-plan's verifyPlanStep, loop-phase's handover write-time
+// verdicts (plan-gate's verifyPlanStep, loop-phase's handover write-time
 // gate), the admission warns, the synthesis records and the diagnosis
 // fail-closeds all append through here. The previous text decides the
 // preamble: an empty audit opens with the record's header line, anything

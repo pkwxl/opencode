@@ -212,6 +212,14 @@ export async function readPhases(dir: string, round?: number): Promise<PhaseStat
   return { round: n, index, phases, done: scan.done, closed: scan.closed }
 }
 
+// The phase index (routing already validated it; re-read here only for the
+// done set and the order, missing/invalid treated as empty). Formerly
+// src/loop-plan.ts's (plans/0053 A2); its home moved here with plans/0235's
+// split so every planning-family module reads it without a cycle.
+export async function phaseState(directory: string): Promise<PhaseState> {
+  return (await readPhases(directory).catch(() => undefined)) ?? { round: 0, index: "", phases: [], done: new Set(), closed: new Map() }
+}
+
 const phaseDecl = (unit: PhaseUnit): UnitDecl => ({ id: unit.id, ...(unit.depends !== undefined ? { depends: unit.depends } : {}) })
 
 // The phase to work on: the first ready one (nextReady over the index and the

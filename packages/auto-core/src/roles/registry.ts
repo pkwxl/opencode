@@ -102,7 +102,7 @@ export const COLLECT_POLICIES = [
   // wrapup.ts reportProblems.
   "report-shape",
   // The task index lines and each task document validated against the unit
-  // grammar — loop-plan.ts plannedTaskProblems / appendProblems.
+  // grammar — tasks.ts plannedTaskProblems / loop-append.ts appendProblems.
   "index-docs",
   // The four mandatory handover sections (document/roles.ts validHandover)
   // and the acceptance-draft rules — loop-phase.ts.

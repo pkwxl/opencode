@@ -17,7 +17,7 @@ import { phaseTypeOfLetter as L, planDutiesPartial, type PhaseTypeEntry } from "
 
 // E2 render inputs: every render takes the facts (default globals), and the
 // planning renders take their phase's duty paragraph pre-rendered (the
-// registry's own data through the active library — loop-plan's helper,
+// registry's own data through the active library — plan-gate's helper,
 // replicated for the fixture).
 const facts = promptFacts()
 const duties = (entry: PhaseTypeEntry) => renderText(entry.planDuties ?? `{{> ${planDutiesPartial(entry)}}}`, {}).trimEnd()
@@ -645,7 +645,7 @@ describe("planDutyText tiers (plans/0080 §4)", () => {
       expect(planDutyText(facts, L("a"))).toContain("behaviour baseline")
     })
     // The same resolution drives the formulation todo's duties block (the
-    // loop-plan helper is this very function): the pack tier voices the
+    // plan-gate helper is this very function): the pack tier voices the
     // implement duties inside the composed planning prompt.
     withPack("# default\n\n## phase duties\n\n### m Implementation\n\nPACK-M-DUTIES implement to parity.\n", (facts) => {
       const text = renderFormulationTodo(facts, { phase: L("m"), phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md", numberStart: 1, charter: formulationAcceptance(facts) }).scope

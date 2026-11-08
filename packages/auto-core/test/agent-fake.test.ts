@@ -3432,7 +3432,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
 // the title parameter its verifier caller passes (src/classify.ts — the
 // session was created titled "auto: classify error"), and the audit write
 // landed uncommitted between the input commit and the planning unit's entry
-// clean gate, blocking the very step it documents (src/loop-plan.ts — it now
+// clean gate, blocking the very step it documents (src/plan-gate.ts — it now
 // commits on its own ahead of the session, the savePlanInput pattern).
 describe("the plan-step verifier (plans/0080 §5; routing and default per plans/0113)", () => {
   beforeAll(() => {

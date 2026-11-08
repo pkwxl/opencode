@@ -8,7 +8,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { appendProblems, resetAppend, snapshotAppend, type AppendSnapshot } from "../src/loop-plan"
+import { appendProblems, resetAppend, snapshotAppend, type AppendSnapshot } from "../src/loop-append"
 import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
 import { renderTaskIndex, renderTaskTodo, takenTaskIds } from "../src/tasks"
 

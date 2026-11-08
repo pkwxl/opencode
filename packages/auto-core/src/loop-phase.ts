@@ -1,7 +1,8 @@
 // Phase loop (--phases): the phase handover (handoverPhase and its step wrapper
 // handoverWithStep) and the phase routing loop (runPhaseLoop), runAll's former
 // closures as top-level functions with their captures made explicit as LoopCtx
-// (defined in ./loop-task). Phase planning lives in ./loop-plan (plans/0053 A2).
+// (defined in ./loop-task). Phase planning lives in ./loop-plan, the append
+// step in ./loop-append (plans/0053 A2; split by plans/0235).
 // Since plans/0101 D1/D2 the loop also owns run's boundary stop and shapes
 // transfer's advance (stopBefore "formulate") — the two command grammars that
 // bracket the phase boundaries.
@@ -18,7 +19,8 @@ import { extractKnowledge } from "./knowledge"
 import { awaitingFormulation } from "./formulate"
 import { banner, dirtyStopLines, log } from "./log"
 import { sessionOpts } from "./opts"
-import { appendPlan, appendWithStep, phaseState, planWithStep } from "./loop-plan"
+import { appendPlan, appendWithStep } from "./loop-append"
+import { planWithStep } from "./loop-plan"
 import { repairRoundAppend, runTaskLoop, type LoopCtx } from "./loop-task"
 import {
   CLARIFIED_MARK,
@@ -30,6 +32,7 @@ import {
   phaseGates,
   phaseHandoverDoc,
   phaseKey,
+  phaseState,
   phaseSurveyDoc,
   phaseTitle,
   phaseVerdictDoc,
@@ -123,7 +126,7 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     if (outcome.kind === "inactive" || outcome.kind === "skipped" || outcome.kind === "consistent") return undefined
     // Record the verdict beside the plan-step verdicts it precedes (the
     // audit's charter covers every composition judgment of the round).
-    // The round's audit sits beside the phase directory (loop-plan's
+    // The round's audit sits beside the phase directory (plan-gate's
     // convention): dirname(phase.dir) is the round root docs/R-NN.
     const audit = join(dirname(phase.dir), "prompt-audit.md")
     await appendAudit(

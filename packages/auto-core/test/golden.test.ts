@@ -96,7 +96,7 @@ const facts = promptFacts()
 const views = promptViews(plan, task)
 const docs = taskDocPaths(task.id)
 // The planning renders' duty paragraph (the registry's own data, rendered
-// through the active library — loop-plan's helper, replicated for the
+// through the active library — plan-gate's helper, replicated for the
 // fixture): a builtin type's shared partial.
 const duties = (letter: PhaseLetter) => renderText(`{{> ${planDutiesPartial(phaseTypeOfLetter(letter))}}}`, {}).trimEnd()
 

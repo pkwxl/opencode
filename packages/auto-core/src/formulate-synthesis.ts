@@ -463,9 +463,11 @@ export async function synthesizeFormulation(input: SynthesisInput): Promise<Synt
 
 // —— the fidelity pass (D5) ——
 //
-// A second cheap one-shot (the verifyPlanPrompt shape: the registry's
-// classifier entry, tools denied, strict last-line verdict, one retry for a
-// parsable line): given the sources and the constructor's brief + ledger as
+// A second cheap one-shot (the record-time charter check's call shape: the
+// registry's classifier entry, tools denied, strict last-line verdict, one
+// retry for a parsable line — checkTextAgainstCharter still rides the entry;
+// the plan verifier left it for the phase-plan route in 0113): given the
+// sources and the constructor's brief + ledger as
 // data, judge that nothing load-bearing was dropped, nothing invented, no
 // obligation weakened. Anchoring is already mechanical (D4.2), so this is
 // the relevance judgment — did any real demand of the sources fail to become
@@ -498,8 +500,9 @@ type FidelityOutcome =
   | { kind: "skipped"; reason: string }
 
 // One fidelity check over the constructor's output, on the registry's
-// classifier entry (the verifyPlanPrompt precedent — a cheap judge, not a
-// second planner): no usable entry is a loud skip, never a block.
+// classifier entry (a cheap judge, not a second planner — the call shape the
+// plan verifier itself rode before 0113's phase-plan route): no usable entry
+// is a loud skip, never a block.
 async function fidelityPass(
   pool: AgentPool,
   routing: RoutingFacts,
