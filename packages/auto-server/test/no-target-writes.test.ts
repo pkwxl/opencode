@@ -34,10 +34,9 @@ import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { appendJournal, journalPath, type JournalEvent } from "../src/question-journal"
 import { DaemonStore } from "../src/store"
 import { wsInteractive } from "../src/worker-interactive"
-import { fixtureProject, scrubbedEnv } from "./fixtures/project"
+import { fixtureProject } from "./fixtures/project"
 import { wsClient, type TestSocket } from "./fixtures/ws"
 
-process.env.XDG_CONFIG_HOME = scrubbedEnv().XDG_CONFIG_HOME
 
 const RUN = "run-000001"
 const SECRET = "oar_seed0000000000000000000000000000000000000000"

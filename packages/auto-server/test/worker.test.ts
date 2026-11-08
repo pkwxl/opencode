@@ -27,10 +27,12 @@ const PACKAGE_ROOT = join(import.meta.dir, "..")
 // The subprocess never inherits this test process's driver environment (a
 // hibernate window would make every run sleep, a model policy would
 // reroute), and it must not read the operator's model registry either
-// ($OPENCODE_AUTO_MODELS or $XDG_CONFIG_HOME/opencode-auto/models.json), so
-// XDG_CONFIG_HOME points at an empty directory — the packages/auto e2e
-// CLI_ENV_BASE pattern. The per-run switches the requests below carry are
-// applied by the worker itself, which is the thing under test.
+// ($OPENCODE_AUTO_MODELS or $XDG_CONFIG_HOME/opencode-auto/models.json):
+// scrubbedEnv() strips the OPENCODE_AUTO_* layer, and the empty config home
+// is the package preload's (test/preload.ts, plans/0232 D1), riding the
+// spread — the packages/auto e2e CLI_ENV_BASE pattern. The per-run switches
+// the requests below carry are applied by the worker itself, which is the
+// thing under test.
 const ENV_BASE: Record<string, string | undefined> = scrubbedEnv()
 
 type WorkerResult = { code: number; out: string; err: string }

@@ -1,0 +1,4 @@
+[test]
+# Hermetic against the operator's model registry: see test/preload.ts (the
+# auto-core precedent, plans/0055 §4.1 "Hermetic tests").
+preload = ["./test/preload.ts"]

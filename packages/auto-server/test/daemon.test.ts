@@ -34,12 +34,11 @@ import { wsClient } from "./fixtures/ws"
 const PACKAGE_ROOT = join(import.meta.dir, "..")
 
 // The daemon spawns worker children from its own environment (this test
-// process): the scrubbedEnv conventions must hold for them — no ambient
-// OPENCODE_AUTO_* reaches a worker (the daemon itself scrubs the layer off
-// its spawns; every fixture run selects its agent through the request's
-// switches instead) and no operator model registry is read (XDG_CONFIG_HOME
-// points at an empty temp).
-process.env.XDG_CONFIG_HOME = scrubbedEnv().XDG_CONFIG_HOME
+// process): no ambient OPENCODE_AUTO_* reaches a worker (the daemon itself
+// scrubs the layer off its spawns; every fixture run selects its agent
+// through the request's switches instead) and no operator model registry is
+// read — the package preload (test/preload.ts, plans/0232 D1) keeps this
+// process's XDG_CONFIG_HOME at an empty temp, which the daemon's spawns keep.
 
 type RunView = {
   id: string

@@ -6,7 +6,6 @@
 // model registry (an empty XDG_CONFIG_HOME).
 import { expect } from "bun:test"
 import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises"
-import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { renderAgentContract } from "@opencode-ai/auto-core/config-fix"
@@ -14,20 +13,13 @@ import { CONFIG_DEFAULTS, saveProjectConfig, type ProjectConfig } from "@opencod
 import { ensureGitignore } from "@opencode-ai/auto-core/gitignore"
 import { establishRound } from "@opencode-ai/auto-core/phases"
 
-// One empty config home per test module (registered as an exit cleanup): a
-// subprocess reading an operator model registry would fail its references or
-// steer, so none may exist.
-let emptyConfigHome: string | undefined
-
+// The scrubbed environment every subprocess spawn builds on: the process
+// environment with the ambient OPENCODE_AUTO_* layer stripped. The empty
+// config home is the package preload's (test/preload.ts, plans/0232 D1 —
+// XDG_CONFIG_HOME already points at its empty temp in this process), riding
+// the spread: one config home per process, subprocesses included.
 export function scrubbedEnv(): Record<string, string | undefined> {
-  if (!emptyConfigHome) {
-    emptyConfigHome = mkdtempSync(join(tmpdir(), "auto-server-env-"))
-    process.on("exit", () => rmSync(emptyConfigHome!, { recursive: true, force: true }))
-  }
-  return {
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key))),
-    XDG_CONFIG_HOME: emptyConfigHome,
-  }
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key)))
 }
 
 // The fake agent's environment (the B6/C5 convention): a PATH with the fake

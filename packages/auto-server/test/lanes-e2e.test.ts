@@ -28,12 +28,12 @@ import { ensureGitignore } from "@opencode-ai/auto-core/gitignore"
 import { establishRound } from "@opencode-ai/auto-core/phases"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
-import { fakeAgent, gitOf, scrubbedEnv } from "./fixtures/project"
+import { fakeAgent, gitOf } from "./fixtures/project"
 
 // The worker children spawn from the daemon's environment (this test
-// process): the scrubbedEnv conventions — no ambient OPENCODE_AUTO_* layer,
-// no operator model registry.
-process.env.XDG_CONFIG_HOME = scrubbedEnv().XDG_CONFIG_HOME
+// process): the hermetic base — no ambient OPENCODE_AUTO_* layer (the daemon
+// scrubs it off its spawns), no operator model registry (the package
+// preload, test/preload.ts, keeps this process's config home empty).
 
 type RunView = {
   id: string

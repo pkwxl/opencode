@@ -41,6 +41,9 @@ export const REPO_LANE: readonly string[] = [
   // release commits, the fold of the person's uncommitted fill, and the
   // advance fixtures beside survey-gate's and transfer's.
   "test/clarify.test.ts",
+  // The worktree cleanliness gate (0232 D2): real git repositories, a nested
+  // repository's dirt included.
+  "test/clean.test.ts",
   // Doc lanes (plans/0099): the loop-shape cases drive real git repositories
   // (the same-tree commit boundary the decorator scopes); the pure halves
   // need no repository, the lane is the honest one.
@@ -195,6 +198,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/document-spec.test.ts",
   "test/document-state.test.ts",
   "test/document-unit.test.ts",
+  // The production TurnFx's own invariants (0232 D2): the fake agent and a
+  // temp-directory journal — in-memory, no repository, no spawn.
+  "test/engine-fx.test.ts",
   "test/execute-handover.test.ts",
   "test/exit.test.ts",
   "test/failback.test.ts",
@@ -238,6 +244,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/mode.test.ts",
   "test/models.test.ts",
   "test/numbering.test.ts",
+  // The overlay loader's own laws (0232 D2): temp directories, no
+  // repository, no spawn.
+  "test/overlay.test.ts",
   "test/parallel.test.ts",
   "test/phases-custom.test.ts",
   "test/phases-registry.test.ts",
@@ -265,6 +274,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/session-opts.test.ts",
   "test/shell.test.ts",
   "test/split.test.ts",
+  // The stats document's schema half (0232 D2): pure constructors, parse and
+  // aggregation laws — in-memory, no repository, no spawn.
+  "test/stats-schema.test.ts",
   "test/stats.test.ts",
   "test/step.test.ts",
   "test/stuck.test.ts",

@@ -36,13 +36,12 @@ import { renderAgentContract } from "@opencode-ai/auto-core/config-fix"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
 import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { establishRound } from "@opencode-ai/auto-core/phases"
-import { fakeAgent, fixtureProject, gitOf, scrubbedEnv, TASK } from "./fixtures/project"
+import { fakeAgent, fixtureProject, gitOf, TASK } from "./fixtures/project"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 import { AutoApi, ApiError } from "../web/api"
 import { answerGate } from "../web/render"
 import { InteractiveSession } from "../web/interactive"
 
-process.env.XDG_CONFIG_HOME = scrubbedEnv().XDG_CONFIG_HOME
 
 type Harness = {
   daemon: DaemonHandle

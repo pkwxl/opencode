@@ -15,10 +15,9 @@ import { tmpdir } from "node:os"
 import { liveRunLock } from "@opencode-ai/auto-core/lock"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
-import { fakeAgent, fixtureProject, scrubbedEnv, TASK, TASK_2 } from "./fixtures/project"
+import { fakeAgent, fixtureProject, TASK, TASK_2 } from "./fixtures/project"
 import { wsClient, type TestSocket } from "./fixtures/ws"
 
-process.env.XDG_CONFIG_HOME = scrubbedEnv().XDG_CONFIG_HOME
 
 type Harness = {
   daemon: DaemonHandle

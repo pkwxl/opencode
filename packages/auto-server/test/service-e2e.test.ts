@@ -35,10 +35,9 @@ import { CONFIG_FILE } from "@opencode-ai/auto-core/config"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { journalPath } from "../src/question-journal"
 import { DaemonStore } from "../src/store"
-import { fakeAgent, gitOf, scrubbedEnv } from "./fixtures/project"
+import { fakeAgent, gitOf } from "./fixtures/project"
 import { wsClient } from "./fixtures/ws"
 
-process.env.XDG_CONFIG_HOME = scrubbedEnv().XDG_CONFIG_HOME
 
 type RunView = { id: string; state: string; code: number | null; signal: string | null; tail: string; live: boolean }
 

@@ -1,0 +1,4 @@
+[test]
+# Hermetic against the operator's model registry, in-process form: see
+# test/preload.ts (the subprocess half is the e2e harness's CLI_ENV_BASE).
+preload = ["./test/preload.ts"]

@@ -32,11 +32,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
-import { fakeAgent, fixtureProject, scrubbedEnv, TASK } from "./fixtures/project"
+import { fakeAgent, fixtureProject, TASK } from "./fixtures/project"
 
-// The daemon serves the tails from this process: the scrubbed-env
-// conventions of the shared fixtures must hold for anything it spawns.
-process.env.XDG_CONFIG_HOME = scrubbedEnv().XDG_CONFIG_HOME
+// The daemon serves the tails from this process: the hermetic base of the
+// shared fixtures (the package preload, test/preload.ts — an empty config
+// home, no ambient registry) must hold for anything it spawns.
 
 // —— the harness ——
 

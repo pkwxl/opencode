@@ -38,12 +38,12 @@ import { renderAgentContract } from "@opencode-ai/auto-core/config-fix"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
 import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { establishRound } from "@opencode-ai/auto-core/phases"
-import { fakeAgent, fixtureProject, gitOf, scrubbedEnv, TASK } from "./fixtures/project"
+import { fakeAgent, fixtureProject, gitOf, TASK } from "./fixtures/project"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 
-// The daemon serves operations from this process: the scrubbed-env
-// conventions of the shared fixtures must hold for anything it spawns.
-process.env.XDG_CONFIG_HOME = scrubbedEnv().XDG_CONFIG_HOME
+// The daemon serves operations from this process: the hermetic base of the
+// shared fixtures (the package preload, test/preload.ts — an empty config
+// home, no ambient registry) must hold for anything it spawns.
 
 type Body = Record<string, unknown>
 type Answer = { status: number; body: Body }

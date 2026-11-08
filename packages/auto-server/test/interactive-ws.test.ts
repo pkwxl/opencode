@@ -27,10 +27,7 @@ import { basename, join } from "node:path"
 import { tmpdir } from "node:os"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
-import { scrubbedEnv } from "./fixtures/project"
 import { wsClient } from "./fixtures/ws"
-
-process.env.XDG_CONFIG_HOME = scrubbedEnv().XDG_CONFIG_HOME
 
 type Harness = {
   daemon: DaemonHandle

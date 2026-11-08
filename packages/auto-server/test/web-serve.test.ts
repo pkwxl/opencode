@@ -28,13 +28,12 @@ import { basename, join } from "node:path"
 import { tmpdir } from "node:os"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
-import { fakeAgent, fixtureProject, scrubbedEnv, TASK, TASK_2 } from "./fixtures/project"
+import { fakeAgent, fixtureProject, TASK, TASK_2 } from "./fixtures/project"
 import type { WsFrame } from "../src/ws-protocol"
 import { AutoApi, ApiError } from "../web/api"
 import { SseTail, type SseFrame } from "../web/sse"
 import { InteractiveSession } from "../web/interactive"
 
-process.env.XDG_CONFIG_HOME = scrubbedEnv().XDG_CONFIG_HOME
 
 type Harness = {
   daemon: DaemonHandle

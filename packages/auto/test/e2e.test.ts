@@ -601,11 +601,13 @@ test.skipIf(!(E2E && CLASSIFIER_MODEL.includes("/")))(
 // Nor does it read the operator's model registry: run and plan load its
 // operator layer at every start ($OPENCODE_AUTO_MODELS, scrubbed above, or
 // $XDG_CONFIG_HOME/opencode-auto/models.json), so the base points
-// XDG_CONFIG_HOME at an empty directory. The opt-in in-process runs above
-// call runAll in this process, where OPENCODE_AUTO_MODELS names a file that
-// does not exist (no operator layer): moving XDG_CONFIG_HOME here would also
-// hide the operator's opencode config from the real server they start.
-// AUTO-DECISION: subprocesses get an empty XDG_CONFIG_HOME, this process an OPENCODE_AUTO_MODELS naming a missing file (a missing file is no operator layer, with no XDG fallback, and the in-process runs keep the real opencode config they need)
+// XDG_CONFIG_HOME at an empty directory. The in-process half is the package
+// preload's (test/preload.ts, plans/0232 D1): this process's
+// OPENCODE_AUTO_MODELS names a file that does not exist (no operator layer,
+// no XDG fallback), while XDG_CONFIG_HOME stays real for the opt-in
+// in-process runs above — they call runAll in this process and need the
+// operator's real opencode config for the server they start.
+// AUTO-DECISION: subprocesses get an empty XDG_CONFIG_HOME, this process an OPENCODE_AUTO_MODELS naming a missing file (a missing file is no operator layer, with no XDG fallback, and the in-process runs keep the real opencode config they need; the pointer is owned by the preload, not this file)
 
 // The suite also pins git's global config (T-127): hosts without a global
 // identity fail every committing path (init's prerequisite check refuses
@@ -642,7 +644,6 @@ const CLI_ENV_BASE: Record<string, string | undefined> = {
   // invocation, beside the core plan suites' rows-0 coverage.
   OPENCODE_AUTO_ANALYSIS: "off",
 }
-process.env.OPENCODE_AUTO_MODELS = join(EMPTY_CONFIG_HOME, "no-operator-layer.json")
 
 async function runCli(args: string[], env?: Record<string, string>) {
   const proc = Bun.spawn([process.execPath, join(import.meta.dir, "..", "src", "index.ts"), ...args], {
@@ -5738,8 +5739,9 @@ describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
       const ambient = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key)))
       for (const key of Object.keys(ambient)) delete process.env[key]
       process.env.OPENCODE_AUTO_LANE_ISOLATION = "on"
-      // The scrub above also removed this module's hermetic OPENCODE_AUTO_MODELS
-      // pointer, and without it the in-process runAll's preflight falls back to
+      // The scrub above also removed the package preload's hermetic
+      // OPENCODE_AUTO_MODELS pointer (test/preload.ts, plans/0232 D1), and
+      // without it the in-process runAll's preflight falls back to
       // the operator's real XDG registry ($XDG_CONFIG_HOME/opencode-auto/
       // models.json), which may reference env keys this process does not carry
       // (on such hosts preflight refuses and runAll exits 1 — T-127 found this
