@@ -58,7 +58,7 @@ Six principles: four pillars, one fence, one contract. Removal of any breaks a c
 - Acceptance gates never auto-repair; a FAIL verdict stops the run for a person to accept with `close` or rework; mode choice is a human judgment ("the program does not make it for them") — 0079 §4, 0044 D9, 0020 §K-5.
 - AUTO-RESOLVE defaults are recorded and charter-clamped, never consumed as closed ("a decision is never closed in real time — *and the pipeline never consumes it as closed*") — `src/charter-clamp.ts`, `src/resolve.ts`; 0082 D12.
 - The proxy's mandate bound: "the person's instruction is the only scope… every stop a command reaches is a report point, never a runway"; marks over recorded decisions stay delegable, authorship does not — `src/driver-helper.ts`; 0107.
-- Bounded escalation, human terminal: fix rounds (progress-gated, never count-capped — two consecutive no-gap rounds block, 0146 amending 0083 D5) → `--repair` → the human; two consecutive reblocks suspend diagnosis (0082 D8); consent is the budget — "every remediation needs a fresh mark; there is no pre-authorized budget".
+- Bounded escalation, human terminal: fix rounds (progress-gated, never count-capped — blocking only when the gap count stops improving, 0146 amending 0083 D5, 0198 the best-count key) → `--repair` → the human; two consecutive reblocks suspend diagnosis (0082 D8); consent is the budget — "every remediation needs a fresh mark; there is no pre-authorized budget".
 - The person's words ride verbatim, never rewritten: the planning input quoted not paraphrased (0095 D5), "the driver never scores, rewrites or refuses an input" (0081 D12), "the driver never rewrites your words" (0082 D2).
 - Person-input surfaces teach their own shape instead of assuming a reference exists (the planning-input scaffold, the ASSIST_RULE enumerate-ask-record discipline, the survey fork grammar) — 0081's headline move, 0084 D1.
 
@@ -92,11 +92,11 @@ Six principles: four pillars, one fence, one contract. Removal of any breaks a c
 
 **Derivations.**
 - The unified commit: after any session the driver recursively commits (nested repos first), subjects and `Auto-Stage` trailers machine-addressable; AI sessions never run commit-type commands — `src/git.ts`; 0021, 0029.
-- The SHA baseline and close-out purity: every commit in `baseline..HEAD` carries the driver trailer; multiple driver commits legal, empty commits forbidden — `src/git.ts` (`unitViolations`, `beginUnit`); 0021 §1.3/§6.
-- Clean worktree at unit start and run start (driver-state leftovers self-heal; other dirt blocks for a human); foreign commits are never rolled back — "the authority over git state belongs to a human" — 0021 D5, 0022.
+- The SHA baseline and close-out purity: every commit in `baseline..HEAD` carries the driver trailer; multiple driver commits legal, empty commits forbidden — `src/git.ts` (`unitViolations`, `beginUnit`); 0021 §1.3/§6. The audit's purity target is the sessions' own commits: a resume that finds the person's commits in an interrupted unit's range adopts them — readable drift alone, no reuse of the recorded session, no rollback, no stop — because both resume entry points re-record the unit baseline at the current HEAD, the person's commits sitting before the close-out range — `src/resume-gate.ts`; 0145, 0183 D3's readable bound.
+- Clean worktree at unit start and run start (driver-state leftovers self-heal; other dirt blocks for a human); foreign commits are never rolled back, and on an interrupted resume they are adopted as the continuation scene — "the authority over git state belongs to a human" — 0021 D5, 0022, 0145.
 - `--commit false` retired entirely (tombstoned); the commit side idles only under dryrun and non-git test doubles — 0021 D7, 0061 R13.
 - The person's completion paths: `close` (the `Closed:` field, `git revert` the undo) and `land` (squash default) — `src/close.ts`, `src/land.ts`; 0053 D17, 0074.
-- Session ends are commit boundaries in the manual twin (shares at handovers; workers still never commit) — 0087. The person must not hand-commit inside a unit's range — it breaks the SHA-baseline audit — 0076.
+- Session ends are commit boundaries in the manual twin (shares at handovers; workers still never commit) — 0087. The person must not hand-commit inside a live unit's range (0076): such commits forfeit session reuse and land as adopted drift at the resume — the audit re-anchors around them, and the authority over git state stays the person's (0021 D5) — they never stop or roll back a run.
 
 **Provenance.** 0021 (2026-09-14), generalizing the prior "persisted and committed" protocol into the universal check.
 
@@ -128,7 +128,7 @@ Six principles: four pillars, one fence, one contract. Removal of any breaks a c
 **Rationale.** "The record outlives the tool… This is the deepest moat: not lock-in but its absence — adoption costs little because leaving costs nothing, and audits need no special tooling" (0064 §1).
 
 **Derivations.**
-- Permanence: documents under `docs/` never move or get renamed once created; task paths permanent so tasks are never nested under rounds or phases — `src/docpaths.ts`; 0010 R2, 0047 §1.
+- Permanence: documents under `docs/` never move or get renamed once created; task paths permanent so tasks are never nested under rounds or phases — `src/docpaths.ts`; 0010 R2, 0047 §1. Task ids never repeat within one corpus: numbering derives from the surviving artifacts alone (0150), documents are write-once so deletion is off-protocol, and a restart's re-issued numbers open a new corpus — the downstream machinery corpus-bounded so the two never collide (0140).
 - Machine-addressable history: per-task commit subjects and `Auto-Task`/`Auto-Stage`/`Auto-Nested` trailers; "git history is the audit trail of AI changes, with rollback granularity = one session" — `src/git.ts`; 0021, 0029.
 - Append-only journals as the interchange: `.auto/run-events.jsonl`, `.auto/run-status.jsonl` — consumers parse the typed lines, "never log prose" — `src/engine/events.ts`, `src/run-status.ts`; 0061 R4, 0067, 0071 §3.
 - Deletion is safe only after distillation, and pairs directories with index lines in one commit; "git history retains everything; the audit trail (per-task commits) never leaves" — 0070.
@@ -154,7 +154,7 @@ Thirteen principles: removal degrades how the tool runs without changing what th
 - The mirrors retired: CURRENT.md deleted (0054 D3), the AGENTS.md round snapshot retired, AGENTS.md holds only the driver's block, read-only during runs (0054 D1/D2).
 - The brief is driver-written state through named channels only (seed, survey install, `fix`'s move) — `src/brief.ts`; 0081 D6c.
 - The config layer is constitutional: fixed by init, revised per-key by amend, repaired by rule by fix, read-only during runs; init and reset are exact inverses — `src/config.ts`; 0004, 0052.
-- One lock per directory (`.auto/run.lock`) — `src/lock.ts`; 0053 D1–D3.
+- One lock per directory (`.auto/run.lock`): one driver per working directory, held for the run's whole life; the lock's scope is commands that write what a running driver reads, never read-only channels — the retry fork takes no lock, loud on collision — `src/lock.ts`; 0053 D1–D3 (the owning concern), 0129 (the scope).
 
 **Derivations — the mechanism scope.**
 - The consolidation: one spine with declared arbitration order, concerns each owning one state slice; `chain-transitions.ts` as "the one home of every SessionChain field write"; `RunServices` the one constructed holder — `src/engine/`, `src/chain-transitions.ts`, `src/services.ts`; 0061 R7/R11.
@@ -196,7 +196,7 @@ Thirteen principles: removal degrades how the tool runs without changing what th
 
 ### P8 — A check's enforcement moment is deliberate: detection records; the person's moments enforce
 
-**Statement.** A mechanical finding names its own moment: most checks record and surface (counts, warnings, findings), blocking is reserved for the stop's own work and the person's moments, and every surfaced line teaches the remedy it wants.
+**Statement.** A mechanical finding names its own moment: most checks record and surface (counts, warnings, findings, informational notes — detection that needs no person act is a note, never a finding), blocking is reserved for the stop's own work and the person's moments, and every surfaced line teaches the remedy it wants.
 
 **Rationale.** Blocking on everything taxes velocity for properties only later moments need (0103 D2); blocking on nothing hides drift (0067's not-chartered header). "✗ is this stop's work, ⚠ is a record — each names its own moment" (0106 D3).
 
@@ -205,6 +205,7 @@ Thirteen principles: removal degrades how the tool runs without changing what th
 - Containment recorded during rounds, enforced at release — P1's timing clause; 0103 D2/D3.
 - The ✗/⚠ reading rule and the remedy channels riding the rendered surfaces ("the gates check outcomes, the surfaces teach remedies") — `src/round-close.ts`, `src/driver-helper.ts`; 0106.
 - Fail-closed verification of the person's charter (the plan verifier: one retry then block, exit 2) versus loudly-degrading enhancement (the synthesis: audit lines, FALLBACK, the deterministic floor) — `src/prompt-verify.ts` vs `src/formulate-synthesis.ts`; 0080 vs 0097 D4.
+- The recorded-state (info) class: detection that names a state needing no person act is a note, never a finding — an expected posture with nothing to repair (a superseded-but-diverging config key) reports `info` with exit 0, firing on divergence alone (agreement the designed state), the hand-remedy trailer never riding it — `src/config-fix.ts`; first ruled 0135, the trigger sharpened 0136.
 - The manual suite's stricter line: no release gate stands behind an agent-driven run — 0103.
 
 **Provenance.** 0100 D6 (detection-is-not-a-gate, ruled when runtime layering was rejected) and 0103's record-then-enforce; the 0106 field round taught the remedy-teaching half.
@@ -212,7 +213,7 @@ Thirteen principles: removal degrades how the tool runs without changing what th
 **Known tensions.** Trades against fail-closed (P12): the plan verifier and the guarantees render gate block precisely because a person's charter is being violated *now*. The distinction is whether the finding's moment has come — never whether the check is cheap.
 
 **Choice.** Record-and-surface versus block — decided per finding by whether its moment has come, never by whether the check is cheap.
-**Chosen default.** Detection records everywhere; blocking is reserved for the stop's own work and the person's moments; every surfaced line teaches its remedy.
+**Chosen default.** Detection records everywhere; blocking is reserved for the stop's own work and the person's moments; every surfaced line teaches its remedy; a detection that needs no person act is a note (the recorded-state class), never a finding.
 **Revisit trigger.** A field round where the accumulated release-blocking set proves late and expensive to restate (T1; the 0045 and 0103-carve-out drifts are the history).
 
 ### P10 — The byte-identical floor
@@ -279,7 +280,7 @@ Thirteen principles: removal degrades how the tool runs without changing what th
 **Known tensions.** Temporary dual-read compatibility was used during the flip and retired deliberately when in-flight risk passed (0035 M3.7) — bounded compatibility windows are permitted, never silent precedence. The exit-1 findings convention of fix/sync deviates from exit-2 wording deliberately (0102 invariants-4).
 
 **Choice.** Frozen vocabularies grown additively versus free renaming; bounded compatibility windows permitted, never silent precedence.
-**Chosen default.** Change only by conscious lockstep (parser, templates, markers, pinning tests in one change); grow additively; retire through tombstones and the versioned deprecation lifecycle (a visible-warning release, then removal in a named later release).
+**Chosen default.** Change only by conscious lockstep (parser, templates, markers, pinning tests in one change); grow additively; retire through tombstones — a vocabulary's tombstone is its permanent teaching refusal (0225's two-track rule), a silently-changing behavior takes one release of visible warning, then removal in a named later release.
 **Revisit trigger.** Dead literals accumulating past the scheduled audits (R6; 0069's dead-field cleanup is the precedent).
 
 ### P14 — Dependencies point one way through declared seams
@@ -355,6 +356,7 @@ Thirteen principles: removal degrades how the tool runs without changing what th
 - The readiness scheduler pure over declared facts; level-independent admission; `Touches` advisory — a wrong declaration is a landing conflict, never corruption — `src/lanes.ts`; 0068 D5/D21.
 - The tier ladder: processes before trees; a second tree only for true concurrent code edits, at the cheapest materialization the filesystem allows — 0096 D9.
 - Doc lanes: the declaration is the safety argument ("disjoint scopes mean no shared mutable path, so isolation is unnecessary rather than merely expensive"); the await chain as the mutex; shared-state read-modify-writes serialized; the parent the sole git writer through the seam decorator — `src/git-ops.ts`, `src/loop-task.ts`; 0099 D3/D4/D8.
+- "Shared git state" names the repository's administrative surfaces — refs, the index, worktree registrations, every read-modify-write of repository state — with the objects database append-only and exempt; one sole writer means the parent driver under lanes (landings flow through it — 0068; the seam decorator — 0099 D4), never concurrent administrative writes by workers.
 - Phases drain before closing; never end a session with a lane in flight; the regression background slot never dirties a start gate — 0068 D20, 0096 D1, 0098 D4.
 - The manual twin: `parallel: <n>` waves with the same admission, the serial floor without the phrase — 0104.
 
@@ -400,7 +402,7 @@ Thirteen principles: removal degrades how the tool runs without changing what th
 - Scheduled waits naming the instant ("weekly limit resets …; sleeping until then", 0057 §6); the silence budget; the escalation order key → model → wait (0055 §7).
 - Stuck detection hint-only, capped, never halting — `src/stuck.ts`; 0016.
 - Liveness probes on fresh connections (half-open detection); truncation resumed by steer, not restart — `src/engine/concerns/liveness.ts`; 0026 §8/D3.
-- Control at boundaries only: `/exit` deferred to the next safe boundary (0014); hibernate stops at unit ends (0027); windows gate dispatches, never running turns (0055 §4.4); phases drain before closing (0068 D20); run's boundary stop at a clean phase end (0101 D1).
+- Control at boundaries only: `/exit` deferred to the next safe boundary (0014); hibernate stops at unit ends (0027); windows gate dispatches, never running turns (0055 §4.4); phases drain before closing (0068 D20); run's boundary stop at a clean phase end (0101 D1). A safe boundary is a committed, resumable stopping point — a unit close, a phase or task boundary, and (0143) a session handover or the wrap-up entry inside a unit — where stopping leaves every artifact committed and the recovery record sufficient; control changes wait for the next such point.
 - Executed means done (a pinned script's result persists; recovery never re-runs on suspicion) — `src/testrun.ts`; 0023 M-D1.
 
 **Provenance.** 0015 (the T-062 postmortem) and 0016; extended by 0057's quota work.
@@ -438,13 +440,13 @@ Ids are never reused — P13's own discipline: a tombstoned id never returns wit
 
 ## How to rule
 
-**The derivation tags.** Every future `plans/NNNN` decision block states its derivation:
+**The derivation tags.** Every future `plans/NNNN` document states its derivation — one consolidated Derives/Derivation paragraph covering every decision block is the corpus's settled form (each block's showing clause named in it; per-block tags equally legal):
 
 - `Derives: P-NN` — with the one clause showing how the ruling follows from the principle.
 - `Amends: P-NN` — when the ruling genuinely extends the constitution: the principle is restated and its provenance carried forward, in the same change.
 - Every ruling also states the tier it touches (constitutional / operating / requirement).
 
-Rulings may derive from more than one principle (name each); a documented tension between two principles is a ruling's material, never an excuse to skip the derivation. Answering a boundary question starts from this document, not from a corpus search.
+Rulings may derive from more than one principle (name each); a documented tension between two principles is a ruling's material, never an excuse to skip the derivation. When principles conflict, Tier I governs: a Tier II default bends to a Tier I principle (or is amended), never the reverse; a tension inside one tier is a ruling's material in the same way. Answering a boundary question starts from this document, not from a corpus search.
 
 **The category scope.** A requirement enters through its family, never through the surfaces an incident happened to touch (amended at v0.3.0 by plans/0123, from the measured aftermath of plans/0120: a principled ruling enacted surface-enumerated, leaving six same-family surfaces teaching against it). Every requirement-bearing ruling document carries a **Category scope** section: the requirement family named in one line, then the family's home-set enumerated at ruling time — every surface that carries, declares, or teaches the family — each home marked changed by this ruling, consistent and untouched (with reason), or deliberately deferred (with reason and the deferral's home). The section is written before the enactment (it is the measuring step, not the changelog); the enactment is complete against the enumeration, and an enactment touching a proper subset of its own enumeration is an audit finding at the next release. Enumerating where a boundary answer lives is measurement — the evidence rule (P19) applied to the corpus itself; the operative intake procedure for this repository's sessions lives in AGENTS.md's development conventions.
 
@@ -458,7 +460,7 @@ Rulings may derive from more than one principle (name each); a documented tensio
 
 **The traceability chain.** positioning → Tier I principle → Tier II policy → concrete requirement → code home → test home — audited in both directions at each release: rule→principle (orphans, gaps) and principle→code (divergences), findings numbered and append-only.
 
-**Change control and the release axis.** Between releases, findings accumulate; a release event is the only moment the constitution or a Tier II default changes. The release spine is semver: **major** — a Tier I amendment or a breaking contract change; **minor** — a new opt-in mechanism (floor-preserving, P10) or a Tier II default change; **patch** — ruled defect fixes; while pre-1.0, minor may carry breaking changes, said so in words in the release record. `docs/releases.md` is the maintained design changelog (version, date, principle deltas with tiers, mechanisms added and retired with plans pointers, tombstones, the audit findings' disposition); `plans/INDEX.md` rows carry the release each plan's rulings shipped in. An `Amends:` ruling names the release it amends; this document carries the stamp "current as of release vX.Y". Retiring a mechanism or vocabulary runs the deprecation lifecycle: tombstone → one release of visible warning (P8's detection-not-a-gate) → removal in a named later release. A release is cut when a ruled program completes; the maintainer cuts it. The corpus before this constitution is baselined `pre`; the first release (v0.1.0) records this constitution's adoption itself.
+**Change control and the release axis.** Between releases, findings accumulate; the version spine, the stamp and the release sections move only at a release event, while the constitution's text may be edited mid-cycle in exactly two recorded classes — **reconciliation** (a wording repair bringing the text back to what a ruling already ruled) and a **mid-cycle `Amends:` ruling** landing its change with the ruling itself — each recorded in `docs/releases.md`'s mid-cycle amendment register as it lands and consumed into the next release section at the cut (0225, from 0165-069: the defect was the edit's silence, never its timing). The release spine is semver: **major** — a Tier I amendment or a breaking contract change; **minor** — a new opt-in mechanism (floor-preserving, P10) or a Tier II default change; **patch** — ruled defect fixes; while pre-1.0, minor may carry breaking changes, said so in words in the release record. `docs/releases.md` is the maintained design changelog (version, date, principle deltas with tiers, mechanisms added and retired with plans pointers, tombstones, the audit findings' disposition); `plans/INDEX.md` rows carry the release each plan's rulings shipped in. An `Amends:` ruling names the release it amends; this document carries the stamp "current as of release vX.Y". Retiring a mechanism or vocabulary runs the deprecation lifecycle's two tracks (0225): a vocabulary's tombstone is its permanent teaching refusal — the retired surface a parse-time refusal naming the successor, never silently ignored; a silently-changing behavior takes one release of visible warning (P8's detection-not-a-gate), then removal in a named later release. A release is cut when a ruled program completes; the maintainer cuts it. The corpus before this constitution is baselined `pre`; the first release (v0.1.0) records this constitution's adoption itself.
 ## The trade-off register
 
 Each row: the tension → the choice made → where it was ruled → the trigger that reopens it. A trade-off row is never closed; it is a standing decision with its reopening condition stated.

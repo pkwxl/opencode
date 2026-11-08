@@ -2,7 +2,7 @@
 
 The maintained release record of the design: one section per release, recording what the constitution said at each point in time and what changed and why. Git history stays the code audit trail (P18) — commits prove what changed in bytes; this file records what changed in **design**: principles established, amended, merged or demoted (with P-ids and tiers), mechanisms added or retired (with `plans/NNNN` pointers), vocabularies tombstoned, the falsification-replay confirmation, and the audit findings' disposition. Code detail, per-commit narration, and anything git already proves do not belong here.
 
-A release is cut when a ruled program completes; **the maintainer cuts it**. Between releases, audit findings accumulate — a release event is the only moment the constitution (Tier I) or a Tier II default changes. The framework is documentation-layer: the release section itself is the record, no tooling implied.
+A release is cut when a ruled program completes; **the maintainer cuts it**. Between releases, audit findings accumulate; the version spine, the stamp and the release sections move only at a release event, while the constitution's text may be edited mid-cycle in exactly two recorded classes — reconciliation (a wording repair bringing the text back to what a ruling already ruled) and a mid-cycle `Amends:` ruling landing its change — each recorded in the mid-cycle amendment register below (0225, from 0165-069: the defect was the edit's silence, never its timing). The framework is documentation-layer: the release section itself is the record, no tooling implied.
 
 Ruled at plans/0110 D14, from the measured ground: no git tags, package `version: 0.0.0`, the plans corpus the only history — the spine starts from zero.
 
@@ -21,14 +21,27 @@ While pre-1.0, minor may carry breaking changes — the release record says so i
 ## Amendment and deprecation
 
 - **Amendment lifecycle.** An `Amends:` ruling names the release it amends, in the same change that lands it; `docs/principles.md` carries the stamp "current as of release vX.Y". A Tier I amendment is a major release; a Tier II default flip is minor. A ruling matching no principle is resolved before landing — constitution incomplete, or the ruling is drift (the derivation discipline, plans/0110 D5).
-- **Deprecation lifecycle.** Retiring a mechanism or vocabulary: **tombstone → one release of visible warning → removal in a named later release.** P13's additive-only discipline on the version axis — no silent dual meanings, no unversioned breaks. Detection during the warning release records; it does not gate (P8).
+- **Deprecation lifecycle (the two-track rule, 0225 — the practiced convention stated).** Retiring a **vocabulary** (a flag, a config key, a registry role, a protocol word): **the tombstone is the retirement** — the retired surface becomes a permanent parse-time teaching refusal (a usage error or a strict validation failure naming the successor channel), never silently ignored; no warning release, because the refusal itself teaches on every use (detection at the surface — P8; the practiced line: 0137's flag precedent, 0150 D2's registry refusal, 0052 D3/D4, 0053 §10 B4). Retiring a **behavior** (a mechanism whose removal silently changes what happens, with no surface left to refuse): **one release of visible warning → removal in a named later release**; detection during the warning release records, it does not gate (P8). Both tracks: ids never reused (P13's own discipline) — no silent dual meanings, no unversioned breaks.
+
+## The mid-cycle amendment register (0225)
+
+Between releases the constitution's text may be edited in exactly two classes, each recorded here as it lands — append-only, one row per edit — and consumed into the next release section's principle deltas at the cut, clearing the register. A mid-cycle edit no row states is an audit finding (0165-069's defect: an edit the stamp misdated and no record named).
+
+- **Reconciliation** — a wording repair bringing the text back to what a ruling already ruled (the text lagging or contradicting its own ruling).
+- **Mid-cycle amendment** — an `Amends:` ruling landing its change with the ruling itself. A Tier II default flip mid-cycle rides the same register, named as the default change it is.
+
+| date | ruling / step | surface | delta (a clause) | finding |
+| --- | --- | --- | --- | --- |
+| 2026-10-28 | 0146 (`7401fe7b5`) | principles.md P2, bounded escalation | the fix-round budget line rewritten (progress-gated, never count-capped); the stamp left at v0.3.0 — **this row is the retroactive record** | 0165-069 / F12 |
+| 2026-11-05 | 0166 step 006 | principles.md P10 derivation list; the P16-secrets family row | `OPENCODE_AUTO_PLAN_VERIFY` moved to the opt-in-checks clause (0113's reality); the secrets family restated to 0055 §4.2's true shape | 0165-101, 0165-132 |
+| 2026-11-09 | 0225 | principles.md P4/P8/P13/P2/P5/P17/P18/P20, How-to-rule, the change-control paragraph; releases.md intro/lifecycle/audit duty; AGENTS.md's derivation-discipline clause | P4's derivations reconciled with 0145 (adoption + the re-anchor); P8 gains the recorded-state (info) class; the deprecation lifecycle restated as the practiced two-track rule; P2's line rephrased without the threshold, current to 0198; five definitional sentences (lock scope, shared git state, task-id uniqueness, safe boundary, Tier precedence); the change-control rule amended to the two recorded classes with this register; the replay method named in the audit duty | 0165-007/F18, 0165-071/F19, 0165-068/F11, 0165-069/F12, 0165-181/F17, 0165-182/F20, 0165-183/F21 |
 
 ## The per-release audit duty
 
 Each release section stands on two audits, both recorded in it:
 
 1. **The traceability chain, both directions** — positioning → Tier I → Tier II → concrete requirement → code home → test home, audited rule→principle (orphans, gaps) and principle→code (divergences). Findings are numbered, append-only, and dispositioned in the release that closes them.
-2. **The falsification replay** — the constitution must answer real, already-ruled questions with the plans closed; the answers come out the same, or the principle set returns to synthesis — never to the ruling.
+2. **The falsification replay** — the constitution must answer real, already-ruled questions with the plans closed; the answers come out the same, or the principle set returns to synthesis — never to the ruling. **The method (0225, from S03 run 1's measured breach — 0165-183/F21): the replay never runs inside the repository** — any agent session started there auto-loads AGENTS.md, whose navigation names the rulings; the blind child starts in an isolated directory holding the amended `docs/principles.md` alone, questions neutrally phrased (no plan numbers, no mechanism names), plans closed.
 
 ---
 
