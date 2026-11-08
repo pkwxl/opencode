@@ -97,7 +97,16 @@ opencode-auto-server token revoke <name>
 (`verbose`, `waitAnswer`, `waitBetween`, `permission`, `newSession`, `dryrun`,
 `maxSessions`, `server`, `repair`, `stopAfter`, `boundary`) and `switches`
 are per-run `OPENCODE_AUTO_*` overrides — the same shared validator the
-worker enforces (`src/request.ts`); anything else, notably any
+worker enforces (`src/request.ts`). Two trust rules bound the carriers
+(plans/0222 D2, the 0165-171 finding): the switches carrier takes **switches
+only** — the registry's two env-only names are refused (`OPENCODE_AUTO_MODELS`,
+the operator registry layer's path, and `OPENCODE_AUTO_SERVER`, the external
+server URL's env form: the operator's channels are the XDG config root the
+worker inherits and the confinement launcher's environment overlay, never a
+run request), and `options.server` takes a **loopback URL only**
+(`127.0.0.1`, `::1`, `localhost` — the daemon's v1 boundary is one machine;
+an off-machine server rides the confinement launcher's environment overlay);
+anything else, notably any
 constitutional config key (`intent`, `treeLanes`, `isolate` and the
 hand-edited `lanes` table included), is refused with the frozen-flag
 message ("frozen by init … revise with amend") as a **400**. Width is
@@ -512,13 +521,23 @@ error frame and a close):
 | route                          | auth | meaning |
 | ------------------------------ | ---- | ------- |
 | `GET /runs/<id>/interactive`   | an operator token with the `answer` **or** `control` scope (the `Authorization` header, or `?token=` — a browser WebSocket cannot set headers) | the client socket: the question channel and the control channel, multiplexed. **Not offered to a wide run** (plans/0162): a `maxSessions ≥ 2` run carries no transport at all — the endpoint answers **409** naming the one-channel rule, and such a run's questions take the stdin-closed degradation path |
-| `GET /runs/<id>/worker`        | the per-run secret the daemon wrote into the worker's spawn payload | the run's own bridge — the worker entry's injected `Interactive` implementation (`src/worker-interactive.ts`) connects back here through the P3a seam (`RunAllOpts.interactive`) |
+| `GET /runs/<id>/worker`        | the per-run secret the daemon passed through the worker's spawn environment | the run's own bridge — the worker entry's injected `Interactive` implementation (`src/worker-interactive.ts`) connects back here through the P3a seam (`RunAllOpts.interactive`) |
 
 Auth precedes run-id existence on both endpoints (the order every route
 keeps — plans/0197 D4): the client endpoint checks the operator token
 before the run lookup (a known token still learns a run id does not exist,
 404), and an unknown run id on the worker endpoint answers the same 401 as
 a wrong secret — no unauthenticated run-id enumeration on either door.
+
+The per-run secret's carriage (plans/0222 D1, the 0165-054 finding): it
+rides the worker's spawn environment as `OPENCODE_AUTO_BRIDGE_TOKEN` —
+never the spawn payload's argv (world-readable through
+`/proc/<pid>/cmdline`), and the `OPENCODE_AUTO_` prefix keeps it out of
+every agent child through the agent domain's X1 scrub. The bridge is
+latched to its first live connection: while a worker socket is open, a
+second worker connection is refused (one error frame, then a close) — the
+worker's own reconnect always arrives after its predecessor's close, so
+nothing legitimate is refused.
 
 Frames (JSON, one per message; `v` on every one):
 

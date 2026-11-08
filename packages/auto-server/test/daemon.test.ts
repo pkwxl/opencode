@@ -600,6 +600,89 @@ describe("daemon: concurrent projects, width, and the confinement launcher (plan
   }, 60_000)
 })
 
+// The spawn carriage and the request's trust boundaries (plans/0222, the
+// 0165-054/171 findings): the per-run bridge secret never rides the worker's
+// argv (world-readable through /proc/<pid>/cmdline — any local user and the
+// run's own agent session read it there), and the switches carrier takes
+// switches only.
+describe("daemon: the bridge secret's carriage and the request's trust boundaries (plans/0222)", () => {
+  test("a spawned worker's argv carries no oar_ token; the secret rides the spawn environment (0165-054's repro inverted)", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "auto-server-carriage-"))
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-carriage-run-"))
+    // A stand-in worker: dumps its argv and the token's SHAPE in the
+    // environment (a boolean — the value never lands in the dump either).
+    const dump = join(dataDir, "worker-facts.json")
+    const standIn = join(dataDir, "stand-in.ts")
+    await Bun.write(
+      standIn,
+      [
+        `const facts = { argv: process.argv, bridgeTokenInEnv: (process.env.OPENCODE_AUTO_BRIDGE_TOKEN ?? "").startsWith("oar_") }`,
+        `await Bun.write(${JSON.stringify(dump)}, JSON.stringify(facts) + "\\n")`,
+        `process.exit(0)`,
+        ``,
+      ].join("\n"),
+    )
+    const store = new DaemonStore(dataDir)
+    store.register(dir)
+    const control = store.issueToken("control", "controller").token
+    const daemon = await startDaemon({ dataDir, port: 0, worker: { command: process.execPath, prefix: [standIn] } })
+    try {
+      const started = await fetch(`${daemon.url}/runs`, { method: "POST", headers: { authorization: `Bearer ${control}`, "content-type": "application/json" }, body: JSON.stringify({ project: dir }) })
+      expect(started.status).toBe(202)
+      const id = ((await started.json()) as RunView).id
+      // The handle's own views (the control token cannot read the run — the
+      // scope matrix's own rule).
+      const deadline = Date.now() + 30_000
+      for (;;) {
+        const run = daemon.runs().find((view) => view.id === id)
+        if (run && !run.live) break
+        if (Date.now() > deadline) throw new Error("the stand-in run never settled")
+        await Bun.sleep(100)
+      }
+      const facts = (await (await Bun.file(dump).json())) as { argv: string[]; bridgeTokenInEnv: boolean }
+      // The pin (the finding's repro inverted): no part of the worker's
+      // command line carries the credential — pre-fix, the payload's
+      // transport held "token":"oar_…" right here.
+      const cmdline = facts.argv.join(" ")
+      expect(cmdline).not.toContain("oar_")
+      // The request itself still rides argv (the payload carriage is the
+      // daemon's own channel for it), and the credential moved to the spawn
+      // environment with the oar_ shape — moved, not dropped.
+      expect(cmdline).toContain(dir)
+      expect(facts.bridgeTokenInEnv).toBe(true)
+    } finally {
+      await daemon.stop()
+      await rm(dataDir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  test("POST /runs refuses the env-only switch names and an off-host server URL as 400s ahead of project resolution (0165-171)", async () => {
+    // Validation precedes the whitelist lookup (and the spawn): a control
+    // token cannot name the operator registry layer's path or an arbitrary
+    // agent endpoint — pre-fix both bodies sailed past validation (the
+    // unregistered project then answered 404, the names themselves
+    // accepted).
+    await withHarness(async (h) => {
+      const models = await h.request("POST", "/runs", h.control, { project: "never-registered", switches: { OPENCODE_AUTO_MODELS: "/tmp/anything.json" } })
+      expect(models.status).toBe(400)
+      expect(((await models.json()) as { error: string }).error).toContain("the operator registry layer's path")
+      const serverSwitch = await h.request("POST", "/runs", h.control, { project: "never-registered", switches: { OPENCODE_AUTO_SERVER: "http://203.0.113.9:4096" } })
+      expect(serverSwitch.status).toBe(400)
+      expect(((await serverSwitch.json()) as { error: string }).error).toContain("the external agent server URL's env form")
+      const serverOption = await h.request("POST", "/runs", h.control, { project: "never-registered", options: { server: "http://203.0.113.9:4096" } })
+      expect(serverOption.status).toBe(400)
+      const optionError = ((await serverOption.json()) as { error: string }).error
+      expect(optionError).toContain("is not loopback")
+      expect(optionError).toContain("confinement launcher")
+      // The floor: a live switch name is accepted by the same validator (the
+      // project resolution then answers, never the switch layer).
+      const live = await h.request("POST", "/runs", h.control, { project: "never-registered", switches: { OPENCODE_AUTO_AGENT: "claude" } })
+      expect(live.status).toBe(404)
+    })
+  })
+})
+
 describe("daemon: lock conflicts (the lock is the arbiter, CLI and daemon alike)", () => {
   test("a live holder answers 423 with the holder line; an unreadable lock counts live too", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-server-live-lock-"))

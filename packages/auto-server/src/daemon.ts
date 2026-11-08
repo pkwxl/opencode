@@ -78,7 +78,7 @@ import { OP_DEFINITIONS, type OpOutcome } from "./ops"
 import { CLIENT_APP_JS, CLIENT_INDEX_HTML } from "./web/client"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
 import { applyServerProfile } from "./profile"
-import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parsePlan, RequestError, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
+import { BRIDGE_TOKEN_ENV, CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parsePlan, RequestError, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
 import { PROTOCOL_VERSION } from "./ws-protocol"
 import { workerCommand } from "./worker-command"
 
@@ -405,15 +405,22 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // XDG_CONFIG_HOME included (one operator, one agent tooling, one model
   // registry). The directory is the registry's absolute path, so the cwd is
   // only the spawn's working directory, never the run's target. The payload
-  // carries the P3b interactive transport (the worker bridge URL and the
-  // per-run secret) whenever the daemon is serving it: the worker entry
-  // builds its Interactive implementation from it and injects it through
-  // RunAllOpts.interactive (the P3a seam), so a question raised inside the
-  // run is answerable from outside the process. The plan payload (P3c) and
-  // the transfer payload (the plans/0101 absorb) name the command the
-  // worker performs: runAll under stopBefore "execute", or runTransfer.
-  const spawnWorker = (project: RegisteredProject, run: RunRecord, runOptions: RunOptions, switches: Record<string, string>, transport?: TransportPayload, plan?: PlanPayload, transfer?: TransferPayload): void => {
-    const env: Record<string, string | undefined> = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key)))
+  // carries the P3b interactive transport (the worker bridge URL) whenever
+  // the daemon is serving it, while the per-run secret rides the spawn
+  // environment as OPENCODE_AUTO_BRIDGE_TOKEN — never argv, which any local
+  // user reads from /proc/<pid>/cmdline (plans/0222 D1); the OPENCODE_AUTO_
+  // prefix keeps the credential out of every agent child through the agent
+  // domain's X1 scrub. The worker entry builds its Interactive
+  // implementation from the pair and injects it through RunAllOpts.interactive
+  // (the P3a seam), so a question raised inside the run is answerable from
+  // outside the process. The plan payload (P3c) and the transfer payload
+  // (the plans/0101 absorb) name the command the worker performs: runAll
+  // under stopBefore "execute", or runTransfer.
+  const spawnWorker = (project: RegisteredProject, run: RunRecord, runOptions: RunOptions, switches: Record<string, string>, transport?: TransportPayload, bridgeSecret?: string, plan?: PlanPayload, transfer?: TransferPayload): void => {
+    const env: Record<string, string | undefined> = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key)),
+    )
+    if (transport !== undefined && bridgeSecret !== undefined) env[BRIDGE_TOKEN_ENV] = bridgeSecret
     const argv = [worker.command, ...worker.prefix, "worker", JSON.stringify({ directory: project.directory, options: runOptions, switches, ...(transport ? { transport } : {}), ...(plan ? { plan } : {}), ...(transfer ? { transfer } : {}) })]
     // The confinement launcher (plans/0162): the one seam every spawned run
     // rides — plain runs, planning runs, transfer advances — wrapped as
@@ -476,15 +483,17 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run: id, event: "opened", project: project.name, directory: project.directory, secret, started: run.started, request: { options: runOptions as unknown as Record<string, unknown>, switches } })
     // The transport URL names this daemon's own bound address (the worker
     // connects back on the loopback or whatever host the operator bound;
-    // the spawn and the bridge are the same machine in v1). Under width
-    // (plans/0162) no transport is attached at all: the core refuses a
-    // channel under maxSessions ≥ 2 (one channel cannot serve concurrent
-    // sessions — the CLI's own rule), so the daemon never offers one and a
-    // wide run's questions take the stdin-closed degradation path. The hub
-    // and the journal entry exist for every run regardless — uniform
-    // lifecycle, and nothing connects to a wide run's.
-    const transport: TransportPayload | undefined = runOptions.maxSessions >= 2 ? undefined : { run: id, url: `ws://${server.hostname ?? DEFAULT_HOSTNAME}:${server.port}/runs/${id}/worker`, token: secret }
-    spawnWorker(project, run, runOptions, switches, transport, plan, transfer)
+    // the spawn and the bridge are the same machine in v1). The secret never
+    // rides the payload: the spawn environment carries it
+    // (OPENCODE_AUTO_BRIDGE_TOKEN, plans/0222 D1). Under width (plans/0162)
+    // no transport is attached at all: the core refuses a channel under
+    // maxSessions ≥ 2 (one channel cannot serve concurrent sessions — the
+    // CLI's own rule), so the daemon never offers one and a wide run's
+    // questions take the stdin-closed degradation path. The hub and the
+    // journal entry exist for every run regardless — uniform lifecycle, and
+    // nothing connects to a wide run's.
+    const transport: TransportPayload | undefined = runOptions.maxSessions >= 2 ? undefined : { run: id, url: `ws://${server.hostname ?? DEFAULT_HOSTNAME}:${server.port}/runs/${id}/worker` }
+    spawnWorker(project, run, runOptions, switches, transport, secret, plan, transfer)
     return run
   }
 

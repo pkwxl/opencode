@@ -49,8 +49,14 @@ export type InteractiveHub = {
 }
 
 // The per-run secret the daemon hands its worker (`oar_` + 24 random bytes,
-// base64url — the store's token shape, daemon-local randomness; it is never
-// stored, only held here and compared at upgrade).
+// base64url — the store's token shape, daemon-local randomness). Where it
+// lives (plans/0222 D1's truth, correcting this comment's old "never stored"
+// claim): held here in the hub and compared at upgrade; journaled 0600 in
+// the daemon's data directory (the question journal's `opened` record — the
+// restart reconstruction needs it, 0067: without it the orphan's reconnect
+// is a 404); and carried to the worker through its spawn environment
+// (OPENCODE_AUTO_BRIDGE_TOKEN — never argv, which any local user reads, and
+// never a log line).
 export function freshRunSecret(): string {
   const bytes = new Uint8Array(24)
   crypto.getRandomValues(bytes)
@@ -138,13 +144,20 @@ export function interactiveHandlers(ctx: InteractiveContext) {
       return
     }
     if (ws.data.kind === "worker") {
-      // One worker socket per run: a second connection replaces the first —
-      // the registry refuses a second spawn, so a live predecessor here is a
-      // half-dead socket of the same worker (its close handler is a no-op
-      // once replaced).
+      // One worker socket per run, latched to its first live connection
+      // (plans/0222 D1): while a worker bridge is open, a second connection
+      // is refused — the credential alone must not be enough to take the
+      // channel from a live bridge (the 0165-054 impostor's adoption step;
+      // with the secret off argv the 401 already refuses the stranger, this
+      // bounds the holder of a leaked secret to the 401-everywhere path).
+      // The legitimate second connection — the worker's own reconnect —
+      // always arrives after its predecessor's close cleared the slot (the
+      // worker transport reconnects only from onclose), so this refuses
+      // nothing the protocol's own speakers produce.
       if (hub.worker !== undefined && hub.worker !== ws) {
-        send(hub.worker, { type: "error", message: "replaced by a new worker connection for this run" })
-        hub.worker.close(1000, "replaced")
+        send(ws, { type: "error", message: "this run already holds a worker bridge connection; a second worker socket is refused while the first is open" })
+        ws.close(1008, "already holding a worker connection")
+        return
       }
       hub.worker = ws
       send(ws, helloOf(hub, ws.data.run))

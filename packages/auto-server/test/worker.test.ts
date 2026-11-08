@@ -19,7 +19,7 @@ import { join } from "node:path"
 import { CONFIG_DEFAULTS, type ProjectConfig } from "@opencode-ai/auto-core/config"
 import { loadModes } from "@opencode-ai/auto-core/mode"
 import { runOptions } from "../src/worker"
-import { runOptionDefaults } from "../src/request"
+import { BRIDGE_TOKEN_ENV, KNOWN_SWITCHES, parseOptions, parseSwitches, parseTransport, runOptionDefaults } from "../src/request"
 import { fakeAgent, fixtureProject, gitOf, scrubbedEnv, TASK } from "./fixtures/project"
 
 const PACKAGE_ROOT = join(import.meta.dir, "..")
@@ -258,7 +258,7 @@ describe("worker: the run request's usage vocabulary", () => {
         ["lane merge not a branch name", { directory: dir, lane: { unit: "T-001", merge: " " } }, /lane\.merge takes the branch name/],
         ["lane with plan", { directory: dir, lane: { unit: "T-001" }, plan: { input: "x" } }, /mutually exclusive with plan and transfer/],
         ["lane with transfer", { directory: dir, lane: { unit: "T-001" }, transfer: {} }, /mutually exclusive with plan and transfer/],
-        ["lane with transport", { directory: dir, lane: { unit: "T-001" }, transport: { run: "run-000001", url: "ws://127.0.0.1:1/runs/run-000001/worker", token: "secret" } }, /a lane run carries no transport/],
+        ["lane with transport", { directory: dir, lane: { unit: "T-001" }, transport: { run: "run-000001", url: "ws://127.0.0.1:1/runs/run-000001/worker" } }, /a lane run carries no transport/],
         ["width under a lane payload", { directory: dir, lane: { unit: "T-001" }, options: { maxSessions: 2 } }, /cannot ride a lane run/],
         ["repair under a lane payload", { directory: dir, lane: { unit: "T-001" }, options: { repair: 2 } }, /options\.repair is a plain run's option/],
       ]
@@ -285,6 +285,90 @@ describe("worker: the run request's usage vocabulary", () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+})
+
+// The run request's trust boundaries (plans/0222, the 0165-054/171 findings):
+// the bridge secret never rides the request document (argv is world-readable
+// through /proc/<pid>/cmdline), and the per-run switches carrier takes
+// switches only — the two env-only names are the operator's layers, and the
+// per-run agent endpoint is loopbound. The shared validators are pinned
+// directly (pure functions, no spawn); the one worker-side spawn proves the
+// entry's own refusal over a hand-spawned transport.
+describe("worker: the run request's trust boundaries (plans/0222)", () => {
+  test("the switches carrier refuses the two env-only names with their teachings; live and retired names unaffected", () => {
+    expect(KNOWN_SWITCHES.has("OPENCODE_AUTO_MODELS")).toBe(false)
+    expect(KNOWN_SWITCHES.has("OPENCODE_AUTO_SERVER")).toBe(false)
+    // 0165-171's probe verbatim: both names were admitted and applied to the
+    // worker's environment verbatim (the operator registry layer's path, the
+    // arbitrary agent endpoint).
+    expect(() => parseSwitches({ OPENCODE_AUTO_MODELS: "/tmp/anything.json" })).toThrow(/OPENCODE_AUTO_MODELS.*operator registry layer's path/s)
+    expect(() => parseSwitches({ OPENCODE_AUTO_SERVER: "http://203.0.113.9:4096" })).toThrow(/OPENCODE_AUTO_SERVER.*external agent server URL's env form/s)
+    // The teachings name the operator's channels (never a per-run request).
+    try {
+      parseSwitches({ OPENCODE_AUTO_MODELS: "/tmp/anything.json" })
+      throw new Error("unreachable")
+    } catch (error) {
+      expect((error as Error).message).toContain("XDG config root")
+      expect((error as Error).message).toContain("never a per-run request")
+    }
+    try {
+      parseSwitches({ OPENCODE_AUTO_SERVER: "http://203.0.113.9:4096" })
+      throw new Error("unreachable")
+    } catch (error) {
+      expect((error as Error).message).toContain("options.server, which takes a loopback URL")
+    }
+    // The floors: a live switch and a retired name parse unchanged.
+    expect(parseSwitches({ OPENCODE_AUTO_STEP: "task" })).toEqual({ OPENCODE_AUTO_STEP: "task" })
+    expect(parseSwitches({ OPENCODE_AUTO_REUSE_SESSION: "on" })).toEqual({ OPENCODE_AUTO_REUSE_SESSION: "on" })
+    // The bridge token's own name is refused as a carrier value — the
+    // credential and the switch layer cannot collide.
+    expect(() => parseSwitches({ OPENCODE_AUTO_BRIDGE_TOKEN: "oar_x" })).toThrow(/is not a known switch/)
+  })
+
+  test("options.server takes loopback only, teaching the operator's channel for wider endpoints", () => {
+    expect(parseOptions({ server: "http://127.0.0.1:4096" }).server).toBe("http://127.0.0.1:4096")
+    expect(parseOptions({ server: "http://[::1]:4096" }).server).toBe("http://[::1]:4096")
+    expect(parseOptions({ server: "http://localhost:4096" }).server).toBe("http://localhost:4096")
+    // 0165-171's endpoint probe verbatim: an arbitrary off-host URL was
+    // accepted, redirecting every session (prompts carrying project
+    // content) to it.
+    try {
+      parseOptions({ server: "http://203.0.113.9:4096" })
+      throw new Error("unreachable")
+    } catch (error) {
+      const message = (error as Error).message
+      expect(message).toContain("loopback")
+      expect(message).toContain('"203.0.113.9" is not loopback')
+      expect(message).toContain("confinement launcher")
+    }
+    expect(() => parseOptions({ server: "not a url" })).toThrow(/options\.server takes a URL string/)
+    expect(parseOptions(undefined).server).toBeUndefined()
+  })
+
+  test("the transport payload carries no secret field; the secret rides the spawn environment", () => {
+    expect(parseTransport({ run: "run-000001", url: "ws://127.0.0.1:1/runs/run-000001/worker" })).toEqual({ run: "run-000001", url: "ws://127.0.0.1:1/runs/run-000001/worker" })
+    // A token in the document is refused naming where the secret lives.
+    try {
+      parseTransport({ run: "run-000001", url: "ws://127.0.0.1:1/runs/run-000001/worker", token: "oar_secret" })
+      throw new Error("unreachable")
+    } catch (error) {
+      expect((error as Error).message).toContain(`rides the worker's spawn environment (${BRIDGE_TOKEN_ENV})`)
+    }
+  })
+
+  test("a hand-spawned transport without the environment token is a usage error before any write", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-bridge-"))
+    try {
+      const run = await runWorker({ directory: dir, transport: { run: "run-000001", url: "ws://127.0.0.1:1/runs/run-000001/worker" } })
+      expect(run.code, `${run.out}\n${run.err}`).toBe(1)
+      expect(run.err).toContain(`spawn environment (${BRIDGE_TOKEN_ENV})`)
+      expect(run.err).toContain("a hand-spawned run carries no transport at all")
+      // Refused before any write
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
 })
 
 describe("worker: one driver per directory (the run lock arrives via runAll)", () => {

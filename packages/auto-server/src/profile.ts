@@ -4,6 +4,7 @@
 // service evolution draft (auto-core plans/0067). The profile is set once at
 // shell-entry startup; the core reads it and never knows this shell.
 import { setShellProfile, type ShellProfile } from "@opencode-ai/auto-core/shell"
+import { BRIDGE_TOKEN_ENV } from "./request"
 import { workerCommand } from "./worker-command"
 
 // The lane launcher (plans/0162, the shell-contract §E item 8 obligation met
@@ -21,6 +22,12 @@ import { workerCommand } from "./worker-command"
 // environment ride the inheritance too.
 const laneLauncher: NonNullable<ShellProfile["laneLauncher"]> = (worktree, unit, instruction, env) => {
   const self = workerCommand()
+  // The parent worker's bridge credential never reaches a lane child (a lane
+  // carries no channel by rule, plans/0222 D1): the credential's process
+  // reach is the one worker that owns the bridge. The switch layer still
+  // inherits whole — the launcher posture 0180 ruled.
+  const childEnv: Record<string, string | undefined> = { ...process.env, ...(env ?? {}) }
+  delete childEnv[BRIDGE_TOKEN_ENV]
   return Bun.spawn(
     [self.command, ...self.prefix, "worker", JSON.stringify({ directory: worktree, lane: { unit, ...(instruction ? { merge: instruction.merge } : {}) } })],
     // The environment is always spelled out: Bun's bare spawn inherits the
@@ -32,7 +39,7 @@ const laneLauncher: NonNullable<ShellProfile["laneLauncher"]> = (worktree, unit,
     // shell's worker applies the request's switches at runtime). The
     // launcher's injection (the tier-1 cache homes) merges over it, exactly
     // the default launcher's {...process.env, ...env} shape.
-    { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...(env ?? {}) } },
+    { stdout: "pipe", stderr: "pipe", env: childEnv },
   )
 }
 

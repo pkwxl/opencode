@@ -147,12 +147,21 @@ worker '<run request JSON>' — the unit the daemon spawns (P1b). The JSON
              on a run
   switches   per-run OPENCODE_AUTO_* experimental switch overrides, applied
              to the worker's environment before the run starts (each run is
-             a fresh process, so the switch layer is safely per-run)
+             a fresh process, so the switch layer is safely per-run). The
+             two env-only names are not switches and are refused:
+             OPENCODE_AUTO_MODELS (the operator registry layer's path) and
+             OPENCODE_AUTO_SERVER (the external server URL's env form) ride
+             the operator's channels — the XDG config root the worker
+             inherits, the confinement launcher's environment overlay —
+             never a run request
   transport  the interactive transport (P3b, daemon-written): the worker
-             bridge WebSocket URL and the per-run secret. The worker builds
-             its Interactive implementation from it and injects it through
-             runAll's io/Interactive seam, so questions and /exit, /failback
-             control are bridged to the daemon's WebSocket endpoint
+             bridge WebSocket URL. The per-run secret rides the worker's
+             spawn environment (OPENCODE_AUTO_BRIDGE_TOKEN), never the
+             request document — argv is world-readable (plans/0222). The
+             worker builds its Interactive implementation from the pair and
+             injects it through runAll's io/Interactive seam, so questions
+             and /exit, /failback control are bridged to the daemon's
+             WebSocket endpoint
   plan       the plan payload (P3c, daemon-written — the plan operation's
              loop route): { "input"?: "<planning input text>",
              "append"?: true|false }. The run performs the CLI plan

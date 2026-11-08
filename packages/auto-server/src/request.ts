@@ -87,11 +87,34 @@ export const HAND_EDITED_KEYS = new Set(["acceptanceGate", "build", "lanes"])
 export const OPTION_KEYS = new Set(["verbose", "waitAnswer", "waitBetween", "permission", "newSession", "dryrun", "maxSessions", "server", "repair", "stopAfter", "boundary"])
 const PERMISSION_MODES: readonly PermissionMode[] = ["auto-allow", "ask-allow", "ask-deny", "ask-fail"]
 
+// The loopback host spellings options.server accepts (plans/0222 D2; the
+// URL host serializer keeps an IPv6 literal's brackets, so both spellings
+// of ::1 are admitted).
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "[::1]", "localhost"])
+
 // Every name the env-switch registry answers to: the live switches plus the
-// env-only names it registers (models, server) and the retired variables
-// (which the core answers with their own notice when set — passed through,
-// never refused here).
-export const KNOWN_SWITCHES = new Set([...Object.values(SWITCH_ENV), ...Object.keys(RETIRED_SWITCHES)])
+// retired variables (which the core answers with their own notice when set —
+// passed through, never refused here). The registry's two env-only names are
+// deliberately absent (plans/0222 D2): OPENCODE_AUTO_MODELS is the operator
+// registry layer's path and OPENCODE_AUTO_SERVER the external server URL's
+// env form — neither is a parsed switch (auto-core parseSwitches never reads
+// them), and each names an operator-owned layer the Security family keeps to
+// the operator's channels (the XDG config root the worker inherits, the
+// confinement launcher's environment overlay), never a per-run request.
+export const KNOWN_SWITCHES = new Set([
+  ...Object.values(SWITCH_ENV).filter((name) => name !== SWITCH_ENV.models && name !== SWITCH_ENV.server),
+  ...Object.keys(RETIRED_SWITCHES),
+])
+
+// The carriage of the worker bridge's per-run secret (plans/0222 D1): the
+// spawn environment, never the request document. The OPENCODE_AUTO_ prefix is
+// the load-bearing choice — the agent domain's X1 scrub (auto-core
+// src/agent/env.ts) removes every OPENCODE_AUTO_* variable from every process
+// the driver runs, so no agent session inherits the credential through the
+// existing seam, zero core change. The daemon writes it after its own
+// OPENCODE_AUTO_* spawn filter; the worker reads it when the transport payload
+// is present; the lane launcher strips it (a lane child carries no channel).
+export const BRIDGE_TOKEN_ENV = "OPENCODE_AUTO_BRIDGE_TOKEN"
 
 // The frozen-key refusal, the API-side equivalent of the CLI's
 // refuseFrozenFlags line (packages/auto test/e2e.test.ts pins its shape):
@@ -178,6 +201,28 @@ export function parseOptions(raw: unknown): RunOptions {
   if ("server" in given) {
     const value = given.server
     if (typeof value !== "string" || !value.trim()) fail("options.server takes a URL string (the external agent server this run talks to)")
+    // Loopbound (plans/0222 D2): the daemon's v1 boundary is a single machine
+    // (the documented posture — loopback bind by default, same-host lock
+    // arbitration), and this field is the one that silently crossed it: a
+    // served route is not a terminal (the probe rate-window's own asymmetry),
+    // so the URL a run request names may only point back at this machine. The
+    // operator's channel for a wider server is the confinement launcher's
+    // environment overlay (serve --launch) — the daemon's spawn filter drops
+    // the ambient OPENCODE_AUTO_* layer, so the launcher is the one lawful
+    // environment route to a worker, never a per-run request. The CLI's
+    // --server keeps its unbounded shape (a terminal is one person's act).
+    let endpoint: URL
+    try {
+      endpoint = new URL(value)
+    } catch {
+      fail(`options.server takes a URL string (the external agent server this run talks to): "${value}" is not a URL`)
+    }
+    if (!LOOPBACK_HOSTS.has(endpoint.hostname)) {
+      fail(
+        `options.server takes a loopback URL (127.0.0.1, ::1 or localhost — the daemon's v1 boundary is a single machine); "${endpoint.hostname}" is not loopback. ` +
+          `The operator's channel for an off-machine server is the confinement launcher's environment overlay (serve --launch), never a per-run request`,
+      )
+    }
     parsed.server = value
   }
   // --repair (the CLI's run option, auto-core plans/0079 §4): the bounded
@@ -255,6 +300,18 @@ export function parseSwitches(raw: unknown): Record<string, string> {
     if (typeof value !== "string") {
       fail(`switches.${name} takes a string value (environment variables are strings; the empty string counts as unset)`)
     }
+    if (name === SWITCH_ENV.models) {
+      fail(
+        `switches.${name} is not a per-run switch: it is the operator registry layer's path (the model registry's own env name, not a switch — the core's parseSwitches never reads it). ` +
+          `The registry layers are the operator's alone (the Security family): the worker reads the operator's XDG config root or the confinement launcher's environment overlay (serve --launch), never a per-run request`,
+      )
+    }
+    if (name === SWITCH_ENV.server) {
+      fail(
+        `switches.${name} is not a per-run switch: it is the external agent server URL's env form (not a switch — the core's parseSwitches never reads it). ` +
+          `The operator's channels are the confinement launcher's environment overlay (serve --launch); the per-run form is options.server, which takes a loopback URL`,
+      )
+    }
     if (!KNOWN_SWITCHES.has(name)) {
       fail(`switches.${name} is not a known switch (check the name against the OPENCODE_AUTO_* registry, auto-core src/switches.ts)`)
     }
@@ -264,29 +321,33 @@ export function parseSwitches(raw: unknown): Record<string, string> {
 }
 
 // The interactive transport payload (P3b): what the daemon writes into the
-// spawn request — the worker bridge URL (ws://…/runs/<id>/worker) and the
-// per-run secret that authenticates the connection — and what the worker
-// entry builds its Interactive implementation from. Daemon-written, never
-// client-written: POST /runs does not accept it (the interactive transport
-// is the daemon's own surface, on for every run it spawns), so a request
-// carrying it by hand is a usage error on the daemon side and a validated
-// field on the worker side.
-export type TransportPayload = { run: string; url: string; token: string }
+// spawn request — the worker bridge URL (ws://…/runs/<id>/worker) — and what
+// the worker entry builds its Interactive implementation from (with the
+// per-run secret, which rides the spawn environment as BRIDGE_TOKEN_ENV —
+// never the request document: argv is world-readable through
+// /proc/<pid>/cmdline, the environment is not, plans/0222 D1). Daemon-written,
+// never client-written: POST /runs does not accept it (the interactive
+// transport is the daemon's own surface, on for every run it spawns), so a
+// request carrying it by hand is a usage error on the daemon side and a
+// validated field on the worker side.
+export type TransportPayload = { run: string; url: string }
 
 export function parseTransport(raw: unknown): TransportPayload {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    fail("transport must be an object: { \"run\": \"<run id>\", \"url\": \"ws://…/runs/<run id>/worker\", \"token\": \"<the per-run secret>\" }")
+    fail('transport must be an object: { "run": "<run id>", "url": "ws://…/runs/<run id>/worker" }')
   }
   const given = raw as Record<string, unknown>
   for (const key of Object.keys(given)) {
-    if (key === "run" || key === "url" || key === "token") continue
-    fail(`transport.${key} is not a transport field (run, url, token)`)
+    if (key === "run" || key === "url") continue
+    fail(
+      key === "token"
+        ? `transport.token is not a transport field (run, url): the per-run secret rides the worker's spawn environment (${BRIDGE_TOKEN_ENV}), never the request document`
+        : `transport.${key} is not a transport field (run, url)`,
+    )
   }
   const run = given.run
   const url = given.url
-  const token = given.token
   if (typeof run !== "string" || !run.trim()) fail('transport.run takes the run id the daemon assigned ("run-<n>")')
-  if (typeof token !== "string" || !token.trim()) fail("transport.token takes the per-run secret the daemon generated for the worker bridge")
   if (typeof url !== "string" || !url.trim()) fail('transport.url takes the worker bridge WebSocket URL ("ws://<host>:<port>/runs/<run id>/worker")')
   let parsed: URL
   try {
@@ -297,7 +358,7 @@ export function parseTransport(raw: unknown): TransportPayload {
   if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
     fail(`transport.url takes a ws:// or wss:// URL (the worker bridge WebSocket endpoint), not ${parsed.protocol}`)
   }
-  return { run, url, token }
+  return { run, url }
 }
 
 // The plan payload (P3c, the plan unlock): a request carrying `plan` runs

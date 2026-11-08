@@ -48,7 +48,7 @@ import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { legacyLayoutProblem } from "@opencode-ai/auto-core/phases"
 import { runTransfer } from "@opencode-ai/auto-core/transfer"
 import type { Interactive } from "@opencode-ai/auto-core/control-types"
-import { CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseLane, parsePlan, parseSwitches, parseTransfer, parseTransport, type LanePayload, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
+import { BRIDGE_TOKEN_ENV, CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseLane, parsePlan, parseSwitches, parseTransfer, parseTransport, type LanePayload, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
 import { wsInteractive } from "./worker-interactive"
 
 // The run request (the payload the daemon sends; the transport — here one
@@ -64,14 +64,16 @@ import { wsInteractive } from "./worker-interactive"
 //              them once (parse-memoization is why each run is a fresh
 //              process);
 //   transport  the P3b interactive transport (daemon-written): the worker
-//              bridge URL and the per-run secret. Present on every run this
-//              daemon spawns — the entry builds its Interactive
-//              implementation from it and injects it through
-//              RunAllOpts.interactive (the P3a seam), so a question raised
-//              inside the run is answerable from outside the process and
-//              /exit, /failback are reachable over the network. Absent (a
-//              hand-spawned worker): no interactive channel, the stdin-closed
-//              question semantics of P1 unchanged.
+//              bridge URL. Present on every run this daemon spawns — the
+//              entry builds its Interactive implementation from it (with the
+//              per-run secret, which rides the spawn environment as
+//              OPENCODE_AUTO_BRIDGE_TOKEN, never the request document — argv
+//              is world-readable through /proc/<pid>/cmdline, plans/0222 D1)
+//              and injects it through RunAllOpts.interactive (the P3a seam),
+//              so a question raised inside the run is answerable from outside
+//              the process and /exit, /failback are reachable over the
+//              network. Absent (a hand-spawned worker): no interactive
+//              channel, the stdin-closed question semantics of P1 unchanged.
 //   plan       the plan payload (P3c, daemon-written — the plan operation's
 //              loop route): the run performs the CLI `plan` command's work —
 //              runAll under stopBefore === "execute" (humanQuestions armed,
@@ -143,9 +145,13 @@ function applySwitches(switches: Record<string, string>): void {
 // visible in `ps` (debuggable from the outside), no fd lifecycle to own, and
 // stdin stays free to be closed (the question-degradation contract);
 // a run request is small (directory, a handful of options, switch
-// overrides), far from argv limits. The daemon (P1c) owns the spawn; if a
-// later unit prefers a request file, only this function's first block
-// changes — parse/validate/run stay put.
+// overrides), far from argv limits. The one thing argv must never carry is a
+// credential (plans/0222 D1, the 0165-054 finding): /proc/<pid>/cmdline is
+// world-readable, so the bridge secret rides the spawn environment
+// (OPENCODE_AUTO_BRIDGE_TOKEN — the X1 prefix scrub keeps it out of every
+// agent child), and the payload's transport names the URL alone. The daemon
+// (P1c) owns the spawn; if a later unit prefers a request file, only this
+// function's first block changes — parse/validate/run stay put.
 export async function runWorker(argv: string[]): Promise<void> {
   if (argv.length !== 1 || !argv[0]) {
     refuse(`the worker takes exactly one argument: the run request as a JSON document (usage: opencode-auto-server worker '<json>' — { "directory": "<dir>", "options": { … }, "switches": { … }, "transport": { … }, "plan": { … }, "transfer": { … }, "lane": { … } })`)
@@ -222,6 +228,24 @@ export async function runWorker(argv: string[]): Promise<void> {
   if (lane !== undefined && options.maxSessions >= 2) {
     refuse(`options.maxSessions ${options.maxSessions} cannot ride a lane run: a lane worker runs one unit in one worktree — width belongs to the parent run that dispatched it`)
   }
+  // The bridge secret rides the spawn environment, never the request
+  // document (plans/0222 D1): the daemon writes OPENCODE_AUTO_BRIDGE_TOKEN
+  // after its own OPENCODE_AUTO_* spawn filter, and the prefix keeps the
+  // credential out of every agent child through the X1 scrub. A transport
+  // payload without it is a hand-spawned document reaching for a channel no
+  // daemon attached — a usage error before any write, teaching the real
+  // hand-spawned shape (no transport at all).
+  let bridgeToken: string | undefined
+  if (transport !== undefined) {
+    const token = process.env[BRIDGE_TOKEN_ENV]?.trim()
+    if (!token) {
+      refuse(
+        `the transport payload's per-run secret rides the worker's spawn environment (${BRIDGE_TOKEN_ENV}), never the request document — ` +
+          `a hand-spawned run carries no transport at all (its questions take the stdin-closed degradation path); only the daemon attaches one`,
+      )
+    }
+    bridgeToken = token
+  }
   applySwitches(switches)
 
   // Legacy layout (M3.7): an old-layout project is a usage error before the
@@ -241,12 +265,13 @@ export async function runWorker(argv: string[]): Promise<void> {
   // The interactive transport (P3b): the daemon's payload becomes the run's
   // interactive channel — the entry constructs the implementation here
   // (after the audit log starts, so the bridge's own lines land in it) and
-  // injects it through RunAllOpts.interactive (the P3a seam). The
-  // announcement is the transport's own banner: the loop logs the 💬 line
-  // only for the terminal sideband shapes, and an injected implementation
-  // is announced by its owner. Without a payload, no channel: the
-  // stdin-closed question semantics of P1 stand.
-  const interactive: Interactive | undefined = transport ? wsInteractive({ url: transport.url, token: transport.token }) : undefined
+  // injects it through RunAllOpts.interactive (the P3a seam). The secret
+  // arrives from the spawn environment (read above; plans/0222 D1), the URL
+  // from the payload. The announcement is the transport's own banner: the
+  // loop logs the 💬 line only for the terminal sideband shapes, and an
+  // injected implementation is announced by its owner. Without a payload,
+  // no channel: the stdin-closed question semantics of P1 stand.
+  const interactive: Interactive | undefined = transport && bridgeToken !== undefined ? wsInteractive({ url: transport.url, token: bridgeToken }) : undefined
   if (transport) {
     log(`🔗 interactive transport: questions and /exit, /failback control are served by the daemon over the bridge ${transport.url} (run ${transport.run}); a transport loss degrades every open question to the unanswered path — never a hang`)
   }

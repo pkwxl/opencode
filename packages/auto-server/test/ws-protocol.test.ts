@@ -256,6 +256,37 @@ describe("the daemon-side routing (interactiveHandlers over one hub)", () => {
       stub.stop()
     }
   })
+
+  test("a second worker socket while the first is open is refused; the first remains the bridge (plans/0222 D1)", async () => {
+    // 0165-054's adoption step: the hub's replace rule closed the live
+    // bridge ("replaced") and adopted whoever arrived with the secret — an
+    // impostor flip-flopping the person's answer channel. The latch refuses
+    // the second socket while the first is open; the worker's own
+    // legitimate reconnect (above) always arrives after its predecessor's
+    // close cleared the slot.
+    const stub = await stubServer()
+    const watcher = wsClient(stub.url("/client?scopes=answer"))
+    const first = wsClient(stub.url("/worker"))
+    try {
+      await Promise.all([watcher.opened, first.opened])
+      await first.nextOf((frame) => frame.type === "hello" && frame.worker, "the first worker's hello")
+      const second = wsClient(stub.url("/worker"))
+      const refusal = await second.nextOf((frame) => frame.type === "error", "the second worker socket's refusal")
+      if (refusal.type === "error") expect(refusal.message).toContain("already holds a worker bridge connection")
+      await second.dropped
+      // The first is still the bridge: its questions fan out, and the hub's
+      // worker slot never moved to the refused socket.
+      first.send({ type: "question", id: "q1", text: "still the bridge" })
+      await watcher.nextOf((frame) => frame.type === "question" && frame.id === "q1", "the first socket still serving")
+      expect(stub.hub.worker).toBeDefined()
+      expect(stub.hub.worker?.data.kind).toBe("worker")
+      await Promise.all([watcher.close(), first.close()])
+    } finally {
+      await watcher.close().catch(() => {})
+      await first.close().catch(() => {})
+      stub.stop()
+    }
+  })
 })
 
 // —— the worker's Interactive implementation ——

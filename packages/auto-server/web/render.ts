@@ -83,7 +83,7 @@ export const START_OPTION_FIELDS: readonly StartOptionField[] = [
   { key: "waitBetween", kind: "minutes", label: "wait-between (minutes)", hint: "the pause between tasks (0 = none; the pause auto-continues on timeout)" },
   { key: "permission", kind: "enum", values: PERMISSION_MODES, label: "permission", hint: "the permission gate's mode for tool use" },
   { key: "maxSessions", kind: "integer", label: "max sessions", hint: "concurrent AI sessions — 2 or more runs lanes (doc lanes at tier 0, worktree lanes per treeLanes; no interactive channel under width)" },
-  { key: "server", kind: "string", label: "agent server", hint: "an external agent server URL this run talks to" },
+  { key: "server", kind: "string", label: "agent server", hint: "a loopback agent server URL (127.0.0.1, ::1 or localhost) this run talks to — the daemon's boundary is one machine" },
 ] as const
 
 // The options the form can produce — a subset of the request vocabulary by
