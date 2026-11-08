@@ -140,6 +140,16 @@ describe("worker: a fixture run is a fully-formed shell run, observable on disk"
 describe("worker: the run request's usage vocabulary", () => {
   // Every refusal here fires before any write: no lock, no log file, no
   // .auto/ at all.
+  //
+  // The frozen-key case was ONE test looping every row of the five families
+  // below — 16 worker spawns (a full bun child each), 6.9 s on the review
+  // host against bun's 5 s per-test default (0165-223, plans/0233 D2 — 0224
+  // D4's deferred half). The repair is the split, never a raised timeout:
+  // every row retained verbatim, one family per test — a family that grows
+  // past the budget splits again the same way (the rule, not a one-time
+  // repair); growth of the frozen vocabulary grows the TEST COUNT, never one
+  // test's runtime. The CLI-facing suites' own frozen-key case is measured
+  // and deferred (0233 D3), not this suite's to touch.
   test("a request carrying config keys is refused with the frozen-flag message, in both spellings, and nothing is written", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-server-frozen-"))
     try {
@@ -158,8 +168,17 @@ describe("worker: the run request's usage vocabulary", () => {
         expect(run.err).toContain(".opencode/auto/config.json")
         expect(run.err).toContain("opencode-auto amend <dir>")
       }
-      // The keys the core gained under this package (plans/0160 D2) keep the
-      // frozen-key family — never the generic unknown-field refusal.
+      // Refused before any write
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the keys the core gained under this package keep the frozen-key family, never the generic unknown-field refusal", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-frozen-0160-"))
+    try {
+      // plans/0160 D2's keys, with their own revision hints.
       for (const [options, hint] of [
         [{ intent: "cleanroom" }, "--intent <value>"],
         [{ treeLanes: "auto" }, "--tree-lanes <value>"],
@@ -171,6 +190,16 @@ describe("worker: the run request's usage vocabulary", () => {
         expect(run.err).toContain("was frozen by init")
         expect(run.err).toContain(hint)
       }
+      // Refused before any write
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("phases and lanes are frozen with their own remedies, never the amend command", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-frozen-remedies-"))
+    try {
       // phases is frozen with the roadmap-line remedy, never the amend
       // command 0137 retired (plans/0193 D2 / 0165-056's S29-07 server half:
       // the mirrored table taught `--phases <value>`, one round trip away
@@ -184,13 +213,30 @@ describe("worker: the run request's usage vocabulary", () => {
       expect(lanes.code).toBe(1)
       expect(lanes.err).toContain("lanes")
       expect(lanes.err).toContain("hand-edited")
-      // The on/off pairs keep the CLI's paired revision hints
+      // Refused before any write
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the on/off pairs keep the CLI's paired revision hints", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-frozen-pairs-"))
+    try {
       const numbering = await runWorker({ directory: dir, options: { autoNumber: false } })
       expect(numbering.err).toContain("--auto-number (use --no-auto-number to turn off)")
       const wrapup = await runWorker({ directory: dir, options: { wrapup: false } })
       expect(wrapup.err).toContain("--wrapup (use --no-wrapup to turn off)")
-      // A config key at the top level of the request, and a dedicated config
-      // carrier, get the same refusal family
+      // Refused before any write
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a config key at the top level of the request, and a dedicated config carrier, get the same refusal family", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-server-frozen-carrier-"))
+    try {
       const topLevel = await runWorker({ directory: dir, phases: "am" })
       expect(topLevel.code).toBe(1)
       expect(topLevel.err).toContain("was frozen by init")
@@ -210,9 +256,10 @@ describe("worker: the run request's usage vocabulary", () => {
   // never a raised timeout: every [name, request, pattern] row is retained
   // verbatim, one family per test — a family that grows past the budget
   // splits again the same way (the rule, not a one-time repair). The frozen-
-  // key half of the usage vocabulary (the config-key refusals above) and the
-  // frozen-key case of the CLI-facing suites stay where they are (step 073
-  // owns 0165-223's own split).
+  // key half of the usage vocabulary (the config-key refusals above) is split
+  // the same way (0165-223, plans/0233 D2 — 0224 D4's deferred half, the
+  // register's division); the CLI-facing suites' own frozen-key case stays
+  // where it is, measured and deferred (0233 D3).
   test("malformed documents and request-field grammar are usage errors on stderr, exit 1", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-server-usage-doc-"))
     try {

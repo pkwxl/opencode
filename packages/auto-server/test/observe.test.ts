@@ -545,7 +545,15 @@ describe("observe: the external observer e2e (a fixture run watched from the out
     // it — never an error state.
     await Bun.write(join(dir, ".auto", "progress.json"), '{"task":"' + TASK + '","ph')
     try {
-      const agent = await fakeAgent({ FAKE_CLAUDE_DELAY_MS: "300" })
+      // DELAY stretches the run's live window (sawLock/sawInProgress, the
+      // tail's bounded latency); WRITE_HOLD stretches the DIRTY windows
+      // themselves — the fake sleeps AFTER each turn's writes, before the
+      // turn's stream answers, so the writes sit on disk uncommitted for the
+      // hold's whole length. Without it the windows are 14–97 ms against this
+      // loop's 150 ms cadence and sawDirty is a per-run coin flip (0165-220,
+      // ruling 0233 D1: measured at both delays — the proposed DELAY=500
+      // alone reproduced sawDirty=false, the windows unmoved).
+      const agent = await fakeAgent({ FAKE_CLAUDE_DELAY_MS: "300", FAKE_CLAUDE_WRITE_HOLD_MS: "500" })
       const before: Record<string, string | undefined> = {}
       for (const [key, value] of Object.entries(agent.env)) {
         before[key] = process.env[key]

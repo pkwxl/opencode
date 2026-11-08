@@ -20,6 +20,12 @@
 //   FAKE_CLAUDE_DELAY_MS — sleep this many milliseconds before answering
 //     each turn, stretching the run so a test can observe a live run from
 //     the outside (the service shell's T-087 extension);
+//   FAKE_CLAUDE_WRITE_HOLD_MS — sleep this many milliseconds AFTER the
+//     turn's writes, holding the turn (and so the run's dirty window — the
+//     writes on disk, the closing commit not yet made) open: a poller
+//     coarser than the window lands inside it deterministically (the
+//     observe e2e's sawDirty, 0165-220 — the pre-turn DELAY above stretches
+//     the run AROUND windows that stay shorter than any poll cadence);
 //   FAKE_CLAUDE_LOG — one JSON line per turn (the session arguments and the
 //     message text), so a test can tell which sessions were forks of which;
 //   the interruption-resume branches (the service shell's T-094): the
@@ -37,6 +43,9 @@ import { dirname, join } from "node:path"
 
 // The per-turn delay knob (see the header): 0 (unset) = immediate answers.
 const DELAY_MS = Number(process.env.FAKE_CLAUDE_DELAY_MS ?? 0)
+// The post-write hold knob (see the header): 0 (unset) = the window keeps
+// its natural write→commit length.
+const WRITE_HOLD_MS = Number(process.env.FAKE_CLAUDE_WRITE_HOLD_MS ?? 0)
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const say = (line: unknown) => console.log(JSON.stringify(line))
@@ -367,6 +376,11 @@ for (;;) {
   // the run's window.
   if (DELAY_MS > 0) await sleep(DELAY_MS)
   const used = act(text)
+  // The post-write hold (see the header): the writes are on disk and the
+  // turn is still open — the closing result has not been said, so the
+  // driver's commit for this session has not run. Holding HERE stretches
+  // the dirty window itself.
+  if (WRITE_HOLD_MS > 0) await sleep(WRITE_HOLD_MS)
   // The turn's stream: init once per process, the replay acknowledgment,
   // one assistant message with usage, the closing result (idle).
   if (!booted) {
