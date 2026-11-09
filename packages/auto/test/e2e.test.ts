@@ -3862,8 +3862,9 @@ describe("CLI: fork (auto-core plans/0128)", () => {
   }
 
   // An initialized project with one fixture checkpoint and two driver-style
-  // task commits (the trailer block git's -m paragraphs produce matches the
-  // scan's line grammar).
+  // task commits (the trailers as ONE -m paragraph — the driver's message()
+  // shape: 0173 D2's read takes the Auto-Task key from the body's LAST
+  // paragraph, and separate -m paragraphs would each sit in their own).
   async function taskProject() {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-fork-"))
     expect((await runCli(["init", dir])).code).toBe(0)
@@ -3872,7 +3873,7 @@ describe("CLI: fork (auto-core plans/0128)", () => {
     for (const id of ["T-001", "T-002"]) {
       await Bun.write(join(dir, `${id}.txt`), `${id}\n`)
       await git("add", "-A")
-      await git("commit", "-m", `${id} implement`, "-m", `Auto-Task: ${id}`, "-m", "Auto-Stage: execute")
+      await git("commit", "-m", `${id} implement`, "-m", `Auto-Task: ${id}\nAuto-Stage: execute`)
     }
     return { dir, git }
   }
@@ -3997,7 +3998,7 @@ describe("CLI: remove-fork (auto-core plans/0139)", () => {
     for (const id of ["T-001", "T-002"]) {
       await Bun.write(join(dir, `${id}.txt`), `${id}\n`)
       await git("add", "-A")
-      await git("commit", "-m", `${id} implement`, "-m", `Auto-Task: ${id}`, "-m", "Auto-Stage: execute")
+      await git("commit", "-m", `${id} implement`, "-m", `Auto-Task: ${id}\nAuto-Stage: execute`)
     }
     return { dir, git }
   }
