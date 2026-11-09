@@ -128,10 +128,11 @@ export type TestRun = {
   unit: string
   // The body of the handover commit's subject: this execution unit's commit
   // title (a subtask gets `T-NNN S<n> <subtask title>`, a whole task gets
-  // `T-NNN exec <title>`, a fix round gets `T-NNN fix<n> <title>`); the
-  // handover commit appends `test handover #<n>[ freeze]` after it — same
-  // subject as the commit that completes the unit, so in git history one look
-  // shows which subtask these intermediate commits belong to.
+  // `T-NNN exec <title>`, a fix round gets `T-NNN fix <round>.<session>
+  // <short title>` — plans/0148 D1); the handover commit appends
+  // `test handover #<n>[ freeze]` after it — same subject as the commit that
+  // completes the unit, so in git history one look shows which subtask these
+  // intermediate commits belong to.
   subject: string
   // Short label for logs and the terminal (`T-NNN S<n>` / `T-NNN`): most
   // handover-related log lines happen outside the session banner (freeze,

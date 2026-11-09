@@ -84,7 +84,7 @@ export type Watch = {
   scope?: LimitScope
   resetSource?: "stated" | "classifier"
   pendingReset?: Promise<number | undefined>
-  // This turn's token increments, accumulated (STATS_PLAN §2, T-003): per
+  // This turn's token increments, accumulated (plans/0019 §E, T-003): per
   // step-finish part, summed with part.id dedup — the only accounting that
   // neither duplicates nor misses (the server-side assistantMessage.tokens
   // is a last-step overwrite and session.tokens carries the fork-inherited

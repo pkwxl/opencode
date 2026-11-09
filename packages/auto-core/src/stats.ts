@@ -1,4 +1,4 @@
-// Cross-interruption cumulative stats (plans/STATS_PLAN.md §1): accumulated
+// Cross-interruption cumulative stats (plans/0019-stats-timing-design.md): accumulated
 // elapsed time and token usage breakdowns at the task/session/phase/round
 // levels, persisted in the target directory `.auto/stats.json` (inside
 // .gitignore, written by the driver exclusively, not on the protect list). The
@@ -22,9 +22,9 @@
 //
 // Every public API takes `dir: string | undefined` as its first parameter;
 // undefined = no-op (no heartbeat, no disk reads or writes); internally a
-// lazily loaded `Map<dir, Handle>`. Two concurrent runs in the same directory
-// are unsupported (the later write overwrites, skewing low rather than
-// crashing) — an accepted boundary, no lock file added.
+// lazily loaded `Map<dir, Handle>`. One driver per directory (the run lock,
+// plans/0053 D1); the stats layer adds no lock of its own — its per-directory
+// write queue is the serialization it always was.
 //
 // The document's schema half — the types, the empty-value constructors, the
 // lenient parsers and the copy/merge functions — lives in
@@ -1024,7 +1024,8 @@ export async function statsKnowledgePhase(dir: string | undefined): Promise<void
 
 // Over the cap, evict the oldest by ascending at (eviction is lossless: the
 // aggregate is already in the three buckets; losing per-session display
-// history is an accepted trade-off, see the risks section of context.md).
+// history is an accepted trade-off — the risks and boundaries of plans/0019
+// §H).
 function evictSessions(doc: StatsDoc) {
   const ids = Object.keys(doc.sessions)
   if (ids.length <= MAX_SESSIONS) return

@@ -11,7 +11,8 @@
 // the wall clamp of watch are covered in test/agent-fake.test.ts, the steer
 // construction in test/testrun.test.ts.
 
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
+import { git } from "./fixtures/runner"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -444,6 +445,85 @@ describe("runSubtask stream handover (the fork retry policy)", () => {
       expect(error.label).toBe("T-001 subtask 1 session handover")
       expect(agent.prompts).toHaveLength(1)
     } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+
+// The recovery-skip oracles (0238 D1d, enacting 0165-192's test arm): one
+// per scope over a TRACKED handover document — the shape the pipeline's
+// cleanup spares (an untracked copy is removed; a tracked one survives for
+// the verdict to read, 0171). A `Status: done` document at the recovery
+// read skips the session: the whole scope straight to the close-out, the
+// subtask scope through artifact verification first. No test named either
+// skip line before (the grep gap the finding measured).
+describe("the recovery skip (a tracked Status: done handover document)", () => {
+  const repo = async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-recovery-skip-"))
+    await git(dir, "init", "-q")
+    await Bun.write(join(dir, "seed.txt"), "s")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "seed")
+    return dir
+  }
+  test("the whole scope: the session is skipped, the skip line names the document, no session dispatched", async () => {
+    const dir = await repo()
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      const plan = planOf(`## T-001: sample task [pending]\nBody.\n`, dir)
+      // The interrupted whole-task session handed over with a completion
+      // document, and the interruption commit landed it: tracked, the
+      // pipeline's cleanup spares it.
+      mkdirSync(join(dir, "docs", "T-001"), { recursive: true })
+      writeFileSync(join(dir, "docs", "T-001", "handoff.md"), "# Handover\n\nAll done.\n\nStatus: done\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "T-001 handover boundary")
+      const agent = fakeAgent()
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      expect(await executeWhole(agent.client, plan, plan.tasks[0]!, { dir, git: noCommitGit() }, chain)).toBeUndefined()
+      expect(agent.prompts).toHaveLength(0)
+      const line = lines.find((value) => value.includes("marks execution complete"))
+      expect(line).toContain("resume after interruption: handover document docs/T-001/handoff.md marks execution complete; skipping the whole-task session")
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the subtask scope: the per-stream document marks the subtask complete — artifacts verified, then the close-out", async () => {
+    const dir = await repo()
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      const plan = planOf(`## T-001: sample task [pending]\nBody.\n`, dir)
+      const agent = fakeAgent()
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const text = "runs stream T-001.S01"
+      // The interrupted stream's unit state and completion document, both
+      // tracked (the interruption commit landed them).
+      mkdirSync(join(dir, "docs", "T-001", "S01"), { recursive: true })
+      writeFileSync(join(dir, "docs", "T-001", "S01", "todo.md"), "# T-001 S01: item\n\n## Goal\n\ng\n\n<!-- auto: eof -->\n")
+      writeFileSync(join(dir, "docs", "T-001", "S01", "handoff.md"), "# Handover\n\nStream done.\n\nStatus: done\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "T-001 S01 handover boundary")
+      // resumeUnit = true (the active record belongs to this stream unit);
+      // split = [] builds the steer; laneStream = true selects the
+      // per-stream document.
+      const result = await runSubtask(agent.client, plan, plan.tasks[0]!, text, 1, { dir, git: noCommitGit() }, chain, undefined, true, [], true)
+      expect(result).toBeUndefined()
+      expect(agent.prompts).toHaveLength(0)
+      const line = lines.find((value) => value.includes("marks the subtask complete"))
+      expect(line).toContain("resume after interruption: handover document docs/T-001/S01/handoff.md marks the subtask complete; verifying its artifacts before the close-out")
+      // The close-out ran: the tracked todo.md became done.md.
+      expect(await Bun.file(join(dir, "docs", "T-001", "S01", "done.md")).exists()).toBe(true)
+    } finally {
+      printed.mockRestore()
       await rm(dir, { recursive: true, force: true })
     }
   })

@@ -79,6 +79,37 @@ describe("nextFixSession (the fix round's per-session ordinals, plans/0148 D1)",
     expect(await nextFixSession(dir, "T-001", 1)).toBe(1)
     expect(await nextFixSession(dir, "T-002", 2)).toBe(1)
   })
+
+  // The corpus bound (0238 D2c, enacting 0165-193's arm — the bound 0165-204
+  // assigned here): the ordinal derives from the task's OWN corpus, the same
+  // boundary taskFirstCommit and taskChangedPaths read (plans/0140) — a
+  // wipe-and-restart over retained history re-issues the id, and the old
+  // lineage's fix subjects must not number the new corpus's first session.
+  test("a re-issued id numbers from its own corpus, never after the wiped lineage's (plans/0140)", async () => {
+    const dir = await fresh()
+    // The OLD corpus: the task formulated, two fix sessions of round 1.
+    await mkdir(join(dir, "docs", "T-001"), { recursive: true })
+    await Bun.write(join(dir, "docs", "T-001", "todo.md"), "# T-001: old\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "old corpus formulation")
+    await git(dir, "commit", "--allow-empty", "-qm", "T-001 fix 1.2 old title")
+    // The wipe-and-restart: the document removed, then re-issued — the
+    // newest commit ADDING todo.md is the new corpus's bound.
+    await rm(join(dir, "docs", "T-001", "todo.md"))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "wipe")
+    await Bun.write(join(dir, "docs", "T-001", "todo.md"), "# T-001: new\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "new corpus formulation")
+    await git(dir, "commit", "--allow-empty", "-qm", "T-001 fix 1.1 new title")
+    // The old lineage's fix 1.2 falls outside the new corpus: the next
+    // session of round 1 is 2, not 3.
+    expect(await nextFixSession(dir, "T-001", 1)).toBe(2)
+    // The floor: with no re-issuance every subject sits inside the corpus,
+    // and the bound changes nothing (the whole-log answer would agree).
+    await git(dir, "commit", "--allow-empty", "-qm", "T-001 fix 1.7 new title")
+    expect(await nextFixSession(dir, "T-001", 1)).toBe(8)
+  })
 })
 
 async function fresh() {

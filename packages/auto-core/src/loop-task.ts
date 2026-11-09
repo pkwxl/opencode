@@ -293,7 +293,7 @@ function exhausted(plan: Plan): number | undefined {
 }
 
 // The task bracket (P2b, src/run-status.ts) every loop shape opens at its
-// unit's start, with the task-switch hook point (STATS_PLAN §3) beside it:
+// unit's start, with the task-switch hook point (plans/0019 §E) beside it:
 // the banner, the shape's own dispatch line (the lead — "starting
 // execution", "dispatching an isolation lane", "dispatching a lane", the
 // lane worker's own), the task-start event, then the stats bucket switch —
@@ -624,7 +624,7 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
     // states, and unaffected by the stats guard (a blocked task may equally
     // have had several questions proxy-answered already).
     for (const line of await taskResolveLines(directory, task.id)) log(line)
-    // the task three-state line (STATS_PLAN §4.2, T-006): blocked also
+    // the task three-state line (plans/0019 §F, T-006): blocked also
     // prints the cumulative stats segment + the tokens line (not printed
     // when the guard fails, consistent with the pre-T-006 behavior —
     // originally only done had a stats line).

@@ -22,7 +22,7 @@
 import { join } from "node:path"
 import { docShapeProblems } from "../doccheck"
 import { subtaskDoc, taskDoc } from "../docpaths"
-import { parseUnitDoc } from "./unit"
+import { parseUnitDoc, pathEscapesRoot } from "./unit"
 import type { ArtifactSpec } from "./types"
 
 // —— 1. `Artifacts:` declaration parsing (session-boundary-hardening §4.3 D4) ——
@@ -221,6 +221,18 @@ export async function checkArtifactSpecs(specs: readonly ArtifactSpec[], check: 
     // Specs declare artifacts; every other role carries its own policy in
     // roles.ts (handoff protocol checks, eof exemption, protect list).
     if (spec.role !== "artifact") continue
+    // The declared-path escape rule (the Touches grammar's own predicates,
+    // 0238 D6d enacting 0165-206d): the existence tests below run at
+    // join(check.dir, spec.path), so an absolute or `..`-bearing declaration
+    // would be a completion gate satisfiable by a file outside the target
+    // directory. The declaration is refused here instead — every consumer
+    // (the decompose collect's in-session retry, the subtask close-out shape
+    // check, the task-level park honesty gate) inherits the line through
+    // this one checker.
+    if (pathEscapesRoot(spec.path)) {
+      problems.push(`declared artifact ${spec.path} escapes the target directory — declare a path inside the project (an absolute or ..-bearing path is never a deliverable artifact)`)
+      continue
+    }
     const isMd = spec.path.toLowerCase().endsWith(".md")
     if (check.policy === "declared") {
       if (!(await Bun.file(join(check.dir, spec.path)).exists())) {

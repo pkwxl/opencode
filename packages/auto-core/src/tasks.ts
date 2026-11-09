@@ -21,8 +21,11 @@
 // Dependencies (M3.5, plans/0047 §7): tasks select by nextReady over their
 // `Depends:` fields (absent = the previous task in the index, today's order;
 // a task may also name a completed task of another phase), and so do
-// subtasks (document/state.ts). The graph is checked on load — a bad graph
-// makes the index invalid — and in the planning and decompose collects.
+// subtasks (document/state.ts). The TASK graph is checked on load (a bad
+// graph makes the index invalid) and in the planning collect; the SUBTASK
+// graph is never checked at load — it is checked at the subtask loop entry
+// (runner.ts), the decompose collect (execute.ts), the split's plan walk
+// (split.ts) and the work-order export (work-order.ts).
 //
 // A `Plan` is the current phase's plan of work: the loaded index with its
 // tasks. The name survives from PLAN.md because the concept did.
@@ -292,7 +295,11 @@ export async function syncChecklistTicks(dir: string, id: string): Promise<strin
 // without its terminator and the sessions copied what they saw — 0131's
 // 38/38 omission).
 export function taskBody(text: string): string {
-  const lines = text.split("\n")
+  // CRLF normalized once at entry (subtasks()'s precedent, the phase-type
+  // file's own — 0158 D1's law that a CRLF document reads as content, and
+  // 0238 D6c: the CR bytes otherwise ride every prompt body and scope
+  // section of a CRLF todo.md).
+  const lines = text.replace(/\r\n/g, "\n").split("\n")
   let i = 0
   if (/^#\s/.test(lines[0]?.trim() ?? "")) {
     i = 1
@@ -601,10 +608,24 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
     // problems") because unitProblems validates more than the graph since
     // plans/0075 — a bad `Decompose:` value fails load through this same
     // throw, and a dependency-worded wrapper would misname it.
-    throw new Error(
-      `task index ${index} has grammar problems: ${graph.join("; ")}. ` +
-        "`Depends:` in docs/T-NNN/todo.md names tasks of this index or completed tasks (`Depends: none` for no prerequisite); `Decompose:` accepts split, whole or pipeline (omit it for no opinion); fix the field lines manually and re-run",
-    )
+    // A `parks on` problem is not a document field at all (0238 D6a,
+    // 0165-206): the park fact is a runtime record — the task's `parked`
+    // entry in .auto/units.json, driver-written — so its remedy names the
+    // record and its file, never a todo.md field that was never wrong.
+    const parkProblems = graph.filter((problem) => problem.includes(" parks on "))
+    const fieldProblems = graph.filter((problem) => !problem.includes(" parks on "))
+    const remedy = [
+      ...parkProblems.map(
+        (problem) =>
+          `${problem.split(" parks on ")[0]}'s park record is runtime state in .auto/units.json (driver-written, gitignored), not a todo.md field — a park naming an id that exists nowhere cannot resolve; remove the task's "parked" entry there and re-run`,
+      ),
+      ...(fieldProblems.length
+        ? [
+            "`Depends:` in docs/T-NNN/todo.md names tasks of this index or completed tasks (`Depends: none` for no prerequisite); `Decompose:` accepts split, whole or pipeline (omit it for no opinion); fix the field lines manually and re-run",
+          ]
+        : []),
+    ].join(". ")
+    throw new Error(`task index ${index} has grammar problems: ${graph.join("; ")}. ${remedy}`)
   }
   const own = new Set(parsed.entries.map((entry) => entry.id))
   const external = [...new Set(decls.flatMap((decl) => (Array.isArray(decl.depends) ? decl.depends : [])))].filter((id) => !own.has(id))

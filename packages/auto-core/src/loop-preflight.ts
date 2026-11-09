@@ -582,7 +582,7 @@ export async function preflight(
   }
 
   const watcher = opts.verbose ? watchFiles(directory) : undefined
-  // stats loading (plans/STATS_PLAN.md §1): read disk → depreciate the
+  // stats loading (plans/0019 §D): read disk → depreciate the
   // previous process's leftover segments → round rollover → open this
   // process's first segment; with an old document present, print the resume
   // banner (§4.6). Must run before trackSubtasks (its heartbeat readings
@@ -599,7 +599,7 @@ export async function preflight(
   // vetted channel frozen at the wall commit — read-only for the run like
   // the driver's own files; an undeclared or never-closed wall contributes
   // nothing (the floor, re-derived from git at every run start).
-  await protect(directory, wallDeclared(directory) ? ((await findWallCommit(directory))?.sealed ?? []) : [])
+  for (const line of await protect(directory, wallDeclared(directory) ? ((await findWallCommit(directory))?.sealed ?? []) : [])) log(line)
   // Every exit from here on returns after protect() ran: the stops below
   // close progress and the watcher AND restore writability (plans/0236 D3,
   // 0165-073) — driveRun's finally, the only other unprotect, never runs for
@@ -610,7 +610,7 @@ export async function preflight(
   const stopBlocked = async (code: number): Promise<{ exit: number }> => {
     progress.close()
     watcher?.close()
-    await unprotect(directory)
+    for (const line of await unprotect(directory)) log(line)
     return { exit: code }
   }
   // on-site restoration of handover documents (test handover interruption

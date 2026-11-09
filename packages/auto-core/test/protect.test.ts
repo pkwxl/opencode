@@ -109,6 +109,36 @@ describe("protect", () => {
     expect(await writable(path).catch(() => "missing")).toBe("missing")
   })
 
+  // A chmod failure other than ENOENT is named, never swallowed (0238 D5b,
+  // enacting 0165-205): the arming calls return their ⚠ lines for the
+  // driver plane to log — a guardrail that failed to arm (or failed to
+  // restore) must not read as armed. ELOOP (a self-referencing symlink)
+  // fails chmod for every user including root, so the arm is deterministic
+  // in tests; an absent file stays silent (the floor above).
+  test("a chmod failure other than ENOENT renders its line at arm, mid-run and restore", async () => {
+    const absent = await protect(dir)
+    expect(absent).toEqual([])
+    // The sealed channel carries the loop: protect/protectAdditional/
+    // unprotect all fail on it identically.
+    const { symlink } = await import("node:fs/promises")
+    await symlink("loop", join(dir, "loop"))
+    const armed = await protect(dir, ["loop"])
+    expect(armed).toHaveLength(1)
+    expect(armed[0]).toContain("protect could not set")
+    expect(armed[0]).toContain(join(dir, "loop"))
+    expect(armed[0]).toContain("ELOOP")
+    expect(armed[0]).toContain("0o444")
+    const resealed = await protectAdditional(dir, ["loop-2"])
+    expect(resealed).toHaveLength(1)
+    expect(resealed[0]).toContain("ELOOP")
+    const restored = await unprotect(dir)
+    expect(restored).toHaveLength(1)
+    expect(restored[0]).toContain("ELOOP")
+    expect(restored[0]).toContain("0o644")
+    expect(restored[0]).toContain("stays read-only after the run")
+    await rm(join(dir, "loop"), { force: true })
+  })
+
   test("the AGENTS.md block sync still writes during protection and leaves the file read-only", async () => {
     await protect(dir)
     expect((await ensurePointer(dir)).block).toBe("inserted")

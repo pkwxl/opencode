@@ -138,7 +138,11 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
   // conventional exit codes (128+signal) distinguish the shape in logs.
   const forceTerminate = (code: number) => {
     server?.close()
-    void unprotect(directory).finally(() => process.exit(code))
+    void unprotect(directory)
+      .then((lines) => {
+        for (const line of lines) log(line)
+      })
+      .finally(() => process.exit(code))
     // Backstop: exit even if cleanup hangs.
     setTimeout(() => process.exit(code), 1000).unref()
   }
@@ -427,7 +431,7 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     run.router.setClassifyUsageSink(undefined)
     run.router.setSynthesisUsageSink(undefined)
     setClampCaller(undefined)
-    // Graceful stats close-out (STATS_PLAN §1): fold the open segment, then
+    // Graceful stats close-out (plans/0019 §D): fold the open segment, then
     // persist the closed segment and unload the handle; the next loadStats
     // reads with no depreciation left. Write failures are silent inside and
     // do not affect the exit code.
@@ -435,7 +439,7 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     // The lifecycle of a managed handle (managed) belongs to the caller; not
     // closed here.
     if (!opts.managed) server?.close()
-    await unprotect(directory)
+    for (const line of await unprotect(directory)) log(line)
     // The run's services die with the run, after everything above that may
     // still read the run's clock (the stats flush); a run nested in a
     // holder-using caller — a test — restores the caller's holder.

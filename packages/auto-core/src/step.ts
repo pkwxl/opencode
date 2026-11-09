@@ -31,7 +31,7 @@ export function stepApplies(step: StepMode, boundary: Boundary): boolean {
 // overrides the tier (default takes OPENCODE_AUTO_STEP's parsed value, injected for
 // unit tests); io is injected for unit tests. When dir passes the target directory,
 // the wait interval is deducted from total/AI time via statsWaitBegin/End and
-// recorded separately as waitMs (one of STATS_PLAN §3's three human-wait points);
+// recorded separately as waitMs (one of plans/0019 §E's three human-wait points);
 // with off's zero behavior, stats are equally untouched.
 export async function stepPause(
   boundary: Boundary,

@@ -65,28 +65,21 @@ export const OPENCODE_CONFIG_FILE = "opencode.json"
 
 // The real paths of the target directory's top-level symlinks that resolve
 // outside the project root: the declared external surfaces the stamp allows.
-// Broken symlinks are skipped (nothing to allow), a real path that IS the
-// root or one of its ancestors is excluded (allowing a parent of the project
-// would be near-global, not a corpus), and the result is sorted and deduped —
+// Derived from the doors scan below (one loop home — 0238 D5a): broken
+// symlinks are skipped (nothing to allow), a real path that IS the root or
+// one of its ancestors is excluded (allowing a parent of the project would
+// be near-global, not a corpus), and the result is sorted and deduped —
 // several symlinks onto one corpus contribute one entry.
 export async function rootSymlinkRealPaths(dir: string): Promise<string[]> {
-  const root = await realpath(dir).catch(() => dir)
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
-  const external: string[] = []
-  for (const entry of entries) {
-    if (!entry.isSymbolicLink()) continue
-    const real = await realpath(join(dir, entry.name)).catch(() => undefined)
-    if (real === undefined || real === root || root.startsWith(real + sep)) continue
-    if (real.startsWith(root + sep)) continue
-    external.push(real)
-  }
-  return [...new Set(external)].sort()
+  const doors = await rootSymlinkDoors(dir)
+  return [...new Set(doors.map((door) => door.target))].sort()
 }
 
-// The same scan keeping names beside targets (plans/0132): the reference
-// doors — each top-level symlink with its resolved external real path, the
-// pair the wall close records and removes. The same exclusion rules as
-// rootSymlinkRealPaths; sorted by name.
+// The one scan (plans/0132): each top-level symlink with its resolved
+// external real path — the reference doors the wall close records and
+// removes, and the real-path derivation above. Broken symlinks are skipped,
+// the root and its ancestors excluded, in-tree targets excluded; sorted by
+// name.
 export async function rootSymlinkDoors(dir: string): Promise<{ name: string; target: string }[]> {
   const root = await realpath(dir).catch(() => dir)
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
@@ -593,6 +586,14 @@ export type CoveringOpen = { target: string; ask: string; key?: string; action: 
 export function admittingCoverage(text: string, targets: readonly string[]): CoveringOpen[] {
   const live = externalDirectoryLive(text)
   if (live === undefined || !targets.length) return []
+  return admittingCoverageLive(live, targets)
+}
+
+// The same scan over the already-parsed section (0238 D5c): the wall's
+// closed predicate reads the section once for its own boundary keys and
+// calls this half, never re-parsing the text inside the coverage question.
+export function admittingCoverageLive(live: Record<string, string>, targets: readonly string[]): CoveringOpen[] {
+  if (!targets.length) return []
   const entries = Object.entries(live)
   const open: CoveringOpen[] = []
   for (const target of targets) {

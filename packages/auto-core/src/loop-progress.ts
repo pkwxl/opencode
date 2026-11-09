@@ -18,7 +18,7 @@ import { statsBoot, statsId, statsTotals, statsWaitBegin, statsWaitEnd } from ".
 // avoiding two readlines fighting over stdin.
 // When dir is given, the wait interval is deducted from total/AI elapsed via
 // statsWaitBegin/End and recorded separately as waitMs (one of the three
-// human-wait points in STATS_PLAN §3); exported for direct unit tests
+// human-wait points, plans/0019 §E); exported for direct unit tests
 // (aligned with subtaskProgressLine).
 export async function waitBetweenTasks(minutes: number, nextID: string, repl?: Interactive, dir?: string) {
   const promptText = `⏸ pause between tasks: press Enter to start ${nextID} now, or wait ${minutes}m to auto-continue: `
@@ -75,7 +75,7 @@ export function trackSubtasks(directory: string) {
   return { close: () => clearInterval(timer) }
 }
 
-// Progress heartbeat text (plans/STATS_PLAN.md §4.5): task elapsed now reads
+// Progress heartbeat text (plans/0019 §F): task elapsed now reads
 // the stats task bucket's cross-interruption cumulative (with live
 // extrapolation of the open segment), replacing the old in-memory since —
 // trustworthy from the first extrapolation after a process restart.

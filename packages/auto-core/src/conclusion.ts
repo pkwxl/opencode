@@ -11,7 +11,7 @@ import { currentRound, phaseKey, phaseLabel, phaseName, type PhaseUnit } from ".
 import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
 import { statsBoot, statsDecomposeOf, statsHistory, statsId, statsLaneRollup, statsTotals, type DecomposeRun, type DigestStat, type DigestStats, type LaneRollup, type ModelStat, type TierStat, type StatsResume } from "./stats"
 
-// Startup resume banner (plans/STATS_PLAN.md §4.6): the snapshot is taken after
+// Startup resume banner (plans/0019 §F): the snapshot is taken after
 // depreciation posting and before round rollover; round/phase/task are the
 // positions where the previous process stopped; a missing task (previous
 // process stopped outside a task segment, or the bucket id is corrupt) omits
@@ -73,7 +73,7 @@ export async function roundResolveLines(directory: string | undefined): Promise<
   return resolveHighlight(items, { scope: "round", id: round })
 }
 
-// ===== T-006 conclusion lines (plans/STATS_PLAN.md §4.2/4.3/4.4) =====
+// ===== T-006 conclusion lines (plans/0019 §F) =====
 // The three conclusion lines (task tri-state / phase close / round complete)
 // are all constructed here; the loop body only logs. The tokens line shares
 // log.ts formatUsageLine with the T-004 ◉ session-end line 2 so the format

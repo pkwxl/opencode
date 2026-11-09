@@ -101,7 +101,7 @@ export async function hibernatePause(
     `⏸ hibernating: ${label} is inside the hibernate window (UTC ${formatHibernate(window)}),` +
       ` resuming around ${wakeAt.toISOString()} (local ${wakeAt.toLocaleString()}, includes random delay); press Ctrl+C twice to force-quit`,
   )
-  // Human/planned wait deduction (same treatment as STATS_PLAN §3): with the segment
+  // Human/planned wait deduction (the waitMs convention, plans/0019 §B): with the segment
   // closed neither aiMs nor wallMs grows, waitMs is recorded separately; the
   // exceptional path pairs waitEnd via bookedSleep's finally, leaving no dangling
   // closed segment.

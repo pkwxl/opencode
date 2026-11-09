@@ -373,6 +373,17 @@ export function resolveDepends(units: readonly UnitDecl[]): Map<string, string[]
   return out
 }
 
+// The declared-path escape rules (the unit grammar's own, one home — 0238
+// D6d): a declaration's paths are target-directory-relative. `Touches`
+// rejects the escapes for concurrency scoping (P17: a scope outside the
+// project bounds no lane), and since 0238 the artifact declarations reject
+// them through the same predicates (spec.ts's checker consumes
+// pathEscapesRoot) — an `Artifacts:` existence test run at join(dir, path)
+// would otherwise be satisfiable by a file outside the root.
+export const isAbsolutePath = (path: string): boolean => path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)
+export const pathHasDotDot = (path: string): boolean => path.split(/[\\/]/).includes("..")
+export const pathEscapesRoot = (path: string): boolean => isAbsolutePath(path) || pathHasDotDot(path)
+
 // All problems of one index's units (G4; takes over 0046 D4). `external`: ids
 // that exist outside this index and may be named (e.g. tasks of earlier
 // phases). `parked`: the runtime park records (id → blocker, plans/0096 D7)
@@ -409,8 +420,8 @@ export function unitProblems(
     if (unit.touches !== undefined) {
       if (unit.touches.length === 0) problems.push(`${unit.id} has an empty Touches value (omit the field to mean everything)`)
       for (const path of unit.touches) {
-        if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) problems.push(`${unit.id} touches an absolute path: ${path}`)
-        else if (path.split(/[\\/]/).includes("..")) problems.push(`${unit.id} touches a path with ..: ${path}`)
+        if (isAbsolutePath(path)) problems.push(`${unit.id} touches an absolute path: ${path}`)
+        else if (pathHasDotDot(path)) problems.push(`${unit.id} touches a path with ..: ${path}`)
       }
     }
     // The plan-recorded execution mode (plans/0075): the value set is grammar,

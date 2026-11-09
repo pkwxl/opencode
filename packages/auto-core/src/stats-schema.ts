@@ -10,7 +10,7 @@
 // consumers keep their single import point.
 import { DECOMPOSE_MODES, type DecomposeMode } from "./document/unit"
 
-// ===== schema (v:1, compact JSON on disk; plans/STATS_PLAN.md :28-43) =====
+// ===== schema (v:1, compact JSON on disk; plans/0019 §C) =====
 // A v:1 backward-compatible extension (plans/0055 §7.1 "Stats"): the buckets
 // and the history aggregate may carry two optional sections, models/tiers
 // (usage and counts per internal model name / per tier). Older documents
@@ -231,7 +231,7 @@ export type LaneUsageDetail = {
 }
 
 // Resume information for loadStats (returned when an old document exists,
-// printed by the startup banner; plans/STATS_PLAN.md §4.6). The snapshot is
+// printed by the startup banner; plans/0019 §F)). The snapshot is
 // taken after depreciation posting and before round rollover — round/phase/task
 // are the positions where the previous process stopped.
 export type StatsResume = {

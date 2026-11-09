@@ -23,7 +23,7 @@ type ResultChannels = {
   blockedExtra: { extra?: Partial<Watch> }
 }
 
-// Turn snapshot (STATS_PLAN §2): every exit of watch carries durationMs +
+// Turn snapshot (plans/0019 §E): every exit of watch carries durationMs +
 // usage + resolves uniformly, including the early-settling error/blocked
 // exits — consumption and proxy answers really happened, they are not lost.
 // extra holds the fields that differ per exit. Rebuilt from the final view

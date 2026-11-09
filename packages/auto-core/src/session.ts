@@ -618,7 +618,7 @@ async function awaitRecovery(run: SessionRun, why: string, causeIn?: WaitCause):
     )
     // The wait can run to hours: deducted from the session and AI timings
     // and booked separately as waitMs (same treatment as askHuman,
-    // STATS_PLAN §2/§3); the probe session's own timings are booked as
+    // plans/0019 §B/§E); the probe session's own timings are booked as
     // usual. A wait for a limit — scheduled to its reset, or after a quota
     // or rate failure — is also booked per model as time lost to quota
     // windows (plans/0057 §11 item 7): the planned sleep, or the part slept

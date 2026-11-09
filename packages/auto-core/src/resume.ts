@@ -255,6 +255,21 @@ function sanitizePhaseRound(phase: Phase | undefined): Phase | undefined {
   }
 }
 
+// The Phase union's kind words (the save side's grammar; a record the driver
+// wrote always carries one of these — or one of the legacy words mapped
+// above). A "step" phase additionally requires its own grammar: a StepKind
+// word and a string unit (an old or hand-made record missing either matches
+// no phase — the loop warns and continues by file-derived routing, the
+// documented pre-M3.6 degradation).
+const PHASE_KINDS = new Set(["decompose", "whole", "subtasks", "wrapup", "closeout", "step"])
+const STEP_KINDS: readonly StepKind[] = ["phase-plan", "phase-handover", "phase-append"]
+function validPhase(phase: unknown): boolean {
+  if (typeof phase !== "object" || phase === null || !PHASE_KINDS.has((phase as { kind?: unknown }).kind as string)) return false
+  if ((phase as { kind: string }).kind !== "step") return true
+  const step = phase as { step?: unknown; unit?: unknown }
+  return STEP_KINDS.includes(step.step as StepKind) && typeof step.unit === "string"
+}
+
 function parseProgress(raw: string): Progress | undefined {
   try {
     const parsed = JSON.parse(raw) as Partial<Progress>
@@ -263,7 +278,11 @@ function parseProgress(raw: string): Progress | undefined {
     // re-enter the merged understand+decompose unit (plans/0030 D2). Legacy
     // "verify"/"review" records (retired, plans/0044 D5) only ever followed the
     // wrap-up, so they re-enter at closeout: no wrap-up rerun, straight to the
-    // result check and the done commit.
+    // result check and the done commit. Every other kind is validated against
+    // the Phase union's own words (P7: the grammar the driver writes; P12: an
+    // unknown word — a hand-edited or future-vintage record — reads as no
+    // phase, the default flow, never a phantom phase reaching the unit gate
+    // with a kind no case names or phaseText's handover fallthrough).
     const rawKind: unknown = parsed.phase?.kind
     const phase =
       typeof rawKind !== "string"
@@ -272,7 +291,9 @@ function parseProgress(raw: string): Progress | undefined {
           ? ({ kind: "decompose" } satisfies Phase)
           : rawKind === "verify" || rawKind === "review"
             ? ({ kind: "closeout" } satisfies Phase)
-            : sanitizePhaseRound(parsed.phase)
+            : validPhase(parsed.phase)
+              ? sanitizePhaseRound(parsed.phase)
+              : undefined
     return {
       task: parsed.task,
       session: typeof parsed.session === "string" ? parsed.session : undefined,

@@ -55,30 +55,61 @@ const FILES = [...PROTECTED_FILES, "AGENTS.md", ".opencode/auto/models.json", ".
 let enabled = false
 let sealed: string[] = []
 
-async function set(path: string, mode: number) {
-  await chmod(path, mode).catch(() => {})
+// One chmod of the guardrail set, failure rendered (0238 D5b, 0165-205):
+// a chmod that fails on anything but ENOENT (an absent protected file is
+// the expected floor — the models layer, the provenance sidecar and the
+// analysis are optional surfaces) renders its ⚠ line — a guardrail that
+// failed to arm (read-only filesystem, foreign owner) or failed to restore
+// at unprotect (a file left read-only after the run) is never silently
+// armed or silently stranded. This module is document-domain and logs
+// nothing itself (D8): the arming calls return the rendered lines and their
+// driver-plane callers log them (loop-preflight's protect and its stops,
+// loop's unprotect paths, the wall's protectAdditional).
+async function set(path: string, mode: number): Promise<string | undefined> {
+  const failure = await chmod(path, mode).then(
+    () => undefined,
+    (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : error.code ?? String(error)),
+  )
+  if (failure === undefined) return undefined
+  const tail = mode === 0o444 ? "a session may modify it by mistake" : "the file stays read-only after the run"
+  return `  ⚠ protect could not set ${path} to 0o${mode.toString(8)} (${failure}) — the read-only guardrail is not in effect for this file; ${tail}`
 }
 
-export async function protect(dir: string, sealedPaths: readonly string[] = []) {
+async function setAll(dir: string, files: readonly string[], mode: number): Promise<string[]> {
+  const lines: string[] = []
+  for (const file of files) {
+    const line = await set(join(dir, file), mode)
+    if (line !== undefined) lines.push(line)
+  }
+  return lines
+}
+
+// Arm the guardrail; the return value is the ⚠ lines of the chmods that
+// failed (empty = fully armed) — the caller (driver plane) logs them.
+export async function protect(dir: string, sealedPaths: readonly string[] = []): Promise<string[]> {
   enabled = true
   sealed = [...sealedPaths]
-  for (const file of [...FILES, ...sealed]) await set(join(dir, file), 0o444)
+  return await setAll(dir, [...FILES, ...sealed], 0o444)
 }
 
 // The wall's mid-run close (plans/0132 D4): the sealed channel joins the
 // read-only set for the rest of the run — no-ops when protection is not
 // active (tests, one-off scripts); the phase-close diff check owns the
-// invariant regardless.
-export async function protectAdditional(dir: string, paths: readonly string[]) {
-  if (!enabled || !paths.length) return
+// invariant regardless. Returns the same ⚠ lines for the caller to log.
+export async function protectAdditional(dir: string, paths: readonly string[]): Promise<string[]> {
+  if (!enabled || !paths.length) return []
   sealed = [...sealed, ...paths.filter((path) => !sealed.includes(path))]
-  for (const path of sealed) await set(join(dir, path), 0o444)
+  return await setAll(dir, sealed, 0o444)
 }
 
-export async function unprotect(dir: string) {
+// Restore writability; the return value is the ⚠ lines of the chmods that
+// failed (empty = fully restored) — files named there stay read-only after
+// the run until the person chmods them by hand.
+export async function unprotect(dir: string): Promise<string[]> {
   enabled = false
-  for (const file of [...FILES, ...sealed]) await set(join(dir, file), 0o644)
+  const lines = await setAll(dir, [...FILES, ...sealed], 0o644)
   sealed = []
+  return lines
 }
 
 // No-ops when protection is not active (tests, one-off scripts).

@@ -89,14 +89,29 @@ export function shortTitle(title: string): string {
 // commit leaves `T-NNN fix <round>.<n>` in the log; the re-opened round's
 // first dispatch is <n>+1, never a second <n>). Scans every repository root
 // (a round's commits may land in any of them) for the highest
-// `<id> fix <round>.<n>` subject; 1 when none exists (the fresh round, and
-// the no-git floor — a failed read keeps the floor ordinal but logs its ⚠,
-// plans/0174 D5).
+// `<id> fix <round>.<n>` subject, bounded by the task's corpus (plans/0140,
+// the same bound taskFirstCommit and taskChangedPaths read — a re-issued
+// id's first fix session numbers from its own lineage, never after the
+// wiped corpus's); 1 when none exists (the fresh round, and the no-git
+// floor — a failed read keeps the floor ordinal but logs its ⚠,
+// plans/0174 D5; an underivable corpus bound keeps the whole-log scan,
+// 0140's own floor: with no re-issuance the bound changes nothing).
 export async function nextFixSession(dir: string, taskId: string, round: number): Promise<number> {
   const prefix = `${taskId} fix ${round}.`
   let max = 0
-  for (const root of await repoRoots(dir)) {
-    const listed = await git(root, ["log", "--format=%s"]).catch(() => undefined)
+  const roots = await repoRoots(dir)
+  // The corpus boundary of the root repository (the taskChangedPaths
+  // pattern): the nested roots' corpora derive from its Auto-Nested
+  // alignment record. A target outside any work tree has no root repository
+  // and no record — the whole-log floor everywhere.
+  const bound = roots.includes(dir) ? await taskCorpusBound(dir, taskId) : ""
+  for (const root of roots) {
+    const corpus = root === dir
+      ? derivableBound(bound)
+        ? await corpusSince(root, bound)
+        : undefined
+      : await nestedTaskCorpus(root, dir, bound, relative(dir, root) || ".")
+    const listed = await git(root, ["log", "-z", "--format=%H%x1f%s%x1e"]).catch(() => undefined)
     if (listed === undefined || listed.code !== 0) {
       // The failed read is surfaced, never answered silently (plans/0174 D5,
       // 0165-204): the ordinal floor stays 1 — nothing gates on it, the
@@ -105,8 +120,12 @@ export async function nextFixSession(dir: string, taskId: string, round: number)
       log(`  ⚠ fix-session numbering could not read the history (${relative(dir, root) || "."}): ${listed === undefined ? "git unavailable" : firstLine(listed.err || listed.out) || `git log exit code ${listed.code}`} — the ordinal may duplicate an unread session`)
       continue
     }
-    for (const subject of listed.out.split("\n")) {
-      if (!subject.startsWith(prefix)) continue
+    for (const entry of listed.out.split("\x1e")) {
+      // -z separates records with NUL; strip it before splitting the sha
+      // from the subject (the taskChangedPaths scan's own note).
+      const [sha, subject] = entry.replaceAll("\0", "").split("\x1f")
+      if (!subject || !subject.startsWith(prefix)) continue
+      if (corpus !== undefined && !corpus.has(sha!.trim())) continue
       const n = Number.parseInt(subject.slice(prefix.length), 10)
       if (Number.isFinite(n) && n > max) max = n
     }

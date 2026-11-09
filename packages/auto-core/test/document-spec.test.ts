@@ -121,6 +121,28 @@ async function put(rel: string, text: string) {
 }
 
 describe('checkArtifactSpecs(policy "declared", subtask-loop declared artifacts)', () => {
+  // The declared-path escape rule (0238 D6d, enacting 0165-206d — the
+  // Touches grammar's own predicates): a declaration naming an absolute or
+  // `..`-bearing path is refused before any existence test, so the
+  // completion gate can never be satisfied by a file outside the target
+  // directory. Before the fix an EXISTING outside file passed the check
+  // silently — the defect's exact shape.
+  test("an escaping declaration is refused even when the outside file exists; in-root declarations unchanged", async () => {
+    // The outside file EXISTS: ../spec-escape-outside.md relative to dir,
+    // and dir's own file spelled absolutely — both reachable at
+    // join(dir, path), both outside the declaration grammar.
+    await Bun.write(join(dir, "..", "spec-escape-outside.md"), "# Outside\n")
+    await put("docs/inside.md", "# Inside\n")
+    const specs = declaredArtifacts("write up Artifacts: ../spec-escape-outside.md, " + join(dir, "docs/inside.md") + ", docs/fine.md")
+    expect(specs).toHaveLength(3)
+    const result = await checkArtifactSpecs(specs, { dir, policy: "declared" })
+    expect(result.problems).toEqual([
+      "declared artifact ../spec-escape-outside.md escapes the target directory — declare a path inside the project (an absolute or ..-bearing path is never a deliverable artifact)",
+      `declared artifact ${join(dir, "docs/inside.md")} escapes the target directory — declare a path inside the project (an absolute or ..-bearing path is never a deliverable artifact)`,
+      "declared artifact docs/fine.md does not exist",
+    ])
+  })
+
   test("a declared path missing → does not exist; present passes (non-.md gets no deeper check)", async () => {
     await put("src/b.ts", "export const x = 1\n")
     const specs: ArtifactSpec[] = [

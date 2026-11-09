@@ -153,11 +153,11 @@ export function unreadableStopLines(what: string, files: readonly string[]): str
 
 // ===== Stats/message formatters (pure functions, not interfering with the
 // output machinery above) =====
-// Serving the stats messages (plans/STATS_PLAN.md §4) and the consolidation
+// Serving the stats messages (plans/0019 §F) and the consolidation
 // of the existing runner/loop private copies: high-frequency lines (progress
 // heartbeats, session-end lines) use the compact formatDurationCompact,
 // conclusion lines (task/phase/round close-out) use the verbose
-// formatDuration — the dual scheme matches the status quo (STATS_PLAN §5).
+// formatDuration — the dual scheme matches the status quo (plans/0019 §F).
 // The wiring (deleting the runner.ts:79-88 and loop.ts:879-884 private
 // copies, changing imports) belongs to T-002/T-003; this consolidation only
 // adds functions, changing no existing call site.
@@ -204,7 +204,7 @@ export function formatTokens(n: number): string {
 }
 
 // Cost rendering: 0 (or no cost info) returns undefined, so message
-// assembly can omit the cost item (STATS_PLAN §5). Returns the "$N.NNN"
+// assembly can omit the cost item (plans/0019 §F). Returns the "$N.NNN"
 // style.
 // AUTO-DECISION: precision is toFixed(4) with trailing zeros stripped
 // (parseFloat round-trip): the plan §4 message draft shows both "$0.041"
@@ -218,7 +218,7 @@ export function formatCost(cost: number): string | undefined {
 }
 
 // Cache hit rate: hit = cacheRead / (cacheRead + input) (the formula
-// confirmed in STATS_PLAN §: after server-side normalization input no
+// confirmed in plans/0019 §B after server-side normalization input no
 // longer contains the cache part); denominator 0 (no usage info) → "—".
 // Returns the "N.N%" style, for the ◉ session-end tokens line
 // ("hit 95.9%").
@@ -236,7 +236,7 @@ export function formatCacheHit(cacheRead: number, input: number): string {
   return `${((cacheRead / total) * 100).toFixed(1)}%`
 }
 
-// Token breakdown line (unified tokens-line format of STATS_PLAN §4, T-006):
+// Token breakdown line (unified tokens-line format, plans/0019 §F, T-006):
 // shared by the T-004 ◉ session-end line 2 and the T-006 task/phase/round
 // conclusion lines so the format cannot drift —
 // `tokens in N / out M[/ reasoning R] / cache-read C / cache-write W, hit H[, cost $X]`.

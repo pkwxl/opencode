@@ -12,7 +12,8 @@ import { commitTree, unitBaseline } from "../src/git"
 import { afterSession, noCommitGit } from "../src/git-ops"
 import { recallHandover, saveHandover } from "../src/handover"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
-import { deadSessionWhy, resumeModelEligible, resumeModelNow, rollbackUnitState } from "../src/unit-commit"
+import { deadSessionWhy, resumeModelEligible, rollbackUnitState } from "../src/unit-commit"
+import { DEFAULT_CONTEXT_LIMIT } from "../src/opts"
 // The agent verdict lives behind the routing fence in the router's module
 // (its no-registry guard is a routing-truthiness branch).
 import { recordedAgentOk } from "../src/router"
@@ -109,52 +110,7 @@ describe("rollbackUnitState (unit rollback orchestration)", () => {
   })
 })
 
-describe("resumeModelNow (strict-resume model check)", () => {
-  const switches = parseSwitches({ [SWITCH_ENV.model]: "implement-scan=kimi/scan,*=kimi/k2" })
-  const step = { kind: "step" as const, step: "phase-plan" as const, unit: "R-01.P01" }
-
-  test("an explicit role wins over the phase, as it does at dispatch (plans/0053 D12)", () => {
-    expect(resumeModelNow({}, switches, step)).toBe("kimi/k2")
-    expect(resumeModelNow({}, switches, step, "implement-scan")).toBe("kimi/scan")
-  })
-
-  // Under a registry (plans/0055 §6.2) the comparison runs on internal names:
-  // the record holds the dispatched entry's internal name, and the check
-  // returns the selection's pick for the same routing — the marks and windows
-  // apply, the env-switch chain does not.
-  test("under a registry: the pick's internal name, down marks and windows applying", () => {
-    const entry = (name: string, fields: Partial<import("../src/models-schema").ModelEntry> = {}): import("../src/models-schema").ModelEntry => ({
-      name,
-      layer: "operator",
-      agent: "opencode",
-      ...fields,
-    })
-    const registry: import("../src/models-schema").ModelRegistry = {
-      layers: [{ name: "operator", path: "/unused/models.json" }],
-      tz: "UTC",
-      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
-      models: new Map([entry("a", { model: "prov/a" }), entry("b", { model: "prov/b" })].map((item) => [item.name, item])),
-      tiers: { deep: { tier: "deep", names: ["a", "b"], layer: "operator" }, simple: { tier: "simple", names: ["b"], layer: "operator" } },
-      routes: new Map(),
-      unused: [],
-    }
-    const routing: import("../src/routing").RoutingFacts = {
-      registry,
-      agentFilter: "opencode",
-      filterSource: undefined,
-      defaultAgent: "opencode",
-      runAgent: "opencode",
-      router: services().router,
-      clock: clockAt(0),
-    }
-    const opts: import("../src/opts").Opts = { routing }
-    // A deep planning step picks the deep list's first entry.
-    expect(resumeModelNow(opts, parseSwitches({}), step)).toBe("a")
-    // The primary marked down: the record's "a" would mismatch the pick.
-    services().router.markModelDown("a")
-    expect(resumeModelNow(opts, parseSwitches({}), step)).toBe("b")
-  })
-
+describe("the strict-resume model checks (resumeModelEligible / deadSessionWhy; the fresh-pick helper resumeModelNow itself was deleted with the eligibility merge — plans/0055 §10 item 11, 0238 D3)", () => {
   // §10 item 11 (plans/0055): under a registry the strict check compares the
   // recorded internal name and agent with eligibility replacing equality — a
   // window change that only moves the fresh pick does not roll a unit back,
@@ -191,6 +147,11 @@ describe("resumeModelNow (strict-resume model check)", () => {
     })
     const bare = parseSwitches({})
     const step = { kind: "step" as const, step: "phase-plan" as const, unit: "R-01.P01" }
+    // The fresh pick, read through the router's own target call (the
+    // production selection the deleted resumeModelNow wrapped — the premise
+    // helper of the eligibility rows, never a surface of its own).
+    const pickOf = (opts: import("../src/opts").Opts, phase?: import("../src/resume").Phase): string | undefined =>
+      opts.routing!.router.target(opts.routing!, { pct: 100, used: 0, at: 0, phase }, bare, DEFAULT_CONTEXT_LIMIT, undefined)
 
     test("eligibility replaces equality: a usable recorded model stays eligible although it is not the fresh pick", () => {
       const models = [entry("a", { model: "prov/a" }), entry("b", { model: "prov/b" })]
@@ -198,7 +159,7 @@ describe("resumeModelNow (strict-resume model check)", () => {
       // The fresh pick is "a"; a record of the second entry "b" would fail the
       // old equality comparison — by eligibility "b" is still usable, so the
       // unit is not rolled back and the resumed session keeps "b".
-      expect(resumeModelNow(opts, bare, step)).toBe("a")
+      expect(pickOf(opts, step)).toBe("a")
       expect(resumeModelEligible(opts, bare, "b", step)).toBe(true)
       expect(deadSessionWhy(opts, bare, { model: "b", phase: step })).toBeUndefined()
     })
@@ -214,9 +175,9 @@ describe("resumeModelNow (strict-resume model check)", () => {
       const models = [entry("x", { model: "prov/x", only: [parsed.window] }), entry("a", { model: "prov/a" })]
       let now = NOW
       const opts: import("../src/opts").Opts = { routing: factsOf(models, fixedClock(() => now)) }
-      expect(resumeModelNow(opts, bare, step)).toBe("a")
+      expect(pickOf(opts, step)).toBe("a")
       now = Date.parse("2026-09-25T19:00:00Z")
-      expect(resumeModelNow(opts, bare, step)).toBe("x")
+      expect(pickOf(opts, step)).toBe("x")
       expect(resumeModelEligible(opts, bare, "a", step)).toBe(true)
     })
 

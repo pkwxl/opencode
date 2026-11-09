@@ -33,9 +33,9 @@ import { stepPause } from "./step"
 import { cleanTestHandoffs, restoreTestHandoffs, testHandoffExists } from "./testrun"
 import { reportResult, runWrapup } from "./wrapup"
 
-// Session-duration display uses the compact duration format: consolidated
-// into formatDurationCompact in src/log.ts (STATS_PLAN §5 — T-001 hoisted it
-// up; this task deletes the private copy here and imports instead).
+// Session-duration display renders through src/log.ts's compact duration
+// format (formatDurationCompact, the formatter family of plans/0019 §E);
+// runner keeps no duration formatting of its own.
 
 // —— The plan-recorded execution mode (plans/0075, ruled 2026-10-04) ——
 // The intelligence in the session, the decision an auditable artifact: the
@@ -183,7 +183,7 @@ export async function runTask(
 ): Promise<Outcome> {
   // Experiment switches (the OPENCODE_AUTO_* environment-variable layer,
   // plans/0003-fork-decompose-design.md §4.6): parsed once at the entry
-  // point (memo) — an illegal value throws its Chinese error message here
+  // point (memo) — an illegal value throws its error message here
   // (exit code 1 on the CLI side); non-default combinations go into the
   // startup log (the default combination is silent, verbose shows the full
   // set); fork/forkBase are consumed by the fork pipeline, this layer only
@@ -353,7 +353,7 @@ export async function runTask(
       const done = await rollbackUnitState(dir, task, "execution unit (invalid handover document)", recalled.baseline!, { progress: recalled })
       if (done.type !== "ok") return done
       recalled.active = false
-      log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} exists but has no valid status line; strict resume judged unfaithful, rolled back and re-running`)
+      log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task, opts.stream)} exists but has no valid status line; strict resume judged unfaithful, rolled back and re-running`)
     } else {
       // The shared recovery ladder (resume-gate.ts, plans/0069 §2.2 D6): the
       // one reuse / strict-rollback / fresh decision this task caller and the
@@ -858,7 +858,7 @@ export async function runTask(
           // hard pause after the checklist item's tick and unified commit are
           // done, before the next item.
           // dir is passed so the pause wait is deducted from the time stats
-          // (STATS_PLAN §3).
+          // (plans/0019 §B).
           await stepPause("subtask", `${task.id} subtask ${index + 1}`, { interactive: opts.interactive, dir })
           // /exit checkpoint (subtask boundary): the request flag lives in the
           // run's control service, which rides the session options beside the

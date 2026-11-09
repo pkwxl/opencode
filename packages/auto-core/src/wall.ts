@@ -66,7 +66,7 @@
 import { readdir, realpath, readlink, rm, stat } from "node:fs/promises"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import { taskDir } from "./docpaths"
-import { admittingCoverage, boundaryAllowedTargets, externalDirectoryLive, isBoundaryKey, OPENCODE_CONFIG_FILE, pathsOverlap, rootSymlinkDoors, stampKey, stampWallClosure } from "./external-dirs"
+import { admittingCoverageLive, boundaryAllowedTargets, externalDirectoryLive, isBoundaryKey, OPENCODE_CONFIG_FILE, pathsOverlap, rootSymlinkDoors, stampKey, stampWallClosure } from "./external-dirs"
 import { firstLine, git, scriptGuardSnapshot, type GitOps, driverStage } from "./git"
 import { allowWrite, protectAdditional, reprotect } from "./protect"
 import { loadPhaseTypes } from "./phases/custom"
@@ -266,8 +266,10 @@ async function reachableDoors(dir: string, record: WallRecord): Promise<{ path: 
 // keys are never the person's (plans/0147), and every other winning entry is
 // a person's (the driver never removes the person's words).
 function openFindingsOf(text: string, targets: readonly string[]): { stamps: { target: string; key: string }[]; person: { target: string; key: string; action: string }[]; gone: string[] } {
+  // The section is parsed once (0238 D5c): the pure coverage half reads the
+  // same live map the boundary-key split below judges by.
   const live = externalDirectoryLive(text)
-  const open = live === undefined ? [] : admittingCoverage(text, targets)
+  const open = live === undefined ? [] : admittingCoverageLive(live, targets)
   const stamps: { target: string; key: string }[] = []
   const person: { target: string; key: string; action: string }[] = []
   const gone = new Set<string>()
@@ -702,7 +704,7 @@ async function closeWall(ctx: WallCtx, phase: PhaseUnit, sealing: PhaseUnit): Pr
   log(`  the wall commit records the resolved target(s) ${targets.join(", ")} — the door→target ledger; the standing deny rides the same commit when ${OPENCODE_CONFIG_FILE} is tracked`)
   if (sealed.length) {
     log(`  sealed channel (frozen at the wall, the person-committed amendment the one exception): ${sealed.join(", ")}`)
-    await protectAdditional(dir, sealed)
+    for (const line of await protectAdditional(dir, sealed)) log(line)
   }
   return []
 }

@@ -62,6 +62,27 @@ describe("rootSymlinkRealPaths (plans/0122)", () => {
     }
   })
 
+  // The derivation pin (0238 D5a, enacting 0165-205): the doors scan is the
+  // one loop; the real paths are exactly its targets, deduped and sorted —
+  // over the same mixed shape as the scan test above.
+  test("rootSymlinkRealPaths is exactly the deduped, sorted targets of rootSymlinkDoors", async () => {
+    const { project, corpus } = await fixture()
+    try {
+      await mkdir(join(project, "inside"))
+      await symlink(corpus, join(project, "linux"))
+      await symlink(join(project, "inside"), join(project, "self"))
+      await symlink(join(corpus, "gone"), join(project, "broken"))
+      await symlink(dirname(project), join(project, "parent"))
+      await symlink(corpus, join(project, "linux-again"))
+      const doors = await rootSymlinkDoors(project)
+      expect(await rootSymlinkRealPaths(project)).toEqual([...new Set(doors.map((door) => door.target))].sort())
+      expect(doors.map((door) => door.name)).toEqual(["linux", "linux-again"])
+    } finally {
+      await rm(project, { recursive: true, force: true })
+      await rm(corpus, { recursive: true, force: true })
+    }
+  })
+
   test("entries map real paths to allow patterns in sorted order", () => {
     expect(entries(["/b", "/a"])).toEqual({ "/a/**": "allow", "/b/**": "allow" })
   })

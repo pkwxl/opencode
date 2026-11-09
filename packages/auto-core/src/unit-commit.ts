@@ -111,19 +111,12 @@ function factsOf(opts: Opts, switches: Switches): RouteFacts {
   )
 }
 
-// The model-consistency evaluation at resume (design 3.1 ④): the target a
-// reused session's recorded model is judged against — the same routing
-// decision the next dispatch takes, a fresh selection over the routing
-// facts, whose pick's internal name the record holds (a resume has no live
-// chain, so a minimal view over the record's role and phase stands in for
-// one). Returning undefined = no candidate usable now (the check treats it
-// as a mismatch). role is the session's explicit routing role
-// (requireArtifact's spec.role, such as m-mode planning's implement-scan,
-// plans/0053 D12); absent = derived from the phase.
-export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | undefined, role?: ModelRole): string | undefined {
-  const facts = factsOf(opts, switches)
-  return facts.router.target(facts, { pct: 100, used: 0, at: 0, role, phase }, switches, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, opts.phase)
-}
+// (The model-consistency evaluation's fresh-pick helper — resumeModelNow —
+// was deleted with the merge that made eligibility replace equality: both
+// callers computed the pick beside the check and never read it, and the
+// merge dropped the dead computation. plans/0055 §10 item 11, the
+// AUTO-DECISION at resume-gate.ts's check; the eligibility helpers below
+// are the live surface.)
 
 // —— Session-agent binding of persisted records (plans/0055 §8.2, §8.3) ——
 // The verdicts of this section live in src/router.ts (recordedAgentOk,

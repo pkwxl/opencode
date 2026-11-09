@@ -332,7 +332,7 @@ let stdinAskChain: Promise<unknown> = Promise.resolve()
 // asks FIFO; the fallback branch serializes the same way.
 // When dir is passed, the waiting interval (the interactive.question path
 // included) is deducted from the session time and the AI time via
-// statsWaitBegin/End and recorded separately as waitMs (STATS_PLAN §2/§3: AI
+// statsWaitBegin/End and recorded separately as waitMs (plans/0019 §B/§E: AI
 // segment off-on); exported for direct unit-test driving (aligned with the
 // runSession internal wiring tests).
 export async function askHuman(

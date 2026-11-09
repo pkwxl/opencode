@@ -3,12 +3,14 @@ import { mkdtemp, mkdir, readdir, rm, chmod } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { requireArtifact } from "../src/artifact"
+import { unitBaseline } from "../src/git"
 import { noCommitGit } from "../src/git-ops"
 import { runTask } from "../src/runner"
 import { setSwitchModelRegistry } from "../src/switches"
 import { closeStep, forgetProgress, openStep, peekProgress, recallProgress, saveProgress, type Progress } from "../src/resume"
 import { fakeAgent } from "./fixtures/agent"
 import { pastMessage } from "./fixtures/loop"
+import { git } from "./fixtures/runner"
 import { seedUnits } from "./fixtures/units"
 
 describe("progress record", () => {
@@ -28,6 +30,27 @@ describe("progress record", () => {
     expect(await recallProgress(dir, "T-001")).toEqual(progress)
     await forgetProgress(dir)
     expect(await recallProgress(dir, "T-001")).toBeUndefined()
+  })
+
+  // The phase read validates the Phase union's own words (0238 D3b, enacting
+  // 0165-194): a hand-edited or future-vintage record's unknown kind — or a
+  // step record with an unknown step word or no unit — reads as NO phase,
+  // the default flow, never a phantom phase reaching the unit gate with a
+  // kind no case names or phaseText's handover fallthrough. Well-formed
+  // records pass through unchanged (the floor).
+  test("an unknown phase kind or step shape reads as no phase — the default flow, never a phantom (0238 D3b)", async () => {
+    const record = async (phase: unknown) => {
+      await mkdir(join(dir, ".auto"), { recursive: true })
+      await Bun.write(join(dir, ".auto", "progress.json"), JSON.stringify({ task: "T-001", at: 1, active: true, phase }))
+      return (await recallProgress(dir, "T-001"))?.phase
+    }
+    expect(await record({ kind: "bogus" })).toBeUndefined()
+    expect(await record({ kind: "step", step: "phase-bogus", unit: "R-01.P01" })).toBeUndefined()
+    expect(await record({ kind: "step", step: "phase-plan" })).toBeUndefined()
+    // The floor: well-formed records of every kind pass through as-is.
+    expect(await record({ kind: "step", step: "phase-plan", unit: "R-01.P01" })).toEqual({ kind: "step", step: "phase-plan", unit: "R-01.P01" })
+    expect(await record({ kind: "subtasks", index: 2 })).toEqual({ kind: "subtasks", index: 2 })
+    expect(await record({ kind: "wrapup", round: 1, gaps: 3 })).toEqual({ kind: "wrapup", round: 1, gaps: 3 })
   })
 
   test("the recovery point is written atomically — a read-only target record is replaced (rename, not an in-place write), leaving no .tmp behind (plans/0183 D2, 0165-113)", async () => {
@@ -440,6 +463,48 @@ describe("recovery through the shared ladder: the step caller (requireArtifact)"
       expect(agent.prompts[0]!.text).not.toContain("[DRIVER]") // the note belongs to the task-level resume
       const line = lines.find((value) => value.includes("resuming the interruption point"))
       expect(line).toContain("PLAN phase planning session resuming the interruption point (the original session is not reusable; redoing this step in a new session)")
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+
+// The strict-resume invalid-handover log beside the read names the read's
+// own document — the one 0156 D5 surface the ruling missed, completed at
+// 0238 D1a (0165-192): a stream record's read took the per-stream file, so
+// the log naming the task-level file taught an obedient session the wrong
+// document.
+describe("the invalid-handover log's stream-aware path (plans/0156 D5, 0238 D1a)", () => {
+  test("a stream record's log names docs/T-NNN/S<nn>/handoff.md, never the task-level file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-task-resume-stream-"))
+    await git(dir, "init", "-q")
+    // The phase's documents are committed BEFORE the baseline: the rollback
+    // to the baseline must leave the index in place (only the interruption's
+    // own leftovers ride the stash).
+    const plan = await seedUnits(dir, "## T-001: sample task [pending]\nBody.\n\n- [ ] item one\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "seed")
+    const baseline = await unitBaseline(dir)
+    await saveProgress(dir, { task: "T-001", session: "ses_old", at: 1, active: true, phase: { kind: "subtasks", index: 1 }, baseline })
+    // The interrupted stream left its per-stream handover document without a
+    // valid status line — the strict-resume unfaithful shape.
+    await mkdir(join(dir, "docs", "T-001", "S01"), { recursive: true })
+    await Bun.write(join(dir, "docs", "T-001", "S01", "todo.md"), "# T-001 S01: item one\n\n## Goal\n\ng\n\n<!-- auto: eof -->\n")
+    await Bun.write(join(dir, "docs", "T-001", "S01", "handoff.md"), "half done; next: the rest\n(no status line)\n")
+    const agent = fakeAgent({ history: { ses_old: [pastMessage("ses_old", 5000)] } })
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    setSwitchModelRegistry(undefined)
+    try {
+      await runTask(agent.client, plan, plan.tasks[0]!, { dir, subtask: "auto", wrapup: false, stream: 1 })
+      const line = lines.find((value) => value.includes("no valid status line"))
+      expect(line).toBeDefined()
+      expect(line).toContain("handover document docs/T-001/S01/handoff.md exists but has no valid status line")
+      expect(line).not.toContain("docs/T-001/handoff.md")
     } finally {
       printed.mockRestore()
       await rm(dir, { recursive: true, force: true })

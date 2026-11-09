@@ -387,7 +387,7 @@ export async function attempt(
   // until TURN_TIMEOUT (2h), and the retry ladder starts at the probe's
   // verdict moment (~2×idleTime).
   const post = new AbortController()
-  // Idempotent guard of the stats segment close (STATS_PLAN §2, T-003): the
+  // Idempotent guard of the stats segment close (plans/0019 §E, T-003): the
   // normal path closes the segment after awaiting watching; paths that never
   // reach the normal close (dispatch failure, exception, ...) are backstopped
   // by finally — the AI segment never hangs.
@@ -471,7 +471,7 @@ export async function attempt(
     // the AI and are cleared once used.
     const note = chain.note
     consumeNote(chain)
-    // Stats wiring (STATS_PLAN §2, T-003): open the AI segment and associate
+    // Stats wiring (plans/0019 §E, T-003): open the AI segment and associate
     // the task before the prompt is dispatched. Bypass sessions (pseudo tasks
     // PLAN/AUTO; recovery-point precedent in resume.ts) are recorded the same
     // way — when statsTask has no current task set, usage/sessions still land
@@ -534,7 +534,7 @@ export async function attempt(
     // Segment-close booking (T-003): usage lands in the task/phase/round
     // buckets + per-session; the report is consumed by the ◉ session-ended
     // two lines below (cumulative elapsed / rounds / cumulative cost,
-    // STATS_PLAN §4.1). Under a registry the same point also books per model
+    // plans/0019 §F). Under a registry the same point also books per model
     // and per tier (0055 §7.1): one booking point, one cross-interruption
     // cumulative criterion.
     const report = await statsSessionEnd(opts.dir, sessionID, result.usage ?? zeroUsage(), statsModel, statsTier, task.id)
@@ -556,7 +556,7 @@ export async function attempt(
     // failed-session record — its purpose ended with this dispatch
     // surviving): the ◉ lines below read the promoted counters.
     promote(chain, sessionID, result, clockNow())
-    // ◉ The two session-ended lines (STATS_PLAN §4.1, T-004): printed
+    // ◉ The two session-ended lines (plans/0019 §F, T-004): printed
     // unconditionally — every session that goes through attempt (phase
     // planning / handover distillation and other bypasses included; reused
     // sessions print too) outputs them uniformly; line 1 context and elapsed,

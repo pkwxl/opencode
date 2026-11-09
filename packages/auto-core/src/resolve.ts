@@ -1,104 +1,137 @@
-// 代答决策台账(plans/0020-auto-resolve-design.md): 把"本应询问用户、却被 driver 自动
-// 放行或代答的决策"(AUTO-RESOLVE)从"AI 本就该自己做的工程裁量"(AUTO-DECISION)
-// 里拆出来,给前者独立标记、独立台账与独立的高亮报文通道。判别硬判据是**分歧点的
-// 决定权本应属于谁**:属于用户(需求意图与范围取舍、对外契约、"什么算做完"的判定
-// 标准、事实确认、触碰任务描述边界)→ AUTO-RESOLVE;属于 AI(实现手段,任一选项都
-// 不改变用户可见行为)→ AUTO-DECISION。
+// The proxy-answer ledger (plans/0020-auto-resolve-design.md): separates
+// "decisions that should have been asked of the user but were auto-approved
+// or proxy-answered by the driver" (AUTO-RESOLVE) from "engineering
+// discretion the AI was always free to take" (AUTO-DECISION), giving the
+// former its own marker, its own ledger and its own highlight-message
+// channel. The hard criterion is **whose call the point of divergence
+// should have been**: the user's (requirement intent and scope trade-offs,
+// external contracts, the standard for "what counts as done", fact
+// confirmation, touching the task description's boundary) → AUTO-RESOLVE;
+// the AI's (implementation means, where no option changes user-visible
+// behavior) → AUTO-DECISION.
 //
-// 两个来源: driver 源(question.asked 被自动答复,runner 接线 H1..H3)权威但只覆盖
-// 会话确实发过问的情形;agent 源(会话在文档/代码里写下的 `AUTO-RESOLVE:` 标记行,
-// 会话收尾扫描 H4)覆盖面取决于会话自觉。二者经 sameIssue 配对(driver 项置
-// matched),报文只展示配对后的合并结果——driver 项有配对即由信息更全的 agent 项
-// 取代,无配对则以 ⚠ 点名"会话未按要求标注"。
+// Two sources: the driver source (question.asked auto-answered, wired at
+// runner H1..H3) is authoritative but covers only the cases where the
+// session actually asked; the agent source (the `AUTO-RESOLVE:` marker
+// lines a session writes in documents/code, scanned at session close H4)
+// covers as much as the session chooses to mark. The two are paired through
+// sameIssue (the driver entry marked matched), and the messages show only
+// the paired, merged result — a driver entry with a pair is replaced by the
+// better-informed agent entry; one without is named with a ⚠ as "the
+// session did not mark as required".
 //
-// 持久化在目标目录 `.auto/resolves.json`(gitignore 内、driver 独占写、不进 protect
-// 名单),与 `.auto/stats.json` 同族但独立成文件——stats 有 30s 心跳高频写,把会增长
-// 的问题文本数组塞进去会让每次心跳重写全量文本。台账只是 driver 的计数与高亮依据,
-// 丢了不影响正确性: 持久审计轨迹是进 git 的两样东西——标记行本身与
-// docs/T-NNN/report.md 的「Proxy-answered questions」节。
+// Persisted in the target directory's `.auto/resolves.json` (inside
+// gitignore, driver-exclusive writes, not on the protect list), the same
+// family as `.auto/stats.json` but its own file — stats takes a 30s
+// heartbeat of high-frequency writes, and stuffing a growing array of
+// question text into it would rewrite the full text on every heartbeat.
+// The ledger is only the driver's counting and highlight basis; losing it
+// does not affect correctness: the persistent audit trail is the two
+// things that enter git — the marker lines themselves and the
+// "Proxy-answered questions" section of docs/T-NNN/report.md.
 //
-// 健壮性照抄 src/stats.ts: 原子写(.tmp → rename + 写队列串行化)、逐字段宽容解析
-// (坏 = 缺失不 throw)、所有写失败 catch 静默——审计永不影响流程与退出码。公共 API
-// 首参一律 `dir: string | undefined`,undefined = 空转。同目录并发两个 run 不支持
-// (后写覆盖),与 stats.json 同一已接受边界。
+// Robustness mirrors src/stats.ts: atomic write (.tmp → rename + write
+// queue serialization), lenient per-field parsing (bad = missing, no
+// throw), every write failure caught and silenced — the audit never
+// affects flow or exit codes. Every public API's first parameter is
+// `dir: string | undefined`; undefined = no-op. Two concurrent runs in
+// one directory are unsupported (the later write overwrites), the same
+// accepted boundary as stats.json — and moot since the run lock (0053 D1,
+// one driver per directory).
 import { mkdir, realpath, rename } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { taskDoc } from "./docpaths"
 import { addedLines, type AddedLines } from "./git"
 
-// ===== schema(v:1,落盘 compact JSON;plans/0020-auto-resolve-design.md §F)=====
+// ===== schema (v:1, compact JSON on disk; plans/0020-auto-resolve-design.md §F) =====
 
 type ResolveSource = "driver" | "agent"
 
 export type ResolveItem = {
   at: number
-  task: string // T-NNN;旁路会话为伪任务 PLAN/AUTO(pseudoTask,runner.ts)
+  task: string // T-NNN; a bypass session's pseudo-task PLAN/AUTO (pseudoTask, runner.ts)
   phase: string // qualified phase id R-NN.P<nn>; "" when unknown
   round: number
-  session?: string // driver 源携带会话 id
+  session?: string // carried by the driver source: the session id
   source: ResolveSource
-  question: string // driver 源 = 提问原文;agent 源 = 标记的 <原问题> 段
-  option?: string // agent 源解析所得 <所选方案>
-  reason?: string // agent 源解析所得 <理由>
-  file?: string // agent 源:标记所在 `路径:行号`
-  malformed?: boolean // agent 源:标记缺箭头/理由段
-  matched?: boolean // driver 源:已找到配对的 agent 标记
-  clamped?: boolean // agent 源:已被章程检查钳制(0082 D12)
-  clamp?: string // 钳制后的默认(强中的读法)，宽授权转为 OPEN 问题的选项
-  checked?: boolean // agent 源:章程检查已跑过(0082 D12)——后续扫描不重跑
+  question: string // driver source = the question verbatim; agent source = the marker's <question> segment
+  option?: string // the agent source's parsed <chosen option>
+  reason?: string // the agent source's parsed <reason>
+  file?: string // agent source: the marker's `path:line`
+  malformed?: boolean // agent source: the marker lacks the arrow / the reason segment
+  matched?: boolean // driver source: a paired agent marker was found
+  clamped?: boolean // agent source: already clamped by the charter check (0082 D12)
+  clamp?: string // the clamp's default (the reading that carries under the charter), a wide grant turned into an OPEN question's option
+  checked?: boolean // agent source: the charter check has run (0082 D12) — later scans do not re-run it
 }
 
-// decisions: 逐任务的 AUTO-DECISION 计数(不落行级明细——台账的存在理由是驱动高亮,
-// AUTO-DECISION 不参与高亮就不需要行级持久化,其持久轨迹是进 git 的标记行本身)。
-// 之所以仍要持久化一个计数: 高亮块末行要把它折叠进去(§H-④),而扫描发生在 runner
-// 的会话收尾、展示发生在 loop 的任务收口,中间隔着多个会话与可能的进程重启,内存
-// 传不过去。
+// decisions: per-task AUTO-DECISION counts (no per-line detail persisted —
+// the ledger exists to drive the highlight, and AUTO-DECISION does not
+// take part in the highlight, so it needs no line-level persistence; its
+// persistent trail is the marker lines that enter git themselves). The
+// count is still persisted because the highlight block's last line folds
+// it in (§H-④), while the scan happens at the runner's session close and
+// the display at the loop's task close-out — several sessions and possibly
+// a process restart sit in between, which memory cannot cross.
 export type ResolveDoc = { v: 1; items: ResolveItem[]; decisions?: Record<string, number> }
 
-// driver 源的回合内观测(runner watch() 的 Watch.resolves,T-005 接线): 落账所需的
-// task/phase/round 由 attempt 侧在 await watching 之后补齐,故事件本身只带提问原文
-// 与会话 id。
+// The driver source's within-turn observation (runner watch()'s
+// Watch.resolves, wired at T-005): the task/phase/round needed for booking
+// are completed by the attempt side after `await watching`, so the event
+// itself carries only the question verbatim and the session id.
 export type ResolveEvent = { at: number; question: string; session?: string }
 
-// 落账时补齐的桶身份(collectAgentResolves 与 driver 侧共用)。
+// The bucket identity completed at booking time (shared by
+// collectAgentResolves and the driver side).
 type ResolveCtx = { task: string; phase?: string; round?: number; session?: string }
 
-// 台账总量上限: 超出按 FIFO 淘汰最旧。上限内不会触及(一轮 24 任务 × 每任务个位数),
-// 设上限只为防异常刷屏把文件撑大。
+// The ledger's total cap: over it, the oldest entries are evicted FIFO.
+// The cap is never reached in normal operation (a round of 24 tasks × a
+// handful per task); it exists only so an anomalous flood cannot bloat the
+// file.
 const MAX_ITEMS = 512
 
-// decisions 映射的键数上限: 同样 FIFO 淘汰最早写入的任务(JS 对象保持字符串键的
-// 插入序)。一个计数键只有十几字节,设上限同样只为防异常增长。
+// The decisions map's key cap: likewise FIFO-evicting the earliest-written
+// task (JS objects keep string keys in insertion order). A count key is a
+// dozen bytes; the cap again exists only against anomalous growth.
 const MAX_DECISION_KEYS = 512
 
-// 单文件扫描上限: 超过 2MB 的文件跳过(标记行只会出现在人写的文档与源码里)。
+// The per-file scan cap: files over 2 MB are skipped (marker lines only
+// ever appear in human-written documents and source).
 const MAX_SCAN_BYTES = 2 * 1024 * 1024
 
-// 高亮块最多逐条列出的条数,超出只给"另有 N 条"。
+// The highlight block's per-entry listing cap; beyond it, only "…and N more".
 const MAX_HIGHLIGHT = 8
 
-// 报文单条问题文本的截断长度(driver 源提问可能是多行长文本,压成单行后截断)。
+// The truncation length for one entry's question text in messages (a
+// driver-source question may be multi-line long text, compacted to one
+// line then truncated).
 const MAX_TEXT = 80
 
 const FILE = join(".auto", "resolves.json")
 
-// AUTO-DECISION: now 注入沿用 stats.ts 的模块级可替换时钟(setResolveClock 测试
-// 钩子),而非逐 API 加可选 now 形参——同一包内两处时钟注入手法保持一致,测试
-// afterEach 复位即可。
+// AUTO-DECISION: the now injection follows stats.ts's module-level
+// replaceable clock (the setResolveClock test hook) instead of an optional
+// now parameter on every API — the two clock-injection styles stay
+// consistent within one package, and tests simply reset in afterEach.
 let clock: () => number = Date.now
 
-// 替换本模块时钟(测试注入确定性 now);不传参恢复 Date.now。
+// Replace this module's clock (tests inject a deterministic now); no
+// argument restores Date.now.
 export function setResolveClock(fn?: () => number) {
   clock = fn ?? Date.now
 }
 
-// ===== 标记解析(§D)=====
+// ===== marker parsing (§D) =====
 
-// 标记行的两类前缀在任意位置都有效: 代码注释(`// AUTO-RESOLVE: …`)与 markdown
-// 列表项(`- AUTO-RESOLVE: …`)同等合法,故只按标记本身定位、不约束行首。
+// Both marker-line prefixes are valid anywhere: a code comment
+// (`// AUTO-RESOLVE: …`) and a markdown list item (`- AUTO-RESOLVE: …`)
+// are equally legal, so the scan locates the marker itself and constrains
+// nothing about the line head.
 const RESOLVE_MARK = /AUTO-RESOLVE[ \t`*]*[:：][ \t]*/
 const DECISION_MARK = /AUTO-DECISION[ \t`*]*[:：][ \t]*/
-// 分隔符三种写法,理由段中英文括号皆可。
+// The separator takes three spellings; the reason segment accepts both
+// ASCII and fullwidth parentheses.
 const ARROW = /[ \t]*(?:->|→|=>)[ \t]*/
 const REASON = /[(（]([^()（）]*)[)）][\s`*]*$/
 
@@ -109,9 +142,13 @@ type ParsedResolve = {
   malformed?: boolean
 }
 
-// 单行解析(不跨行)。无标记、空正文或纯占位行返回 undefined;**容错优先**: 缺箭头
-// 时整行作 question 仍然返回(malformed,照样计数并落账)——少报一条代答比格式洁癖
-// 的代价大得多。缺理由段同样置 malformed(§F schema 注释口径: 缺箭头/理由段)。
+// Single-line parsing (never across lines). No marker, empty body or a
+// pure placeholder line returns undefined; **tolerance first**: a missing
+// arrow still returns the whole line as the question (malformed, counted
+// and booked the same) — under-reporting one proxy answer costs far more
+// than format fastidiousness. A missing reason segment likewise sets
+// malformed (the §F schema comment's wording: lacks the arrow / the
+// reason segment).
 export function parseResolveLine(text: string): ParsedResolve | undefined {
   const mark = RESOLVE_MARK.exec(text)
   if (!mark) return undefined
@@ -128,20 +165,27 @@ export function parseResolveLine(text: string): ParsedResolve | undefined {
   return { question, option: option || undefined, reason: trimDecor(reason[1]) || undefined }
 }
 
-// 去掉正文两端的空白与 markdown 装饰(行内代码的反引号、加粗星号),使文档里以
-// `` `AUTO-RESOLVE: …` `` 形式写出的标记行与裸写的一致。
+// Strips whitespace and markdown decoration (inline-code backticks, bold
+// asterisks) from both ends of the body, so a marker line written in a
+// document as `` `AUTO-RESOLVE: …` `` parses the same as a bare one.
 function trimDecor(text: string): string {
   return text.replace(/^[\s`*]+/, "").replace(/[\s`*]+$/, "")
 }
 
-// 语法说明行里的占位段(`<原问题>` 等)不是真的代答记录: 本设计的说明文档、wrapup
-// 模板与本文件自身都写有格式样例,不排除会在每个改动文档的任务里被反复采集。
+// The placeholder segments of syntax-explanation lines (`<question>` and
+// kin) are not real proxy answers: this design's own explanation
+// document, the wrapup template and this very file all carry format
+// samples, and they would otherwise be collected over and over in every
+// task that edits those documents.
 function placeholder(text: string): boolean {
   return /^<[^<>]*>$/.test(text)
 }
 
-// 归一化后全等或互为子串即视为同一问题。自 runner.ts 上收至此(收口先例: log.ts 的
-// formatter 收口): 既供 runner 判重复提问,也供台账去重与 driver↔agent 配对。
+// Equal after normalization, or either a substring of the other, counts as
+// the same question. Hoisted here from runner.ts (the consolidation
+// precedent: log.ts's formatter consolidation): it serves both the
+// runner's repeated-question check and the ledger's dedup and
+// driver↔agent pairing.
 export function sameIssue(a: string, b: string): boolean {
   const x = normalize(a)
   const y = normalize(b)
@@ -156,10 +200,11 @@ export function normalize(text: string): string {
   return text.replace(/\s+/g, "").toLowerCase()
 }
 
-// ===== 持久化(原子写 + 写队列;镜像 stats.ts)=====
+// ===== persistence (atomic write + write queue; mirrors stats.ts) =====
 
-// 逐字段宽容解析(镜像 resume.ts parseProgress): 坏条目跳过、坏字段取缺省,绝不
-// throw——台账损坏只该让计数从当下重开,不该让运行停机。
+// Lenient per-field parsing (mirroring resume.ts parseProgress): bad
+// entries skipped, bad fields defaulted, never a throw — a corrupt ledger
+// should only restart the counts from now, never stop the run.
 function parseDoc(raw: string): ResolveDoc {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>
@@ -170,7 +215,7 @@ function parseDoc(raw: string): ResolveDoc {
       if (typeof entry !== "object" || !entry) continue
       const item = entry as Record<string, unknown>
       const question = typeof item.question === "string" ? item.question : ""
-      if (!question) continue // 无提问文本的条目无展示价值,丢弃
+      if (!question) continue // an entry without question text has no display value; dropped
       items.push({
         at: typeof item.at === "number" && Number.isFinite(item.at) ? item.at : 0,
         task: typeof item.task === "string" ? item.task : "",
@@ -195,8 +240,10 @@ function parseDoc(raw: string): ResolveDoc {
   }
 }
 
-// 计数映射的宽容解析: 非对象整体丢弃,坏值(非有限正整数)逐键跳过——计数是体感
-// 指标,坏数据宁可丢也不该让读回失败。
+// The count map's lenient parsing: a non-object is dropped wholesale, bad
+// values (not finite positive integers) skipped key by key — the counts
+// are a coarse signal, and bad data should be discarded rather than fail
+// the read-back.
 function parseDecisions(raw: unknown): Record<string, number> | undefined {
   if (typeof raw !== "object" || !raw || Array.isArray(raw)) return undefined
   const out: Record<string, number> = {}
@@ -212,8 +259,9 @@ async function readDoc(dir: string): Promise<ResolveDoc> {
   return raw ? parseDoc(raw) : { v: 1, items: [] }
 }
 
-// 对齐 stats.ts/plan.ts 的 .tmp → rename;resolves.json 非 protect 名单文件,无需
-// allowWrite/reprotect。失败向上抛,由 update 的 catch 静默。
+// The .tmp → rename aligned with stats.ts/plan.ts; resolves.json is not a
+// protect-list file, so no allowWrite/reprotect. Failures propagate up and
+// are silenced by update's catch.
 async function atomicWrite(dir: string, text: string) {
   const auto = join(dir, ".auto")
   await mkdir(auto, { recursive: true })
@@ -224,8 +272,10 @@ async function atomicWrite(dir: string, text: string) {
   await rename(tmp, target)
 }
 
-// 写队列: 同一目录的读-改-写串行化,并发调用不丢条目(stats.ts 是内存文档单写点,
-// 本模块无常驻文档,故串行化的是整个读-改-写)。写失败静默。
+// The write queue: read-modify-write serialized per directory, concurrent
+// calls lose no entries (stats.ts has an in-memory document as its single
+// write point; this module keeps no resident document, so what is
+// serialized is the whole read-modify-write). Write failures silenced.
 const writing = new Map<string, Promise<void>>()
 
 function update(dir: string, mutate: (doc: ResolveDoc) => void): Promise<void> {
@@ -233,7 +283,7 @@ function update(dir: string, mutate: (doc: ResolveDoc) => void): Promise<void> {
     .then(async () => {
       const doc = await readDoc(dir)
       mutate(doc)
-      if (doc.items.length > MAX_ITEMS) doc.items = doc.items.slice(-MAX_ITEMS) // FIFO 淘汰最旧
+      if (doc.items.length > MAX_ITEMS) doc.items = doc.items.slice(-MAX_ITEMS) // FIFO-evict the oldest
       const tasks = doc.decisions ? Object.keys(doc.decisions) : []
       if (tasks.length > MAX_DECISION_KEYS) {
         doc.decisions = Object.fromEntries(tasks.slice(-MAX_DECISION_KEYS).map((task) => [task, doc.decisions![task]!]))
@@ -245,14 +295,17 @@ function update(dir: string, mutate: (doc: ResolveDoc) => void): Promise<void> {
   return next
 }
 
-// 去重键: source + task + 归一化 question(同一问题在同一任务内重复落账只留一条;
-// 跨任务同问题各留一条,因为它们是两次独立的代答)。
+// The dedup key: source + task + normalized question (the same question
+// booked twice within one task leaves one entry; the same question across
+// tasks leaves one each, because they are two independent proxy answers).
 function key(item: { source: ResolveSource; task: string; question: string }): string {
   return `${item.source}\u0000${item.task}\u0000${normalize(item.question)}`
 }
 
-// 追加落账。已存在的同键条目不重复追加,但允许补齐信息(option/reason/file/matched
-// 从无到有时就地更新)——driver 项的 matched 正是这样被 agent 扫描补上的。
+// Append-booking. An entry with an existing key is not appended again, but
+// its information may be completed (option/reason/file/matched updated in
+// place from absent to present) — the driver entry's matched is completed
+// exactly this way by the agent scan.
 export async function recordResolves(dir: string | undefined, items: ResolveItem[]): Promise<void> {
   if (!dir || !items.length) return
   await update(dir, (doc) => {
@@ -272,13 +325,19 @@ export async function recordResolves(dir: string | undefined, items: ResolveItem
   })
 }
 
-// 累加逐任务 AUTO-DECISION 计数。累加口径的前提是"每次扫描只看得见本次会话
-// 新增的行"(0199 D1: 扫描以会话的 added lines 为单位——对 HEAD 的 diff 加未跟踪
-// 整文件;afterSession 扫描完即统一提交,提交内容不再进入后续扫描);dryrun 下
-// 提交被跳过、对 HEAD 的 diff 跨会话堆积,同一批标记会被反复看见,计数偏大
-// ——AUTO-RESOLVE 侧由去重键吸收,计数侧不设行级明细故吸收不了。这是已接受
-// 边界(0020 §K-10 原针对 --commit false 的裁定转写到 dryrun,唯一剩下的无提交
-// 世界): 该计数是"标注门槛是否失控"的体感指标,不是事实来源。
+// Accumulates the per-task AUTO-DECISION count. The accumulation's premise
+// is that "each scan sees only the lines added by this session" (0199 D1:
+// the scan's unit is the session's added lines — the diff against HEAD
+// plus whole untracked files; afterSession scans and then commits
+// uniformly, so committed content never re-enters later scans); under
+// dryrun the commit is skipped and the diff against HEAD accumulates
+// across sessions, the same batch of markers is seen repeatedly, and the
+// count runs high — the AUTO-RESOLVE side absorbs this through the dedup
+// key, the count side keeps no line detail and so cannot absorb it. This
+// is an accepted boundary (0020 §K-10's ruling for --commit false,
+// restated for dryrun, the one remaining no-commit world): the count is a
+// coarse signal for "has the marking threshold lost control", never a
+// source of fact.
 function addDecisions(doc: ResolveDoc, task: string, count: number) {
   if (!task || count <= 0) return
   doc.decisions = { ...doc.decisions, [task]: (doc.decisions?.[task] ?? 0) + count }
@@ -295,7 +354,8 @@ export async function recordDecisions(dir: string | undefined, task: string, cou
   })
 }
 
-// 读回某任务的 AUTO-DECISION 累计计数(高亮块末行折叠用)。缺失/损坏一律 0。
+// Reads back one task's accumulated AUTO-DECISION count (the highlight
+// block's last-line fold). Missing/corrupt reads as 0.
 export async function decisionsOf(dir: string | undefined, task: string): Promise<number> {
   if (!dir || !task) return 0
   await writing.get(dir)?.catch(() => {})
@@ -303,22 +363,33 @@ export async function decisionsOf(dir: string | undefined, task: string): Promis
   return doc.decisions?.[task] ?? 0
 }
 
-// ===== 会话收尾扫描(H4)=====
+// ===== the session-close scan (H4) =====
 
-// 扫描本次会话工作区变更中的**新增行**,提取两类标记: AUTO-RESOLVE 落账(并回配
-// driver 项的 matched),AUTO-DECISION 只累加逐任务计数、不落行级明细——台账的存在
-// 理由是驱动高亮,AUTO-DECISION 不参与高亮就不需要行级持久化,它的持久轨迹本来
-// 就是进 git 的标记行本身;计数则是高亮块末行的折叠数字(§H-④)。
-// 扫描单位是 added line 而非 changed file(0199 D1, 0165-109): 标记语法是行语法,
-// 会话代答过的就是它写下的行——一个后任务改动了带已提交标记的文件时,整文件扫描
-// 会把前任务的标记按新任务重复落账(去重键含任务号,拦不住跨任务重看),高亮块
-// 便向用户指认该任务从未做过的代答。新增行经 git.ts 的 addedLines 逐仓库取回
-// (对 HEAD 的 -U0 diff;未跟踪文件整文件,beginUnit 的干净起点使其成为本单元
-// 的新写;嵌套子仓库是本项目常态);非 git 目录返回空清单,机制自然空转。HEAD
-// 不可解析或 diff 读取失败的仓库退回整文件扫描(0199 D1 的异常底线)。二进制与
-// 超过 2MB 的文件跳过。
-// 返回本次扫描到的标记条数(落账去重之前的口径: 它回答的是"扫描确实跑过、看见了
-// 多少标记",而非"台账新增了几条")。
+// Scans the **added lines** of this session's workspace changes and
+// extracts the two marker kinds: AUTO-RESOLVE is booked (and pairs driver
+// entries' matched back), AUTO-DECISION only accumulates the per-task
+// count with no line-level detail — the ledger exists to drive the
+// highlight, AUTO-DECISION takes no part in the highlight and so needs no
+// line-level persistence (its persistent trail is the marker lines that
+// enter git themselves); the count is the highlight block's last-line
+// fold (§H-④).
+// The scan's unit is the added line, not the changed file (0199 D1,
+// 0165-109): the marker syntax is a line syntax, and what the session
+// proxy-answered is the lines it wrote — when a later task edits a file
+// carrying already-committed markers, a whole-file scan re-books the
+// earlier task's markers under the later task (the dedup key carries the
+// task id and cannot stop the cross-task re-seeing), and the highlight
+// would point the user at proxy answers that task never made. Added lines
+// come back per repository through git.ts's addedLines (the -U0 diff
+// against HEAD; untracked files whole — beginUnit's clean baseline makes
+// them this unit's new writes; nested sub-repositories are this project's
+// normal shape); a non-git directory returns an empty list and the
+// mechanism idles naturally. A repository whose HEAD cannot be parsed or
+// whose diff cannot be read falls back to whole-file scanning (0199 D1's
+// abnormal-case floor). Binary files and files over 2 MB are skipped.
+// Returns the marker entries this scan saw (the pre-dedup count: it
+// answers "the scan ran and saw this many markers", not "the ledger grew
+// by this many").
 export async function collectAgentResolves(
   dir: string | undefined,
   ctx: ResolveCtx,
@@ -332,7 +403,8 @@ export async function collectAgentResolves(
     const text = await readScannable(join(dir, file))
     if (text === undefined) continue
     const lines = text.split("\n")
-    // "all" = 未跟踪文件(本单元的新写): 每一行都是本次会话新增的。
+    // "all" = an untracked file (this unit's new write): every line is one
+    // this session added.
     const numbers: readonly number[] = added === "all" ? lines.map((_, i) => i + 1) : added
     for (const lineNo of numbers) {
       const line = lines[lineNo - 1]
@@ -354,8 +426,9 @@ export async function collectAgentResolves(
       })
     }
   }
-  // 标记落账与计数累加合并为同一次读-改-写: 两者同源于本次扫描,分两次 update 会多
-  // 一轮读盘与原子写。
+  // The marker booking and the count accumulation merge into one
+  // read-modify-write: the two share this scan as their source, and two
+  // updates would cost an extra disk read and atomic write.
   if (items.length || decisions) {
     await update(dir, (doc) => {
       if (items.length) mergeAgent(doc, items)
@@ -365,8 +438,10 @@ export async function collectAgentResolves(
   return { resolves: items.length, decisions }
 }
 
-// 落账 agent 项 + 回配 driver 项: 同一任务内经 sameIssue 命中的 driver 项置
-// matched(报文侧据此把它折叠掉,由信息更全的 agent 项代表这次代答)。
+// Books the agent entries and pairs the driver entries back: a driver
+// entry of the same task hit through sameIssue is set matched (the
+// message side folds it away on that basis, the better-informed agent
+// entry standing for the proxy answer).
 function mergeAgent(doc: ResolveDoc, items: ResolveItem[]) {
   const index = new Map(doc.items.map((item) => [key(item), item]))
   for (const item of items) {
@@ -387,7 +462,8 @@ function mergeAgent(doc: ResolveDoc, items: ResolveItem[]) {
   }
 }
 
-// 可扫描文件的读取: 目录/不存在/超限返回 undefined,含 NUL 字节的按二进制跳过。
+// Reads one scannable file: directories / missing / over-cap return
+// undefined; content with NUL bytes is skipped as binary.
 async function readScannable(path: string): Promise<string | undefined> {
   const file = Bun.file(path)
   const size = await file.exists().then((ok) => (ok ? file.size : -1)).catch(() => -1)
@@ -397,7 +473,7 @@ async function readScannable(path: string): Promise<string | undefined> {
   return text
 }
 
-// ===== 读回(resolvesOf)=====
+// ===== read-back (resolvesOf) =====
 
 type ResolveScope = "task" | "phase" | "round"
 
@@ -421,10 +497,12 @@ export async function resolvesOf(
   )
 }
 
-// ===== 章程钳制(0082 §10 D12 的台账侧) =====
+// ===== the charter clamp (0082 §10 D12's ledger side) =====
 
-// 尚未钳制的 agent 源条目(带标记所在文件):钳制检查的输入。driver 源与
-// 无文件条目不参与——钳制改写的是标记行本身,只有 agent 源标记行存在。
+// Agent-source entries not yet clamped (carrying the marker's file): the
+// clamp check's input. Driver-source and fileless entries do not take
+// part — the clamp rewrites the marker line itself, and only agent-source
+// marker lines exist on disk.
 export async function pendingClampItems(dir: string | undefined): Promise<ResolveItem[]> {
   if (!dir) return []
   await writing.get(dir)?.catch(() => {})
@@ -432,9 +510,11 @@ export async function pendingClampItems(dir: string | undefined): Promise<Resolv
   return doc.items.filter((item) => item.source === "agent" && item.file !== undefined && !item.checked)
 }
 
-// 落账钳制结果:同键条目就地补 clamped/clamp(driver 项 matched 的同款
-// 就地更新手法);无同键条目(台账被清)则跳过——钳制的持久轨迹首先是
-// 被改写的标记行本身,台账只是驱动高亮与去重的依据。
+// Books a clamp result: the same-key entry is completed in place with
+// clamped/clamp (the same in-place update the driver entry's matched
+// uses); no same-key entry (the ledger was cleared) is skipped — the
+// clamp's persistent trail is first the rewritten marker line itself, the
+// ledger only the driver's highlight and dedup basis.
 export async function recordClamp(dir: string | undefined, item: ResolveItem, clamp?: string): Promise<void> {
   if (!dir) return
   await update(dir, (doc) => {
@@ -448,17 +528,20 @@ export async function recordClamp(dir: string | undefined, item: ResolveItem, cl
   })
 }
 
-// ===== 高亮报文(§H)=====
+// ===== the highlight message (§H) =====
 
 type HighlightOpts = {
-  scope?: ResolveScope // 缺省 task
+  scope?: ResolveScope // default task
   id?: string | number // phase label P<nn>-<type> / round number (wording when scope !== "task")
-  decisions?: number // 本任务 AUTO-DECISION 计数(有代答时折进末行)
+  decisions?: number // this task's AUTO-DECISION count (folded into the last line when present)
 }
 
-// 构造高亮块(纯函数)。items 为空返回空数组——没有代答就不该占任何版面。
-// 展示前先做 driver↔agent 合并: 已配对的 driver 项被丢弃(agent 项信息更全,含所选
-// 方案/理由/标记位置),未配对的 driver 项保留并点名"会话未按要求标注"。
+// Builds the highlight block (a pure function). Empty items return an
+// empty array — no proxy answers, no space taken. The driver↔agent merge
+// happens before display: paired driver entries are dropped (the agent
+// entry is better-informed, carrying the chosen option/reason/marker
+// location), unpaired driver entries stay and are named "the session did
+// not mark as required".
 export function resolveHighlight(items: ResolveItem[], opts?: HighlightOpts): string[] {
   const shown = items.filter((item) => !(item.source === "driver" && item.matched))
   if (!shown.length) return []
@@ -484,9 +567,10 @@ export function resolveHighlight(items: ResolveItem[], opts?: HighlightOpts): st
   return lines
 }
 
-// 单条文案: `<原问题> → <所选方案>(<理由>)`,缺项按实有部分收缩;driver 源未配对
-// 与 agent 源格式不规范各自带 ⚠ 点名(两者是不同的失守: 前者是根本没标,后者是标了
-// 但没按格式写)。
+// One entry's text: `<question> → <chosen option> (<reason>)`, shrinking to
+// the parts that exist; an unpaired driver source and a malformed agent
+// source each carry their own ⚠ (two different failures: the former never
+// marked at all, the latter marked but not in the format).
 function entryText(item: ResolveItem): string {
   const question = compactText(item.question)
   if (item.source === "driver") return `${question}  ⚠ session did not write the AUTO-RESOLVE marker as required`
@@ -496,9 +580,13 @@ function entryText(item: ResolveItem): string {
   return `${question}${option}${reason}${warn}`
 }
 
-// 压成单行并截断: driver 源的提问原文可能是多行长文本,整段贴进结论行会把高亮块
-// 淹掉;完整原文在台账与任务报告里。导出供 runner 的会话内即时行(H1)共用同一压缩
-// 口径——两处展示的是同一份提问文本,截断长度不该各写一份。
+// Compacts to one line and truncates: a driver source's question verbatim
+// may be multi-line long text, and pasting the whole of it into the
+// conclusion line would drown the highlight block; the full text lives in
+// the ledger and the task report. Exported for the runner's in-session
+// immediate line (H1) to share the one compaction rule — both places
+// display the same question text, and the truncation length should not be
+// written twice.
 export function compactText(text: string): string {
   const line = text.replace(/\s+/g, " ").trim()
   return line.length > MAX_TEXT ? `${line.slice(0, MAX_TEXT)}…` : line

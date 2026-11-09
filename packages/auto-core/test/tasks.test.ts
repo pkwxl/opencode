@@ -157,6 +157,38 @@ describe("loadPlan", () => {
     await expect(loadPlan(dir, phase)).rejects.toThrow("grammar problems")
   })
 
+  // A park problem is runtime state, never a document field (0238 D6a,
+  // enacting 0165-206a): the wrapper's remedy must name the park record and
+  // its file (.auto/units.json) — the old wrapper taught editing todo.md's
+  // `Depends:` lines, which were never wrong.
+  test("a park record on an unknown id throws with the record's own remedy, never the Depends field's", async () => {
+    await Bun.write(join(dir, phase.dir, "tasks.md"), renderTaskIndex("R-01.P01", [{ id: "T-001", title: "a" }]))
+    await mkdir(join(dir, "docs/T-001"), { recursive: true })
+    await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: a\nPhase: R-01.P01\n\n## Goal\n\ng\n\n<!-- auto: eof -->\n")
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await Bun.write(join(dir, UNITS_FILE), JSON.stringify({ tasks: { "T-001": { parked: "T-009" } } }))
+    const error = await loadPlan(dir, phase).then(() => undefined, (thrown: Error) => thrown)
+    expect(error).toBeInstanceOf(Error)
+    expect(error!.message).toContain("T-001 parks on unknown T-009")
+    // The remedy names the record and its file, and teaches the one edit.
+    expect(error!.message).toContain(".auto/units.json")
+    expect(error!.message).toContain('"parked"')
+    expect(error!.message).not.toContain("`Depends:` in docs/T-NNN/todo.md names tasks")
+    // A document-field problem beside it keeps the field remedy (the two
+    // teachings split by the problem's own kind).
+    await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: a\nPhase: R-01.P01\nDepends: T-008\n\n## Goal\n\ng\n\n<!-- auto: eof -->\n")
+    const mixed = await loadPlan(dir, phase).then(() => undefined, (thrown: Error) => thrown)
+    expect(mixed!.message).toContain("parks on unknown T-009")
+    expect(mixed!.message).toContain(".auto/units.json")
+    expect(mixed!.message).toContain("`Depends:` in docs/T-NNN/todo.md names tasks")
+  })
+
+  test("taskBody normalizes CRLF once at entry — no CR byte rides the prompt body (0238 D6c, subtasks()'s precedent)", () => {
+    const body = taskBody("# T-001: a\r\nPhase: R-01.P01\r\n\r\n## Goal\r\n\r\ngoal text\r\n\r\n<!-- auto: eof -->\r\n")
+    expect(body).toBe("## Goal\n\ngoal text")
+    expect(body.includes("\r")).toBe(false)
+  })
+
   test("taskBody drops the title, the field block and the terminator", () => {
     expect(taskBody("# T-001: a\nPhase: R-01.P01\nDepends: none\n\n## Goal\n\ng\n\n<!-- auto: eof -->\n")).toBe("## Goal\n\ng")
     expect(taskBody(renderTaskTodo({ id: "T-002", title: "b", goal: "g", scope: "s", acceptance: "a" }))).toBe(

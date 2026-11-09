@@ -359,7 +359,8 @@ async function parkReleaseNote(facts: ReturnType<typeof promptFacts>, dir: strin
 // natural finish or the handover document marks completion. Returns undefined
 // = execution stage done.
 // A handover document left over from the previous attempt is cleaned up by the
-// caller (the pipeline) after its recovery determination.
+// caller (the pipeline) after its recovery determination — an untracked copy
+// removed, a tracked one spared for its verdict to retire (plans/0171).
 // `lead` = auto's lead (plans/0059 D2–D4): the prompt carries the split
 // clause, and a session that ends having written subtasks.md is judged by the
 // driver's split guard before its work is committed —
@@ -985,16 +986,21 @@ export async function leadForkBase(client: ClientSource, task: Task, opts: Opts,
   return { id, used, lead: true, ...(agent !== undefined ? { agent } : {}) }
 }
 
-// Runs one subtask session, then ticks the checklist item on trust: the
-// session self-checks its own work; the whole task is accounted for by the
-// wrap-up report and its result line.
+// Runs one subtask session, then the artifact shape check gates the
+// checklist tick (completion is never judged by agent self-report, P3 —
+// plans/0171); the whole task is accounted for by the wrap-up report and its
+// result line.
 // No context handover for the planned pipeline's subtasks: the session
 // handover mechanism is the whole-task sessions' (plans/0056 — this wiring was retired with
 // it); such a session that runs past the usage cap is left to the
 // provider-side compression / cap errors, which go through the existing
-// "session error" path. The interruption-recovery seeding below still reads a
-// handover document left by a run of an earlier release, and the close-out
-// still clears such leftovers.
+// "session error" path. The interruption-recovery seeding below reads the
+// scope's handover document — the live stream mechanism's own (a stream may
+// hand itself over through handoff.md), and for a planned subtask the
+// task-level file, a same-run earlier stage's leftover — seeding the
+// handover engine's consumed state so a stale document is never fresh
+// (the note at the read states the same); the close-out clears untracked
+// leftovers.
 // `split` = the item is a stream of auto's taken split (plans/0059 D5; the
 // split point, Task.split). Such a stream:
 //   - forks the lead (base, from leadForkBase) and gets the short delta of

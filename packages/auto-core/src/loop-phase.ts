@@ -396,7 +396,7 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   // the phase proxy-answer summary (plans/0020-auto-resolve-design.md §H-③,
   // H6): pinned above the ■ phase-close line.
   for (const line of await phaseResolveLines(directory, phase)) log(line)
-  // the phase-close line (STATS_PLAN §4.3, T-006): after commitTree, before
+  // the phase-close line (plans/0019 §F, T-006): after commitTree, before
   // return 0 — the handover commit's duration still lands in this phase's
   // bucket (readings extrapolated live, the currently open segment included).
   const closing = await phaseCloseLines(directory, phase)
@@ -557,7 +557,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
     if (route.type === "complete") {
       log("✓ all phases complete")
       for (const line of await roundResolveLines(directory)) log(line)
-      // the round-complete line (STATS_PLAN §4.4, T-006): the phase count is
+      // the round-complete line (plans/0019 §F, T-006): the phase count is
       // the phase index's done count (this round's already-handed-over
       // phases); the cumulative across-rounds segment is appended by the
       // constructor itself when history.rounds > 0.
@@ -601,7 +601,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       }
       return 0
     }
-    // the phase-switch hook point (STATS_PLAN §3): a change of the
+    // the phase-switch hook point (plans/0019 §E): a change of the
     // phase-qualified id resets the phase bucket; the same id is idempotent.
     // blocked has already returned and complete is about to exit, neither
     // needs the switch.
@@ -719,7 +719,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       // the round proxy-answer summary (plans/0020-auto-resolve-design.md
       // §H-③, H6): pinned above the ■ round line.
       for (const line of await roundResolveLines(directory)) log(line)
-      // the round-complete line on the unphased path (STATS_PLAN §4.4,
+      // the round-complete line on the unphased path (plans/0019 §F,
       // T-006): the phase bucket is always the "m" pseudo phase, so the phase
       // segment is omitted.
       const lines = await roundCompleteLines(directory)
