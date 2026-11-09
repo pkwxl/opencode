@@ -1904,6 +1904,15 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       const stubbed = await runCli(["transfer", dir], on)
       expect(stubbed.code).toBe(0)
       expect(stubbed.out).toContain("the project analysis is open")
+      // The person's review-and-commit between the gated commands: init's
+      // config layer and the opened stub stay uncommitted until the person
+      // commits them here — the release consumptions commit exactly their
+      // own write surface (plans/0207 D1), never the person's dirt, so the
+      // review stop's start-clean gate names these files and stops (exit 2)
+      // without this step. The released analysis below then stays
+      // uncommitted by hand: it rides the brief-install commit as its
+      // evidence (0207 D1's uncommitted-hand-release arm).
+      await commitFixture(dir)
       // The person releases an analysis whose R-01 roadmap line (amt)
       // differs from config (am), carrying a round-brief proposal for R-01
       // (plans/0115): the release approves both the phase list and the brief.
