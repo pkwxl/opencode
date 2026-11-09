@@ -60,7 +60,8 @@ time:
 | `prompts/run.md` | consistent, untouched — the manual suite's `parallel: <n>` hand-over phrase is its own person-driven channel |
 | `docs/principles.md` | consistent, untouched — no principle statement names the guidance channel; P17/P10 stand as written |
 | `docs/structure.md` | consistent, untouched — the rows name homes, not the channel |
-| test homes: `test/intent.test.ts`, `test/parallel.test.ts`, `test/session-opts.test.ts`, `test/turn-test-protocol.test.ts`, `test/agent-fake.test.ts`, `test/loop-preflight.test.ts`, `test/bundle.test.ts`, `test/golden.test.ts` + the four moving goldens | changed |
+| test homes: `test/intent.test.ts`, `test/parallel.test.ts`, `test/session-opts.test.ts`, `test/turn-test-protocol.test.ts`, `test/agent-fake.test.ts`, `test/loop-preflight.test.ts`, `test/bundle.test.ts` + the four moving goldens | changed |
+| `test/golden.test.ts` (the golden runner) | consistent, untouched — the four goldens moved, the runner itself not edited (the first draft's enumeration wrongly listed the runner among the touched homes; corrected 0166 step 080 over the S02 audit's triage, never registered as a finding) |
 
 ## The evidence
 
