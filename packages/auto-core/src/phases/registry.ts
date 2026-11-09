@@ -44,8 +44,7 @@ export type PhaseTypeEntry = {
   // Preset letter for `--phases` (builtin types only; custom types have none).
   letter?: PhaseLetter
   // Human-readable name: logs, commit subjects, the `phaseName` prompt var.
-  // Builtins are Chinese until the M3.8 translation batch; a custom type's is
-  // its file's title line.
+  // The builtins render English; a custom type's is its file's title line.
   name: string
   // Key of this type's duty text: the `### <key>` subsection under an intent
   // pack's `## phase duties` (decompose), and the `plan-duties-<key>` shared

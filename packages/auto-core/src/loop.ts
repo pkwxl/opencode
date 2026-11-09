@@ -42,7 +42,9 @@ export type { RunAllOpts }
 
 // Exit codes: 0 = all tasks done, 1 = usage/setup error, 2 = blocked, waiting
 // for a human to resolve the issue outside the session and re-run,
-// 130 = force-killed by double Ctrl+C. A blocked
+// 3 = /exit paused the run at a safe boundary (re-running resumes precisely),
+// 130 = force-killed by double Ctrl+C (143 SIGTERM / 129 SIGHUP run the same
+// force-terminate cleanup). A blocked
 // task needs no `answer`: re-running resumes it directly.
 
 export async function runAll(directory: string, opts: RunAllOpts): Promise<number> {
@@ -280,6 +282,11 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     // that burned two deep-tier attempts stays visible in the per-model
     // lines instead of vanishing.
     run.router.setSynthesisUsageSink((usage) => void statsSynthesisUsage(directory, usage))
+    // The ready server handle captured as const before the clamp wiring
+    // below (plans/0237 D6: the closure once read a const declared after
+    // the dryrun branch — a TDZ trap for any clamp invocation from that
+    // window; the narrowing comment at the ctx literal still holds).
+    const serverHandle = server
     // The record-time charter check's caller (plans/0082 §10 D12): wired
     // once the routing facts and the pool exist, so every post-session scan
     // of the run can check and clamp recorded AUTO-RESOLVE defaults; the
@@ -328,9 +335,8 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
       log(`✓ permission preflight complete; report written to .auto/dryrun.md, highlights:\n\n${result.lastText}`)
       return 0
     }
-    // The advanceFinal closure would lose narrowing; capture the ready server
-    // handle as const.
-    const serverHandle = server
+    // The advanceFinal closure would lose narrowing; serverHandle (captured
+    // above the clamp wiring) is the ready server handle as const.
     const ctx: LoopCtx = {
       directory,
       opts,

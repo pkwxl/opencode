@@ -279,21 +279,32 @@ export async function handoverVerdict(
 // —— The dependency park (plans/0096 D6/D7; whole-task scopes only) ——
 
 // The park's validity over one fresh `Status: park <blocker id>` directive:
-// the blocker must be a live member of this phase's index (an id outside it
-// is a planning failure — readiness counts external ids done, so the park
-// could never hold), and every `Artifacts:` entry the task declares must be
-// on disk (the spec-driven check; a task declaring nothing parks on the
-// prose gate — the session's own claim, inspected at wrap-up as any claim
-// is). `known` on the foreign verdict says whether the named id is a task
-// of this target directory at all (a cross-phase done task) or nothing.
-type ParkCheck = { type: "ok" } | { type: "invalid"; problems: string[] } | { type: "foreign"; known: boolean }
+// the blocker must be a live member of this phase's index, and every
+// `Artifacts:` entry the task declares must be on disk (the spec-driven
+// check; a task declaring nothing parks on the prose gate — the session's
+// own claim, inspected at wrap-up as any claim is). An id outside the index
+// splits on the state-file probe (plans/0237 D2): a task of this target
+// directory (a state file exists — a cross-phase task) is the foreign
+// verdict, a planning failure the person reorders; an id that exists
+// nowhere is the session's own invention — a collect problem (0096 D7's
+// deadlock letter) that joins the invalid arm's one relaunch with feedback,
+// never a thrown exit 1 after a session already spent work.
+type ParkCheck = { type: "ok" } | { type: "invalid"; problems: string[] } | { type: "foreign" }
 
 async function parkCheck(planDir: string, plan: Plan, task: Task, blocker: string): Promise<ParkCheck> {
   const target = plan.tasks.find((entry) => entry.id === blocker)
   if (target === undefined) {
     const paths = taskStatePaths(blocker)
     const known = (await Bun.file(join(planDir, paths.pending)).exists()) || (await Bun.file(join(planDir, paths.complete)).exists())
-    return { type: "foreign", known }
+    if (!known) {
+      return {
+        type: "invalid",
+        problems: [
+          `${blocker} is not a task of this target directory — no ${paths.pending} or ${paths.complete} exists; the id was invented or mistyped. Park on a real blocker of this phase's index, or end with the honest status lines`,
+        ],
+      }
+    }
+    return { type: "foreign" }
   }
   const problems: string[] = []
   if (blocker === task.id) problems.push("a task cannot park on itself")
@@ -544,7 +555,13 @@ export async function executeWhole(
   // working state is already preserved in the stash).
   const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
     if (!strict || !chain.baseline) return undefined
-    const done = await rollbackUnitState(dir, task, "execution session", chain.baseline, { progress: await peekProgress(dir) })
+    const done = await rollbackUnitState(dir, task, "execution session", chain.baseline, {
+      progress: await peekProgress(dir),
+      // D10's sibling fact off the session options (plans/0237 D1): the
+      // rollback is refused before any git call while sibling doc lanes'
+      // state is in the tree — never the tree-wide sweep.
+      ...(opts.siblingScopes?.length ? { siblingScopes: opts.siblingScopes } : {}),
+    })
     if (done.type !== "ok") return done
     continuation = false
     feedback = ""
@@ -628,13 +645,16 @@ export async function executeWhole(
       const check = await parkCheck(planDir, plan, task, directive)
       if (check.type === "foreign") {
         // A cross-phase block is a planning failure (readiness counts
-        // external ids done, so the park could never hold): stop and report
-        // — the thrown error exits 1, the phase-index drift's own grammar
-        // (plans/0053 D34).
-        throw new Error(
-          `${task.id} parked on ${directive}, which is ${check.known ? "a task outside this phase's index" : "not a task of this target directory"}: ids outside the index count done at the pick, so the park could never hold — a cross-phase block is a planning failure. ` +
+        // external ids done, so the park could never hold): the person's
+        // reorder, surfaced as the blocked verdict — exit 2's posture, the
+        // session's spent work staying in the worktree for the re-run —
+        // never the thrown exit 1 of a usage error (plans/0237 D2).
+        return {
+          type: "blocked",
+          question:
+            `${task.id} parked on ${directive}, a task outside this phase's index: ids outside the index count done at the pick, so the park could never hold — a cross-phase block is a planning failure. ` +
             `Reorder the phase's tasks (or split them) so ${directive} runs before ${task.id}, and re-run; the session's work is in the worktree`,
-        )
+        }
       }
       if (check.type === "invalid") {
         if (parkRetried) {
@@ -1204,7 +1224,12 @@ export async function runSubtask(
     // (the working state is already preserved in the stash).
     const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
       if (!strict || !baseline) return undefined
-      const done = await rollbackUnitState(dir, task, `subtask ${index}`, baseline, { progress: await peekProgress(dir) })
+      const done = await rollbackUnitState(dir, task, `subtask ${index}`, baseline, {
+        progress: await peekProgress(dir),
+        // D10's sibling fact off the session options (plans/0237 D1) — the
+        // same refusal the whole-task scope's closure threads.
+        ...(opts.siblingScopes?.length ? { siblingScopes: opts.siblingScopes } : {}),
+      })
       if (done.type !== "ok") return done
       continuation = false
       feedback = ""

@@ -979,6 +979,40 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     }
   })
 
+  // plans/0237 D4 (0165-137): a restart that throws mid-way at the rotation
+  // site — a spawn failure exactly at a rotation — teaches before it stops:
+  // the fallback line names the committed rotation and the next-spawn
+  // application, then the throw propagates (the loud stop, never swallowed).
+  test("a rotation restart that throws: the teaching line names the committed rotation and the next-spawn application, and the throw propagates (plans/0237 D4)", async () => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      const routing = facts()
+      routing.router.activateRings(routing.registry, false)
+      const agent = make({ turn: classTurn("usage limit reached, quota exceeded") })
+      const { host, configs } = fakeHost()
+      const boom = new Error("the managed opencode server failed to spawn within 5s")
+      host.restart = async () => {
+        throw boom
+      }
+      const chain = deepChain()
+      await expect(runSession(agent.client, task, "p", optsWith(host, routing), chain, undefined, undefined, DEFAULTS)).rejects.toBe(boom)
+      // The rotation was committed and the spawn config written BEFORE the
+      // restart (the ruled order); the teaching line says exactly that.
+      expect(configs).toHaveLength(1)
+      const taught = lines.find((line) => line.includes("but the managed server could not be restarted onto key 2/2 PROV_KEY_B"))
+      expect(taught).toBeDefined()
+      expect(taught).toContain("T-001")
+      expect(taught).toContain("(the rotation is committed; the new key applies at its next spawn): the managed opencode server failed to spawn within 5s")
+      // One session only: the re-dispatch never ran (the throw is the stop).
+      expect(agent.prompts).toHaveLength(1)
+    } finally {
+      printed.mockRestore()
+    }
+  })
+
   test("a refusing ring falls through to model failover on the next candidate, both keys held to their instants", async () => {
     const routing = facts()
     routing.router.activateRings(routing.registry, false)

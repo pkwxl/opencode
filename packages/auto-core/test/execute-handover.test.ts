@@ -12,7 +12,7 @@
 // construction in test/testrun.test.ts.
 
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -174,6 +174,56 @@ Body.
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  // plans/0237 D1 (0165-019): the engine's own strict rollback redo — the
+  // deeper rollback 0099 D10 never examined — refuses while sibling doc
+  // lanes' state is in the tree (the fact rides the session options). Over
+  // a REAL repository: the no-commit double would idle strict resume
+  // entirely (records false).
+  test("a handover due with no document under live sibling scopes: the strict rollback redo is refused — the blocked verdict names the scope, nothing is stashed (plans/0237 D1)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-sibling-engine-"))
+    try {
+      await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited
+      await Bun.write(`${dir}/.gitignore`, ".auto/\n")
+      await Bun.write(`${dir}/seed.txt`, "s")
+      await Bun.spawn(["git", "-C", dir, "add", "-A"]).exited
+      await Bun.spawn(["git", "-C", dir, "commit", "-qm", "setup"]).exited
+      const plan = planOf(
+        `## T-001: sample task [pending]
+Body.
+`,
+        dir,
+      )
+      // The sibling lane's in-flight file — the state the tree-wide rollback
+      // would sweep into this unit's stash.
+      await mkdir(join(dir, "docs", "T-002"), { recursive: true })
+      writeFileSync(join(dir, "docs", "T-002", "inflight.md"), "the sibling lane's in-flight work")
+      const sha = (await new Response(Bun.spawn(["git", "-C", dir, "rev-parse", "HEAD"]).stdout).text()).trim()
+      const agent = fakeAgent({
+        turn: (ctx: { session: string; n: number }) =>
+          ctx.n === 1 ? [ev.message(ctx.session, "m_big", 90_000), ev.text(ctx.session, "t1", "working"), ev.idle(ctx.session)] : undefined,
+      })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, baseline: [{ root: dir, sha }] }
+      const result = await executeWhole(agent.client, plan, plan.tasks[0]!, { dir, siblingScopes: ["docs/T-002/"] }, chain)
+      expect(result).toEqual({
+        type: "blocked",
+        question:
+          "T-001 execution session: strict resume would roll the unit back to its baseline, but sibling doc lanes' state is in the tree (docs/T-002/); " +
+          "a rollback is tree-wide and would sweep it. Handle the sibling state (commit or clean it) and re-run serially (--max-sessions 1) so the rollback can proceed safely",
+      })
+      // The refusal fired before any git call: no stash was created and the
+      // sibling's dirt is untouched — never the tree-wide sweep.
+      const stashes = await new Response(Bun.spawn(["git", "-C", dir, "stash", "list"]).stdout).text()
+      expect(stashes).toBe("")
+      expect(await Bun.file(join(dir, "docs", "T-002", "inflight.md")).text()).toBe("the sibling lane's in-flight work")
+      // One session only: no cold-start redo, no retry (the blocked verdict
+      // short-circuits the engine's retry ladder).
+      expect(agent.prompts).toHaveLength(1)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
 
   test("a large window raises the wall (plans/0059 D6): a session finishing past the 2×cap budget but under a quarter of the window is a natural finish, nothing demanded", async () => {
     const { dir, plan, task, agent, chain } = await setup(

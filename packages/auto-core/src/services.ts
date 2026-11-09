@@ -119,8 +119,13 @@ export const SERVICE_ENTRIES = [
   "agent-pool",
 ] as const
 
-let installed: RunServices | undefined
-let previous: RunServices | undefined
+// The install stack (plans/0061 C1's AUTO-DECISION — "the installs restore
+// in LIFO order" — enacted at any depth by plans/0237 D7): each install
+// pushes, each uninstall pops and reactivates the holder below, so a run
+// nested in a holder-using caller — a test — leaves the caller's holder
+// intact, however deep the nesting (the one-slot `previous` this replaces
+// silently fell to the process default past depth 2).
+const stack: RunServices[] = []
 let fallback: RunServices | undefined
 // The instance the process-level time keepers are currently wired to, so an
 // activation that changes nothing rewires nothing.
@@ -138,15 +143,14 @@ const activate = (services: RunServices): void => {
 // before (a surrounding install, or the process default), so a run nested in
 // a holder-using caller — a test — leaves the caller's holder intact.
 export function installServices(services: RunServices): void {
-  previous = installed
-  installed = services
+  stack.push(services)
   activate(services)
 }
 
 export function uninstallServices(): void {
-  installed = previous
-  previous = undefined
-  if (installed !== undefined) activate(installed)
+  stack.pop()
+  const top = stack[stack.length - 1]
+  if (top !== undefined) activate(top)
   else wired = undefined // the next services() call wires the process default
 }
 
@@ -155,7 +159,8 @@ export function uninstallServices(): void {
 // pre-holder behavior for processes that never install, such as the
 // non-run commands).
 export function services(): RunServices {
-  if (installed !== undefined) return installed
+  const top = stack[stack.length - 1]
+  if (top !== undefined) return top
   if (fallback === undefined) {
     fallback = createServices()
     activate(fallback)

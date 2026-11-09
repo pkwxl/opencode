@@ -31,12 +31,14 @@
 // the next round's start blocks on it: plan's prelude (plan.ts, exit 2,
 // plans/0053 D4). No state is written, so routing stays a pure function of
 // the files.
+import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { scrubDriverEnv } from "./agent/opencode/server"
 import { roundBriefPath } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
 import { nestedRepoPrefixes, repoRoots, unitAddedLines, driverBaseline, type UnitBaseline } from "./git"
 import { closeSection, ROUND_CLOSE_HEADING } from "./round-brief"
+import { DEFAULT_SCRIPT_POLL_MS, readLogTail, scriptTmpDir, watchProcess } from "./script"
 
 // The build's wall-clock cap: generous for a real target build, but a hung
 // build must not hang the round start forever.
@@ -115,26 +117,49 @@ export async function roundCloseProblems(
 }
 
 // Run the build in the target directory; undefined = exit 0, else why not.
-async function runBuild(dir: string, command: string): Promise<string | undefined> {
-  const proc = Bun.spawn(["sh", "-c", command], {
+// The cap bounds the WAIT, not only the child (plans/0237 D3, 0165-102): the
+// wrapper spawns detached as its own process group with its output redirected
+// by the shell into a file under the driver workdir (runScript's no-pipe
+// trick — a grandchild holding the pipes can never hang a read that waits on
+// no pipe), and the 0175 watchdog owns the lifetime: on the cap the whole
+// group gets SIGTERM and the grace escalates to SIGKILL, so a multi-command
+// build's hung grandchild dies with the cap instead of outliving the round
+// close writing into the tree. `timeoutMs` is the same knob shape
+// runScript/watchProcess expose, for the regression pin.
+export async function runBuild(dir: string, command: string, opts: { timeoutMs?: number } = {}): Promise<string | undefined> {
+  const capMs = opts.timeoutMs ?? BUILD_TIMEOUT_MS
+  const outDir = scriptTmpDir(dir)
+  await mkdir(outDir, { recursive: true })
+  const outPath = join(outDir, "round-close-build.log")
+  await Bun.write(outPath, "")
+  const start = Date.now()
+  const proc = Bun.spawn(["sh", "-c", `exec >"$0" 2>&1\n${command}`, outPath], {
     cwd: dir,
-    stdout: "pipe",
-    stderr: "pipe",
+    stdout: "ignore",
+    stderr: "ignore",
     stdin: "ignore",
+    detached: true,
     // The round-close build runs the project's own tooling: the scrubbed
     // base, like every driver-run child (plans/0180 D3).
     env: scrubDriverEnv(),
   })
-  let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
-    proc.kill()
-  }, BUILD_TIMEOUT_MS)
-  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  clearTimeout(timer)
+  // The watchdog's tick stays finer than the cap it enforces (the default
+  // 5 s poll over the default 30 min cap; a shorter cap proportionally
+  // shorter, so the kill lands at the cap, not at the first coarse tick).
+  const { timedOut } = await watchProcess({
+    proc,
+    logPath: outPath,
+    start,
+    maxMs: capMs,
+    idleMs: capMs,
+    pollMs: Math.min(DEFAULT_SCRIPT_POLL_MS, Math.max(1, Math.floor(capMs / 2))),
+  })
+  const code = proc.exitCode
   if (code === 0 && !timedOut) return undefined
-  const tail = `${out}${err}`.trimEnd().split("\n").slice(-BUILD_TAIL_LINES).join("\n")
-  const why = timedOut ? `timed out after ${BUILD_TIMEOUT_MS / 60_000} minutes` : `exited ${code}`
+  const tail = (await readLogTail(outPath)).trimEnd().split("\n").slice(-BUILD_TAIL_LINES).join("\n")
+  // The default cap renders exactly as before (plans/0237 D3 keeps the
+  // message wording byte-identical); a non-default cap names its own unit.
+  const why = timedOut ? `timed out after ${capMs >= 60_000 ? `${capMs / 60_000} minutes` : `${capMs}ms`}` : `exited ${code}`
   return `\`${command}\` ${why}${tail ? `; output tail:\n${tail}` : ""}`
 }
 

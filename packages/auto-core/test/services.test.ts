@@ -137,6 +137,30 @@ describe("the services holder", () => {
     expect(services()).not.toBe(outer)
   })
 
+  // plans/0237 D7 (0165-186): the LIFO restore holds at ANY depth — the
+  // one-slot `previous` this replaces silently fell to the process default
+  // past depth 2 (a test nesting three holders lost both outer holders).
+  test("the install stack is a real LIFO at depth three (plans/0237 D7): each uninstall peels one holder, the outermost last", () => {
+    const outer = createServices()
+    const middle = createServices()
+    const inner = createServices()
+    installServices(outer)
+    installServices(middle)
+    installServices(inner)
+    expect(services()).toBe(inner)
+    uninstallServices()
+    expect(services()).toBe(middle)
+    uninstallServices()
+    expect(services()).toBe(outer)
+    uninstallServices()
+    // The stack empty: the process default serves again (identical to the
+    // depth-two row's second uninstall above).
+    const before = services()
+    expect(before).not.toBe(outer)
+    expect(before).not.toBe(middle)
+    expect(services()).toBe(before) // still memoized
+  })
+
   test("a fresh holder from the preload is in effect for every test", () => {
     // The preload installed a fresh createServices() before this test; its
     // clock is a live system clock (the same readings the pre-holder code

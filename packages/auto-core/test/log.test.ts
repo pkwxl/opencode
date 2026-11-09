@@ -95,14 +95,20 @@ describe("formatter (stats-message consolidation, STATS_PLAN §5)", () => {
     expect(formatDuration(2 * 3600_000 + 5 * 60_000 + 30_000)).toBe("2h 5m")
   })
 
-  test("formatDurationCompact compact style: verbatim identical to runner.ts's private copy", () => {
+  test("formatDurationCompact compact style: rounds to whole seconds before splitting — never a value in a unit it has outgrown (plans/0237 D7)", () => {
     expect(formatDurationCompact(0)).toBe("0ms")
     expect(formatDurationCompact(999)).toBe("999ms")
     expect(formatDurationCompact(1000)).toBe("1.0s")
     expect(formatDurationCompact(12_400)).toBe("12.4s")
-    expect(formatDurationCompact(59_950)).toBe("60.0s")
+    expect(formatDurationCompact(59_400)).toBe("59.4s")
+    // The unit inversion the old toFixed arms produced ("60.0s" at 59_950,
+    // "1m60s" at 119_600) is gone: the half-second at a boundary carries
+    // into the next tier, exactly the verbose sibling's pinned convention.
+    expect(formatDurationCompact(59_500)).toBe("1m")
+    expect(formatDurationCompact(59_950)).toBe("1m")
     expect(formatDurationCompact(60_000)).toBe("1m")
     expect(formatDurationCompact(100_000)).toBe("1m40s")
+    expect(formatDurationCompact(119_600)).toBe("2m")
     expect(formatDurationCompact(3600_000)).toBe("60m")
   })
 

@@ -281,6 +281,15 @@ export type Opts = {
   // lanes cover the verification. Set only by the doc-lane dispatch; never
   // by a person's CLI.
   docLane?: boolean
+  // The live sibling scopes beside this doc-lane unit (plans/0099 D10's
+  // refusal fact carried onto the session options the way docLane was —
+  // plans/0237 D1, retiring runTask's input-level carrier): the scopes of
+  // every OTHER lane the registry holds live at this unit's dispatch. The
+  // rollback guard reads it (rollbackUnitState refuses a tree-wide rollback
+  // while sibling state is in the tree, never sweeping it), as does the
+  // resume ladder's refusal. Set only by the doc-lane dispatch; never by a
+  // person's CLI.
+  siblingScopes?: readonly string[]
 }
 
 // —— The session-options builder (the loop family's one Opts factory) ——
@@ -344,9 +353,11 @@ export type SessionCtx = {
 // value graph, which opts must not pull under every importer — and, since
 // plans/0068 S5, the stream ordinal of a stream lane unit (the task pipeline
 // runs exactly that checklist item), and, since plans/0126 D3, the doc-lane
-// flag of a documentation-scoped unit running beside siblings in this tree.
+// flag of a documentation-scoped unit running beside siblings in this tree,
+// and, since plans/0237 D1, those siblings' live scopes (D10's rollback
+// refusal fact).
 type SessionSite =
-  | { site: "task"; phase: PhaseKey; stream?: number; docLane?: boolean }
+  | { site: "task"; phase: PhaseKey; stream?: number; docLane?: boolean; siblingScopes?: readonly string[] }
   | { site: "phase-append" }
   | { site: "handover" }
   | { site: "knowledge" }
@@ -432,6 +443,10 @@ export function sessionOpts(ctx: SessionCtx, site: SessionSite): Opts {
       // present only for a doc-lane unit (plans/0126 D3: the engine's test
       // concern reads it — no driver test scripts beside sibling writes)
       ...(site.docLane ? { docLane: true } : {}),
+      // present only for a doc-lane unit with live siblings (plans/0237 D1:
+      // the rollback guard and the resume ladder's refusal read it — D10's
+      // fact, never a tree-wide rollback over a sibling's state)
+      ...(site.siblingScopes?.length ? { siblingScopes: site.siblingScopes } : {}),
     }
   }
   // the bypass sessions (planning, appending, handover

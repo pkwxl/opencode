@@ -1607,18 +1607,25 @@ async function runDocUnit(
   }
   await taskBracket(directory, task.id, task.title, "starting a doc lane", task.attempts)
   const start = Date.now()
-  const outcome = await runTask(serverHandle, plan, task, sessionOpts(ctx, { site: "task", phase: phaseKey(phase), docLane: true }), {
+  const outcome = await runTask(
+    serverHandle,
+    plan,
+    task,
+    sessionOpts(ctx, { site: "task", phase: phaseKey(phase), docLane: true, ...(input.siblingScopes?.length ? { siblingScopes: input.siblingScopes } : {}) }),
+    {
     // The unit-start SHA baseline beginUnit recorded (0083 D1: the
     // verification charter's commit range) beside the doc-lane facts — the
     // effective scope (D7), the session prompts' concurrency clause (D11's
     // docLane render fact, carried onto the session options too by plans/0126
-    // D3 so the engine's test concern refuses mid-session test requests), and,
-    // on a recovery drive, the rollback refusal's sibling scopes (D10).
+    // D3 so the engine's test concern refuses mid-session test requests), and
+    // the rollback refusal's sibling scopes (D10 — carried onto the session
+    // options since plans/0237 D1, so the engine's rollback guard and the
+    // resume ladder's refusal read the one carrier; a live-sibling dispatch
+    // and a recovery drive alike).
     ...(taskBaseline ? { baseline: taskBaseline } : {}),
     docLane: true,
     scope: input.scope,
     ...(input.drain !== undefined ? { drain: input.drain } : {}),
-    ...(input.siblingScopes !== undefined ? { siblingScopes: input.siblingScopes } : {}),
   })
   if (outcome.type === "dirty" || outcome.type === "unreadable") {
     // The unreadable arm (plans/0236 D4) teaches investigation, never

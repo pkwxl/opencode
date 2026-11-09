@@ -228,15 +228,18 @@ describe("the interactive fast path (plans/0082 §6 D9)", () => {
       expect(lines.some((line) => line.includes("remediation executed inline"))).toBe(true)
       expect(lines.some((line) => line.includes("re-blocked after two inline remediations"))).toBe(true)
       // The sideband offered the options twice; each pick wrote the same
-      // Choice line the detached protocol would.
+      // Choice line the detached protocol would — judged by the executor's
+      // own readers (plans/0237 D5: the whole-text `toMatch(/Choice: A/)`
+      // oracle was weaker than the ruled grammar — Decision region,
+      // line-anchored — it guarded; the reader IS the oracle).
       expect(repl.asked.length).toBe(2)
       expect(repl.asked[0]).toContain("pick a remediation option")
       expect(repl.asked[0]).toContain("A: Amend by hand")
       const doc1 = await Bun.file(join(f.dir, "docs/R-01/blockage-1.md")).text()
-      expect(doc1).toMatch(/Choice: A/)
-      expect(doc1).toMatch(/Executed: A \(no commits — advice recorded\)/)
+      expect(choiceMark(doc1)).toEqual({ choice: "A" })
+      expect(executedMark(doc1)).toEqual({ option: "A", shas: "no commits — advice recorded" })
       const doc2 = await Bun.file(join(f.dir, "docs/R-01/blockage-2.md")).text()
-      expect(doc2).toMatch(/Choice: A/)
+      expect(choiceMark(doc2)).toEqual({ choice: "A" })
     } finally {
       await rm(f.dir, { recursive: true, force: true })
     }
@@ -252,6 +255,10 @@ describe("the interactive fast path (plans/0082 §6 D9)", () => {
       const doc = await Bun.file(join(f.dir, "docs/R-01/blockage-1.md")).text()
       expect(doc).toContain("Choice: <one option letter>")
       expect(doc).not.toMatch(/^Executed:/m)
+      // The executor's readers answer "no decision" over the placeholder
+      // document (plans/0237 D5): the strong oracle for the detached state.
+      expect(choiceMark(doc)).toBeUndefined()
+      expect(executedMark(doc)).toBeUndefined()
     } finally {
       await rm(f.dir, { recursive: true, force: true })
     }

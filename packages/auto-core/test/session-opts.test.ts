@@ -245,4 +245,15 @@ describe("sessionOpts width keys (plans/0068 S5)", () => {
     expect(sessionOpts(wide, { site: "task", phase }).control).toBe(ctx.control)
     expect(sessionOpts(wide, { site: "task", phase, stream: 1 }).control).toBe(ctx.control)
   })
+
+  test("the doc-lane sibling scopes ride the task options of a dispatch with live siblings alone (plans/0237 D1 — D10's rollback-refusal fact on the one carrier)", () => {
+    const wide: SessionCtx = { ...ctx, opts: { ...ctx.opts, maxSessions: 2 } }
+    const withSiblings = sessionOpts(wide, { site: "task", phase, docLane: true, siblingScopes: ["docs/T-002/", "docs/T-003/"] })
+    expect(withSiblings.siblingScopes).toEqual(["docs/T-002/", "docs/T-003/"])
+    // Absent everywhere else: a solo doc lane, a serial task, a stream.
+    expect("siblingScopes" in sessionOpts(wide, { site: "task", phase, docLane: true })).toBe(false)
+    expect("siblingScopes" in sessionOpts(wide, { site: "task", phase })).toBe(false)
+    expect("siblingScopes" in sessionOpts(wide, { site: "task", phase, stream: 1 })).toBe(false)
+    expect("siblingScopes" in sessionOpts(ctx, { site: "handover" })).toBe(false)
+  })
 })

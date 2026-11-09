@@ -386,7 +386,23 @@ async function rotateProviderKey(run: SessionRun, why: string, until?: number): 
   const to = ringKeyLabel(plan.rotation.to)
   run.router.commitRotation(plan.rotation, hold)
   host.setConfig(run.router.spawnKeyConfig())
-  const restarted = await host.restart(`${why}; rotating the provider ${plan.provider} key ring to key ${to}`, chain.agent)
+  let restarted: boolean
+  try {
+    restarted = await host.restart(`${why}; rotating the provider ${plan.provider} key ring to key ${to}`, chain.agent)
+  } catch (error) {
+    // The restart threw mid-way (plans/0237 D4, 0165-137 — a spawn failure
+    // exactly at a rotation): the rotation is already committed and the
+    // spawn config already carries the landed key, so teach that state
+    // before rethrowing — the failure stays the loud stop it always was,
+    // never swallowed, and the person knows the next spawn needs no hand
+    // act (the marked-down key's hold and the landed position are both in
+    // the router's committed state).
+    log(
+      `⚠ ${task.id} ${why}; provider ${plan.provider} key ${from} marked down, but the managed server could not be restarted onto key ${to} ` +
+        `(the rotation is committed; the new key applies at its next spawn): ${error instanceof Error ? error.message : String(error)}`,
+    )
+    throw error
+  }
   log(
     `⇄ ${task.id} ${why}; provider ${plan.provider} key ${from} marked down, continuing the same model on key ${to}` +
       (restarted ? "" : " (the managed server could not be restarted; the new key applies at its next spawn)"),

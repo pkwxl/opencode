@@ -12,8 +12,11 @@ import { PROTECTED_FILES } from "./document/roles"
 // driver's block, which sessions no longer maintain (plans/0054 D2); preflight
 // syncs the block through ensurePointer, which unlocks and reprotects around
 // its write. Driver writes call allowWrite / reprotect around each mutation;
-// runAll restores writability in a finally block so a human can edit the
-// files (including manual config amendments) after the driver stops.
+// every exit path restores writability so a human can edit the files
+// (including manual config amendments) after the driver stops — driveRun's
+// finally for the run's own exits (plans/0236 D3 gave preflight's protected
+// stops their own unprotect at the stopBlocked helper), and the
+// force-terminate cleanup for the signal paths.
 // The file list is the driverState role's fixed-location files
 // (document/roles.ts PROTECTED_FILES, M2.3) plus the contract surface AGENTS.md,
 // the model registry's project layer (plans/0055 §4.1), the bundle

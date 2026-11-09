@@ -166,20 +166,20 @@ const DECOMPOSE_DESC: Record<DecomposeMode, string> = {
 // loop's beginUnit recorded (0083 D1's verification charter commit range);
 // `scope` — a doc lane's effective scope, threading D7's pathspec to the
 // wrap-up's charter range; `drain` — D9's quiet-tree callback the wrap-up's
-// lane gate awaits; `siblingScopes` — D10's recovery-flatten fact: the other
-// leftover doc units' scopes present in the tree while this one is driven —
-// a strict-resume rollback is tree-wide (stash push -u of everything, then
-// the soft reset), so with siblings present the rollback verdict becomes
-// the human posture (stop 2) instead of sweeping their state; `docLane` —
-// D11's render fact, true exactly for a doc lane's units: the whole-task
-// and wrap-up prompts gain their concurrency clause under it (a serial or
-// solo unit renders byte-identically without it).
+// lane gate awaits; `docLane` — D11's render fact, true exactly for a doc
+// lane's units: the whole-task and wrap-up prompts gain their concurrency
+// clause under it (a serial or solo unit renders byte-identically without
+// it). D10's sibling fact (the live sibling scopes whose state a tree-wide
+// rollback would sweep) rides Opts itself since plans/0237 D1 — the
+// doc-lane dispatch carries it onto the session options beside docLane, so
+// the ladder's refusal below and the engine's rollback guard
+// (rollbackUnitState) read the one carrier.
 export async function runTask(
   client: ClientSource,
   plan: Plan,
   task: Task,
   opts: Opts,
-  input: { baseline?: UnitBaseline; scope?: readonly string[]; drain?: () => Promise<void>; siblingScopes?: readonly string[]; docLane?: boolean } = {},
+  input: { baseline?: UnitBaseline; scope?: readonly string[]; drain?: () => Promise<void>; docLane?: boolean } = {},
 ): Promise<Outcome> {
   // Experiment switches (the OPENCODE_AUTO_* environment-variable layer,
   // plans/0003-fork-decompose-design.md §4.6): parsed once at the entry
@@ -223,19 +223,19 @@ export async function runTask(
   // D10's rollback refusal (plans/0099): a strict-resume rollback is
   // tree-wide — with sibling doc lanes' state in the tree (the recovery
   // flatten's leftovers, or an in-flight lane beside this one — the dispatch
-  // sites thread the live sibling scopes since plans/0210 D3), honoring the
+  // sites thread the live sibling scopes onto the session options since
+  // plans/0210 D3, the one carrier since plans/0237 D1), honoring the
   // verdict would sweep their dirt into this unit's stash and retract their
   // landed shares. With siblings present the verdict becomes the human
   // posture: a blocked outcome naming the unit, the ladder's reason and the
   // sibling scopes. (The session-level rollback inside executeWhole's
-  // handover engine is not suppressed — D10 names the ladder's verdict; a
-  // lane hitting that deeper rollback is 0165-019's, guarded at
-  // rollbackUnitState.)
+  // handover engine is refused by the same fact at rollbackUnitState's own
+  // guard — plans/0237 D1 completed D10 at that one home.)
   const rollbackRefused = (why: string): Outcome => ({
     type: "blocked",
     question:
       `${task.id} resume after interruption: ${why}. Strict resume would roll the unit back to its baseline, but sibling doc lanes' state is in the tree ` +
-      `(${input.siblingScopes!.join(", ")}); a rollback is tree-wide and would sweep it. Handle the sibling state (commit or clean it) and re-run serially (--max-sessions 1) so the rollback can proceed safely`,
+      `(${opts.siblingScopes!.join(", ")}); a rollback is tree-wide and would sweep it. Handle the sibling state (commit or clean it) and re-run serially (--max-sessions 1) so the rollback can proceed safely`,
   })
   // Strict resume (plans/0022-session-recovery-fidelity-design.md): when on,
   // records carry the unit baseline / effective model, verified on resume;
@@ -349,7 +349,7 @@ export async function runTask(
       handoffStatus(handoffRaw) === undefined &&
       recalled.baseline !== undefined
     if (handoffInvalid) {
-      if (input.siblingScopes?.length) return rollbackRefused("the handover document exists but has no valid status line")
+      if (opts.siblingScopes?.length) return rollbackRefused("the handover document exists but has no valid status line")
       const done = await rollbackUnitState(dir, task, "execution unit (invalid handover document)", recalled.baseline!, { progress: recalled })
       if (done.type !== "ok") return done
       recalled.active = false
@@ -417,7 +417,7 @@ export async function runTask(
         // to the summarized state (reusing the existing "not a resumed run"
         // semantics — pipeline cleans up the stale handover document and the
         // next unit starts from a clean baseline).
-        if (input.siblingScopes?.length) return rollbackRefused(verdict.why)
+        if (opts.siblingScopes?.length) return rollbackRefused(verdict.why)
         const done = await rollbackUnitState(dir, task, "execution unit", recalled.baseline!, { progress: recalled })
         if (done.type !== "ok") return done
         recalled.active = false

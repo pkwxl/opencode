@@ -173,8 +173,27 @@ export async function rollbackUnitState(
   task: Task,
   unit: string,
   baseline: UnitBaseline,
-  extra: { progress?: Progress } = {},
+  extra: { progress?: Progress; siblingScopes?: readonly string[] } = {},
 ): Promise<{ type: "ok" } | UnitStop> {
+  // The sibling guard (plans/0099 D10, completed at this one home —
+  // plans/0237 D1, 0165-019): a strict-resume rollback is tree-wide, so
+  // with sibling doc lanes' state in the tree (live lanes beside this one,
+  // or the recovery flatten's leftovers — the dispatch threads the live
+  // sibling scopes onto the session options since plans/0210 D3, carried
+  // here by the execute closures) honoring the verdict would sweep their
+  // dirt into this unit's stash and retract their landed shares. With
+  // siblings present the rollback is refused BEFORE any git call — nothing
+  // stashed, nothing reset — and the verdict becomes the human posture:
+  // blocked naming the unit and the sibling scopes (the ladder
+  // refusal's voice, one home for every caller).
+  if (extra.siblingScopes?.length) {
+    return {
+      type: "blocked",
+      question:
+        `${task.id} ${unit}: strict resume would roll the unit back to its baseline, but sibling doc lanes' state is in the tree (${extra.siblingScopes.join(", ")}); ` +
+        `a rollback is tree-wide and would sweep it. Handle the sibling state (commit or clean it) and re-run serially (--max-sessions 1) so the rollback can proceed safely`,
+    }
+  }
   const rolled = await rollbackUnit(dir, baseline, { task: task.id, unit })
   if (!rolled.ok) {
     return { type: "dirty", files: rolled.failures.map((failure) => `${failure.rel}: ${failure.error}`) }

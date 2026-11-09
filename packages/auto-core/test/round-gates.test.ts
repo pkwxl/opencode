@@ -11,7 +11,7 @@ import { clarifiedMark, completePhase, establishRound, forksWithoutRecommend, ph
 import { renderPhaseHandover } from "../src/prompt"
 import { renderFormulationTodo } from "../src/prompt-plan"
 import { closeSection, renderRoundBrief, roundBriefText } from "../src/round-brief"
-import { roundCloseLines, roundCloseProblems } from "../src/round-close"
+import { roundCloseLines, roundCloseProblems, runBuild } from "../src/round-close"
 import { phaseType, planDutiesPartial } from "../src/phases/registry"
 import { parsePhaseTypeFile } from "../src/phases/custom"
 import { promptFacts } from "../src/prompt-facts"
@@ -241,6 +241,34 @@ describe("round-close gate (plans/0049 G8)", () => {
       const fail = await roundCloseProblems(dir, 1, { build: "echo compiling; echo broken >&2; exit 3" })
       expect(fail.problems).toHaveLength(1)
       expect(fail.problems[0]).toStartWith("build: `echo compiling; echo broken >&2; exit 3` exited 3; output tail:\ncompiling\nbroken")
+    }),
+  )
+
+  // plans/0237 D3 (0165-102): the cap bounds the WAIT, not only the `sh`
+  // child. A multi-command build's hung grandchild once held the output
+  // pipes past the cap (the kill reached only `sh`, the text() reads waited
+  // for EOF) — the finding's repro returned at 6004 ms under a 1000 ms cap.
+  // Now the wrapper spawns as its own process group with the output in a
+  // file: the group kill reaches the grandchild and the wait never rides a
+  // pipe.
+  test(
+    "a hung grandchild dies with the cap: the group is killed, the wait bounded — never EOF on a pipe the grandchild holds (plans/0237 D3)",
+    withDir(async (dir) => {
+      await gitRepo(dir)
+      const start = Date.now()
+      const failure = await runBuild(dir, "sleep 6; echo built", { timeoutMs: 1000 })
+      const elapsed = Date.now() - start
+      expect(failure).toStartWith("`sleep 6; echo built` timed out after 1000ms")
+      // The cap fired and the whole group died with it: the call returned
+      // around the cap (the kill grace aside), never the grandchild's own
+      // six seconds — and the grandchild never wrote its late line (no
+      // output at all, so no tail in the message).
+      expect(elapsed).toBeLessThan(5000)
+      expect(failure).not.toContain("output tail")
+      // The failing-exit and message shapes stay byte-identical (the pinned
+      // row above covers the merged tail through roundCloseProblems).
+      expect(await runBuild(dir, "exit 3")).toBe("`exit 3` exited 3")
+      expect(await runBuild(dir, "true")).toBeUndefined()
     }),
   )
 

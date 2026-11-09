@@ -1302,9 +1302,13 @@ if (command === "init" || command === "amend" || command === "plan" || command =
 // bundle files a run's sessions read, plans/0100 D4) with the same dryrun
 // exemption; clarify (plans/0116 D6) writes the gate documents a running
 // driver re-reads (docs/analysis.md, a held survey.md), amend's reason, and
-// never takes the lock itself — one atomic check → write → commit. (`continue`
-// and `check` used to refuse here too; both retired ahead of every check,
-// their notices above.)
+// never takes the lock itself — a check, then the write: the milliseconds
+// between the two are unheld, and a run starting exactly there meets git's
+// index.lock or the run-start dirty gate, both loud and both recovered by
+// re-running once the other process finishes (plans/0237 D7 retired the old
+// "one atomic check" claim — nothing was atomic about a check-then-act).
+// (`continue` and `check` used to refuse here too; both retired ahead of
+// every check, their notices above.)
 if (command === "init" || command === "amend" || command === "reset" || command === "clarify" || (command === "sync" && !syncDryrun) || (command === "fix" && !fixDryrun)) {
   const holder = liveRunLock(directory)
   if (holder) {

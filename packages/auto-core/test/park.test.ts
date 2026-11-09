@@ -277,15 +277,53 @@ describe("executeWhole's park verdict (off mode reads it too; the kill switch of
     expect(await runtimeParked(dir, "T-001")).toBe("T-002")
   })
 
-  test("a park naming an id outside the phase's index stops as a planning failure (thrown, exit 1's grammar)", async () => {
+  // plans/0237 D2 (0165-075): the id-outside-the-index verdicts split on the
+  // state-file probe. An id that exists NOWHERE is the session's own
+  // invention — a collect problem (0096 D7's deadlock letter) joining the
+  // invalid arm's one relaunch with feedback, then the hidden-blockage
+  // block; a real task of the directory outside this phase's index is the
+  // cross-phase planning failure — the person's reorder as the blocked
+  // verdict (exit 2's posture), never the thrown exit 1 the code once used.
+  test("a park naming an id that exists nowhere is a collect problem: one relaunch with the invented-id feedback, then the hidden-blockage block (plans/0237 D2)", async () => {
+    const { dir, plan, task, agent, chain, writeHandoff } = await wholeSetup((ctx) => {
+      writeHandoff("# Parked\n\nStatus: park T-009\n")
+      return undefined
+    })
+    dirs.push(dir)
+    const result = await executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain, false)
+    expect(result?.type).toBe("blocked")
+    if (result?.type === "blocked") {
+      // The hidden-blockage block carries the invented-id problem whole.
+      expect(result.question).toContain("park directive that failed its checks twice (T-009 is not a task of this target directory")
+      expect(result.question).toContain("the id was invented or mistyped. Park on a real blocker of this phase's index, or end with the honest status lines; hidden blockage)")
+    }
+    expect(agent.prompts).toHaveLength(2)
+    // The relaunch's feedback named the invention and the honest exits.
+    expect(agent.prompts[1]!.text).toContain("the park did not pass its checks")
+    expect(agent.prompts[1]!.text).toContain("T-009 is not a task of this target directory")
+    expect(agent.prompts[1]!.text).toContain("Park on a real blocker of this phase's index")
+    // Neither round wrote a parked record (the park never passed).
+    expect(await runtimeParked(dir, "T-001")).toBeUndefined()
+  })
+
+  test("a park naming a real task outside this phase's index returns the blocked verdict — the person's reorder, exit 2's posture, never a throw (plans/0237 D2)", async () => {
     const { dir, plan, task, agent, chain, writeHandoff } = await wholeSetup((ctx) => {
       if (ctx.n === 1) writeHandoff("# Parked\n\nStatus: park T-009\n")
       return undefined
     })
     dirs.push(dir)
-    await expect(executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain, false)).rejects.toThrow(
-      /T-001 parked on T-009.*planning failure/s,
-    )
+    // T-009 exists as a task of this target directory (a state file), just
+    // not in this phase's index — the cross-phase shape.
+    mkdirSync(join(dir, "docs", "T-009"), { recursive: true })
+    writeFileSync(join(dir, "docs", "T-009", "todo.md"), "# T-009: elsewhere\nPhase: R-02.P01\n\n## Goal\n\nG.\n\n<!-- auto: eof -->\n")
+    const result = await executeWhole(agent.client, plan, task, { dir, git: noCommitGit() }, chain, false)
+    expect(result).toEqual({
+      type: "blocked",
+      question: expect.stringContaining("T-001 parked on T-009, a task outside this phase's index: ids outside the index count done at the pick, so the park could never hold — a cross-phase block is a planning failure. Reorder the phase's tasks (or split them) so T-009 runs before T-001, and re-run; the session's work is in the worktree"),
+    })
+    // No relaunch: the planning failure is the person's, and no parked
+    // record was written for a park that never held.
+    expect(agent.prompts).toHaveLength(1)
     expect(await runtimeParked(dir, "T-001")).toBeUndefined()
   })
 

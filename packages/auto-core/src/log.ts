@@ -176,17 +176,24 @@ export function formatDuration(ms: number): string {
   return `${hours}h ${minutes % 60}m`
 }
 
-// Compact duration (runner.ts:79-88 version kept verbatim):
+// Compact duration (the runner.ts:79-88 consolidation, its rounding fixed
+// by plans/0237 D7 — the toFixed arms once crossed their own unit, "60.0s"
+// and "1m60s"):
 // "Nms" / "N.Ns" / "Nm" / "NmNs". Used in session-end lines, reuse hints
-// and other high-frequency lines.
+// and other high-frequency lines. Like the verbose sibling, the value is
+// rounded to whole seconds before splitting — a half-second at a unit
+// boundary carries into the next tier (59_500 → "1m", formatDuration's
+// pinned convention) — while the sub-minute arm keeps its tenth from the
+// raw value (the rounded total stays ≤ 59 inside the arm, so the tenth
+// never crosses).
 export function formatDurationCompact(ms: number): string {
   if (ms < 1000) return `${ms}ms`
-  const seconds = ms / 1000
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const minutes = Math.floor(seconds / 60)
-  const remainingSeconds = seconds % 60
+  const totalSeconds = Math.round(ms / 1000)
+  if (totalSeconds < 60) return `${(ms / 1000).toFixed(1)}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  const remainingSeconds = totalSeconds % 60
   if (remainingSeconds === 0) return `${minutes}m`
-  return `${minutes}m${remainingSeconds.toFixed(0)}s`
+  return `${minutes}m${remainingSeconds}s`
 }
 
 // Compact token-count rendering (runner.ts:2806 / prompt.ts:501 versions

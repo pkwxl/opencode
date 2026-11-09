@@ -71,6 +71,42 @@ describe("rollbackUnitState (unit rollback orchestration)", () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  // plans/0237 D1 (0165-019): the sibling guard at this one home — the
+  // rollback is refused BEFORE any git call while sibling doc lanes' state
+  // is in the tree, never the tree-wide stash-and-reset sweep.
+  test("a rollback with live sibling scopes is refused before any git call — nothing stashed, nothing reset, the sibling's dirt intact (plans/0237 D1)", async () => {
+    const dir = await freshRepo()
+    try {
+      await writeFile(join(dir, "seed.txt"), "s")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: pre-baseline commit" })
+      const baseline = await unitBaseline(dir)
+      // This unit's half-work beside a sibling lane's in-flight file.
+      await mkdir(join(dir, "docs", "T-001"), { recursive: true })
+      await mkdir(join(dir, "docs", "T-002"), { recursive: true })
+      await writeFile(join(dir, "docs", "T-001", "wip.md"), "half-finished work")
+      await writeFile(join(dir, "docs", "T-002", "inflight.md"), "the sibling lane's in-flight work")
+      const refused = await rollbackUnitState(dir, task, "execution session", baseline!, { siblingScopes: ["docs/T-002/"] })
+      expect(refused).toEqual({
+        type: "blocked",
+        question:
+          "T-001 execution session: strict resume would roll the unit back to its baseline, but sibling doc lanes' state is in the tree (docs/T-002/); " +
+          "a rollback is tree-wide and would sweep it. Handle the sibling state (commit or clean it) and re-run serially (--max-sessions 1) so the rollback can proceed safely",
+      })
+      // Nothing was touched: no stash, no reset, both units' dirt intact.
+      const stashes = await new Response(Bun.spawn(["git", "-C", dir, "stash", "list"]).stdout).text()
+      expect(stashes).toBe("")
+      expect(await Bun.file(join(dir, "docs", "T-001", "wip.md")).text()).toBe("half-finished work")
+      expect(await Bun.file(join(dir, "docs", "T-002", "inflight.md")).text()).toBe("the sibling lane's in-flight work")
+      // Without the fact the rollback runs as before (the P10 floor).
+      const done = await rollbackUnitState(dir, task, "execution session", baseline!)
+      expect(done.type).toBe("ok")
+      const after = await new Response(Bun.spawn(["git", "-C", dir, "stash", "list"]).stdout).text()
+      expect(after).toContain("auto-rollback")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("resumeModelNow (strict-resume model check)", () => {
