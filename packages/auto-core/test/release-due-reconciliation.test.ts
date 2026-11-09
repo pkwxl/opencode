@@ -1,73 +1,89 @@
-// The due-cut reconciliation pin (plans/0230, 0166 step 070): the release
-// record's standing material between cuts — the fired trigger's owed
-// statement (the dated census, the programs, the W1/W6 gate, the tag
-// decision, the not-cut boundary), the mid-cycle amendment register
-// completed against the constitution-edit census (0221's retroactive row)
-// and restated as the principle-delta draft, and the assessment material
-// step 081 consumes (0165-070/F14, S02-06: a trigger fired with no
-// reconciliation). The 0221 docs-pin pattern (the 0225/0226/0227 lineage):
-// if the section silently reverts, the register loses its retroactive row,
-// or the census sentence drifts from the dated snapshot it records, this
-// pin goes red rather than the due state going unrecorded again. The census
-// is pinned as the dated snapshot it is, never a live oracle — a live count
-// against INDEX would go red at every later step's INDEX row, falsifying a
-// record that is already true. Anchoring a needle means moving it in the
-// same change as a sanctioned ruling, never to silence it.
+// The due-cut reconciliation pin (plans/0230, 0166 step 070) — re-anchored at
+// the v0.4.0 cut (2026-11-09), the sanctioned act the pin's own law names:
+// anchoring a needle means moving it in the same change as a sanctioned
+// ruling, never to silence it. The v0.4.0 cut consumed the prepared state
+// this pin held (the due-cut section's census, the register's five rows, the
+// prepared-not-cut boundary) into the v0.4.0 release section — the register
+// cleared, the 0230 section's standing body retired to its consumed note,
+// the census superseded by the cut-moment re-measurement, the tag decision
+// resolved by the cut's tag acts. This pin now holds the consumed state: if
+// the v0.4.0 section's record of its own cut silently reverts — the register
+// rows reappearing without a new sanctioned edit, the consumed note losing
+// its consumption, the census or tag sentences drifting — the pin goes red
+// rather than the cut's record going unrecorded. The register table returns
+// only with a new mid-cycle edit, whose row this pin does not hold (each
+// future row lands with its own ruling).
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
 const releases = readFileSync(join(import.meta.dir, "..", "docs", "releases.md"), "utf8")
 
-// The reconciled sentences: [name, needle]. Each needle is a distinctive
-// phrase of a 0230 decision (D1 the section, D2 the register, D3 the
-// assessment material), fail-red against the pre-0230 document (proven at
-// the step's landing).
+// The consumed sentences: [name, needle]. Each needle is a distinctive phrase
+// of the v0.4.0 cut's own record (the section, the cleared register, the
+// consumed 0230 section), fail-red against the pre-cut document (the state
+// the previous anchoring held — proven by this cut's swap of the prepared
+// state back in).
 const PINS: [name: string, needle: string][] = [
-  // D1 — the section, its census and its boundary
-  ["section heading", "## The due-cut reconciliation (0230, prepared not cut)"],
-  ["census count", "105 rulings open against the next release"],
-  ["census span", "rows spanning 0125–0229"],
-  ["census snapshot law", "A dated snapshot, never a live count"],
-  ["the programs", "the 0155–0160 ruled program completed 2026-10-30 (the trigger's first firing)"],
-  ["W1/W6 gate", '"should not ship before W1 and W6 land"'],
-  ["gate re-check", "step 081 re-checks the gate at its own moment"],
-  ["tag riding the cut", "the maintainer tags `07036c2b5` as v0.3.0, or the tag rides the next explicitly instructed cut alongside it"],
-  ["not-cut boundary", "preparation, never the cut — the version spine unmoved, the principles.md stamp unchanged, the register not cleared, no release section written"],
-  // D2 — the register completed and restated as the draft
-  ["register 0221 retroactive row", "| 2026-11-08 | 0221 (`be3daccb1`)"],
-  ["register 0221 retroactive name", "added retroactively by 0230 (the edit pre-dated this register, 0146's precedent)"],
-  ["register restated, five rows", "the mid-cycle amendment register above carries five rows — 0146, 0166 step 006, 0221, 0225, 0226"],
-  ["principle-delta draft", "the principle-delta draft the next release section absorbs at the cut"],
-  ["consumption prepared, never enacted", "The consumption is prepared here, never enacted"],
-  // D3 — the audits the cut owes (step 081's draft input)
-  ["traceability both directions", "the traceability chain both directions (rule→principle: orphans and gaps; principle→code: divergences)"],
-  ["replay under the stated method", "the falsification replay under 0225 D7's stated method"],
-  ["family check, S02-01's lapse recorded", "22 requirement-bearing rulings — 0142–0161, 0163, 0164 — carry no Category scope section"],
-  ["step 081 the consuming step", "step 081 (release-assessment) hands the material over"],
+  // The v0.4.0 section and its census
+  ["section heading", "## v0.4.0 — 2026-11-09 — the three-package review and its remediation program"],
+  ["census at the cut", "One hundred fifteen rulings since v0.3.0 ship together"],
+  ["census measurement", "115 open rows at the pre-cut HEAD `f82a06dd5`"],
+  // The register consumed and cleared
+  ["register cleared", "The register stands empty — its five rows (0146, 0166 step 006, 0221, 0225, 0226) were consumed into the v0.4.0 release section's principle deltas at the v0.4.0 cut (2026-11-09)"],
+  // The 0230 section consumed
+  ["0230 consumed", "**consumed at the v0.4.0 cut (2026-11-09)**"],
+  ["0230 superseded census", "Its census (105 open rows at the preparing HEAD `6f2cf849c`) was superseded by the cut-moment re-measurement recorded in the v0.4.0 section below"],
+  // The audits the cut owes and records
+  ["replay passed", "**Falsification replay — passed.** Run at the cut (2026-11-09) under the stated method"],
+  ["family check lapse recorded", "22 requirement-bearing rulings (0142–0161, 0163, 0164) originally carried no Category scope section"],
+  // The tag decision resolved
+  ["tag rows closed", "the v0.3.0 git tag created at its recorded anchor `07036c2b5`"],
+  ["v0.4.0 tag at this commit", "the v0.4.0 tag at this commit"],
+  // The determination, said in words
+  ["pre-1.0 determination", "carried by this minor release said so in words"],
 ]
 
-describe("the due-cut reconciliation (0230, 0166 step 070)", () => {
-  test("every reconciled sentence stands where its ruling put it", () => {
+// The retired prepared-state sentences: each must be ABSENT — the cut's
+// consumption retired them (their return without a new sanctioned edit is
+// the silent revert this pin exists to catch).
+const RETIRED: [name: string, needle: string][] = [
+  ["the register's dated rows", "| 2026-11-08 | 0221"],
+  ["the register's first row", "| 2026-10-28 | 0146"],
+  ["the prepared-not-cut boundary", "the register not cleared, no release section written"],
+  ["the prepared census as standing law", "105 rulings open against the next release"],
+]
+
+describe("the v0.4.0 cut's consumed reconciliation (0230, consumed 2026-11-09)", () => {
+  test("every consumed sentence stands where the cut put it", () => {
     for (const [name, needle] of PINS) {
       expect(releases.includes(needle), `${name}: ${needle}`).toBe(true)
     }
   })
 
-  test("the section and the retroactive row hold their standing positions", () => {
-    // D1's placement: standing material between cuts — after the per-release
-    // audit duty, before the `---` spine.
+  test("the prepared state stays consumed, never silently reverted", () => {
+    for (const [name, needle] of RETIRED) {
+      expect(releases.includes(needle), `${name} (must stay retired): ${needle}`).toBe(false)
+    }
+  })
+
+  test("the sections hold their standing positions", () => {
+    // The consumed 0230 note stays between the per-release audit duty and
+    // the `---` spine (standing material's position, now a consumed marker).
     const auditDuty = releases.indexOf("## The per-release audit duty")
     const reconciliation = releases.indexOf("## The due-cut reconciliation")
     const spine = releases.indexOf("\n---\n")
     expect(reconciliation).toBeGreaterThan(auditDuty)
     expect(reconciliation).toBeLessThan(spine)
-    // D2's placement: the retroactive row in the register's date order,
-    // between step 006's row and 0225's.
-    const step006 = releases.indexOf("| 2026-11-05 | 0166 step 006")
-    const row0221 = releases.indexOf("| 2026-11-08 | 0221")
-    const row0225 = releases.indexOf("| 2026-11-09 | 0225")
-    expect(row0221).toBeGreaterThan(step006)
-    expect(row0221).toBeLessThan(row0225)
+    // The v0.4.0 section is the last release section, after v0.3.0's.
+    const v030 = releases.indexOf("## v0.3.0 —")
+    const v040 = releases.indexOf("## v0.4.0 —")
+    expect(v040).toBeGreaterThan(v030)
+    expect(v040).toBeGreaterThan(spine)
+    // The cleared register sits between its law and the audit duty.
+    const registerLaw = releases.indexOf("## The mid-cycle amendment register")
+    const cleared = releases.indexOf("The register stands empty")
+    expect(cleared).toBeGreaterThan(registerLaw)
+    expect(cleared).toBeLessThan(auditDuty)
   })
 })

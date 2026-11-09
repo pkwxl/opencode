@@ -2,7 +2,7 @@
 
 This is the design constitution of the auto tool family: the ruled set of principles every design decision in `plans/NNNN` derives from, and the frame that governs how the set itself changes. It compresses the plans corpus (0001–0109, baselined `pre`) into one positioning statement, six constitutional principles, thirteen operating principles and two registers — every entry carrying its provenance and code homes, so a reader can check the ruling rather than trust the summary. Concrete requirements (formats, grammars, exit codes, thresholds, security mechanics) are not here: they live with their mechanisms, and the tier test keeps them out. The plans corpus remains the detail record; this document is the ruling surface.
 
-Current as of release v0.3.0. The plans corpus before this initiative is baselined `pre`.
+Current as of release v0.4.0. The plans corpus before this initiative is baselined `pre`.
 
 ## 0. The positioning statement
 

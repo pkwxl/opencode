@@ -48,8 +48,12 @@ const PINS: [name: string, doc: string, needle: string][] = [
   // D6 — the mid-cycle amendment register (0165-069/F12)
   ["principles register pointer", principles, "mid-cycle amendment register"],
   ["releases register section", releases, "## The mid-cycle amendment register (0225)"],
-  ["register 0146 retroactive row", releases, "this row is the retroactive record"],
-  ["register 0225 row", releases, "| 2026-11-09 | 0225 |"],
+  // Re-anchored at the v0.4.0 cut (2026-11-09): the register's rows were
+  // consumed into that release section's principle deltas per 0225 D6's own
+  // rule — the needles now hold the rows' consumed homes there (the pin's
+  // law's sanctioned move; the register rows themselves stand in git history).
+  ["register 0146 row, consumed into v0.4.0", releases, "**0146 (reconciliation, 2026-10-28)** — P2's bounded-escalation budget line rewritten progress-gated"],
+  ["register 0225 row, consumed into v0.4.0", releases, "**0225 (mid-cycle amendment, 2026-11-09)** — P4's derivations reconciled with 0145"],
   // D7 — the replay method (0165-183/F21)
   ["replay method", releases, "the replay never runs inside the repository"],
   // D8 — the derivation wording aligned to the corpus's form (0165-181/F17)

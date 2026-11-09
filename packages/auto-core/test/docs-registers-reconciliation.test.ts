@@ -48,7 +48,11 @@ const REGISTER_PINS: [name: string, doc: string, needle: string][] = [
   ["T10 reopen floor", principles, "fact is this row's floor"],
   ["T11 tension", principles, "the driver-exclusive commit right vs the person's own commits in an interrupted unit's range"],
   ["T11 choice", principles, "adopted as readable drift, the close-out re-anchoring at the current HEAD"],
-  ["mid-cycle register row", releases, "| 2026-11-09 | 0226 |"],
+  // Re-anchored at the v0.4.0 cut (2026-11-09): the register's 0226 row was
+  // consumed into that release section's principle deltas per 0225 D6's own
+  // rule — the needle now holds the row's consumed home there (the pin's
+  // law's sanctioned move; the register row itself stands in git history).
+  ["mid-cycle register row, consumed into v0.4.0", releases, "**0226 (reconciliation, 2026-11-09)** — the trade-off/risk registers refreshed to the corpus"],
 ]
 
 // The retired wordings: the stale cells the finding measured. Their return is
