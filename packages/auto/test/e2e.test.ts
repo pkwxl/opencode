@@ -707,8 +707,21 @@ async function fakeClaude(extra: Record<string, string> = {}) {
 }
 
 describe("CLI parsing: run-side options and the config", () => {
-  test("run refuses options frozen by init (exit code 1 + revision hints)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+  // The frozen-key case was ONE test looping every row of the families
+  // below — ~25 CLI spawns (16 frozen flags + 9 arms), 3.4 s at HEAD on
+  // this host and 4.14 s on the 0166 step-073 host, deterministically past
+  // the suite-timing family's guideline (each test under roughly half
+  // bun's 5 s per-test default — 0224 D4's split rule, S00-01's breach
+  // class; split by 0241 D4, discharging 0233 D3's deferral at its named
+  // home). The repair is the split, never a raised timeout: every row and
+  // assertion retained verbatim, one family per test on its own fresh dir
+  // — a family that grows past the budget splits again the same way (the
+  // rule, not a one-time repair); growth of the frozen vocabulary grows
+  // the TEST COUNT, never one test's runtime. The server's own frozen-key
+  // case is the precedent form (packages/auto-server/test/worker.test.ts,
+  // 0233 D2 enacting 0224 D4's deferred half).
+  test("run refuses the options frozen by init (exit code 1 + the amend revision hint)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-frozen-"))
     try {
       const fixed = [
         ["-m", "migrate"],
@@ -737,24 +750,53 @@ describe("CLI parsing: run-side options and the config", () => {
         expect(run.err).toContain(".opencode/auto/config.json")
         expect(run.err).toContain("opencode-auto amend <dir>")
       }
-      // --phases is frozen with the roadmap-line remedy, never the amend
-      // command 0137 retired (plans/0193 D2, 0165-056/S29-07: the old hint
-      // taught `opencode-auto amend --phases`, which answers with its own
-      // retirement refusal — one more round trip away from the true channel).
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("--phases is frozen with the roadmap-line remedy, never the amend command 0137 retired", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-frozen-phases-"))
+    try {
+      // plans/0193 D2, 0165-056/S29-07: the old hint taught
+      // `opencode-auto amend --phases`, which answers with its own
+      // retirement refusal — one more round trip away from the true channel.
       const phasesFrozen = await runCli(["run", dir, "--phases", "admtvk"])
       expect(phasesFrozen.code).toBe(1)
       expect(phasesFrozen.err).toContain("--phases was frozen by init")
       expect(phasesFrozen.err).toContain("a round's phases reshape by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md")
       expect(phasesFrozen.err).not.toContain("amend <dir> --phases")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the on/off pairs' revision hints take the paired form", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-frozen-pairs-"))
+    try {
       // The auto-numbering pair's revision hint takes the paired form
       const numbering = await runCli(["run", dir, "--auto-number"])
       expect(numbering.err).toContain("--auto-number (use --no-auto-number to turn off)")
       // The wrapup pair's revision hint takes the paired form
       const wrapup = await runCli(["run", dir, "--wrapup"])
       expect(wrapup.err).toContain("--wrapup (use --no-wrapup to turn off)")
-      // -m/--mode's message has the same shape (the short form carries the
-      // revision hint)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("-m/--mode's message has the same shape (the short form carries the revision hint)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-frozen-shortform-"))
+    try {
       expect((await runCli(["run", dir, "-m", "migrate"])).err).toContain("-m/--mode was frozen by init")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the retired flags answer with their retirement notices, never the amend guidance", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-frozen-retired-"))
+    try {
       // --commit is no longer a frozen config flag: the flag went with the
       // config key (committing cannot be turned off), so any form of it gets
       // the retirement notice instead of the amend guidance
@@ -766,13 +808,26 @@ describe("CLI parsing: run-side options and the config", () => {
       const removed = await runCli(["run", dir, "--commit-subtask"])
       expect(removed.code).toBe(1)
       expect(removed.err).toContain("--commit-subtask removed")
-      // The watchdog's old names get the rename hint
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the watchdog's old names get the rename hint", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-frozen-renamed-"))
+    try {
       const renamed = await runCli(["run", dir, "--verify-idle", "10"])
       expect(renamed.code).toBe(1)
       expect(renamed.err).toContain("was renamed to --idle-time")
       expect((await runCli(["init", dir, "--verify-max", "30"])).err).toContain("was renamed to --idle-max")
-      // --handover-test requires --test-by-driver (init's constitutional
-      // check; run already refuses the whole flag)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("--handover-test requires --test-by-driver (init's constitutional check; run already refuses the whole flag)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-frozen-lonely-"))
+    try {
       const lonely = await runCli(["init", dir, "--handover-test"])
       expect(lonely.code).toBe(1)
       expect(lonely.err).toContain("--handover-test requires --test-by-driver")
