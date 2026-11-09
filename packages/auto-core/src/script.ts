@@ -645,9 +645,11 @@ export async function writeLaneReceipt(dir: string, run: LaneRun, heads: { root:
     "",
   ]
   if (run.verdict === "red") {
+    // The Log field lives in the common fields above, stated once
+    // (plans/0239 D4: every receipt's reader looks for it there); this block
+    // is the watchdog's kill line and the fenced log tail alone.
     lines.push(
-      ...(run.timedOut ? [`The lane was killed by the watchdog (${run.timeoutReason === "max" ? "the absolute duration cap" : "no output for too long"}); the log tail follows.`] : []),
-      ...(run.log ? [`Log: ${run.log}`, ""] : []),
+      ...(run.timedOut ? [`The lane was killed by the watchdog (${run.timeoutReason === "max" ? "the absolute duration cap" : "no output for too long"}); the log tail follows.`, ""] : []),
       "```",
       ...(run.evidence?.length ? run.evidence : ["(the log is empty)"]),
       "```",

@@ -4,7 +4,7 @@
 // loop → runner → … chain, the same reason changedFiles was lifted into
 // git.ts). loop.ts re-exports ensureGitignore so the existing import path
 // @opencode-ai/auto-core/loop stays valid.
-import { rm } from "node:fs/promises"
+import { rm, stat } from "node:fs/promises"
 import { join, relative, sep } from "node:path"
 import { repoRoots } from "./git"
 
@@ -94,7 +94,14 @@ async function appendEntries(directory: string, entries: string[], opts: { dryRu
   const lines = existing ? existing.split("\n") : []
   const missing = [...new Set(entries)].filter((entry) => !lines.some((line) => normalize(line) === normalize(entry)))
   if (!missing.length) return []
-  if (!opts.dryRun) await Bun.write(file, `${existing ? `${existing.trimEnd()}\n` : ""}${missing.join("\n")}\n`)
+  // The person's trailing blank lines are theirs to keep (plans/0239 D2b):
+  // the base is the existing text verbatim when it already ends in a
+  // newline, and one newline is added only when their last line lacks it —
+  // the driver's entries need a fresh line, nothing more.
+  if (!opts.dryRun) {
+    const base = existing ? (existing.endsWith("\n") ? existing : `${existing}\n`) : ""
+    await Bun.write(file, `${base}${missing.join("\n")}\n`)
+  }
   return missing
 }
 
@@ -150,8 +157,12 @@ export async function ensureInitGitignore(directory: string): Promise<string[]> 
 
 // The shared strip logic: removes the lines equivalent to the given entries;
 // if only blank remains after the removal the file is deleted (init created
-// it). dryRun computes the result without writing, so reset can print the
-// plan before asking.
+// it). The kept lines are written verbatim — the split/join round-trip
+// carries the file's own trailing shape, and the person's leading and
+// trailing blank lines survive the strip (plans/0239 D2c: the driver's
+// rewrite reaches exactly its own lines, never a normalization of the
+// person's formatting). dryRun computes the result without writing, so
+// reset can print the plan before asking.
 async function stripEntries(
   directory: string,
   entries: string[],
@@ -163,11 +174,11 @@ async function stripEntries(
   const targets = entries.map(normalize)
   const kept = existing.split("\n").filter((line) => !targets.includes(normalize(line)))
   const removed = kept.length !== existing.split("\n").length
-  const text = kept.join("\n").trim()
-  const emptied = removed && text === ""
+  const text = kept.join("\n")
+  const emptied = removed && kept.every((line) => line.trim() === "")
   if (!opts.dryRun && removed) {
     if (emptied) await rm(file, { force: true })
-    else await Bun.write(file, `${text}\n`)
+    else await Bun.write(file, text)
   }
   return { removed, emptied }
 }
@@ -183,4 +194,25 @@ export async function removeGitignoreEntries(
   opts: { dryRun?: boolean } = {},
 ): Promise<{ removed: boolean; emptied: boolean }> {
   return stripEntries(directory, [...ENTRIES, ...INIT_ENTRIES, ...(await nestedRepoEntries(directory))], opts)
+}
+
+// The .gitignore lines shaped like a nested-repository entry whose directory
+// no longer exists on disk (plans/0239 D2d): possibly init's entry for a
+// repository deleted after init — removeGitignoreEntries cannot strip it
+// (it derives nested entries from the live tree, and no durable init-time
+// record distinguishes init's stale line from the person's own), so reset
+// reports them instead, never consuming what it cannot prove its own. The
+// grammar is nestedRepoEntries' own write shape: a root-anchored,
+// slash-closed relative path (glob metacharacters excluded — init never
+// writes them).
+export async function staleNestedEntryLines(directory: string): Promise<string[]> {
+  const existing = await Bun.file(join(directory, ".gitignore")).text().catch(() => undefined)
+  if (existing === undefined) return []
+  const stale: string[] = []
+  for (const raw of existing.split("\n")) {
+    const line = raw.trim()
+    if (!/^\/[^*?]+\/$/.test(line) || stale.includes(line)) continue
+    if (!(await stat(join(directory, line)).then((entry) => entry.isDirectory(), () => false))) stale.push(line)
+  }
+  return stale
 }

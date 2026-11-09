@@ -181,3 +181,36 @@ describe("the switch census (0229)", () => {
     expect(retiredSwitches.length).toBe(4)
   })
 })
+
+// The key-ring walk paragraph (plans/0239 D6, finding 0165-218): 0178's
+// code truth — the earlier-keys-only bound (D1), the consumed-fork skip
+// (D2), the doc-lane deferral (D3) — reached the code in step 018 but the
+// README paragraph kept asserting the invariant 0178's own measurement
+// refuted ("The walk never oscillates", with a reason that was never true:
+// the fork did walk, and under a short stated reset the walk undid the
+// rotation — 80 restarts over 40 failures). These pins hold the paragraph
+// to the code's three gates so it cannot outrun the code silently again.
+describe("the key-ring walk paragraph (0239)", () => {
+  const keyRingSection = (() => {
+    const at = readme.indexOf("### Key ring")
+    if (at < 0) return ""
+    const rest = readme.slice(at)
+    const next = rest.indexOf("\n### ")
+    return next < 0 ? rest : rest.slice(0, next)
+  })()
+
+  test("the section exists", () => {
+    expect(keyRingSection).not.toBe("")
+  })
+
+  test("the refuted invariant and its false reason are gone", () => {
+    expect(keyRingSection).not.toContain("never oscillates")
+    expect(keyRingSection).not.toContain("rides the held key it landed on")
+  })
+
+  test("the three gates the code has are stated (0178 D1/D2/D3)", () => {
+    expect(keyRingSection).toContain("only ever moves to an *earlier* key")
+    expect(keyRingSection).toContain("a consumed fork skips it")
+    expect(keyRingSection).toContain("a doc-lane session defers it whole")
+  })
+})

@@ -781,7 +781,7 @@ describe("CLI parsing: run-side options and the config", () => {
     }
   })
 
-  test("run keeps accepting valid option combinations, with no false usage errors", async () => {
+  test("run keeps accepting valid option combinations, with no false usage errors; a never-initialized directory is refused teaching init directly (plans/0239 D5)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const combos = [
@@ -790,14 +790,18 @@ describe("CLI parsing: run-side options and the config", () => {
       ]
       for (const extra of combos) {
         const run = await runCli(["run", dir, ...extra])
-        // The combination is valid: the config takes its defaults, parsing
-        // passes and runAll is entered; the empty directory lacks the agent
-        // contract file, so it exits 1 (driver messages go to stdout,
-        // distinguishing them from usage errors' stderr).
+        // The combination is valid: parsing passes with no usage error.
+        // Since plans/0239 D5 the never-initialized directory is refused
+        // before the run log, the banner and the preflight session (plan's
+        // requireConfigFile home, stderr like every command refusal),
+        // naming the missing config — the root cause — and the one-hop
+        // remedy init (the old chain taught fix first, which itself taught
+        // init).
         expect(run.code).toBe(1)
-        expect(run.out).toContain("agent contract file missing")
-        expect(run.err).toBe("")
-        expect(run.out).toContain("⚙ project config (.opencode/auto/config.json)")
+        expect(run.out).toBe("")
+        expect(run.err).toContain(`nothing to run: ${dir} has no .opencode/auto/config.json`)
+        expect(run.err).toContain(`run opencode-auto init ${dir} first`)
+        expect(run.err).not.toContain("fix")
       }
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -3194,6 +3198,13 @@ describe("CLI: the parser's token-form refusals (0195)", () => {
   test("boolean flags' =value form is validated — a typo'd value no longer silently means true (0165-212)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-bool-"))
     try {
+      // The floor arm below reaches the run banner, so the directory needs
+      // a config (plans/0239 D5: a never-initialized directory is refused
+      // before the banner, teaching init). The contract is left absent on
+      // purpose — the floor runs end at the contract stop, well short of a
+      // session.
+      await mkdir(join(dir, ".opencode", "auto"), { recursive: true })
+      await Bun.write(join(dir, ".opencode", "auto", "config.json"), '{"mode":"migrate"}\n')
       const refused = await runCli(["run", dir, "--verbose=flase"])
       expect(refused.code).toBe(1)
       expect(refused.err).toContain('--verbose takes true or false: "flase" is neither')

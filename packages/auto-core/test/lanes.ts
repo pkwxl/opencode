@@ -282,6 +282,9 @@ export const UNIT_LANE: readonly string[] = [
   "test/stuck.test.ts",
   "test/switches.test.ts",
   "test/tasks.test.ts",
+  // plans/0239 D3: the genericity scan over the shipped template bytes —
+  // pure file reads, no git, no spawn.
+  "test/template-genericity.test.ts",
   "test/template.test.ts",
   "test/tier.test.ts",
   "test/turn-arbitration.test.ts",

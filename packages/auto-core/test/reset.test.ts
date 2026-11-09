@@ -243,3 +243,86 @@ describe("removeGitignoreEntries", () => {
     expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("/.gitignore\n/opencode.json\n")
   })
 })
+
+// plans/0239 D2 (finding 0165-208): the person's bytes stand — the driver's
+// rewrite reaches exactly its own lines. removePointer cleans only the seam
+// each removal creates (the blank-line run where the block stood collapses
+// to at most one blank line; a seam ending the file normalizes the tail to
+// one newline); the .gitignore strip writes the kept lines verbatim; a
+// stale nested-repository entry is reported, never stripped.
+describe("reset: the person's bytes stand (plans/0239 D2)", () => {
+  let dir: string
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-reset-person-"))
+  })
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("AGENTS.md: a deliberate 3+ blank-line run away from the block keeps its bytes through the strip", async () => {
+    await ensurePointer(dir)
+    const text = await Bun.file(join(dir, "AGENTS.md")).text()
+    const block = text.slice(text.indexOf("<!-- opencode-auto:start -->"))
+    const before = "# My notes\n\nIntro.\n\n\n\nWide gap — mine to keep.\n\nTail prose.\n\n"
+    await writeFile(join(dir, "AGENTS.md"), before + block)
+    const entries = await reset(dir)
+    expect(entries.find((entry) => entry.path === "AGENTS.md")).toMatchObject({ action: "strip" })
+    // The seam where the block stood (at the file's end) normalizes its tail
+    // to one newline; the wide gap three paragraphs earlier keeps all three
+    // of its blank lines.
+    const after = await Bun.file(join(dir, "AGENTS.md")).text()
+    expect(after).toBe("# My notes\n\nIntro.\n\n\n\nWide gap — mine to keep.\n\nTail prose.\n")
+  })
+
+  test("AGENTS.md: leading blank lines and a mid-file seam (prose continues after the block)", async () => {
+    await ensurePointer(dir)
+    const text = await Bun.file(join(dir, "AGENTS.md")).text()
+    const block = text.slice(text.indexOf("<!-- opencode-auto:start -->"))
+    // Leading blank lines the person wrote, the block mid-file, prose after.
+    await writeFile(join(dir, "AGENTS.md"), "\n\n# Heading\n\nBefore.\n\n" + block + "\nAfter.\n\n\n")
+    const entries = await reset(dir)
+    expect(entries.find((entry) => entry.path === "AGENTS.md")).toMatchObject({ action: "strip" })
+    const after = await Bun.file(join(dir, "AGENTS.md")).text()
+    // The seam (one blank line before the block + the block's own line
+    // break) collapses to one blank line; everything else keeps its bytes.
+    expect(after).toBe("\n\n# Heading\n\nBefore.\n\nAfter.\n\n\n")
+  })
+
+  test("AGENTS.md: a file the strip empties to the heading shell still reports emptied", async () => {
+    await ensurePointer(dir)
+    const entries = await reset(dir)
+    expect(entries.find((entry) => entry.path === "AGENTS.md")).toMatchObject({ action: "remove" })
+    expect(await exists(join(dir, "AGENTS.md"))).toBe(false)
+  })
+
+  test(".gitignore: the person's leading and trailing blank lines survive the strip", async () => {
+    await writeFile(join(dir, ".gitignore"), "\n\n# mine\ntmp/\n.auto/\ndist/\n\n\n")
+    const entries = await reset(dir)
+    expect(entries.find((entry) => entry.path === ".gitignore")).toMatchObject({ action: "strip" })
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("\n\n# mine\ndist/\n\n\n")
+  })
+
+  test(".gitignore: a stale nested-repository entry is reported, never stripped", async () => {
+    await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited
+    // init stamped /pkg/ for a repository that has since been deleted; the
+    // person's /live-dir/ entry points at a real directory and is not
+    // reported even though nothing git lives in it.
+    await mkdir(join(dir, "live-dir"))
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/pkg/\n/live-dir/\n")
+    const entries = await reset(dir)
+    const gitignore = entries.find((entry) => entry.path === ".gitignore")
+    expect(gitignore).toMatchObject({ action: "strip" })
+    expect(gitignore?.reason).toContain("nested-repository-shaped line(s) whose directories no longer exist (/pkg/)")
+    expect(gitignore?.reason).toContain("never stripped")
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("/pkg/\n/live-dir/\n")
+  })
+
+  test(".gitignore: stale lines alone still surface (a keep entry, nothing to strip)", async () => {
+    await writeFile(join(dir, ".gitignore"), "/gone-repo/\n*.log\n")
+    const entries = await planReset(dir)
+    const gitignore = entries.find((entry) => entry.path === ".gitignore")
+    expect(gitignore).toMatchObject({ action: "keep" })
+    expect(gitignore?.reason).toContain("(/gone-repo/)")
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("/gone-repo/\n*.log\n")
+  })
+})

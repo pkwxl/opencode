@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { chmod, mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { DEFAULT_KILL_GRACE_MS, DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, laneLogDir, runScript, scriptTmpDir } from "../src/script"
+import { DEFAULT_KILL_GRACE_MS, DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, laneLogDir, runScript, scriptTmpDir, writeLaneReceipt, type LaneRun } from "../src/script"
+import { EOF_MARK } from "../src/doccheck"
 
 describe("scriptTmpDir", () => {
   test("the path is the tmp/ subdirectory under the target directory", () => {
@@ -220,4 +221,81 @@ describe("runScript", () => {
     await Bun.sleep(600)
     expect(await Bun.file(join(dir, "late.txt")).text().catch(() => "")).toBe("")
   }, 8_000)
+})
+
+// plans/0239 D4 (finding 0165-210): the lane receipt's Log field is stated
+// once — in the common field array, where every receipt's reader looks — and
+// the red branch never duplicates it. The exact field sequences are pinned:
+// a future single-field consumer must never have to choose between two
+// identical lines.
+describe("writeLaneReceipt: the Log field stated once (plans/0239 D4)", () => {
+  let dir: string
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-script-receipt-"))
+  })
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  const run = (over: Partial<LaneRun>): LaneRun => ({
+    lane: "verify-full",
+    verdict: "red",
+    code: 1,
+    ms: 10,
+    log: "/tmp/driver-side.log",
+    receipt: join("docs", "T-001", "testhands", "verify-full.md"),
+    start: "2026-11-09T10:00:00Z",
+    end: "2026-11-09T10:01:00Z",
+    ...over,
+  })
+  const heads = [{ root: ".", sha: "abc123" }]
+  const read = async () => await Bun.file(join(dir, "docs", "T-001", "testhands", "verify-full.md")).text()
+
+  test("a red receipt: one Log line, the exact field sequence", async () => {
+    await writeLaneReceipt(dir, run({ evidence: ["FAILED src/a.ts", "1 test failed"] }), heads)
+    const text = await read()
+    expect(text).toBe(
+      [
+        "# Lane verify-full",
+        "",
+        "Lane: verify-full",
+        "Heads: .=abc123",
+        "Start: 2026-11-09T10:00:00Z",
+        "End: 2026-11-09T10:01:00Z",
+        "Verdict: red",
+        "Log: /tmp/driver-side.log",
+        "",
+        "```",
+        "FAILED src/a.ts",
+        "1 test failed",
+        "```",
+        "",
+        EOF_MARK,
+        "",
+      ].join("\n"),
+    )
+    expect(text.match(/^Log: /gm)?.length).toBe(1)
+  })
+
+  test("a timed-out red receipt: the kill line with its blank, still one Log", async () => {
+    await writeLaneReceipt(dir, run({ timedOut: true, timeoutReason: "idle", evidence: [] }), heads)
+    const text = await read()
+    expect(text).toContain("The lane was killed by the watchdog (no output for too long); the log tail follows.\n\n```\n(the log is empty)")
+    expect(text.match(/^Log: /gm)?.length).toBe(1)
+  })
+
+  test("a green receipt keeps the common fields (Log in place, no red block)", async () => {
+    await writeLaneReceipt(dir, run({ verdict: "green", code: 0 }), heads)
+    const text = await read()
+    expect(text).toContain("Verdict: green\nLog: /tmp/driver-side.log\n")
+    expect(text).not.toContain("```")
+    expect(text.match(/^Log: /gm)?.length).toBe(1)
+  })
+
+  test("a carried receipt states Carried, never Log", async () => {
+    await writeLaneReceipt(dir, run({ verdict: "green", code: 0, carried: "docs/T-000/testhands/verify-full.md", log: "/tmp/old.log" }), heads)
+    const text = await read()
+    expect(text).toContain("Carried: docs/T-000/testhands/verify-full.md")
+    expect(text).not.toContain("Log:")
+  })
 })

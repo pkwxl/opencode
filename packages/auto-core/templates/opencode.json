@@ -16,7 +16,6 @@
     "bash": {
       "*": "allow",
       "/tmp/*": "allow",
-      "/home/*": "allow",
       "bun test*": "allow",
       "bun run*": "allow",
       "bun typecheck*": "allow",

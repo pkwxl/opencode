@@ -12,6 +12,7 @@ import {
   removeGitignoreEntry,
   retiredGitignoreEntries,
   RETIRED_ENTRIES,
+  staleNestedEntryLines,
 } from "../src/gitignore"
 import { WORKDIR_ROOTS } from "../src/git"
 import { MODELS_FILE } from "../src/models"
@@ -230,5 +231,48 @@ describe("retiredGitignoreEntries / removeGitignoreEntry", () => {
     await writeFile(join(dir, ".gitignore"), "opencode.json\n")
     expect(await removeGitignoreEntry(dir, "/opencode.json")).toBe(true)
     expect(await Bun.file(join(dir, ".gitignore")).exists()).toBe(false)
+  })
+})
+
+// plans/0239 D2b/D2d (finding 0165-208): the append preserves the person's
+// trailing blank lines (a newline is added only when their last line lacks
+// one — the driver's entries need a fresh line, nothing more), and the
+// stale-nested reader reports exactly the grammar-shaped lines whose
+// directories no longer exist.
+describe("the person's bytes stand (plans/0239 D2b/D2d)", () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-gitignore-person-"))
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("an append over trailing blank lines keeps them byte-identical", async () => {
+    gitInit(dir)
+    await writeFile(join(dir, ".gitignore"), "# mine\ndist/\n\n\n")
+    expect(await ensureGitignore(dir)).toBe(true)
+    // The person's two trailing blank lines stand; the entries follow on
+    // their own fresh line.
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("# mine\ndist/\n\n\ntmp/\n.auto/\n")
+  })
+
+  test("an append over a last line without a newline adds exactly one", async () => {
+    gitInit(dir)
+    await writeFile(join(dir, ".gitignore"), "# mine")
+    expect(await ensureGitignore(dir)).toBe(true)
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("# mine\ntmp/\n.auto/\n")
+  })
+
+  test("staleNestedEntryLines: exactly the grammar-shaped lines whose directories are gone", async () => {
+    await mkdir(join(dir, "live"), { recursive: true })
+    await writeFile(join(dir, ".gitignore"), "/gone-repo/\n/live/\n/pkg/nested/\nnode_modules/\n*.log\n/opencode.json\n")
+    expect(await staleNestedEntryLines(dir)).toEqual(["/gone-repo/", "/pkg/nested/"])
+  })
+
+  test("staleNestedEntryLines: no file, nothing reported", async () => {
+    expect(await staleNestedEntryLines(dir)).toEqual([])
   })
 })

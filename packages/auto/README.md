@@ -1346,9 +1346,13 @@ failback boundary — boundaries never touch key state at all). Both searches ar
 rotation search starts at the first declared key and lands on the earliest key with no evidence against it,
 and **every new session walks the same order** — when an earlier key's hold or reset has passed, the ring
 moves back to it and the managed server restarts before the session's first call, so a recovered earlier
-key is retried at the next session without waiting for the current key to fail. The walk never oscillates
-(the fork a rotation just seeded rides the held key it landed on), and a key with no mark never triggers
-one (the recovery probe's cleared ring stays on the key it tests). A refused rotation search (every other
+key is retried at the next session without waiting for the current key to fail. Three gates bound the walk
+(plans/0178): it only ever moves to an *earlier* key (a later key's passed hold never disturbs a working
+current key), a consumed fork skips it (the fork rides the key path its seeding act chose — a rotation's
+fork would otherwise undo the rotation under a short stated reset, the measured restart-per-failure
+cycle), and a doc-lane session defers it whole (a restart would kill the sibling lanes' open sessions; the
+recovered key re-preferences at the next serial moment). A key with no mark never triggers a walk (the
+recovery probe's cleared ring stays on the key it tests). A refused rotation search (every other
 key held) is applied too — the failed key is marked, the position stays. `/failback`
 clears all key state and rewinds every ring to its first key; a successful probe likewise clears the key
 state it tested. An external server (`--server`, a profile's `server`) cannot be restarted, so the ring is

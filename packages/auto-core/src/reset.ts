@@ -35,7 +35,7 @@ import { join } from "node:path"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { removePointer } from "./agents-block"
 import { BRIEF_FILE } from "./brief"
-import { removeGitignoreEntries } from "./gitignore"
+import { removeGitignoreEntries, staleNestedEntryLines } from "./gitignore"
 
 type ResetAction = "remove" | "strip" | "rmdir" | "keep"
 
@@ -107,8 +107,23 @@ export async function planReset(dir: string): Promise<ResetEntry[]> {
   const gitignore = join(dir, ".gitignore")
   if (await fileExists(gitignore)) {
     const preview = await removeGitignoreEntries(dir, { dryRun: true })
+    // A nested-repository entry whose directory no longer exists may be
+    // init's for a repository deleted after init (plans/0239 D2d): the strip
+    // derives nested entries from the live tree, so the stale line survives
+    // it — reported for the person to judge, never stripped (nothing on disk
+    // proves the line the person's own or init's).
+    const stale = await staleNestedEntryLines(dir)
+    const staleNote = stale.length
+      ? `${stale.length} nested-repository-shaped line(s) whose directories no longer exist (${stale.join(", ")}) may be init's entries for repositories deleted after init — reset cannot prove them, so they are reported, never stripped; delete them by hand if they are`
+      : ""
     if (preview.emptied) entries.push({ path: ".gitignore", action: "remove", reason: "file is empty after removing the entries" })
-    else if (preview.removed) entries.push({ path: ".gitignore", action: "strip", reason: "remove the entries init wrote (tmp/, .auto/, the local-only files and nested git repositories)" })
+    else if (preview.removed)
+      entries.push({
+        path: ".gitignore",
+        action: "strip",
+        reason: `remove the entries init wrote (tmp/, .auto/, the local-only files and nested git repositories)${staleNote ? `; ${staleNote}` : ""}`,
+      })
+    else if (stale.length) entries.push({ path: ".gitignore", action: "keep", reason: staleNote })
   }
 
   for (const rel of PRUNE_DIRS) {

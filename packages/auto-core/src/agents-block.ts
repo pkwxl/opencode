@@ -295,11 +295,18 @@ export async function ensurePointer(
 
 // The inverse of ensurePointer (used by reset): removes the canonical block
 // and any legacy named blocks, keeping the rest of the file (the user's own
-// prose) verbatim. If after removal the prose is down to the bare
-// `# AGENTS.md` heading shell — i.e. the file was created by ensurePointer
-// in the first place — it reports emptied and the caller deletes the whole
-// file. dryRun only computes the result without writing, so reset can
-// print the list first and confirm.
+// prose) verbatim. Each removal cleans only the seam it creates: the
+// blank-line run where the block stood collapses to at most one blank line,
+// and a seam ending the file normalizes the tail to one newline
+// (ensurePointer's own gated tail rule) — the person's bytes elsewhere
+// (leading whitespace, deliberate blank-line runs away from every seam,
+// trailing blank lines no seam touched) keep their bytes: the cleanup is a
+// removal act, never a normalization pass over their prose (plans/0158 D2's
+// law, extended to the removal path, plans/0239 D2a). If after removal the
+// prose is down to the bare `# AGENTS.md` heading shell — i.e. the file was
+// created by ensurePointer in the first place — it reports emptied and the
+// caller deletes the whole file. dryRun only computes the result without
+// writing, so reset can print the list first and confirm.
 export async function removePointer(
   directory: string,
   opts: { dryRun?: boolean } = {},
@@ -308,24 +315,40 @@ export async function removePointer(
   const existing = await Bun.file(agentsFile).text().catch(() => undefined)
   if (existing === undefined) return { removed: false, emptied: false }
 
+  // Collect the spans to cut (the legacy replace keeps its matches in place
+  // so both patterns' offsets stay valid against the same text), then splice
+  // right-to-left.
   let removed = false
-  let text = existing.replace(LEGACY_BLOCK, () => {
+  const spans: Array<[number, number]> = []
+  let text = existing.replace(LEGACY_BLOCK, (match, _name, offset: number) => {
+    spans.push([offset, offset + match.length])
     removed = true
-    return ""
+    return match
   })
   const match = CANONICAL_BLOCK.exec(text)
   if (match) {
-    text = text.slice(0, match.index) + text.slice(match.index + match[0].length)
+    spans.push([match.index, match.index + match[0].length])
     removed = true
   }
-  text = text.replace(/\n{3,}/g, "\n\n").trim()
+  let tailSeam = false
+  for (const [start, end] of spans.sort((a, b) => b[0] - a[0])) {
+    const before = text.slice(0, start)
+    const after = text.slice(end)
+    const open = before.match(/\n*$/)?.[0].length ?? 0
+    const close = after.match(/^\n*/)?.[0].length ?? 0
+    if (/^\n*$/.test(after)) tailSeam = true
+    const kept = Math.min(open + close, 2)
+    text = before.slice(0, before.length - open) + "\n".repeat(kept) + after.slice(close)
+  }
+  if (tailSeam) text = text.replace(/\n+$/, "\n")
 
-  const emptied = removed && (text === "" || text === "# AGENTS.md")
+  const trimmed = text.trim()
+  const emptied = removed && (trimmed === "" || trimmed === "# AGENTS.md")
   if (!opts.dryRun && removed) {
     if (emptied) await rm(agentsFile, { force: true })
     else {
       await chmod(agentsFile, 0o644).catch(() => {})
-      await Bun.write(agentsFile, `${text}\n`)
+      await Bun.write(agentsFile, text)
     }
   }
   return { removed, emptied }

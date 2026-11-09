@@ -1367,6 +1367,14 @@ if (command === "run") {
     console.error("--stop-after takes a task id (T-NNN): the task whose completion ends this run")
     process.exit(1)
   }
+  // A never-initialized directory is refused here, before the banner and the
+  // preflight session (plans/0239 D5): loadRunConfig's missing-file floor
+  // would print a defaults config banner over a directory with no config and
+  // the run would stop two refusals later at the missing agent contract
+  // teaching fix — which itself teaches init. The root cause is the missing
+  // config; plan's block holds the same check (its comment states the
+  // principle) and requireConfigFile is the one teaching home.
+  await requireConfigFile("run", true, true)
   startRunLog(directory, session)
   const { config, mode } = await loadRunConfig(directory)
   await logRunBanner(directory, config)
@@ -1999,12 +2007,18 @@ function refuseLaneForeignFlags(): void {
 }
 
 // The missing-config refusal of the commands that need an initialized project
-// (plan, close, land and the amend command): the verb is the block's own word
-// ("nothing to plan/close/land/amend"); `first` carries the one wording
-// difference (amend's line omits "first").
-async function requireConfigFile(verb: string, first: boolean): Promise<void> {
+// (plan, close, land, the amend command and — plans/0239 D5 — run): the verb
+// is the block's own word ("nothing to plan/close/land/amend/run"); `first`
+// carries the one wording difference (amend's line omits "first"). run passes
+// `legacyRuns`: a legacy project (only .auto/config.json holds its mode) is
+// initialized by an older release and keeps running on the documented legacy
+// floor — its banner note already teaches fix — so run lets it through while
+// plan keeps refusing it (the round setup needs the full config, and fix
+// writes it from the legacy mode).
+async function requireConfigFile(verb: string, first: boolean, legacyRuns = false): Promise<void> {
   if (await Bun.file(join(directory, CONFIG_FILE)).exists()) return
   const legacy = await legacyModeFallback(directory)
+  if (legacyRuns && legacy !== undefined) return
   console.error(
     `nothing to ${verb}: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory}${first ? " first" : ""}` +
       (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
