@@ -19,9 +19,10 @@
 //     the probe is the POST route behind its own opt-in scope (P4b);
 //   - the planPrelude boundary matrix: the no-agent routes served with
 //     their lines and codes (round establishment, the round-close gate,
-//     the drift re-sync, the refusal stops), and — since the P3c unlock —
-//     the agent-planning routes spawning planning runs (202 + the run
-//     resource, the task landing through the core's planning step);
+//     the drift refusal naming transfer, the refusal stops), and — since
+//     the P3c unlock — the agent-planning routes spawning planning runs
+//     (202 + the run resource, the task landing through the core's
+//     planning step);
 //   - the auth matrix per scope and the whitelist for operations;
 //   - the lock rules: the config ops' 423 under a planted live holder, the
 //     lock-acquiring ops' 423, and the registry's retryable 409 beside a
@@ -625,23 +626,31 @@ describe("the lifecycle operations (P1d)", () => {
       const empty = await h.call("POST", `/projects/${manualName}/plan`, h.control)
       expect(empty.status).toBe(200)
       expect(has(empty.body, "no tasks listed")).toBe(true)
-      // the drift re-sync (row 3): a mid-round phases reshape rides its one
-      // channel — the released roadmap line (0137; the amend key is retired,
-      // plans/0193 D4) — and surfaces as a drift plan reconciles
+      // the drift refusal (row 3, 0206 D2): a mid-round phases reshape rides
+      // its one channel — the released roadmap line (0137; the amend key is
+      // retired, plans/0193 D4) — and plan refuses before any write naming
+      // transfer as the reshape's apply; the committed re-derivation is the
+      // advance's alone (the CLI mirror of this row: packages/auto's
+      // phase-index-drift describe)
       await Bun.write(
         join(dir, "docs", "analysis.md"),
         "# Project analysis\n\nClarified: yes\n\n## Roadmap\n\n- R-01 adm — widen the round with a design phase\n",
       )
       await gitOf(dir)("add", "-A")
       await gitOf(dir)("commit", "-qm", "reshape R-01 by its roadmap line")
-      const resynced = await h.call("POST", `/projects/${name}/plan`, h.control)
-      expect(resynced.status).toBe(200)
-      expect(has(resynced.body, "phase index of round R-01 re-synced")).toBe(true)
-      expect(has(resynced.body, "P02-design")).toBe(true)
-      const index = await Bun.file(join(dir, "docs", "R-01", "phases.md")).text()
-      expect(index).toContain("P03 implement")
-      expect(await Bun.file(join(dir, "docs", "R-01", "P03-implement", "todo.md")).exists()).toBe(true)
-      expect(await Bun.file(join(dir, "docs", "R-01", "P02-implement", "todo.md")).exists()).toBe(false)
+      const established = await Bun.file(join(dir, "docs", "R-01", "phases.md")).text()
+      const refusedDrift = await h.call("POST", `/projects/${name}/plan`, h.control)
+      expect(refusedDrift.status).toBe(409)
+      expect(refusedDrift.body.code).toBe(1)
+      expect(has(refusedDrift.body, "the phase index of round R-01 differs from the roadmap of docs/analysis.md")).toBe(true)
+      expect(has(refusedDrift.body, "transfer re-derives the unstarted tail on its own commit")).toBe(true)
+      expect(has(refusedDrift.body, `run: opencode-auto-server transfer ${dir}`)).toBe(true)
+      // nothing written: the index keeps its established shape byte-for-byte
+      // and no widened-phase directory or moved open-todo seed appears
+      expect(await Bun.file(join(dir, "docs", "R-01", "phases.md")).text()).toBe(established)
+      expect(await Bun.file(join(dir, "docs", "R-01", "P02-design", "todo.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, "docs", "R-01", "P03-implement", "todo.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, "docs", "R-01", "P02-implement", "todo.md")).exists()).toBe(true)
       // row 2 (plans/0101 D4): a phased COMPLETE round is transfer's too —
       // the round close and the next round's opening refuse here naming the
       // advance command (the round-close gate itself runs inside transfer).
