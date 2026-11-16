@@ -15,7 +15,7 @@ import type { ModelEntry, ModelRegistry, TierList } from "../src/models-schema"
 import { releasedRoadmapRounds } from "../src/roadmap"
 import { runTransfer } from "../src/transfer"
 import { addTask } from "../src/task-add"
-import { completePhase, establishRound, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
+import { completePhase, establishRound, phaseLabel, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
 import { renderRoundBrief } from "../src/round-brief"
 import { renderTaskIndex } from "../src/tasks"
 import { reportForUserPath } from "../src/docpaths"
@@ -1005,5 +1005,161 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
     expect(round).not.toContain("retry ladder")
     // The person's brief is the construct's input: the advance proceeds.
     expect(out.lines.some((line) => line.includes("⏸ review stop: the formulation todo"))).toBe(true)
+  })
+})
+
+describe("transfer: the open round (plans/0243 B — establish, absorb, close)", () => {
+  const OPEN_LINE = "- R-01 open — absorb fixes and small features"
+  const BRIEFS = "\n## Round briefs\n\n### R-01\n\nKeep the shipped tool healthy.\n\n- Acceptance: the reported issues stay fixed.\n"
+
+  async function openRepo(line: string = OPEN_LINE): Promise<string> {
+    const dir = await repo()
+    // The clean-gate shape of the 0115 suite: AGENTS.md local-only.
+    await Bun.write(join(dir, ".gitignore"), ".auto/\ntmp/\n/AGENTS.md\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "ignore the block")
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS([line]))
+    return dir
+  }
+
+  async function commitAll(dir: string, message: string) {
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", message)
+  }
+
+  // Mark a task done the way a run's close-out would leave it (done.md, the
+  // index line ticked), and commit — the state past a first fix's run.
+  async function doneTask(dir: string) {
+    const state = (await readPhases(dir, 1))!
+    const phase = state.phases[0]!
+    await addTask(dir, phase, "fix the login crash")
+    const index = join(dir, phase.dir, "tasks.md")
+    await Bun.write(index, (await Bun.file(index).text()).replace("- [ ] T-001", "- [x] T-001"))
+    rmSync(join(dir, "docs/T-001/todo.md"))
+    await Bun.write(join(dir, "docs/T-001/done.md"), taskDoc("T-001", "R-01.P01"))
+    await commitAll(dir, "task done")
+  }
+
+  // Fill the round brief's ## Close — the person's close intent.
+  async function fillClose(dir: string) {
+    const brief = join(dir, "docs/R-01/round.md")
+    const text = await Bun.file(brief).text()
+    await Bun.write(brief, `${text.split("## Close")[0]!}## Close\n\n- The fixes are restated in the target's own docs; nothing accepted as lost.\n`)
+  }
+
+  test("an open line establishes the light round: the Kind index, the pre-seeded brief, the open G1 channels", async () => {
+    const dir = await openRepo()
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(out.code).toBe(0)
+    expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("Kind: open\n")
+    expect((await readPhases(dir, 1))!.phases.map(phaseLabel)).toEqual(["P01-implement"])
+    // The pre-seeded brief carries the line's goal as its Goal.
+    expect(await Bun.file(join(dir, "docs/R-01/round.md")).text()).toContain("## Goal\n\nabsorb fixes and small features")
+    // The sourced suffix names the kind; the G1 next teaches the open
+    // channels, never a construction.
+    expect(out.lines.some((line) => line.includes("✓ round R-01 established: P01-implement — open round from the roadmap of docs/analysis.md (R-01 line \"absorb fixes and small features\"; the kind establishes its single implement phase; config default was \"mt\")"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("next (round-start gate): review the round setup and the pre-seeded docs/R-01/round.md"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("the round stays open until you fill its ## Close"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("it constructs"))).toBe(false)
+    // The AGENTS.md guidance state is the open variant.
+    expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("round-start gate, an open round")
+    // The setup stays uncommitted (the G1 review is the person's commit).
+    expect((await git(dir, "status", "--porcelain")).trim()).not.toBe("")
+  })
+
+  test("nothing to advance: the empty round and the pending round refuse teaching the open channels", async () => {
+    const dir = await openRepo()
+    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await commitAll(dir, "round start")
+    const empty = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(empty.code).toBe(2)
+    expect(empty.lines.some((line) => line.includes("nothing to advance: round R-01 is open — its single phase stays open by design"))).toBe(true)
+    expect(empty.lines.some((line) => line.includes("no task is listed yet — add one with: opencode-auto plan") && line.includes("--new-task"))).toBe(true)
+    expect(empty.lines.some((line) => line.includes("to close the round instead: fill the ## Close of docs/R-01/round.md"))).toBe(true)
+    const state = (await readPhases(dir, 1))!
+    await addTask(dir, state.phases[0]!, "fix the login crash")
+    const pending = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(pending.code).toBe(2)
+    expect(pending.lines.some((line) => line.includes("1 pending task(s) execute with: opencode-auto run"))).toBe(true)
+  })
+
+  test("the close is the person's: the untouched ## Close holds; the filled one closes; the next transfer is the ordinary round-open", async () => {
+    const dir = await openRepo()
+    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await commitAll(dir, "round start")
+    await doneTask(dir)
+    // The untouched ## Close holds the close (the round-close checks gate it).
+    const held = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(held.code).toBe(2)
+    expect(held.lines.some((line) => line.includes("round R-01 does not pass its round-close checks, so the open round cannot close yet — nothing was closed"))).toBe(true)
+    expect(held.lines.some((line) => line.includes("## Close"))).toBe(true)
+    expect(existsSync(join(dir, "docs/R-01/P01-implement/todo.md"))).toBe(true)
+    // The filled ## Close is the close intent: the arm lands it.
+    await fillClose(dir)
+    await commitAll(dir, "close listing")
+    const closed = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(closed.code).toBe(0)
+    expect(closed.lines.some((line) => line.includes("✓ open round R-01 closed"))).toBe(true)
+    expect(closed.lines.some((line) => line.includes("next: open the next round with: opencode-auto transfer"))).toBe(true)
+    expect(existsSync(join(dir, "docs/R-01/P01-implement/done.md"))).toBe(true)
+    expect((await Bun.file(join(dir, "docs/R-01/phases.md")).text()).trimEnd().endsWith("- [x] P01 implement")).toBe(true)
+    // The transition commit landed on the close's own pathspec; the tree is clean.
+    expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+    const subjects = (await git(dir, "log", "--format=%s")).split("\n")
+    expect(subjects).toContain("PLAN close R-01 (P01-implement Implementation, open round)")
+    // The following invocation is the ordinary shape 4: the roadmap holds no
+    // line for R-02 — the exhausted stop, never a silent config round.
+    const next = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(next.code).toBe(0)
+    expect(next.lines.some((line) => line.includes("holds no line for round R-02"))).toBe(true)
+  })
+
+  test("a close over pending work refuses naming run and close, never a silent fold", async () => {
+    const dir = await openRepo()
+    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await commitAll(dir, "round start")
+    const state = (await readPhases(dir, 1))!
+    await addTask(dir, state.phases[0]!, "fix the login crash")
+    await fillClose(dir)
+    await commitAll(dir, "close intent with pending work")
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(out.code).toBe(2)
+    expect(out.lines.some((line) => line.includes("still holds 1 pending task(s) and does not close on them"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("opencode-auto close <ref>"))).toBe(true)
+    expect(existsSync(join(dir, "docs/R-01/P01-implement/todo.md"))).toBe(true)
+  })
+
+  test("a released proposal beats the seed: installed verbatim at the establishment, the stop teaching the open channels", async () => {
+    const dir = await openRepo()
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS([OPEN_LINE]) + BRIEFS)
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(out.code).toBe(0)
+    expect(out.lines.some((line) => line.includes("installs verbatim over the seed — the round-start gate passes"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("✓ round brief installed verbatim: docs/analysis.md `### R-01` → docs/R-01/round.md"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("next: the round is open — add tasks with: opencode-auto plan") && line.includes("--new-task"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("review stop: the formulation todo"))).toBe(false)
+    const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
+    expect(round).toContain("Keep the shipped tool healthy.")
+    expect(round).toContain("## Close")
+    // The driver's round-start commit swept the setup: the tree is clean.
+    expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+  })
+
+  test("the interrupted close settles on its own commit, then the ordinary round-open", async () => {
+    const dir = await openRepo()
+    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await commitAll(dir, "round start")
+    await doneTask(dir)
+    await fillClose(dir)
+    await commitAll(dir, "close listing")
+    // The kill window: the completion rename landed, its commit did not.
+    const state = (await readPhases(dir, 1))!
+    const phase = state.phases[0]!
+    expect(await completePhase(dir, phase, [])).toEqual([])
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(out.code).toBe(0)
+    expect(out.lines.some((line) => line.includes("✓ the interrupted close of open round R-01 settled on its own commit"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("holds no line for round R-02"))).toBe(true)
+    expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
   })
 })

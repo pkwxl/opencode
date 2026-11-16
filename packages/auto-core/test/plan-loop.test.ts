@@ -388,3 +388,42 @@ describe("the digest cap of the round's first planning session", () => {
     },
   )
 })
+
+describe("the open round in the phase loop (plans/0243 B)", () => {
+  async function openFixture(): Promise<LoopFixture> {
+    const f = await loopFixture("implement")
+    made.push(f)
+    await establishRound(f.dir, { phases: "implement", open: { goal: "absorb fixes" } })
+    await f.commit("round start")
+    return f
+  }
+
+  test("run on an empty open round teaches the open channels, exit 0, no session", async () => {
+    const f = await openFixture()
+    const { code, lines } = await f.run()
+    expect(code).toBe(0)
+    expect(lines.some((line) => line.includes("no tasks listed in docs/R-01/P01-implement/tasks.md yet — round R-01 is open: add the first with"))).toBe(true)
+    // The phase stays open (todo.md, never done.md); no session ran.
+    expect(has(f, "docs/R-01/P01-implement/todo.md")).toBe(true)
+    expect(f.agent.prompts).toHaveLength(0)
+  })
+
+  test("all tasks done: the wrap-up keeps the round open — no handover, no boundary stop, the close channel taught", async () => {
+    const f = await openFixture()
+    const phase = await f.phase(0)
+    await Bun.write(join(f.dir, phase.dir, "tasks.md"), renderTaskIndex(qualifiedPhase(phase), [{ id: "T-001", title: "task T-001", done: true }]))
+    await Bun.write(join(f.dir, "docs/T-001/done.md"), taskDoc("T-001", qualifiedPhase(phase)))
+    await f.commit("task done")
+    const { code, lines } = await f.run()
+    expect(code).toBe(0)
+    expect(lines).toContain("✓ all tasks complete")
+    expect(lines.some((line) => line.includes("round R-01 stays open: absorb more work with"))).toBe(true)
+    expect(lines.some((line) => line.includes("to close it, fill the ## Close of docs/R-01/round.md"))).toBe(true)
+    // No distillation, no boundary vocabulary, no rename: the round is open.
+    expect(lines.some((line) => line.includes("phase boundary"))).toBe(false)
+    expect(lines.some((line) => line.includes("phase handover"))).toBe(false)
+    expect(has(f, "docs/R-01/P01-implement/todo.md")).toBe(true)
+    expect(has(f, "docs/R-01/P01-implement/done.md")).toBe(false)
+    expect(f.agent.prompts).toHaveLength(0)
+  })
+})

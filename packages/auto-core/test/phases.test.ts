@@ -14,7 +14,9 @@ import {
   formatPhases,
   legacyLayoutProblem,
   nextRound,
+  phaseTailDrift,
   roundEstablishing,
+  roundIsOpen,
   parsePhases,
   phaseAcceptanceDoc,
   phaseArtifacts,
@@ -28,6 +30,7 @@ import {
   routePhase,
   syncPhaseIndex,
 } from "../src/phases"
+import { closeSection, renderOpenRoundBrief, roundBriefText } from "../src/round-brief"
 import { withDirFactory } from "./fixtures/dir"
 
 describe("parsePhases", () => {
@@ -584,4 +587,40 @@ describe("rounds (M section + the per-round directory scheme): currentRound / ne
       rmSync(dir, { recursive: true, force: true })
     }
   })
+})
+
+describe("the open round (plans/0243 B): the index Kind line, the establishment, the drift pin", () => {
+  test("establishRound open writes the Kind line, the single implement phase and the pre-seeded brief", withDir(async (dir) => {
+    await establishRound(dir, { phases: "implement", round: 1, open: { goal: "absorb fixes and small features" } })
+    const index = await read(dir, "docs/R-01/phases.md")
+    expect(index).toContain("# Phases (R-01)\nKind: open\n")
+    const state = (await readPhases(dir, 1))!
+    expect(state.open).toBe(true)
+    expect(state.phases.map(phaseLabel)).toEqual(["P01-implement"])
+    expect(await roundIsOpen(dir)).toBe(true)
+    // The pre-seeded brief: the goal is real content (genuine planning
+    // input), the other sections stay hints, and ## Close stays the
+    // untouched stub the close gate reads.
+    const brief = await read(dir, "docs/R-01/round.md")
+    expect(brief).toBe(renderOpenRoundBrief(1, "absorb fixes and small features"))
+    expect(await roundBriefText(dir, 1)).toContain("absorb fixes and small features")
+    expect(closeSection(brief)).toBe("")
+  }))
+
+  test("a normal round's index carries no Kind line and reads open: false (the pre-0243 floor); an unknown kind is a named problem", withDir(async (dir) => {
+    await establishRound(dir, { phases: "am", round: 1 })
+    expect(await read(dir, "docs/R-01/phases.md")).not.toContain("Kind:")
+    expect((await readPhases(dir, 1))!.open).toBe(false)
+    expect(await roundIsOpen(dir)).toBe(false)
+    await Bun.write(join(dir, phaseIndexPath(1)), (await read(dir, "docs/R-01/phases.md")).replace("# Phases (R-01)", "# Phases (R-01)\nKind: wide"))
+    await expect(readPhases(dir, 1)).rejects.toThrow(/unknown round kind "wide"/)
+  }))
+
+  test("the kind is write-once (a re-sync keeps the Kind line) and the open round never drifts (the pinned phase list)", withDir(async (dir) => {
+    await syncPhaseIndex(dir, 1, "implement", true)
+    await syncPhaseIndex(dir, 1, "implement")
+    expect(await read(dir, "docs/R-01/phases.md")).toContain("Kind: open\n")
+    expect(await phaseTailDrift(dir, 1, "adm")).toBeUndefined()
+    expect(await phaseTailDrift(dir, 1, "implement")).toBeUndefined()
+  }))
 })

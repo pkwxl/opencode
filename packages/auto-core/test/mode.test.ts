@@ -17,9 +17,11 @@ ${marker} note.
 }
 
 describe("built-in modes", () => {
-  test("the built-ins register only migrate, both copy blocks present (migrated verbatim from the old registry)", () => {
+  test("the built-ins register the five scenario postures (migrate plus the plans/0243 A family), both copy blocks present", () => {
     const modes = loadModes()
-    expect(Object.keys(modes)).toEqual(["migrate"])
+    // The family order is the registry's insertion order (plans/0243 A): the
+    // migration posture first, then the maintenance pair, then fork and pr.
+    expect(Object.keys(modes)).toEqual(["migrate", "debug", "fix", "fork", "pr"])
     const mode = modes.migrate!
     expect(mode.name).toBe("migrate")
     // init lead-in: scenario definition, task-layout principles
@@ -31,6 +33,27 @@ describe("built-in modes", () => {
     expect(mode.exec).toContain("behaviourally equivalent")
     expect(mode.exec).toContain("compatibility layer")
     expect(mode.exec).toContain("AUTO-DECISION")
+  })
+
+  test("the plans/0243 A postures carry their scenario discipline in both blocks", () => {
+    const modes = loadModes()
+    // debug: reproduction before fix, diagnosis converted to a failing test
+    expect(modes.debug!.init).toContain("reproduce → diagnose → fix → verify")
+    expect(modes.debug!.init).toContain("no fix task is planned before a failing reproduction exists")
+    expect(modes.debug!.exec).toContain("turns green")
+    expect(modes.debug!.exec).toContain("Fix the named cause only")
+    // fix: one issue per task, the regression-test duty
+    expect(modes.fix!.init).toContain("One issue per task")
+    expect(modes.fix!.exec).toContain("fails without the fix and passes with it")
+    expect(modes.fix!.exec).toContain("No refactors, dependency bumps or format-only changes ride a fix")
+    // fork: recorded divergence, the upstream-merge surface
+    expect(modes.fork!.init).toContain("small, recorded, and mergeable")
+    expect(modes.fork!.exec).toContain("recorded deviation")
+    expect(modes.fork!.exec).toContain("upstream-merge surface clean")
+    // pr: the one review-ready change set, commit hygiene
+    expect(modes.pr!.init).toContain("one review-ready change set")
+    expect(modes.pr!.exec).toContain("Commit hygiene is part of the deliverable")
+    expect(modes.pr!.exec).toContain("splits into its own task")
   })
 
   test("unregistered names are absent from the registry (optimize/implement/test must come from the target directory)", () => {
@@ -50,7 +73,8 @@ describe("target-directory mode extension (.opencode/auto/modes/)", () => {
       writeFileSync(join(overlay, "optimize.md"), modeText("optimize", "optimized"))
       writeFileSync(join(overlay, "migrate.md"), modeText("migrate", "custom"))
       const modes = loadModes(dir)
-      expect(Object.keys(modes).sort()).toEqual(["migrate", "optimize"])
+      // The five built-ins (plans/0243 A) plus the overlay, sorted.
+      expect(Object.keys(modes).sort()).toEqual(["debug", "fix", "fork", "migrate", "optimize", "pr"])
       expect(modes.optimize!.init).toContain("optimized intro")
       // Same-name override: the built-in migrate's copy is replaced by the target-directory version
       expect(modes.migrate!.init).toContain("custom intro")

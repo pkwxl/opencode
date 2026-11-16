@@ -62,6 +62,53 @@ export function renderRoundBrief(round: number): string {
   ].join("\n")
 }
 
+// The open round's pre-seeded brief (plans/0243 B): the Goal section carries
+// the released roadmap line's goal verbatim, so the light round still opens
+// with its brief holding the line's intent — the person's G1 review edits or
+// accepts it (the seed's provenance comment says so). Acceptance, Release and
+// `## Close` stay the stub's hints: they are the person's judgment, and the
+// close gate still requires the restatement listing. The seed's Goal makes
+// roundBriefText defined (genuine planning input) — the released `### R-NN`
+// proposal's precedence rides on the untouched-seed comparison below, not on
+// emptiness.
+export function renderOpenRoundBrief(round: number, goal: string): string {
+  return [
+    `# Round ${roundDirName(round)}`,
+    "",
+    "## Goal",
+    "",
+    goal.trim(),
+    "",
+    "<!-- Seeded from the released roadmap line of the project analysis (plans/0243) — revise freely; every",
+    "     planning session reads this file as it stands. -->",
+    "",
+    "## Acceptance criteria",
+    "",
+    "<!-- How a reviewer tells the round's goal was met: checks, behaviors, evidence. -->",
+    "",
+    "## Release criteria",
+    "",
+    "<!-- What must hold before the round is closed and the next one starts. The driver itself checks that the whole",
+    "     tree holds no reference into docs/T-*, docs/R-* or .auto/ and, when config `build` is set, that the build",
+    "     passes. -->",
+    "",
+    ROUND_CLOSE_HEADING,
+    "",
+    ...CLOSE_HINT,
+    "",
+  ].join("\n")
+}
+
+// Whether the round brief is still the untouched open-round seed (plans/0243
+// B): the file equals renderOpenRoundBrief byte-identically — the same
+// driver-rendering comparison installRoundBrief makes. A released `### R-NN`
+// proposal beats the seed (the person's released words over the driver's
+// mechanical seed); any hand edit stands over both.
+export async function openRoundBriefUntouched(dir: string, round: number, goal: string): Promise<boolean> {
+  const raw = await Bun.file(join(dir, roundBriefPath(round))).text().catch(() => undefined)
+  return raw === renderOpenRoundBrief(round, goal)
+}
+
 // HTML comments are the stub's hints, never content. Exported since the
 // project analysis document (src/analysis.ts, plans/0084) stubs the same way
 // and its section checks strip with the same rule.
@@ -136,7 +183,10 @@ export type RoundBriefInstall = { installed: boolean; lines: string[] }
 // stays for the next clean gate to judge — the release consumptions run
 // ahead of it, and what they fold is unlisted otherwise. Never clobbers: a
 // round.md that already holds real content stands (the person's file wins,
-// an ℹ line saying so). An equal re-run writes nothing and only re-commits
+// an ℹ line saying so). The open round's seed (plans/0243 B) is the one
+// driver-written exception — `opts.seed` names the seed rendering, and a
+// file byte-identical to it counts as untouched (a released proposal beats
+// the mechanical seed). An equal re-run writes nothing and only re-commits
 // (the interrupted-install shape: the write landed, the commit did not —
 // round.md sits inside the pathspec, so the re-run's commit stages it). The
 // commit failure is a ⚠ line, never a throw — the caller's stop owns the
@@ -147,12 +197,13 @@ export async function installRoundBrief(
   source: string,
   proposal: string,
   commit: RoundBriefCommitter,
+  opts: { seed?: string } = {},
 ): Promise<RoundBriefInstall> {
   const target = join(dir, roundBriefPath(round))
   const name = roundDirName(round)
   const composed = renderInstalledRoundBrief(round, proposal)
   const existing = await Bun.file(target).text().catch(() => undefined)
-  if (existing !== undefined && existing !== composed && stubbedText(existing) !== undefined) {
+  if (existing !== undefined && existing !== composed && existing !== opts.seed && stubbedText(existing) !== undefined) {
     return { installed: false, lines: [`ℹ the released round-brief proposal was not installed: ${roundBriefPath(round)} already holds content — the file on disk stands`] }
   }
   if (existing !== composed) await Bun.write(target, composed)

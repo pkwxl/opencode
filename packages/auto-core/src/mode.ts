@@ -12,6 +12,10 @@
 import { readFileSync } from "node:fs"
 import { overlayMarkdownFiles } from "./overlay"
 import builtinMigrate from "../templates/modes/migrate.md" with { type: "file" }
+import builtinDebug from "../templates/modes/debug.md" with { type: "file" }
+import builtinFix from "../templates/modes/fix.md" with { type: "file" }
+import builtinFork from "../templates/modes/fork.md" with { type: "file" }
+import builtinPr from "../templates/modes/pr.md" with { type: "file" }
 
 export type ModeSpec = {
   name: string
@@ -36,8 +40,19 @@ const RETIRED_SECTIONS = ["final: audit", "final: validate", "final: finalize"]
 // the shared overlay loader reads the directory and enforces the name
 // grammar). Invalid files throw (the CLI turns this into an exit-1 usage
 // error). With dir omitted, only the built-ins are loaded.
+// The built-in family (plans/0243 A): migrate the migration posture, debug
+// and fix the post-completion maintenance postures, fork the divergent-copy
+// posture, pr the review-ready change-set posture — all scenario prose only
+// (the 0079 §5 ruling: a mode never shapes phases or scheduling; the light
+// work shape is the open round's, entered by a roadmap line).
 export function loadModes(dir?: string): Record<string, ModeSpec> {
-  const modes: Record<string, ModeSpec> = { migrate: parseModeFile("migrate", readFileSync(builtinMigrate, "utf8")) }
+  const modes: Record<string, ModeSpec> = {
+    migrate: parseModeFile("migrate", readFileSync(builtinMigrate, "utf8")),
+    debug: parseModeFile("debug", readFileSync(builtinDebug, "utf8")),
+    fix: parseModeFile("fix", readFileSync(builtinFix, "utf8")),
+    fork: parseModeFile("fork", readFileSync(builtinFork, "utf8")),
+    pr: parseModeFile("pr", readFileSync(builtinPr, "utf8")),
+  }
   if (!dir) return modes
   for (const file of overlayMarkdownFiles(dir, "modes", "mode")) {
     modes[file.name] = parseModeFile(file.name, file.text)

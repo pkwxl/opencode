@@ -2,7 +2,11 @@
 // establishment authority since plans/0101 D5): the machine-parsed round
 // lines `- R-NN <phases> — <goal>` and the released readers over them — a
 // line rules only once the person released the document with a whole-line
-// `Clarified: yes`. Split from src/analysis.ts (plans/0114 D4, provenance's
+// `Clarified: yes`. Since plans/0243 B a line's phases slot may carry the
+// reserved kind word `open` alone — `- R-NN open — <goal>`, the open round
+// (the light maintenance kind: one implicit implement phase, no formulation,
+// no handover, closing by transfer at the person's `## Close`).
+// Split from src/analysis.ts (plans/0114 D4, provenance's
 // precedent) so the runtime plane reaches the readers beside the pipeline
 // (`fix`'s supersession finding names the config key a covering roadmap
 // retires); analysis keeps the release grammar gates and the establishment
@@ -12,7 +16,7 @@ import { join } from "node:path"
 import { ANALYSIS_DOC } from "./docpaths"
 import { clarifiedMark } from "./phases"
 import { loadPhaseTypes } from "./phases/custom"
-import { resolvePhases } from "./phases/registry"
+import { OPEN_KIND, resolvePhases } from "./phases/registry"
 
 // One planned round of the roadmap: `- R-01 adm — <goal>`. The phases value
 // is the phases grammar (the config key's own) — a letter preset or a comma-separated
@@ -34,14 +38,31 @@ const ROADMAP_LINE = /^\s*[-*]\s*R-(\d+)\s+([a-z][a-z0-9,() -]*?)\s+(?:—|--)\s
 // bytes (P13).
 export const normalizeNewlines = (text: string): string => text.replace(/\r\n/g, "\n")
 
-export type RoadmapRound = { round: number; phases: string; goal: string }
+// The open-round kind word `OPEN_KIND` lives in the registry's vocabulary
+// table (src/phases/registry.ts, plans/0243 B): the reserved word alone in a
+// line's phases slot — `- R-05 open — <goal>` — marks the light round kind
+// (a single implicit implement phase that never hands over or auto-closes;
+// tasks enter by `plan --new-task` / `--append`, the round closes by
+// transfer once the person fills `## Close`). The word establishes phases
+// "implement" by definition; it is never a phase-type id, and `open` beside
+// other tokens is a release problem analysis.ts names (one legal spelling).
+
+export type RoadmapRound = { round: number; phases: string; goal: string; kind?: "open" }
 
 // Every roadmap round line in the document, in order (whole-document scan).
+// An open-kind line carries `phases: "implement"` (the kind's definition) and
+// `kind: "open"`; consumers that compare phases values skip kind lines (the
+// divergence predicate below), and the establishment resolves them like any
+// other line.
 export function roadmapRounds(text: string): RoadmapRound[] {
   const rounds: RoadmapRound[] = []
   for (const line of normalizeNewlines(text).split("\n")) {
     const match = ROADMAP_LINE.exec(line)
-    if (match) rounds.push({ round: Number(match[1]!), phases: match[2]!.replace(/\s+/g, ""), goal: match[3]!.trim() })
+    if (!match) continue
+    const round = Number(match[1]!)
+    const goal = match[3]!.trim()
+    const phases = match[2]!.replace(/\s+/g, "")
+    rounds.push(phases === OPEN_KIND ? { round, phases: "implement", goal, kind: OPEN_KIND } : { round, phases, goal })
   }
   return rounds
 }
@@ -68,8 +89,11 @@ export async function releasedRoadmapRound(dir: string, round: number): Promise<
 // surfaces only a real divergence. A line value that fails to resolve reads
 // as divergent (fail loud, P12): it is the person's word and establishment
 // will judge it; the config side is strict-loaded before every caller
-// reaches here.
+// reaches here. An open-kind line (plans/0243 B) never diverges: its phases
+// slot is a round kind, not a phases value — comparing it against config
+// would be a category error, and the kind's "implement" holds by definition.
 export async function phasesDiverge(dir: string, configPhases: string, covered: RoadmapRound): Promise<boolean> {
+  if (covered.kind === OPEN_KIND) return false
   const types = loadPhaseTypes(dir)
   const resolved = (value: string) => resolvePhases(value, types)?.map((entry) => entry.type).join(",")
   const configIds = resolved(configPhases)

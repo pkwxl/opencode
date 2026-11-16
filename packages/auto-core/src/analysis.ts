@@ -37,6 +37,7 @@ import { CLARIFIED_MARK, clarifiedMark } from "./phases"
 import { resolvePhases, type PhaseTypeEntry } from "./phases/registry"
 import { stripComments, stubbedText } from "./round-brief"
 import { normalizeNewlines, releasedRoadmapRound, roadmapRounds, ROADMAP_LINE, type RoadmapRound } from "./roadmap"
+import { OPEN_KIND } from "./phases/registry"
 
 // The section headings the release requires (whole `## ` lines; the bodies are
 // free). `## Close` has no counterpart here — the analysis predates every
@@ -287,7 +288,7 @@ function sectionBody(text: string, heading: string): string | undefined {
     .trim()
 }
 
-export type RoundPhasesResolution = { phases: string; roadmap?: RoadmapRound }
+export type RoundPhasesResolution = { phases: string; roadmap?: RoadmapRound; kind?: "open" }
 
 // Roadmap-driven establishment (plans/0101 D5): the released roadmap's line
 // for a round *is* its phase list — `roadmapPhases(analysis, round) ??
@@ -295,12 +296,15 @@ export type RoundPhasesResolution = { phases: string; roadmap?: RoadmapRound }
 // share, so a roadmap-established round is never drift against config and a
 // config value alone never silently re-shapes a round the roadmap covers.
 // The line rides along for the sourced stop line and the strict-failure
-// naming. m mode never consults the roadmap (an m-mode project has no phased
-// roadmap), whatever lines the document carries.
+// naming. An open-kind line (plans/0243 B) resolves to `phases: "implement"`
+// with `kind: "open"` riding along — the caller's establishment writes the
+// index's Kind line and the pre-seeded brief from it. m mode never consults
+// the roadmap (an m-mode project has no phased roadmap), whatever lines the
+// document carries.
 export async function resolveRoundPhases(dir: string, round: number, fallback: string): Promise<RoundPhasesResolution> {
   if (fallback === "m") return { phases: fallback }
   const roadmap = await releasedRoadmapRound(dir, round)
-  return roadmap ? { phases: roadmap.phases, roadmap } : { phases: fallback }
+  return roadmap ? { phases: roadmap.phases, roadmap, ...(roadmap.kind !== undefined ? { kind: roadmap.kind } : {}) } : { phases: fallback }
 }
 
 // Round-like bullets that fail the parse — the incident shape: a document
@@ -356,6 +360,22 @@ export function analysisProblems(text: string, types: readonly PhaseTypeEntry[])
   for (const entry of rounds) {
     if (resolvePhases(entry.phases, types)) continue
     problems.push(`the roadmap line \`R-${String(entry.round).padStart(2, "0")} ${entry.phases}\` is not a phases value (a letter preset over admtvk, or a comma-separated type-id list; known types: ${known.join(", ")})`)
+  }
+  // The open-kind reservation (plans/0243 B): `open` alone in a line's
+  // phases slot is the open-round kind; the word beside anything else
+  // (`open implement`, `analysis,open`) reads as drafted to its author but
+  // never parses — the release names the reserved word, not only the generic
+  // not-a-phases-value message the mangled capture would meet above.
+  for (const line of normalizeNewlines(text).split("\n")) {
+    const match = ROADMAP_LINE.exec(line)
+    if (!match) continue
+    const slot = match[2]!
+    if (slot.replace(/\s+/g, "") !== OPEN_KIND && /\bopen\b/.test(slot)) {
+      problems.push(
+        `the roadmap line \`${match[0]!.trim()}\` uses \`open\` beside other phases tokens — \`open\` is a round kind, not a phase type: ` +
+          `the open round's line is \`- R-NN open — <goal>\` alone (no phases list; the kind establishes its single implement phase itself), and a phased round's line lists phases only`,
+      )
+    }
   }
   // The optional round-brief proposals (plans/0115 D2): only when the section
   // is present — an absent section is the byte-identical floor. A drafted but

@@ -2,7 +2,7 @@
 // grammar checks and the roadmap's round lines, pure over text — the route
 // behavior over fixtures lives in test/plan.test.ts's analysis describe.
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -18,7 +18,7 @@ import {
 } from "../src/analysis"
 import { clarifiedMark, surveyForks } from "../src/phases"
 import { BUILTIN_PHASE_TYPES } from "../src/phases/registry"
-import { releasedRoadmapRound, roadmapPhases, roadmapRounds } from "../src/roadmap"
+import { phasesDiverge, releasedRoadmapRound, roadmapPhases, roadmapRounds } from "../src/roadmap"
 
 // A released, well-formed analysis: every section holds real content, one
 // open-recorded fork (answered beside, per the release recipe), a brief
@@ -450,5 +450,41 @@ describe("the round-brief proposals (plans/0115)", () => {
     expect(stub).toContain("a `##` -->\n<!-- heading ends this section, so keep every proposal above any later `##` heading")
     // The comment-only stub still parses to nothing.
     expect(roundBriefProposals(stub).size).toBe(0)
+  })
+})
+
+describe("the open-round kind in roadmap lines (plans/0243 B)", () => {
+  test("`open` alone in the phases slot is the kind: it establishes implement, never a phase-type id", async () => {
+    const text = RELEASED.replace("- R-02 mtv — acceptance pass and knowledge", "- R-02 open — absorb fixes and small features")
+    expect(analysisProblems(text, BUILTIN_PHASE_TYPES)).toEqual([])
+    expect(roadmapRounds(text)).toEqual([
+      { round: 1, phases: "adm", goal: "port the core and its tests" },
+      { round: 2, phases: "implement", goal: "absorb fixes and small features", kind: "open" },
+    ])
+    // The released reader carries the kind; the resolution threads it.
+    expect(roadmapPhases(text, 2)).toBe("implement")
+    const dir = mkdtempSync(join(tmpdir(), "auto-open-"))
+    try {
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      writeFileSync(join(dir, "docs/analysis.md"), text)
+      expect(await resolveRoundPhases(dir, 2, "adm")).toEqual({
+        phases: "implement",
+        roadmap: { round: 2, phases: "implement", goal: "absorb fixes and small features", kind: "open" },
+        kind: "open",
+      })
+      // An open line never reads as a phases divergence against config (the
+      // kind's "implement" holds by definition, not by comparison).
+      expect(await phasesDiverge(dir, "adm", { round: 2, phases: "implement", goal: "", kind: "open" })).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("`open` beside other tokens is the named reserved-word problem, one legal spelling", () => {
+    for (const line of ["- R-02 open implement — fixes", "- R-02 implement,open — fixes", "- R-02 analysis, open — fixes"]) {
+      const text = RELEASED.replace("- R-02 mtv — acceptance pass and knowledge", line)
+      const problems = analysisProblems(text, BUILTIN_PHASE_TYPES)
+      expect(problems.some((problem) => problem.includes("uses `open` beside other phases tokens — `open` is a round kind, not a phase type"))).toBe(true)
+    }
   })
 })

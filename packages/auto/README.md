@@ -705,7 +705,8 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
 - **Project start (no round yet)**: with the assisted analysis on (`OPENCODE_AUTO_ANALYSIS`, default)
   the first `transfer` opens `docs/analysis.md` — work with your agent on the analysis, the goals, one
   `Fork:` line per open decision, the `## Project brief` proposal and the multi-round `## Roadmap`
-  (`- R-NN <phases> — <goal>` per round — the round's phases value: a letter preset over `admtvk` containing `m`, or comma-separated type ids), then release it: `clarify`
+  (`- R-NN <phases> — <goal>` per round — the round's phases value: a letter preset over `admtvk` containing `m`, or comma-separated type ids — or the single word `open`, the
+  [open round](#open-rounds) kind), then release it: `clarify`
   writes the whole line `Clarified: yes` and commits it (adding the line and committing by hand remains
   fully supported); the next `transfer` installs the approved brief verbatim and establishes
   `R-01` under the roadmap's line (the config `phases` value the fallback when no released line covers
@@ -773,6 +774,43 @@ opencode-auto run <dir>         # then: execute the phase's tasks; stops at its 
   (command recorded as `transfer`), and questions in its sessions follow `plan`'s policy: never asked
   — recorded as provisional defaults and listed in the round report's needs-attention section (a
   session that asks anyway waits for a human without timeout).
+
+### Open rounds
+
+A roadmap line whose phases slot is the single word `open` — `- R-05 open — <goal>`, nothing beside it —
+establishes an **open round** (auto-core plans/0243): the light maintenance kind, for the work that comes
+back after a project ships (bug fixes found in application, small features, debugging). Where a phased
+round carries the full ceremony — a formulation todo per phase, a handover distillation per phase, a
+boundary stop per phase — an open round carries none of it:
+
+```sh
+opencode-auto transfer <dir>              # opens the round under its `open` line: single P01-implement,
+                                          # round.md pre-seeded with the line's goal — review and commit (the round-start gate)
+opencode-auto plan <dir> --new-task "fix the login crash on empty input"   # per issue: the task, no session
+opencode-auto run <dir>                   # executes it (verification session + unified commit as anywhere);
+                                          # ends with the round still open — no handover, no boundary stop
+opencode-auto plan <dir> --new-task "…"   # the next issue…  (`--append -p <text>` batches a described set)
+# when the window is done:
+#   fill the `## Close` of docs/R-05/round.md, commit, then:
+opencode-auto transfer <dir>              # closes the round (round-close checks gate it) and stops with its listing;
+                                          # the next transfer opens the next roadmap line (or the exhausted stop)
+```
+
+- **The kind, not a mode**: `open` is a round kind in the roadmap grammar (the one reshape channel,
+  plans/0137) — never a phase type (`open` beside other tokens is a release problem the analysis flow
+  names; a custom phase type named `open` is refused at load). The scenario *prose* for maintenance work
+  rides the mode layer instead: `amend -m debug|fix` (see [Mode layer](#mode-layer--m--mode)).
+- **What stays**: everything per-task — the lead session, the independent verification session, the
+  bounded fix loop, the unified commit, the regression boundary between units, `--repair`, work orders,
+  the retry fork. The round's index records its kind (`Kind: open` in `docs/R-NN/phases.md`,
+  write-once); the round never drifts (its single implicit implement phase is the kind's definition);
+  `status`, `driver-helper` and the AGENTS.md guidance teach the open channels in every open-round state.
+- **The close is the person's**: `transfer` on an open round refuses while work is pending (naming
+  `run`) or nothing is listed (naming `--new-task`); the filled `## Close` of `round.md` is the close
+  intent — the round-close checks gate it (build, the restatement listing), the completion rename and a
+  `phase-transition` commit scoped to the round's own close surface land it, and no handover distills.
+  A released `### R-NN` round-brief proposal beats the pre-seeded goal and installs verbatim at the
+  open, as for any round.
 
 ### The release command (clarify)
 
@@ -1965,13 +2003,26 @@ driver's scheduling state machine:
 - Execution sessions (decompose / whole-task / subtask / wrap-up) get the matching notes.
 
 Modes are file templates too: **adding a mode = dropping a mode file into the target directory, zero source
-changes**. Built-in `templates/modes/migrate.md` (auto-core package; migration/upgrade scenario: tasks
-arranged as "baseline confirmation → migration rework → regression verification" under the precondition
-that external behavior stays unchanged, regression verification preferring existing test/build commands;
-the execution
-notes require old and new implementations to behave identically, compatibility layers to state their
-purpose and removal timing, and migration trade-offs to be marked per `AUTO-DECISION`
-requirements); the target directory's `.opencode/auto/modes/<name>.md` adds or overrides modes, file
+changes**. Built-in mode files (auto-core package; plans/0243 A):
+
+- `templates/modes/migrate.md` — migration/upgrade scenario: tasks arranged as "baseline confirmation →
+  migration rework → regression verification" under the precondition that external behavior stays
+  unchanged; the execution notes require old and new implementations to behave identically, compatibility
+  layers to state their purpose and removal timing, and migration trade-offs to be marked per
+  `AUTO-DECISION` requirements.
+- `templates/modes/debug.md` — defect diagnosis scenario: tasks arranged as "reproduce → diagnose → fix →
+  verify"; no fix before a failing reproduction exists or the cause is named; instrumentation removed when
+  the fix lands; the diagnosis converted into a failing test the fix turns green.
+- `templates/modes/fix.md` — known-issue fix scenario: one issue per task, the smallest coherent diff;
+  every fix lands with its regression test; no refactors or dependency bumps riding a fix.
+- `templates/modes/fork.md` — divergent-copy scenario: the divergence stays small, recorded and mergeable;
+  every deliberate divergence a recorded deviation with its upstreaming disposition; the upstream-merge
+  surface kept clean.
+- `templates/modes/pr.md` — review-ready change-set scenario: the round's output is one coherent,
+  self-contained change set; tests and docs planned with the behavior they cover; commit hygiene part of
+  the deliverable.
+
+The target directory's `.opencode/auto/modes/<name>.md` adds or overrides modes, file
 format (rendered through the template engine before injection):
 
 ```markdown
@@ -1991,7 +2042,10 @@ sections `## final: audit` /
 The mode is fixed in the project config's `mode` key (`.opencode/auto/config.json`): `init -m <name>`
 amends it explicitly (precedence: explicit value > existing config value > default `migrate`); `run` reads
 and resolves it from the config and no longer accepts `-m` (appearing is a usage error). Additional
-scenarios like `optimize` / `implement` / `test` are just files in the format above.
+scenarios like `optimize` / `implement` / `test` are just files in the format above. A mode is scenario
+prose only (plans/0079 §5): the light *work shape* for maintenance is the open round's (see
+[Open rounds](#open-rounds)), not a mode's — `amend -m debug` switches the prose posture while an `open`
+roadmap line carries the shape.
 
 ## Phased flow (--phases)
 

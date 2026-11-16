@@ -114,6 +114,8 @@ import {
   executeNotice,
   gateStopLines,
   nothingToAdvanceLine,
+  openRoundEmptyLines,
+  openRoundWrapLines,
   phaseBoundaryLines,
   roadmapExhaustedLines,
   roundCloseRefusalLines,
@@ -132,6 +134,7 @@ import {
   phaseSurveyDoc,
   phaseTitle,
   readPhases,
+  roundIsOpen,
   roundRoot,
   routePhase,
   surveyForks,
@@ -362,6 +365,29 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
           channels.push("none — the next act is execution")
           recovery.push(`${bin} run ${dir}`)
         }
+      }
+    } else if (route && (await roundIsOpen(dir))) {
+      // An open round (plans/0243 B): the light kind's rhythm — tasks absorb
+      // with --new-task / --append, run executes, and the person's filled
+      // ## Close plus transfer closes the round. The loop's and transfer's
+      // own lines verbatim (the brief renders the same bytes the terminal
+      // prints, D3).
+      if (route.type === "plan") {
+        stopLines.push(...(await openRoundEmptyLines(dir, route.plan.index)))
+        channels.push(`tasks — add one with ${bin} plan ${dir} --new-task "<title>" (or --append -p <text> once one exists); the round stays open`)
+        recovery.push(`${bin} plan ${dir} --new-task "<title>"`, `then: ${bin} run ${dir}`)
+      } else if (route.type === "execute") {
+        const failed = await failedTasks(dir, route.plan.tasks)
+        if (failed.length) failedRow(dir, failed, channels, recovery)
+        else {
+          stopLines.push(...executeNotice(dir, route, true))
+          channels.push("none — the next act is execution")
+          recovery.push(`${bin} run ${dir}`)
+        }
+      } else {
+        stopLines.push(...(await openRoundWrapLines(dir)))
+        channels.push(`${roundBriefPath(round)} — fill its \`## Close\` section when the round's work is done, then commit; until then more work absorbs with plan --new-task / --append`)
+        recovery.push(`${bin} transfer ${dir} — closes the open round (its round-close checks gate the close)`)
       }
     } else if (route?.type === "complete") {
       if (await roundCloseRow(round)) {

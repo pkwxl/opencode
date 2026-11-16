@@ -1255,3 +1255,62 @@ describe("planPrelude: --round / --phase (rows 14–15, plans/0084)", () => {
     }),
   )
 })
+
+describe("planPrelude: the open-round rows (plans/0243 B)", () => {
+  test("an empty open round: bare plan teaches the open channels; an input teaches the first --new-task; --append rides the same refusal", withDir(async (dir) => {
+    await establishRound(dir, { phases: "implement", open: { goal: "absorb fixes" } })
+    const bare = await planPrelude(dir, { phases: "mt" })
+    expect(bare.type).toBe("stop")
+    if (bare.type === "stop") {
+      expect(bare.code).toBe(0)
+      expect(bare.lines[0]).toContain("no tasks listed in docs/R-01/P01-implement/tasks.md yet — round R-01 is open: add the first with")
+      expect(bare.lines[0]).toContain("--new-task")
+    }
+    for (const opts of [{ input: INPUT }, { append: true, input: INPUT }]) {
+      const refused = await planPrelude(dir, { phases: "mt", ...opts })
+      expect(refused).toEqual({
+        type: "stop",
+        code: 1,
+        lines: [
+          `the open round lists no task yet: add the first with opencode-auto plan ${dir} --new-task "<title>" ` +
+            `(a planning input appends once a task exists — opencode-auto plan ${dir} --append -p <text>)`,
+        ],
+      })
+    }
+  }))
+
+  test("a working open round: an input implies the append (the loop's open arm takes it); bare plan points at run; all done teaches the wrap-up", withDir(async (dir) => {
+    await establishRound(dir, { phases: "implement", open: { goal: "absorb fixes" } })
+    const [implement] = await phasesOf(dir)
+    await listTasks(dir, implement!, [["T-001", false]])
+    expect(await planPrelude(dir, { phases: "mt", input: INPUT })).toEqual({ type: "loop" })
+    expect(await planPrelude(dir, { phases: "mt", append: true, input: INPUT })).toEqual({ type: "loop" })
+    const bare = await planPrelude(dir, { phases: "mt" })
+    expect(bare.type).toBe("stop")
+    if (bare.type === "stop") {
+      expect(bare.code).toBe(0)
+      expect(bare.lines[0]).toContain("lists 1 task(s) (1 pending); next:")
+    }
+    await listTasks(dir, implement!, [["T-001", true]])
+    const done = await planPrelude(dir, { phases: "mt" })
+    expect(done.type).toBe("stop")
+    if (done.type === "stop") {
+      expect(done.code).toBe(0)
+      expect(done.lines[0]).toContain("round R-01 stays open: absorb more work with")
+      expect(done.lines[0]).toContain("to close it, fill the ## Close of docs/R-01/round.md")
+    }
+  }))
+
+  test("--new-task lands on an open round's plan route (row 11 covers it, no session, one commit)", withDir(async (dir) => {
+    await commitAll(dir)
+    await establishRound(dir, { phases: "implement", open: { goal: "absorb fixes" } })
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "round start")
+    const added = await planPrelude(dir, { phases: "mt", newTask: "fix the login crash" })
+    expect(added.type).toBe("stop")
+    if (added.type === "stop") {
+      expect(added.code).toBe(0)
+      expect(added.lines[0]).toContain("✓ task T-001 added to docs/R-01/P01-implement/tasks.md")
+    }
+  }))
+})

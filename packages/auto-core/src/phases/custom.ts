@@ -33,7 +33,7 @@
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { fieldBlockProblems, parseUnitDoc } from "../document/unit"
-import { BUILTIN_PHASE_TYPES, PHASE_GATES, PRESET_FORM, TIERS, type PhaseGate, type PhaseTypeEntry, type Tier } from "./registry"
+import { BUILTIN_PHASE_TYPES, OPEN_KIND, PHASE_GATES, PRESET_FORM, TIERS, type PhaseGate, type PhaseTypeEntry, type Tier } from "./registry"
 
 export const PHASE_TYPE_DIR = join(".opencode", "auto", "phases")
 
@@ -194,9 +194,13 @@ function reasoningTier(where: string, raw: string | undefined): Tier {
 // undefined = usable as a custom type id. Model-routing role words are reserved
 // too, but that list belongs to the driver (switches.ts phaseTypeRoleProblems,
 // checked where the driver loads the types; D8: this domain stays below it).
+// The roadmap's kind word `open` is reserved as well (plans/0243 B, one
+// conscious lockstep with the roadmap grammar): a custom type named `open`
+// could never be established by a roadmap line, so the load refuses it here.
 export function typeNameProblem(type: string): string | undefined {
   if (!NAME_PATTERN.test(type)) return "the file name must be a lowercase letter followed by letters/digits/hyphens"
   if (BUILTIN_PHASE_TYPES.some((entry) => entry.type === type)) return `"${type}" is a builtin phase type and cannot be redefined`
+  if (type === OPEN_KIND) return `"${type}" is reserved (the roadmap line's open-round kind word, plans/0243); pick another name`
   if (PRESET_FORM.test(type)) return `"${type}" reads as a letter preset (only admtvk letters); pick a name with another letter`
   return undefined
 }

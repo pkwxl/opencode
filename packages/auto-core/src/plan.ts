@@ -41,6 +41,7 @@ import {
   phaseTailDrift,
   phaseTitle,
   readPhases,
+  roundIsOpen,
   roundRoot,
   routePhase,
   surveyForks,
@@ -604,6 +605,33 @@ export async function planPrelude(dir: string, opts: {
     })
     return adopted.ok ? stop(0, adopted.lines) : stop(adopted.code, adopted.lines)
   }
+  // The open-round rows (plans/0243 B): an open round has no formulation to
+  // dispatch and no boundary to hold, so the phased rows 6/7/10 below do not
+  // apply to it. Task entry is --new-task (row 11 above, route-unaware) and
+  // --append; a planning input implies the append (m mode's D23 rule, scoped
+  // to the round kind); an empty index teaches the first --new-task; with
+  // the work all done (execute route exhausted or the handover route), the
+  // stop teaches run — the round never advances here, transfer owns its
+  // close. --export / --adopt (--rows 12-13 above) and the preparation
+  // flags keep their own rows: their refusals already speak the truth of an
+  // open round's routes.
+  if (!manual && (await roundIsOpen(dir))) {
+    if (opts.input !== undefined || opts.append) {
+      if (route.type === "plan") {
+        return stop(1, [
+          `the open round lists no task yet: add the first with ${surface.plan(dir, "--new-task \"<title>\"")} ` +
+            `(a planning input appends once a task exists — ${surface.plan(dir, "--append -p <text>")})`,
+        ])
+      }
+      const mid = await midPipelineTask(dir)
+      if (mid) return stop(1, [midPipelineLine(mid)])
+      return { type: "loop" }
+    }
+    if (route.type === "plan") return stop(0, await openRoundEmptyLines(dir, route.plan.index))
+    const pending = route.plan.tasks.filter((task) => task.status !== "done").length
+    if (pending > 0) return stop(0, executeNotice(dir, route, true))
+    return stop(0, await openRoundWrapLines(dir))
+  }
   if (!manual) {
     // Row 10 (plans/0053 D23): --append on the execute or handover route
     // appends to the phase the route names now — never advancing to another
@@ -873,6 +901,11 @@ export async function establishRoundSetup(
     if (result.type === "failed") return { type: "failed", error: result.error, switched: result.switched }
     isolated = result.isolated
   }
+  // An open round's roadmap line resolves to `phases: "implement"` with the
+  // kind riding along (plans/0243 B): the establishment seeds the index's
+  // Kind line and the brief's Goal from the line's goal. The strict
+  // validation below judges the resolved value exactly as any other line's.
+  const open = resolved.kind === "open" && resolved.roadmap ? { goal: resolved.roadmap.goal } : undefined
   // A roadmap line whose types the pack no longer ships fails strictly here,
   // through the ordinary establishment validation, naming the line (D5): the
   // release checked it against the types of its day, and this is where the
@@ -889,12 +922,17 @@ export async function establishRoundSetup(
   }
   let state: PhaseState | undefined
   try {
-    await establishRound(dir, { phases, round })
+    await establishRound(dir, { phases, round, ...(open ? { open } : {}) })
     state = await readPhases(dir, round)
   } catch (error) {
     return { type: "error", error: error instanceof Error ? error.message : String(error) }
   }
-  await ensurePointer(dir, { testByDriver: opts.testByDriver, guidance: { kind: "round", round: name, manual: opts.phases === "m" } })
+  // An open round's G1 guidance teaches the open rhythm (plans/0243 B) —
+  // the pre-seeded brief, the open channels — not the construct.
+  await ensurePointer(dir, {
+    testByDriver: opts.testByDriver,
+    guidance: { kind: "round", round: name, manual: opts.phases === "m", ...(open ? { open: true } : {}) },
+  })
   return { type: "ok", round, state: state!, units: state!.phases, isolated, resolved, branch }
 }
 
@@ -1427,6 +1465,53 @@ export function emptyIndexNotice(dir: string, index: string): string[] {
   const { bin } = shellProfile()
   const surface = surfaceOf()
   return [`ℹ no tasks listed in ${index} yet: list them there by hand (docs/T-NNN/todo.md per task), or run: ${surface.plan(dir, "-p <text> | --file <path>")}`]
+}
+
+// —— The open round's lines (plans/0243 B; the 0102/0105 family so the
+// person-proxy brief renders the same bytes the loop and transfer print) ——
+// The open channels every open-round stop teaches: absorbing more work, and
+// closing at the person's ## Close. The round is derived per call (the
+// current round — every open-round stop is about the current round).
+
+// run on an open round whose task index is still empty: the first task is a
+// --new-task away, and the round stays open.
+export async function openRoundEmptyLines(dir: string, index: string): Promise<string[]> {
+  const surface = surfaceOf()
+  const n = await currentRound(dir)
+  const round = roundDirName(n)
+  return [
+    `ℹ no tasks listed in ${index} yet — round ${round} is open: add the first with ${surface.plan(dir, "--new-task \"<title>\"")} ` +
+      `(or ${surface.plan(dir, "--append -p <text>")} once one exists); the round stays open, absorbing tasks one by one`,
+  ]
+}
+
+// run on an open round whose tasks are all done: the wrap-up — the round
+// stays open (no handover, no boundary), and the person's channels are
+// absorbing more or closing.
+export async function openRoundWrapLines(dir: string): Promise<string[]> {
+  const surface = surfaceOf()
+  const n = await currentRound(dir)
+  const round = roundDirName(n)
+  return [
+    `ℹ round ${round} stays open: absorb more work with ${surface.plan(dir, "--new-task \"<title>\"")} ` +
+      `(or ${surface.plan(dir, "--append -p <text>")} for a described batch); to close it, fill the ## Close of ${roundBriefPath(n)}, commit, then run: ${surface.transfer(dir)}`,
+  ]
+}
+
+// transfer on an open round that still holds work (or holds none yet):
+// nothing to advance — the open round has no boundary; the channels are run
+// (or the first --new-task) and the ## Close.
+export async function openRoundHeldLines(dir: string, pending: number): Promise<string[]> {
+  const surface = surfaceOf()
+  const n = await currentRound(dir)
+  const round = roundDirName(n)
+  return [
+    `⏸ nothing to advance: round ${round} is open — its single phase stays open by design; ` +
+      (pending > 0
+        ? `${pending} pending task(s) execute with: ${surface.run(dir)}`
+        : `no task is listed yet — add one with: ${surface.plan(dir, "--new-task \"<title>\"")}`),
+    `to close the round instead: fill the ## Close of ${roundBriefPath(n)}, commit, then re-run: ${surface.transfer(dir)}`,
+  ]
 }
 
 // A planning step that just ran under plan's stop condition (plans/0053 D6,

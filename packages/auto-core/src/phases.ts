@@ -44,9 +44,10 @@ import {
   type UnitDecl,
   type UnitRef,
 } from "./document/unit"
-import { renderRoundBrief } from "./round-brief"
+import { renderOpenRoundBrief, renderRoundBrief } from "./round-brief"
 import { loadPhaseTypes } from "./phases/custom"
 import {
+  OPEN_KIND,
   phaseType,
   resolvePhases,
   unitArtifactSpecs,
@@ -142,9 +143,18 @@ export function phaseIndexPath(round: number): string {
 const INDEX_NOTE =
   "Phase index (opencode-auto): order and membership only. A phase is complete when its directory holds done.md; the driver ticks the line when it renames todo.md."
 
-function renderPhaseIndex(round: string, units: readonly PhaseUnit[], done: ReadonlySet<string> = new Set()): string {
+// The round-kind field line (plans/0243 B): `Kind: open` directly under the
+// index title — the open round's durable, write-once kind record. The kind is
+// pinned at establishment (the roadmap line's `open` word); a phases value
+// never changes it, and the round's phase list never drifts (the kind's
+// single implicit implement phase is its definition). Absent = a normal
+// round (every pre-0243 index). Any other value is a problem (fail loud):
+// the only kinds the driver writes are the ones it can honor.
+const KIND_LINE = /^Kind:\s*(\S+)\s*$/m
+
+function renderPhaseIndex(round: string, units: readonly PhaseUnit[], done: ReadonlySet<string> = new Set(), open = false): string {
   const lines = units.map((unit) => `- [${done.has(unit.id) ? "x" : " "}] ${unit.id} ${unit.type}`)
-  return [`# Phases (${round})`, "", INDEX_NOTE, "", ...lines, ""].join("\n")
+  return [`# Phases (${round})`, ...(open ? [`Kind: ${OPEN_KIND}`] : []), "", INDEX_NOTE, "", ...lines, ""].join("\n")
 }
 
 // A phase's todo.md as written at round start: the qualified id and display
@@ -163,6 +173,11 @@ export type PhaseState = {
   // `Closed: <reason>` → the reason. Still done for scheduling (currentPhase,
   // doneTypes), but not delivered.
   closed: Map<string, string>
+  // The open-round kind (plans/0243 B): the index's `Kind: open` line — the
+  // round's single implicit implement phase never hands over or auto-closes;
+  // tasks enter by `plan --new-task` / `--append`, the round closes by
+  // transfer at the person's `## Close`.
+  open: boolean
 }
 
 // Read a round's phase index and the state files of its phases (round defaults
@@ -202,6 +217,14 @@ export async function readPhases(dir: string, round?: number): Promise<PhaseStat
     if (depends !== undefined) unit.depends = depends
   }
   if (!problems.length) problems.push(...unitProblems("phase", phases.map(phaseDecl)))
+  // The round-kind field (plans/0243 B): `Kind: open` or absent; anything
+  // else is a problem, never a silently ignored word.
+  const kind = KIND_LINE.exec(text)
+  let open = false
+  if (kind) {
+    if (kind[1] !== OPEN_KIND) problems.push(`unknown round kind "${kind[1]}" (the Kind line is either absent or \`Kind: ${OPEN_KIND}\`)`)
+    else open = true
+  }
   if (problems.length) {
     throw new Error(
       `phase index ${index} is invalid: ${problems.join("; ")}. ` +
@@ -209,7 +232,7 @@ export async function readPhases(dir: string, round?: number): Promise<PhaseStat
         "(`Depends:` in it names phases of this round); fix it manually and re-run",
     )
   }
-  return { round: n, index, phases, done: scan.done, closed: scan.closed }
+  return { round: n, index, phases, done: scan.done, closed: scan.closed, open }
 }
 
 // The phase index (routing already validated it; re-read here only for the
@@ -217,7 +240,7 @@ export async function readPhases(dir: string, round?: number): Promise<PhaseStat
 // src/loop-plan.ts's (plans/0053 A2); its home moved here with plans/0235's
 // split so every planning-family module reads it without a cycle.
 export async function phaseState(directory: string): Promise<PhaseState> {
-  return (await readPhases(directory).catch(() => undefined)) ?? { round: 0, index: "", phases: [], done: new Set(), closed: new Map() }
+  return (await readPhases(directory).catch(() => undefined)) ?? { round: 0, index: "", phases: [], done: new Set(), closed: new Map(), open: false }
 }
 
 const phaseDecl = (unit: PhaseUnit): UnitDecl => ({ id: unit.id, ...(unit.depends !== undefined ? { depends: unit.depends } : {}) })
@@ -241,7 +264,9 @@ export function doneTypes(state: Pick<PhaseState, "phases" | "done">): string[] 
 // matching prefix (same position, same type) is kept; the rest is replaced,
 // which is allowed only for phases that are not done and whose directory holds
 // nothing but todo.md — anything else throws before a file is touched.
-export async function syncPhaseIndex(dir: string, round: number, phases: string): Promise<PhaseUnit[]> {
+// `open` (plans/0243 B) renders the Kind line — the caller passes it only at
+// an open round's establishment; an existing index's kind is preserved below.
+export async function syncPhaseIndex(dir: string, round: number, phases: string, open = false): Promise<PhaseUnit[]> {
   const { units, existing, keep } = await phaseSync(dir, round, phases)
   const name = roundDirName(round)
   if (existing) {
@@ -253,7 +278,10 @@ export async function syncPhaseIndex(dir: string, round: number, phases: string)
     const todo = join(dir, unit.dir, UNIT_PENDING)
     if (!(await Bun.file(todo).exists())) await Bun.write(todo, renderPhaseTodo(unit))
   }
-  await Bun.write(join(dir, phaseIndexPath(round)), renderPhaseIndex(name, units, existing?.done))
+  // The round kind is write-once: a re-sync of an open round's index keeps
+  // the Kind line (the kind's phase list is its definition; the drift check
+  // below pins it, so this render only happens at the establishment).
+  await Bun.write(join(dir, phaseIndexPath(round)), renderPhaseIndex(name, units, existing?.done ?? new Set(), existing?.open ?? open))
   return units
 }
 
@@ -296,6 +324,7 @@ export async function phaseTailDrift(dir: string, round: number, phases: string)
   if (phases === "m") return undefined
   const existing = await readPhases(dir, round)
   if (!existing) return undefined
+  if (existing.open) return undefined // the kind's phase list is pinned (plans/0243 B)
   if (existing.phases.every((unit) => existing.done.has(unit.id))) return undefined
   const { units, keep } = await phaseSync(dir, round, phases)
   if (keep === existing.phases.length && keep === units.length) return undefined
@@ -555,11 +584,14 @@ export function phaseFlowBlockedLine(reason: string): string {
 }
 
 // Phase progress line (run banner and status): ✓ = done, ⊘ = closed (done
-// without delivering; replaces ✓), ▶ = current.
-export function formatPhases(state: Pick<PhaseState, "phases" | "done" | "closed">): string {
+// without delivering; replaces ✓), ▶ = current. An open round names its kind
+// (plans/0243 B): the round's one phase never completes until the person
+// closes the round, and the marker keeps a reader from reading it as stalled.
+export function formatPhases(state: Pick<PhaseState, "phases" | "done" | "closed" | "open">): string {
   const current = currentPhase(state)
   const mark = (unit: PhaseUnit) => (state.closed.has(unit.id) ? "⊘" : state.done.has(unit.id) ? "✓" : unit === current ? "▶" : "")
-  return state.phases.map((unit) => `${phaseLabel(unit)}${mark(unit)}`).join(" ")
+  const sides = state.phases.map((unit) => `${phaseLabel(unit)}${mark(unit)}`).join(" ")
+  return state.open ? `${sides} (open round)` : sides
 }
 
 // —— Rounds (plans/0006-phases-design.md §M; round-directory plan) ——
@@ -647,15 +679,31 @@ export async function roundRoot(dir: string, round: number): Promise<string | un
 // The no-phase mode ("m") establishes R-01 with its single implement phase the
 // same way. The round defaults to currentRound (init / first run); a new round
 // passes nextRound.
-export async function establishRound(dir: string, opts: { phases: string; round?: number }): Promise<{ round: number; root: string }> {
+// An open round (plans/0243 B, `opts.open` from a released `open` roadmap
+// line): the index records the Kind line and the brief is pre-seeded with the
+// line's goal — the person's G1 review edits or accepts it, so the light
+// round still opens bracketed by their round-start commit.
+export async function establishRound(dir: string, opts: { phases: string; round?: number; open?: { goal: string } }): Promise<{ round: number; root: string }> {
   const round = opts.round ?? (await currentRound(dir))
   const root = roundDir(round)
   await mkdir(join(dir, root), { recursive: true })
-  await syncPhaseIndex(dir, round, opts.phases)
+  await syncPhaseIndex(dir, round, opts.phases, opts.open !== undefined)
   // The no-phase mode has no round loop (plans/0048 §2), so no brief.
   const brief = join(dir, roundBriefPath(round))
-  if (opts.phases !== "m" && !(await Bun.file(brief).exists())) await Bun.write(brief, renderRoundBrief(round))
+  if (opts.phases !== "m" && !(await Bun.file(brief).exists())) {
+    await Bun.write(brief, opts.open ? renderOpenRoundBrief(round, opts.open.goal) : renderRoundBrief(round))
+  }
   return { round, root }
+}
+
+// Whether the current (or named) round is an open round (plans/0243 B): the
+// one predicate every open-aware consumer reads (the loop's never-closing
+// arm, transfer's intercept, the read-outs) — derived from the index's Kind
+// line, no persisted state. A missing or unreadable index is not open (the
+// caller's own routing names the real problem).
+export async function roundIsOpen(dir: string, round?: number): Promise<boolean> {
+  const state = await readPhases(dir, round).catch(() => undefined)
+  return state?.open === true
 }
 
 // Knowledge documents of a round: the standard artifacts of its knowledge

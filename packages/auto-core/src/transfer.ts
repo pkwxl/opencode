@@ -24,7 +24,14 @@
 //      the round past its last line meets the roadmap-exhausted stop naming
 //      the extend-the-document channel, never a silent config round —
 //      establishing and stopping at G1; the construction is the following
-//      invocation's (the round-start commit sits between, as in shape 1).
+//      invocation's (the round-start commit sits between, as in shape 1);
+//   5. open round (plans/0243 B, the current round established `open` by its
+//      roadmap line): no boundary exists — pending work or an empty index
+//      refuses teaching the open channels (run / --new-task), and the
+//      person's filled `## Close` is the close intent: the round-close
+//      checks gate it, the completion rename and the transition commit land
+//      it (no distillation), and the stop is the close listing — the next
+//      invocation is the ordinary shape 4.
 // The refusals between: m mode keeps today's shape entirely (D8 — plan and
 // run, no boundary vocabulary applies), nothing to advance (the phase still
 // holds pending work — run's), and the gate-held stop. Exit codes: the
@@ -45,7 +52,7 @@ import { ensurePointer } from "./agents-block"
 import { releasedRoundBriefProposal, roundBriefNearMissNote } from "./analysis"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
-import { commitTree } from "./git"
+import { changedFiles, commitTree } from "./git"
 import { runAll } from "./loop"
 import { logGateStop } from "./loop-phase"
 import type { RunAllOpts } from "./loop-preflight"
@@ -54,8 +61,9 @@ import { acquireRunLock, lockLines } from "./lock"
 import { loadIntents, planningInputScaffold } from "./intent/load"
 import { planInputPath } from "./plan-input"
 import { releasedRoadmapRound, releasedRoadmapRounds } from "./roadmap"
-import { installRoundBrief, roundBriefText } from "./round-brief"
+import { closeSection, installRoundBrief, openRoundBriefUntouched, renderOpenRoundBrief, roundBriefText } from "./round-brief"
 import {
+  completePhase,
   currentRound,
   legacyLayoutProblem,
   phaseFlowBlockedLine,
@@ -64,9 +72,13 @@ import {
   phaseIndexPath,
   phaseKey,
   phaseLabel,
+  phaseTitle,
   readPhases,
+  roundIsOpen,
   roundRoot,
   routePhase,
+  type PhaseRoute,
+  type PhaseUnit,
 } from "./phases"
 import {
   analysisGate,
@@ -76,6 +88,7 @@ import {
   establishRoundSetup,
   establishStopLines,
   nothingToAdvanceLine,
+  openRoundHeldLines,
   phaseRefText,
   roadmapExhaustedLines,
   roundCloseRefusalLines,
@@ -84,7 +97,7 @@ import {
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { shellProfile } from "./shell"
 import { autoSwitches } from "./switches"
-import { loadPlan } from "./tasks"
+import { loadPlan, type Plan } from "./tasks"
 import { wallPrecheckFindings } from "./wall"
 
 // The shell's entry: the run lock ("transfer", re-entered by the runAll the
@@ -143,6 +156,14 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
       return 2
     }
   }
+  // The open-round intercept (plans/0243 B, 0101 D2's fifth shape): an open
+  // round has no phase boundary to advance — its single implicit implement
+  // phase stays open, absorbing tasks, until the person closes it. Work
+  // pending (or nothing listed) is run's and --new-task's; the person's
+  // close intent is the filled `## Close` restatement of round.md, and the
+  // close arm below lands it. The completed round (a close that already
+  // landed) falls past here to the round-open shape.
+  if (route.type !== "complete" && (await roundIsOpen(directory))) return await openRoundAdvance(directory, round, route, opts)
   // Shape 4: the round closed — the round-close gate, then the next round
   // from the roadmap's line or the exhausted stop.
   if (route.type === "complete") return await roundOpen(directory, round, opts)
@@ -282,6 +303,115 @@ async function rederiveTail(directory: string, round: number, opts: RunAllOpts):
   return undefined
 }
 
+// The open round's advance (plans/0243 B, the intercept's resolved-by-state
+// body): an open round has no phase boundary — pending work or an empty
+// index teaches the open channels (exit 2, nothing advanced); the person's
+// filled `## Close` is the close intent, honored in every state (a close
+// over pending tasks is refused naming run and `close`, never a silent
+// fold; a close over an empty index is the honest withdrawal of the line).
+async function openRoundAdvance(
+  directory: string,
+  round: number,
+  route: Exclude<PhaseRoute<Plan>, { type: "complete" } | { type: "blocked" }>,
+  opts: RunAllOpts,
+): Promise<number> {
+  const { bin } = shellProfile()
+  const pending = route.type === "execute" ? route.plan.tasks.filter((task) => task.status !== "done").length : 0
+  // The close intent: the filled `## Close` restatement — the same section
+  // the round-close gate reads below (the seed's hint comments strip to
+  // nothing, so an untouched close is not intent).
+  const brief = await Bun.file(join(directory, roundBriefPath(round))).text().catch(() => undefined)
+  const closing = brief !== undefined && (closeSection(brief) ?? "") !== ""
+  if (route.type === "execute") {
+    if (closing) {
+      log(
+        `⏸ open round ${roundDirName(round)} still holds ${pending} pending task(s) and does not close on them: ` +
+          `execute them with: ${bin} run ${directory} — or close the ones that will not run (${bin} close <ref> ${directory} --reason <text>), then re-run: ${bin} transfer ${directory}`,
+      )
+      return 2
+    }
+    for (const line of await openRoundHeldLines(directory, pending)) log(line)
+    return 2
+  }
+  if (route.type === "plan" && !closing) {
+    for (const line of await openRoundHeldLines(directory, 0)) log(line)
+    return 2
+  }
+  return await openRoundClose(directory, round, route.phase, opts)
+}
+
+// The open round's close arm (plans/0243 B): the round-close checks gate the
+// close (the build, the restatement listing; their refusal is the person's
+// fix — nothing closed yet), then the completion rename and the transition
+// commit land it, and the stop is the close listing — the same review moment
+// a phased round's close is. No handover distills (the open round's phases
+// never distill; its record is the task documents, the brief and the
+// commits), and the commit's pathspec is the close's own write surface — the
+// index tick and the phase directory (plans/0207 D1's discipline) — so the
+// person's unrelated dirt stays for the clean gate that owns judging it.
+async function openRoundClose(directory: string, round: number, phase: PhaseUnit, opts: RunAllOpts): Promise<number> {
+  const { bin } = shellProfile()
+  const close = await roundCloseProblems(directory, round, { build: opts.build, scanExempt: opts.scanExempt })
+  if (close.problems.length) {
+    log(`⏸ round ${roundDirName(round)} does not pass its round-close checks, so the open round cannot close yet — nothing was closed`)
+    for (const line of roundCloseLines(close, "transfer")) log(line)
+    log(`next: fix them, commit, then re-run: ${bin} transfer ${directory}`)
+    return 2
+  }
+  // The phase's own gates (an acceptanceGate config covering implement is
+  // honored): read-only ahead of the rename, like the handover path's
+  // pre-check; completePhase's own re-check is the choke point either way.
+  const gates = phaseGates(phase, opts.acceptanceGate)
+  const problems = gates.length ? await phaseGateProblems(directory, phase, gates) : []
+  if (problems.length) {
+    await logGateStop(directory, phase, problems, undefined)
+    return 2
+  }
+  const gated = await completePhase(directory, phase, gates)
+  if (gated.length) {
+    await logGateStop(directory, phase, gated, undefined)
+    return 2
+  }
+  const settled = await commitTree(
+    directory,
+    { id: "PLAN", title: `round close (${roundDirName(round)})` },
+    { stage: "phase-transition", subject: `PLAN close ${roundDirName(round)} (${phaseTitle(phase)}, open round)` },
+    [phaseIndexPath(round), phase.dir],
+  )
+  if (!settled.ok) {
+    log(
+      `⏸ the open round's close commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
+        `The completion changes are kept in the worktree (the phase is already marked done); commit manually and re-run`,
+    )
+    return 2
+  }
+  for (const line of roundCloseLines(close)) log(line)
+  log(`✓ open round ${roundDirName(round)} closed`)
+  log(`next: open the next round with: ${bin} transfer ${directory}`)
+  return 0
+}
+
+// An open round's interrupted close (plans/0243 B): the completion rename
+// landed, its transition commit did not — the driver's own leftover, settled
+// here on the close's own pathspec exactly like the clean gate's
+// driver-state self-heal, so every kill point of the open close re-derives
+// (the round-close checks below then run over a committed tree).
+async function settleOpenClose(directory: string, round: number): Promise<void> {
+  const state = await readPhases(directory, round).catch(() => undefined)
+  if (!state?.open || !state.phases.every((unit) => state.done.has(unit.id))) return
+  const surface = [phaseIndexPath(round), ...state.phases.map((unit) => unit.dir)]
+  const norm = (file: string) => file.replaceAll("\\", "/")
+  const dirt = (await changedFiles(directory)).filter((file) => surface.some((path) => norm(file) === path || norm(file).startsWith(`${path}/`)))
+  if (!dirt.length) return
+  const settled = await commitTree(
+    directory,
+    { id: "PLAN", title: `round close (${roundDirName(round)})` },
+    { stage: "phase-transition", subject: `PLAN close ${roundDirName(round)} (open round — interrupted close settled)` },
+    surface,
+  )
+  if (settled.ok) log(`✓ the interrupted close of open round ${roundDirName(round)} settled on its own commit (the completion rename had landed without its commit)`)
+}
+
 // Shape 1 (plans/0101 D2): the 0084 rows 0/0a–0d re-homed from plan — today's
 // shapes and exit semantics as they move, the stop lines naming transfer's
 // rhythm. OPENCODE_AUTO_ANALYSIS=off degrades to direct establishment from
@@ -323,27 +453,65 @@ async function projectStart(directory: string, round: number, opts: RunAllOpts):
 // with plan's row machinery); transfer renders its own G1 lines — the
 // round-start commit is the person's review, and the command that follows it
 // is transfer (the construction and its review stop), not plan's dispatch.
+// An open round (plans/0243 B) stops on its own rhythm: the brief is
+// pre-seeded from the roadmap line's goal (the review edits or accepts it),
+// a released proposal installs over the seed at the establishment itself
+// (the m-mode precedent — no construction exists for the advance's seam to
+// carry the install), and the next step is the open channels, never a
+// construction.
 async function establishStop(directory: string, round: number, opts: RunAllOpts, before: string[]): Promise<number> {
   const { bin } = shellProfile()
   const setup = await establishRoundSetup(directory, round, { phases: opts.phases!, isolate: opts.isolate, testByDriver: opts.testByDriver })
   const ok = setup.type === "ok" ? setup : undefined
   const name = roundDirName(round)
+  // An open round's establishment carries the seed's goal (the resolved
+  // line's).
+  const openGoal = ok?.resolved.kind === "open" && ok.resolved.roadmap ? ok.resolved.roadmap.goal : undefined
   // The D5 sourced suffix (plans/0101 D5): a roadmap-established round names
-  // the line that ruled, beside the config default it displaced.
-  const sourceSuffix = ok?.resolved.roadmap ? ` — phases from the roadmap of ${ANALYSIS_DOC} (${name} line "${truncateGoal(ok.resolved.roadmap.goal)}"; config default was "${opts.phases}")` : ""
+  // the line that ruled, beside the config default it displaced. An open
+  // line names its kind — the phases it establishes are the kind's
+  // definition, not an ordinary phases value.
+  const sourceSuffix = ok?.resolved.roadmap
+    ? openGoal !== undefined
+      ? ` — open round from the roadmap of ${ANALYSIS_DOC} (${name} line "${truncateGoal(openGoal)}"; the kind establishes its single implement phase; config default was "${opts.phases}")`
+      : ` — phases from the roadmap of ${ANALYSIS_DOC} (${name} line "${truncateGoal(ok.resolved.roadmap.goal)}"; config default was "${opts.phases}")`
+    : ""
   // The round-brief proposal channel (plans/0115 D3): a released `### R-NN`
   // proposal passes the round-start gate — the person's release was the
-  // review — and the advance continues into the construction in the same
-  // invocation, the install landing inside it (applyReleasedBrief) on the
-  // driver's own round-start commit, which sweeps this uncommitted setup: the
-  // gate's person commit is replaced by the release mark. A round.md already
-  // holding content, or no proposal, keeps today's gate stop.
-  if (ok && (await roundBriefText(directory, round)) === undefined && (await releasedRoundBriefProposal(directory, round)) !== undefined) {
+  // review. For a phased round the advance continues into the construction
+  // in the same invocation, the install landing inside it
+  // (applyReleasedBrief) on the driver's own round-start commit, which
+  // sweeps this uncommitted setup: the gate's person commit is replaced by
+  // the release mark. For an open round the proposal beats the seed and
+  // installs here (no construction exists to carry it), the stop teaching
+  // the open channels. A round.md already holding content, or no proposal,
+  // keeps today's gate stop.
+  const proposal = ok ? await releasedRoundBriefProposal(directory, round) : undefined
+  const seedUntouched = ok && openGoal !== undefined ? await openRoundBriefUntouched(directory, round, openGoal) : false
+  if (ok && proposal !== undefined && ((await roundBriefText(directory, round)) === undefined || seedUntouched)) {
     for (const line of before) log(line)
     // The pair through the one wording home (plans/0207 D3, 0165-188): the
     // continuation composes through establishedLines exactly as the G1 stop's
     // success arm does — no second inline spelling to drift.
     for (const line of establishedLines(round, ok, `${ok.units.map(phaseLabel).join(", ")}${sourceSuffix}`)) log(line)
+    if (openGoal !== undefined) {
+      // The open round's proposal install (plans/0243 B): here at the
+      // establishment, plan's m-mode arm the precedent — the round-start
+      // commit sweeps this uncommitted setup, and the seed rendering rides
+      // along so the never-clobber guard reads the pre-seeded file as the
+      // driver's own untouched write, not the person's content.
+      const done = await installRoundBrief(directory, round, ANALYSIS_DOC, proposal, commitTree, { seed: renderOpenRoundBrief(round, openGoal) })
+      for (const line of done.lines) log(line)
+      log(
+        `ℹ the released \`${roundDirName(round)}\` round-brief proposal of ${ANALYSIS_DOC} installs verbatim over the seed — the round-start gate passes (your release was its review); ` +
+          `revise the brief in place any time, every planning session reads the current file`,
+      )
+      log(
+        `next: the round is open — add tasks with: ${bin} plan ${directory} --new-task "<title>" (or --append -p <text> once one exists), ` +
+          `execute them with: ${bin} run ${directory}; close the round by filling the ## Close of ${roundBriefPath(round)}, committing, and re-running: ${bin} transfer ${directory}`,
+      )
+      return 0
+    }
     log(
       `ℹ the released \`${roundDirName(round)}\` round-brief proposal of ${ANALYSIS_DOC} installs verbatim — the round-start gate passes (your release was its review); ` +
         `revise the brief in place any time, every planning session reads the current file`,
@@ -372,8 +540,12 @@ async function establishStop(directory: string, round: number, opts: RunAllOpts,
     "transfer",
     ok ? `${ok.units.map(phaseLabel).join(", ")}${sourceSuffix}` : "",
     ok
-      ? `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it; ` +
-        `then run: ${bin} transfer ${directory} — it constructs ${phaseRefText(ok.units[0]!)}'s plan task and stops for your review (plan dispatches it, run executes the phase)`
+      ? openGoal !== undefined
+        ? `next (round-start gate): review the round setup and the pre-seeded ${roundBriefPath(round)} (its ## Goal carries the roadmap line's goal — revise or accept it), and commit it; ` +
+          `then add tasks with: ${bin} plan ${directory} --new-task "<title>" (or --append -p <text> once one exists), execute them with: ${bin} run ${directory} — ` +
+          `the round stays open until you fill its ## Close and re-run: ${bin} transfer ${directory}`
+        : `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it; ` +
+          `then run: ${bin} transfer ${directory} — it constructs ${phaseRefText(ok.units[0]!)}'s plan task and stops for your review (plan dispatches it, run executes the phase)`
       : "",
   )
   // A released near-miss heading naming this round (plans/0158 D3): the
@@ -396,6 +568,9 @@ async function establishStop(directory: string, round: number, opts: RunAllOpts,
 // config `phases` (D5), today's behavior.
 async function roundOpen(directory: string, round: number, opts: RunAllOpts): Promise<number> {
   const { bin } = shellProfile()
+  // An open round's interrupted close settles first (plans/0243 B): the
+  // checks below read a committed state.
+  await settleOpenClose(directory, round)
   const close = await roundCloseProblems(directory, round, { build: opts.build, scanExempt: opts.scanExempt })
   if (close.problems.length) {
     for (const line of roundCloseRefusalLines(directory, round, round + 1, close, "transfer")) log(line)

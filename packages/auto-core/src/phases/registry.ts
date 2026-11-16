@@ -192,6 +192,13 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
 // implementation is meaningless, and "m" alone is the no-phase single run.
 export const REQUIRED_TYPE = "implement"
 
+// The open-round kind word (plans/0243 B): reserved in the roadmap line's
+// phases slot (`- R-NN open — <goal>`, src/roadmap.ts) — the light round
+// kind, never a phase-type id. It lives here in the vocabulary table so the
+// custom-type name check (src/phases/custom.ts) reserves it beside the
+// builtin ids without importing the roadmap plane above this domain.
+export const OPEN_KIND = "open"
+
 export function isPhaseLetter(value: string): value is PhaseLetter {
   return (PHASE_LETTERS as readonly string[]).includes(value)
 }

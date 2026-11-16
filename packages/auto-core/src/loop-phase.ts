@@ -36,10 +36,11 @@ import {
   phaseSurveyDoc,
   phaseTitle,
   phaseVerdictDoc,
+  roundIsOpen,
   routePhase,
   type PhaseUnit,
 } from "./phases"
-import { emptyIndexNotice, executeNotice, gateStopLines, phaseBoundaryLines, roundCompleteNext } from "./plan"
+import { emptyIndexNotice, executeNotice, gateStopLines, openRoundEmptyLines, openRoundWrapLines, phaseBoundaryLines, roundCompleteNext } from "./plan"
 import { planInputPath, readPlanInput } from "./plan-input"
 import { openBlockage } from "./blockage-diagnose"
 import { clampLine, clampedItemsOf } from "./charter-clamp"
@@ -689,6 +690,13 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
         )
       }
     }
+    // The open-round kind (plans/0243 B), derived once per routing pass: an
+    // open round's single implicit implement phase never hands over and never
+    // auto-closes, so the loop's open arms below ride this flag — the implied
+    // append (an input is an append, m mode's D23 rule scoped to the kind)
+    // and the never-closing wrap-up. Everything else (task pipeline, gates,
+    // regression) runs exactly as in any phase.
+    const openRound = !ctx.manual && (await roundIsOpen(directory))
     // An append this run was asked for (plans/0053 D23): the phase the route
     // names now already has its index written — tasks pending (execute route)
     // or the phase distilled / gate-stopped (handover route) — so new tasks
@@ -696,12 +704,32 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
     // It always rides an input (the prelude refuses --append without one, and
     // m mode implies the append from an input on a non-empty index), so the
     // input still being unconsumed is what makes this an append: a planning
-    // step consumed it otherwise, and appendPlan consumes it here.
-    if (ctx.input !== undefined && route.type !== "plan" && (ctx.append || ctx.manual)) {
+    // step consumed it otherwise, and appendPlan consumes it here. An open
+    // round implies the append the same way (plans/0243 B).
+    if (ctx.input !== undefined && route.type !== "plan" && (ctx.append || ctx.manual || openRound)) {
       banner(`${phaseTitle(route.phase)} task append`)
       const code = await appendWithStep(ctx, route.phase)
       if (code !== 0 || opts.stopBefore !== undefined) return code
       continue
+    }
+    // An open round (plans/0243 B) rides m mode's never-closing semantics
+    // scoped to the round kind: no formulation constructs, no handover, no
+    // boundary stop. With the index empty the run teaches the open channels;
+    // with every task done it wraps up — exit 0, the phase stays open — and
+    // the person's channels are absorbing more work or closing at ## Close.
+    // The execute route (pending work) falls through to the task loop below
+    // like any phase's.
+    if (openRound && route.type !== "execute") {
+      if (route.type === "plan") {
+        for (const line of await openRoundEmptyLines(directory, route.plan.index)) log(line)
+        return 0
+      }
+      log("✓ all tasks complete")
+      // the round proxy-answer summary (m mode's wrap-up arm prints it too):
+      // pinned above the open-round notice.
+      for (const line of await roundResolveLines(directory)) log(line)
+      for (const line of await openRoundWrapLines(directory)) log(line)
+      return 0
     }
     // manual mode (no phases): with no task to run it wraps up — an empty
     // task index prompts a fill-in, all tasks complete prints the

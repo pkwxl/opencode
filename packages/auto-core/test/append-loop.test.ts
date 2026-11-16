@@ -233,3 +233,22 @@ describe("the stale handover removed after a successful append (plans/0053 D25/F
     },
   )
 })
+
+describe("an open round's implied append (plans/0243 B)", () => {
+  test("a fresh input on the open round's listed index is an append without the flag (m mode's D23 rule, scoped to the kind)", async () => {
+    const f = await loopFixture("implement", (dir) => ({ turn: appendTurn(dir) }))
+    made.push(f)
+    await establishRound(f.dir, { phases: "implement", open: { goal: "absorb fixes" } })
+    const phase = await f.phase(0)
+    await seedTasks(f, phase, [["T-001", true]])
+    await f.commit("listed tasks")
+    const appended = await f.run({ stopBefore: "execute", planInput: { text: "One more fix." } })
+    expect(appended.code).toBe(0)
+    expect(await read(f, join(phase.dir, "tasks.md"))).toContain("- [ ] T-002 task T-002")
+    expect(has(f, "docs/T-002/todo.md")).toBe(true)
+    // The round is still the open round: nothing closed, nothing distilled.
+    expect(has(f, "docs/R-01/P01-implement/todo.md")).toBe(true)
+    openStepGone(f)
+    await clean(f)
+  })
+})

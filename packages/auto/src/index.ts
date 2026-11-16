@@ -428,7 +428,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
     "new-session",
     "--new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)",
   ],
-  ["mode", "-m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)"],
+  ["mode", "-m/--mode prompt-level scenario mode (built-in migrate, debug, fix, fork, pr; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)"],
   [
     "prompt",
     "-p/--prompt is the planning input of plan (-p <text> | --file <path>; plan --scaffold prints a template to complete into a file); on every other command it is refused. " +
