@@ -79,6 +79,7 @@ Six principles: four pillars, one fence, one contract. Removal of any breaks a c
 - Lane and regression verdicts parsed from log tails and receipts, never session claims ("receipts are the truth, the record is the liveness pointer") — `src/script.ts`, `src/regression.ts`; 0096, 0098.
 - Flow control keys on driver-persisted records: "only state the driver actually persists (and clears at close-out) can serve as the basis for advancing the flow" — `src/resume.ts`; 0018.
 - Zero-persist natural ends re-prompt once, then block for a human — 0026 D2.
+- **Amendment (plans/0244, S6).** The audit's first-hand duty — absolute in the bundle mandates ("re-run every deciding check first-hand") — is scoped by reach: first-hand where due (the round's measured delta reaches the row's watched surface); elsewhere a cited committed baseline with a recorded disjointness argument (Δ ∩ watched = ∅, mechanical) carries the verdict. Standing on this principle's own driver-persisted-evidence letter: a committed, git-addressable receipt is driver-persisted evidence, never the current agent's self-report — and the cover-set gate makes such evidence's validity round close's condition, so the amendment strengthens the mechanical half rather than weakening the fresh-session one — `src/assurance.ts`, `src/round-close.ts`; 0244 D3/D4.
 
 **Provenance.** 0007's phase-2 pivot (the founding retirement of self-maintained status); restated at 0044 §3 and 0064 §1 as a differentiator.
 

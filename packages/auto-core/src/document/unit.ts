@@ -200,6 +200,24 @@ export function tickIndexLine(file: string, id: string): Promise<void> {
   return run
 }
 
+// The tick's mechanical reverse (plans/0244 D5): revert an index line to its
+// pending rendering — written when the driver re-opens a completed unit it
+// owns new work for (the close-audit unit's construction re-opens the
+// round's terminal phase so the ordinary pipeline can dispatch into it).
+// Same serialized queue and idempotence shape as the tick: a missing file or
+// an already-pending line writes nothing.
+export function untickIndexLine(file: string, id: string): Promise<void> {
+  const run = tickQueue.then(async () => {
+    const text = await Bun.file(file).text().catch(() => undefined)
+    if (text === undefined) return
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const line = new RegExp(`^([-*] \\[)x(\\]\\s+${escaped}(?::|\\s|$))`, "m")
+    if (line.test(text)) await Bun.write(file, text.replace(line, "$1 $2"))
+  })
+  tickQueue = run.catch(() => {})
+  return run
+}
+
 // —— Unit documents: title line + field block ——
 
 // A unit's dependency declaration. `depends`: undefined = field absent (G3

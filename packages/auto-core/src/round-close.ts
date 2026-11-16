@@ -1,7 +1,7 @@
 // Round-close gate (M4.2, plans/0049 G8; root plan D12 ③, 0036 D12, open
 // question 15-⑦ ruled "middle form"): whether a round whose phases are all
-// done may be closed, i.e. whether the next round may start. Three checks,
-// all read-only — two hold the gate, one rides as the ledger:
+// done may be closed, i.e. whether the next round may start. Four checks,
+// all read-only — three hold the gate, one rides as the ledger:
 //   1. the destination scan — the containment ledger over what the project
 //      wrote into the destination repositories: git's own modified set, the
 //      run of driver commits back from HEAD plus the uncommitted and
@@ -24,6 +24,13 @@
 //      decisions were restated into the target's own documentation and which
 //      were accepted as lost. The gate checks presence, not content — no
 //      mechanical criterion tells which rationale had to survive.
+//   4. the assurance cover set (plans/0244 D4, S4 — the blocking half): when
+//      a table stands, every due row must be covered — mechanical `blocks`
+//      rows and `close-due` rows uncovered hold the close (the rows named,
+//      the remedy taught per the round's shape: the close-audit unit or the
+//      audit phase's findings); `accrue` rows never block (the composition's
+//      observation records their accrual). No table ⇒ no due rows ⇒ nothing
+//      (the P10 floor, byte-identical).
 // The round user report is no longer among them (plans/0109 D1: the report
 // retired to optional — the person-proxy brief renders the live account the
 // report used to freeze; a report a person commissions is never read here).
@@ -34,11 +41,14 @@
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { scrubDriverEnv } from "./agent/opencode/server"
-import { roundBriefPath } from "./docpaths"
+import { ASSURANCE_DOC, roundBriefPath } from "./docpaths"
+import { blockingCoverRows, readCoverSet, type CoverRow } from "./assurance"
+import { roundCarriesAuditPhase, standingCloseAudit } from "./close-audit"
 import { processReferenceScan } from "./document/process-refs"
 import { nestedRepoPrefixes, repoRoots, unitAddedLines, driverBaseline, type UnitBaseline } from "./git"
 import { closeSection, ROUND_CLOSE_HEADING } from "./round-brief"
 import { DEFAULT_SCRIPT_POLL_MS, readLogTail, scriptTmpDir, watchProcess } from "./script"
+import { shellProfile } from "./shell"
 
 // The build's wall-clock cap: generous for a real target build, but a hung
 // build must not hang the round start forever.
@@ -113,7 +123,48 @@ export async function roundCloseProblems(
       `close listing: ${brief} \`${ROUND_CLOSE_HEADING}\` is empty — list the decisions restated into the target's own documentation and those accepted as lost`,
     )
   }
+  // 4. The assurance cover set (plans/0244 D4, S4): the blocking half, both
+  // close arms' shared gate — the same composition the observation renders
+  // (readCoverSet), blocked on its uncovered rows. The floor first: no
+  // table (or no due rows) contributes nothing, byte-identical.
+  problems.push(...(await coverSetProblems(dir, round)))
   return { problems, warnings, ...(buildSkipped ? { buildSkipped } : {}) }
+}
+
+// The cover-set family's problem lines (plans/0244 D4/D8 — the frozen
+// named-rows exit-2 teaching): one line per uncovered blocking row, the
+// remedy clause mirroring the observation's uncovered clause (one wording
+// family), the close-due rows' tail naming the round's shape — the audit
+// phase's findings, the standing close-audit unit (run it / read it), or the
+// construction the close arms perform. A table that does not parse blocks
+// naming its problem (P12: an unjudgeable due set is never silently empty).
+async function coverSetProblems(dir: string, round: number): Promise<string[]> {
+  let rows: readonly CoverRow[]
+  try {
+    rows = (await readCoverSet(dir, round))?.rows ?? []
+  } catch (error) {
+    const problem = error instanceof Error ? error.message : String(error)
+    return [`assurance cover set: ${ASSURANCE_DOC} does not parse — ${problem} — fix the row it names; the close reads the table again`]
+  }
+  const blocking = blockingCoverRows(rows)
+  if (!blocking.length) return []
+  const dueClose = blocking.some((cover) => cover.due.row.close === "close-due")
+  const auditPhase = dueClose ? await roundCarriesAuditPhase(dir, round) : false
+  const standing = dueClose && !auditPhase ? await standingCloseAudit(dir, round) : undefined
+  const { bin } = shellProfile()
+  return blocking.map((cover) => {
+    const row = cover.due.row
+    const lead = `assurance cover set: ${row.id} (${row.invariant}) is due at this close and uncovered`
+    if (row.kind === "mechanical") {
+      return `${lead} — a green lane receipt at the closing tree deciding ${row.paths.join(", ")} covers it${row.facts.length ? ` (its fact phrases: ${row.facts.join(", ")})` : ""}`
+    }
+    const clause = `${lead} — an adjudication receipt (an audit findings document naming ${row.id} with Result: PASS) covers it`
+    if (row.close !== "close-due") return clause
+    if (auditPhase) return `${clause}; the round's audit phase produces the findings`
+    if (standing?.pending) return `${clause}; the close-audit unit ${standing.id} stands (docs/${standing.id}/todo.md) — execute it with: ${bin} run ${dir}, then re-run this close`
+    if (standing) return `${clause}; the close-audit unit ${standing.id} already ran — its findings document is the adjudication to read (a FAIL is a finding for the person, never repaired in-round)`
+    return `${clause}; the close-audit unit is constructed at the round's close attempt (transfer), then executed with: ${bin} run ${dir}`
+  })
 }
 
 // Run the build in the target directory; undefined = exit 0, else why not.

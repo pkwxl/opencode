@@ -980,6 +980,27 @@ export function driverStage(body: string): string | undefined {
   return trailerBlock(body)?.get("Auto-Stage")
 }
 
+// The receipts' provenance witness (plans/0171 D2, enacting S20-05; moved
+// from src/script.ts by plans/0244 S4 so the assurance family reads it
+// without crossing the script seam — a pure move, byte-identical): the
+// commit that introduced the receipt's current bytes must be one of the
+// driver's receipt janitor commits (the `regression` and `testhands` stages
+// — the only writers of receipts are the lane runners, and they commit
+// through those stages), and the tree must hold no uncommitted change to
+// the file. A receipt a session forged rides whatever unified commit was
+// next (stage execute/wrapup/subtask) — rejected; a person-committed one
+// carries no Auto-Stage at all — rejected; unreadable git (P12) — rejected:
+// every rejection degrades toward the lane re-running, the fail-safe
+// direction that self-heals with a fresh janitor receipt.
+export async function receiptDriverCommitted(dir: string, rel: string): Promise<boolean> {
+  const dirty = await git(dir, ["status", "--porcelain", "--", rel]).catch(() => undefined)
+  if (dirty === undefined || dirty.code !== 0 || dirty.out.trim().length > 0) return false
+  const read = await git(dir, ["log", "-1", "--format=%B", "--", rel]).catch(() => undefined)
+  if (read === undefined || read.code !== 0) return false
+  const stages = [...read.out.matchAll(/^Auto-Stage: (.+)$/gm)].map((match) => match[1]!.trim())
+  return stages.includes("regression") || stages.includes("testhands")
+}
+
 // One non-driver commit inside a judged range, named (plans/0184 D2,
 // 0165-024): the short sha, the author, the committer's ISO date — the
 // adoption line's facts, and the while-the-driver-ran comparison's input

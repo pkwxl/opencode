@@ -14,7 +14,7 @@ import { dirname, join } from "node:path"
 import { GUIDANCE, ensurePointer } from "../src/agents-block"
 import { renderAgentContract } from "../src/config-fix"
 import { renderHelperBrief } from "../src/driver-helper"
-import { ANALYSIS_DOC, reportForUserPath } from "../src/docpaths"
+import { ANALYSIS_DOC, ASSURANCE_DOC, reportForUserPath } from "../src/docpaths"
 import { EOF_MARK } from "../src/doccheck"
 import { completePhase, establishRound, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
 import { recordResolves } from "../src/resolve"
@@ -355,6 +355,93 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     const built = await renderHelperBrief(dir, { phases: "mt", build: "make check" })
     expect(built.some((line) => line.includes("round R-01 is complete and passes its close checks, except the build, not run by this brief — the next transfer opens R-02 and stops at its round-start gate"))).toBe(true)
     expect(built.some((line) => line.includes("build: no build command configured"))).toBe(false)
+  })
+
+  // —— The assurance cover set at the close listing (plans/0244 D4, S3) ——
+
+  // A synthetic two-row table (P16: no real project's rows) and a green lane
+  // receipt at the current HEAD — the S-01 row's fresh cover.
+  const ASSURANCE_ROWS = [
+    "| id | invariant | kind | watched surface | cadence | close | baseline |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| S-01 | suite green at close | mechanical | src, test | every-round | blocks |  |",
+    "| S-02 | clean-room independence | judgment | crossing events, similarity flags | every-round | close-due |  |",
+  ].join("\n")
+
+  async function assuranceReceipt(dir: string): Promise<void> {
+    const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+    write(
+      dir,
+      "docs/T-001/testhands/lint.md",
+      ["# Lane lint", "", "Lane: lint", `Heads: .=${head}`, `Tree: .=${head}..${head}`, "Start: 2026-11-16T00:00:00.000Z", "End: 2026-11-16T00:00:01.000Z", "Verdict: green", "Decides: src, test", "Log: /tmp/opencode/lint.log", ""].join("\n"),
+    )
+    // The receipt janitor commit (plans/0171 D2): the provenance witness the
+    // S4 composition reads demands the trailer family.
+    await git(dir, "add", "--", "docs/T-001/testhands/lint.md")
+    await git(dir, "commit", "-q", "-m", "T-001 testhands receipts (lint)\n\nAuto-Stage: testhands", "--", "docs/T-001/testhands/lint.md")
+  }
+
+  test("row 6 and the complete pass — the cover-set records ride the close listing, the uncovered rows block it (plans/0244 D4 S3+S4)", async () => {
+    const dir = await repo()
+    await completeRound(dir, "mt")
+    write(dir, "docs/R-01/round.md", renderRoundBrief(1))
+    write(dir, ASSURANCE_DOC, ASSURANCE_ROWS)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "unfill the close listing; declare the assurance table")
+    await assuranceReceipt(dir)
+    const held = await renderHelperBrief(dir, { phases: "mt" })
+    // The observation renders beside the held close — every due row with its
+    // state, the uncovered row's remedy teaching the adjudication that would
+    // cover it.
+    expect(held).toContain("- assurance cover set — 2 row(s) due at this close under docs/assurance.md (observations of the cover set; the blocking refusals render at the close gate's stop):")
+    expect(held).toContain("- S-01 (suite green at close): fresh — the green receipt lint (docs/T-001/testhands/lint.md) stands at the closing tree and decides its watched surface")
+    expect(held).toContain("- S-02 (clean-room independence): uncovered — an adjudication receipt (an audit findings document naming S-02 with Result: PASS) covers it")
+    // S4's blocking half: the uncovered close-due row is a problem beside the
+    // close listing's own, the remedy teaching the unit the close arms
+    // construct (this round — "mt" — carries no audit phase).
+    expect(held.filter((line) => line.startsWith("  ✗ "))).toEqual([
+      "  ✗ close listing: docs/R-01/round.md `## Close` is empty — list the decisions restated into the target's own documentation and those accepted as lost",
+      `  ✗ assurance cover set: S-02 (clean-room independence) is due at this close and uncovered — an adjudication receipt (an audit findings document naming S-02 with Result: PASS) covers it; the close-audit unit is constructed at the round's close attempt (transfer), then executed with: opencode-auto run ${dir}`,
+    ])
+    expect(held).toContain("⚠ round close checks: transfer will refuse to open the next round until these are fixed")
+    // The passing close keeps the same pass line byte-identical once every
+    // due row is covered: the close listing filled, S-02 adjudicated by a
+    // findings document naming it (the receipt re-written at the new tree).
+    write(dir, "docs/R-01/round.md", FILLED_BRIEF(1))
+    write(
+      dir,
+      "docs/T-095/findings.md",
+      ["# Findings (T-095)", "", "## S-02 — clean-room independence", "", "The round's delta raises no crossing event; the invariant holds.", "", "Result: PASS", ""].join("\n"),
+    )
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "fill the close listing; adjudicate S-02")
+    await assuranceReceipt(dir)
+    const passed = await renderHelperBrief(dir, { phases: "mt" })
+    expect(passed.some((line) => line.includes("round R-01 is complete and passes its close checks — the next transfer opens R-02 and stops at its round-start gate"))).toBe(true)
+    expect(passed).toContain("- S-01 (suite green at close): fresh — the green receipt lint (docs/T-001/testhands/lint.md) stands at the closing tree and decides its watched surface")
+    expect(passed).toContain("- S-02 (clean-room independence): adjudicated — docs/T-095/findings.md carries Result: PASS for it")
+    expect(passed.some((line) => line.startsWith("  ✗ "))).toBe(false)
+  })
+
+  test("the floor — with no docs/assurance.md declared the brief renders byte-identically (plans/0244 D2/D4, P10)", async () => {
+    const dir = await repo()
+    await completeRound(dir, "mt")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "round complete")
+    const floor = (await renderHelperBrief(dir, { phases: "mt" })).join("\n")
+    expect(floor.includes("assurance")).toBe(false)
+    // The table declared: the observation renders (the seam is live)…
+    write(dir, ASSURANCE_DOC, ASSURANCE_ROWS)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "declare the assurance table")
+    const withTable = (await renderHelperBrief(dir, { phases: "mt" })).join("\n")
+    expect(withTable).not.toBe(floor)
+    expect(withTable).toContain("assurance cover set — 2 row(s) due at this close under docs/assurance.md")
+    // …and the table removed: the brief returns to the exact floor bytes.
+    rmSync(join(dir, ASSURANCE_DOC))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "remove the assurance table")
+    expect((await renderHelperBrief(dir, { phases: "mt" })).join("\n")).toBe(floor)
   })
 
   test("row 8 — a failed task: the gaps channel, the close/run --repair recovery", async () => {

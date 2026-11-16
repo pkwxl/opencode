@@ -174,6 +174,10 @@ describe("clarify: the analysis release (plans/0116 D1/D4)", () => {
 
   test("the review lists the round-brief proposals (plans/0204 D2): one line per `### R-NN`, the absent posture named", async () => {
     const dir = await repo()
+    // R-01 drafts its line's goal verbatim (the D6 floor — no block, today's
+    // row bytes); R-02 re-words its line's goal and carries the
+    // reconciliation block (plans/0244 D6) — the review row names it, the
+    // person's yes reading the difference beside the roadmap line above.
     await Bun.write(
       join(dir, "docs/analysis.md"),
       [
@@ -206,17 +210,29 @@ describe("clarify: the analysis release (plans/0116 D1/D4)", () => {
         "",
         "Harden the edges the port left thin.",
         "",
+        "#### Ask vs charter",
+        "",
+        "The line's goal is hardening; this charter hardens the edges the port left thin and",
+        "leaves the config parsing for the round after — the difference is scope's, not outcome's.",
+        "",
       ].join("\n"),
     )
     const { result } = await capture(() => clarifyGate(dir, { phases: "mt" }))
     expect(result.type).toBe("released")
     // One review line per proposal (0115's channel joins 0116 D3's list):
     // each installs verbatim and passes its round's start gate on this mark.
+    // The verbatim-drafting proposal's row renders byte-identically to its
+    // pre-D6 form (P10); the block-carrying proposal's row carries the
+    // reconciliation for the person's yes (P2).
     expect(
       result.lines.some((line) => line.includes("- R-01 — its round-brief proposal installs verbatim as its round.md when it opens (that round's round-start gate passes on this release)")),
     ).toBe(true)
     expect(
-      result.lines.some((line) => line.includes("- R-02 — its round-brief proposal installs verbatim as its round.md when it opens (that round's round-start gate passes on this release)")),
+      result.lines.some((line) =>
+        line ===
+        "  - R-02 — its round-brief proposal installs verbatim as its round.md when it opens (that round's round-start gate passes on this release); " +
+          "its `#### Ask vs charter` block restates the roadmap line's goal above beside the drafted charter, naming the difference — this release approves that difference",
+      ),
     ).toBe(true)
     // The absent posture: no section, every round keeps its round-start gate.
     const plain = await repo()

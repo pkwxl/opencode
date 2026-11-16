@@ -22,6 +22,7 @@ import { readFileSync } from "node:fs"
 import { chmod, mkdir, readdir, rename, rmdir } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { PROVENANCE_FILE, compareProvenance, parseProvenanceStamp, provenanceStampOf, renderProvenanceStamp, type ProvenanceComparison } from "./provenance"
+import { parseAssuranceTable } from "./assurance"
 import { parseIntentFile } from "./intent/load"
 import { guaranteesProblem } from "./intent/guarantees"
 import { testLanesProblem } from "./intent/test-lanes"
@@ -30,12 +31,14 @@ import { parseModeFile } from "./mode"
 import { SUBTASK_MODES, type SubtaskMode } from "./opts"
 import { parsePhaseTypeFile } from "./phases/custom"
 import { BUILTIN_PHASE_TYPES, PRESET_FORM, phasesProblem, resolvePhases, type PhaseTypeEntry } from "./phases/registry"
+import { ASSURANCE_DOC } from "./docpaths"
 import cleanroomManifest from "../templates/bundles/cleanroom/bundle.json" with { type: "file" }
 import cleanroomSurvey from "../templates/bundles/cleanroom/phases/survey.md" with { type: "file" }
 import cleanroomSpecRead from "../templates/bundles/cleanroom/phases/spec-read.md" with { type: "file" }
 import cleanroomAudit from "../templates/bundles/cleanroom/phases/audit.md" with { type: "file" }
 import cleanroomPack from "../templates/bundles/cleanroom/intents/cleanroom.md" with { type: "file" }
 import cleanroomMode from "../templates/bundles/cleanroom/modes/cleanroom.md" with { type: "file" }
+import cleanroomAssuranceSeed from "../templates/bundles/cleanroom/docs/assurance.md" with { type: "file" }
 import faithfulManifest from "../templates/bundles/faithful/bundle.json" with { type: "file" }
 import faithfulSurvey from "../templates/bundles/faithful/phases/survey.md" with { type: "file" }
 import faithfulPack from "../templates/bundles/faithful/intents/faithful.md" with { type: "file" }
@@ -48,7 +51,10 @@ import faithfulLeanMode from "../templates/bundles/faithful-lean/modes/faithful-
 const BUNDLE_MANIFEST = "bundle.json"
 
 // A bundle as files: relative path → content. The allowed keys are
-// bundle.json, phases/<type>.md, intents/<name>.md and modes/<name>.md.
+// bundle.json, phases/<type>.md, intents/<name>.md, modes/<name>.md and —
+// the one document seed a bundle may carry (plans/0244 D2/D7) —
+// docs/assurance.md, the assurance-table seed materialized into the target's
+// docs/ tree at init (create-only; see materializeIntentBundle).
 export type IntentBundleFiles = Record<string, string>
 
 // A parsed bundle: everything materialization and stamping need. The file
@@ -71,8 +77,12 @@ export type IntentBundle = {
   // the stamped phases value before materialization needs beside the types
   // already on disk (init's prefix guard).
   types: PhaseTypeEntry[]
-  // The materializable files (repository-relative suffix → text).
-  files: { phases: Record<string, string>; pack?: string; mode?: string }
+  // The materializable files (repository-relative suffix → text). docs holds
+  // the target-document seeds (today: docs/assurance.md alone) — kept apart
+  // from the .opencode/auto surfaces because they install differently
+  // (create-only, never provenance-tracked; the seeded document is the
+  // target's own data from the first edit on, P15/P5).
+  files: { phases: Record<string, string>; pack?: string; mode?: string; docs?: Record<string, string> }
 }
 
 // Same naming discipline as mode and intent pack files (the shared rule the
@@ -104,13 +114,16 @@ export function parseIntentBundle(files: IntentBundleFiles): IntentBundle {
   if (typeof name !== "string" || !NAME_PATTERN.test(name)) {
     throw new Error(`${BUNDLE_MANIFEST} name must be a lowercase letter followed by letters/digits/hyphens; got ${JSON.stringify(name)}`)
   }
-  // The file layout: only the three subtrees beside the manifest.
+  // The file layout: the three subtrees beside the manifest, plus the one
+  // document seed (plans/0244 D2: the assurance table docs/assurance.md —
+  // exactly that path, the core's own protocol constant; a wider docs/
+  // subtree waits for a second real consumer, P21).
   const layout = new Map<string, string>()
   for (const [path, text] of Object.entries(files)) {
     if (path === BUNDLE_MANIFEST) continue
     const slash = path.indexOf("/")
-    if (!path.endsWith(".md") || slash === -1 || !(SUBDIRS as readonly string[]).includes(path.slice(0, slash))) {
-      throw new Error(`intent bundle file "${path}" is outside the bundle layout (allowed: ${SUBDIRS.map((sub) => `${sub}/*.md`).join(", ")} beside ${BUNDLE_MANIFEST})`)
+    if (path !== ASSURANCE_DOC && (!path.endsWith(".md") || slash === -1 || !(SUBDIRS as readonly string[]).includes(path.slice(0, slash)))) {
+      throw new Error(`intent bundle file "${path}" is outside the bundle layout (allowed: ${SUBDIRS.map((sub) => `${sub}/*.md`).join(", ")} and ${ASSURANCE_DOC} beside ${BUNDLE_MANIFEST})`)
     }
     layout.set(path, text)
   }
@@ -159,6 +172,21 @@ export function parseIntentBundle(files: IntentBundleFiles): IntentBundle {
   if (guaranteeProblem !== undefined) throw new Error(guaranteeProblem)
   const laneProblem = testLanesProblem(pack)
   if (laneProblem !== undefined) throw new Error(laneProblem)
+  // The assurance-table seed judges at the parse's own moment too (the 0221
+  // D1 discipline, the parseAssuranceTable home): a shipped seed that does
+  // parse under the landed table grammar previously materialized clean and
+  // failed only at the materialized project's close gate, after init wrote
+  // it. A seed that parses to no rows seeds nothing — refused the same way.
+  const docs: Record<string, string> = {}
+  if (layout.has(ASSURANCE_DOC)) {
+    try {
+      const rows = parseAssuranceTable(layout.get(ASSURANCE_DOC)!)
+      if (!rows.length) throw new Error(`${ASSURANCE_DOC}: the table declares no rows`)
+    } catch (error) {
+      throw new Error(`the bundle's ${ASSURANCE_DOC} seed does not parse: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    docs[ASSURANCE_DOC] = layout.get(ASSURANCE_DOC)!
+  }
   // The mode: at most one, also named like the bundle.
   const modePaths = [...layout.keys()].filter((key) => key.startsWith("modes/"))
   if (modePaths.length > 1) throw new Error(`an intent bundle carries at most one mode (modes/${name}.md, named like the bundle); found ${modePaths.length}`)
@@ -203,6 +231,7 @@ export function parseIntentBundle(files: IntentBundleFiles): IntentBundle {
       phases: phaseFiles,
       pack: layout.get(packPaths[0]!),
       ...(modePaths.length ? { mode: layout.get(modePaths[0]!) } : {}),
+      ...(Object.keys(docs).length ? { docs } : {}),
     },
   }
 }
@@ -241,6 +270,18 @@ export async function materializeIntentBundle(dir: string, bundle: IntentBundle)
     }
     if (bundle.files.pack !== undefined) await write(join(".opencode", "auto", "intents", `${bundle.name}.md`), bundle.files.pack)
     if (bundle.files.mode !== undefined) await write(join(".opencode", "auto", "modes", `${bundle.name}.md`), bundle.files.mode)
+    // The document seeds (plans/0244 D2/D7): create-only, unlike every
+    // .opencode/auto surface above. The assurance table is the target's own
+    // living data the moment it stands — the audits cite it, the close-audit
+    // rewrites its baselines — so a re-materialization (or a bundle arriving
+    // at an existing project) never overwrites it: the seed births, the
+    // person and their rounds own every later byte. An existing project
+    // gets nothing forced (P2/P15); transcribing its last audit into rows
+    // stays the person's manual act, taught in the seed's own prose.
+    for (const [rel, text] of Object.entries(bundle.files.docs ?? {})) {
+      if (await Bun.file(join(dir, rel)).exists()) continue
+      await write(rel, text)
+    }
     await write(PROVENANCE_FILE, renderProvenanceStamp(provenanceStampOf(bundle.name, bundleFileMap(bundle))))
   } finally {
     // Never leave the driver workdir's directory behind (the lock's own
@@ -252,10 +293,16 @@ export async function materializeIntentBundle(dir: string, bundle: IntentBundle)
 }
 
 // The repository-relative file map a materialization of this bundle writes
-// (exactly materializeIntentBundle's set): the detection and sync callers
-// resolve the running bundle by name and hand this map to the provenance
-// comparison. Forward-slash keys on purpose — they live in the committed
-// sidecar, where node:path's separator would not stay portable.
+// (exactly materializeIntentBundle's set, minus the document seeds): the
+// detection and sync callers resolve the running bundle by name and hand
+// this map to the provenance comparison. Forward-slash keys on purpose —
+// they live in the committed sidecar, where node:path's separator would not
+// stay portable. The docs seeds stay out deliberately (plans/0244 D7): the
+// sidecar covers the tool-owned .opencode/auto surfaces sync may refresh;
+// the assurance table is born as the bundle's bytes but is the target's own
+// data from the first edit on — a provenance delta on it would teach sync
+// to revert the person's audits and baselines, the one write this surface
+// must never make.
 export function bundleFileMap(bundle: IntentBundle): Record<string, string> {
   const files: Record<string, string> = {}
   for (const [type, text] of Object.entries(bundle.files.phases)) {
@@ -315,6 +362,11 @@ function builtinBundles(): Record<string, IntentBundleFiles> {
         "phases/audit.md": readFileSync(cleanroomAudit, "utf8"),
         "intents/cleanroom.md": readFileSync(cleanroomPack, "utf8"),
         "modes/cleanroom.md": readFileSync(cleanroomMode, "utf8"),
+        // The assurance-table seed (plans/0244 D2/D7): the eight standing
+        // audit dimensions as rows, installed create-only into the target's
+        // docs/assurance.md — the due set the re-keyed audit duty plans
+        // against, and the cover-set gate's row vocabulary.
+        "docs/assurance.md": readFileSync(cleanroomAssuranceSeed, "utf8"),
       },
       faithful: {
         "bundle.json": readFileSync(faithfulManifest, "utf8"),
@@ -381,5 +433,8 @@ async function readBundleDirectory(path: string): Promise<IntentBundleFiles | un
       files[`${sub}/${name}`] = await Bun.file(join(dir, name)).text()
     }
   }
+  // The one document seed (plans/0244 D2): read when present, never scanned.
+  const seed = await Bun.file(join(path, ASSURANCE_DOC)).text().catch(() => undefined)
+  if (seed !== undefined) files[ASSURANCE_DOC] = seed
   return files
 }

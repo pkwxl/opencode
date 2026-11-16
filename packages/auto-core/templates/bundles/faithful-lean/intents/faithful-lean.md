@@ -63,10 +63,18 @@ checks do not regress.
 4. Splitting and artifact criteria for this phase: verify parity against the behavior baseline —
 split by verification layer or scenario family (build checks, functional tests, black-box
 acceptance against the baseline, one item per baseline behavior family); every item names the
-behavior proven and records the observed evidence, never a bare "tests passed"; keep writing
-checks apart from fixing defects — defects the checks expose are appended as separate fix
-items, not mixed into the check-writing item.
-
+behavior proven and records the observed evidence, never a bare "tests passed"; keep writing checks
+apart from fixing defects — defects the checks expose are appended as separate fix items, not mixed
+into the check-writing item.
+{{#if delta}}
+When this document's round-measured delta block stands, it keys the split: the changed families
+it groups (code, test, docs) set the verification targets — each changed family's checks are their
+own items keyed to what the round actually changed, never to the standing surface — the standing
+baseline suite runs once per tree state as the regression bound (a check whose committed receipt
+stands at this tree — its `Tree:` range covering the tree, its `Decides:` paths naming the surfaces
+it decided — is cited, never re-executed; a later motion of the tree re-verifies exactly the
+surfaces it moved), and changed test sections prove determinism by running twice.
+{{/if}}
 ### v acceptance
 
 4. Splitting and artifact criteria for this phase:
@@ -79,6 +87,12 @@ items, not mixed into the check-writing item.
      phase directory, ending with the result line `Result: PASS` or `Result: FAIL <reason>` —
      a driver protocol string, written verbatim: the verdict judges external parity plus the
      debt-removal accounting and follows the findings, never optimism;
+{{#if delta}}
+The delta block keys the dimensions' depth: a verification dimension whose family the round's
+measured delta reached gets fresh verification against the baseline (the debt-removal accounting
+dimension keyed to the internal surfaces the delta changed); a dimension the delta does not reach
+cites the round's standing evidence for it, the citation recorded in the findings.
+{{/if}}
 
 ## planning-input
 
@@ -117,6 +131,16 @@ criterion the task asked for was actually observed to pass against the reference
 behavior, with the evidence written in this report; `Result: FAIL` means a required check
 failed, could not be run, or the goal is not met — say why in one line. Never write PASS for
 a check you did not run or observe.
+
+### round-brief
+
+Treat the round brief's goal and acceptance criteria as the measure of this phase's plan, and
+key the verification they demand to what the round's measured delta block reaches — the
+assurance table's due rows (docs/assurance.md), when the project declares one, are the owed
+set: criteria and plans name the verification the delta actually owes against the baseline,
+never a re-run of the standing surface for its own sake, and never a criterion quietly
+narrowed below what the brief asks. The round brief belongs to the human — never edit
+round.md.
 
 ## governance
 

@@ -150,6 +150,13 @@ const CLASSIFIED: Record<string, Domain> = {
   // phases domain's fork/clarified parsers and registry resolution directly.
   analysis: "driver",
   artifact: "driver",
+  // The assurance family's single home (plans/0244): the round-delta
+  // measurement (D1), and — as its stages land — the assurance table
+  // loader, the due set and the cover-set check (D2/D4). Driver, in the
+  // kernel's records family (see SUBDOMAIN), because it measures git and
+  // reads the receipts the run's records already hold; the planning loops
+  // and the close arms consume it, never the reverse.
+  assurance: "driver",
   attempt: "driver",
   // Intent bundles (plans/0079 §3): the parse/materialize/register surface of
   // the named policy bundle — init-time installation machinery that validates
@@ -563,6 +570,10 @@ const CLASSIFIED: Record<string, Domain> = {
   // Adding one task by hand (--new-task): the mechanical, no-session half
   // of append planning (plans/0058); called from plan's prelude.
   "task-add": "driver",
+  // The close-audit unit's constructor (plans/0244 D5): the driver-side
+  // write the close arms call — an addTask-shaped task construction plus
+  // the green path's baseline citations; called from the close arms.
+  "close-audit": "driver",
   "templates.d": "driver",
   testrun: "driver",
   // Default reasoning tiers of sessions (plans/0055 §5): the role table over
@@ -643,6 +654,12 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   resolve: "kernel",
   testrun: "kernel",
   script: "kernel",
+  // The assurance family (plans/0244): the round-delta measurement, the
+  // assurance table, the due set and the cover-set check — the run's
+  // records read one layer deeper (git) and served to the pipeline's
+  // planning loops and close arms; it starts no session and touches no
+  // session-driving module.
+  assurance: "kernel",
   // The regression lane (plans/0098): the driver-run processes' sibling —
   // one background lane over a disposable tree copy, receipts, coverage.
   regression: "kernel",
@@ -766,6 +783,11 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   "prompt-plan": "pipeline",
   close: "pipeline",
   "task-add": "pipeline",
+  // The close-audit unit's constructor (plans/0244 D5): pipeline beside
+  // formulate and task-add — the addTask-shaped driver write the close arms
+  // call, reaching the task store, the numbering floor and git's kernel
+  // primitives, never the loop.
+  "close-audit": "pipeline",
   wrapup: "pipeline",
   artifact: "pipeline",
   knowledge: "pipeline",

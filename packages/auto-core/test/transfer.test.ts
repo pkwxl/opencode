@@ -1010,7 +1010,11 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
 
 describe("transfer: the open round (plans/0243 B — establish, absorb, close)", () => {
   const OPEN_LINE = "- R-01 open — absorb fixes and small features"
-  const BRIEFS = "\n## Round briefs\n\n### R-01\n\nKeep the shipped tool healthy.\n\n- Acceptance: the reported issues stay fixed.\n"
+  // The proposal re-words its line's goal, so it carries the ask-vs-charter
+  // block (plans/0244 D6) — the establishment's analysisGate holds a
+  // divergent proposal without it.
+  const BRIEFS =
+    "\n## Round briefs\n\n### R-01\n\nKeep the shipped tool healthy.\n\n- Acceptance: the reported issues stay fixed.\n\n#### Ask vs charter\n\nThe line asks fixes and small features absorbed; this charter holds the health bar —\nthe reported issues stay fixed, small features land as they are asked for.\n"
 
   async function openRepo(line: string = OPEN_LINE): Promise<string> {
     const dir = await repo()
@@ -1161,5 +1165,130 @@ describe("transfer: the open round (plans/0243 B — establish, absorb, close)",
     expect(out.lines.some((line) => line.includes("✓ the interrupted close of open round R-01 settled on its own commit"))).toBe(true)
     expect(out.lines.some((line) => line.includes("holds no line for round R-02"))).toBe(true)
     expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+  })
+})
+
+// The cover-set gate's both close arms (plans/0244 D4/D5, S4): the phased
+// close (the complete route inside the advance) and the open close (0243 B's
+// arm) read the cover set beside the build and the restatement listing —
+// uncovered `blocks`/`close-due` rows hold the close exit 2 naming them, the
+// close-due rows' remedy constructing D5's unit, and `accrue` rows riding
+// (S3's observation records them); the no-table floor keeps today's bytes.
+describe("transfer: the assurance cover-set gate (plans/0244 D4/D5, S4)", () => {
+  const HEADER = "| id | invariant | kind | watched surface | cadence | close | baseline |"
+  const SEPARATOR = "| --- | --- | --- | --- | --- | --- | --- |"
+  const row = (cells: readonly string[]) => `| ${cells.join(" | ")} |`
+  const table = (rows: readonly string[]) => [`# Assurance`, ``, HEADER, SEPARATOR, ...rows].join("\n")
+  // A close-due judgment row (the unit's adjudication), a mechanical blocks
+  // row (a lane receipt's to cover) and an accrue row (never blocking).
+  const S_CLOSE_DUE = row(["S-20", "clean-room independence", "judgment", "crossing events", "every-round", "close-due", ""])
+  const S_BLOCKS = row(["S-21", "suite green at close", "mechanical", "src, test", "every-round", "blocks", ""])
+  const S_ACCRUE = row(["S-22", "interface parity", "mechanical", "include", "every-round", "accrue", ""])
+
+  test("the phased close arm: uncovered rows hold the close naming them; the close-audit unit is constructed in the re-opened terminal phase, the refusal teaching run", async () => {
+    const { fakeAgent } = await import("./fixtures/agent")
+    const dir = await repo()
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), "contract\n")
+    await establishRound(dir, { phases: "implement", round: 1 })
+    const state = (await readPhases(dir, 1))!
+    await Bun.write(join(dir, state.phases[0]!.dir, "tasks.md"), "- [x] T-001 task T-001\n")
+    await mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+    await Bun.write(join(dir, "docs/T-001/done.md"), taskDoc("T-001", "R-01.P01"))
+    await Bun.write(join(dir, "docs/R-01/round.md"), renderRoundBrief(1).replace("## Close", "## Close\n\n- Everything restated into the target's own docs; nothing accepted as lost."))
+    await Bun.write(join(dir, "docs/assurance.md"), table([S_CLOSE_DUE, S_BLOCKS, S_ACCRUE]))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "phase done, the assurance table declared")
+    const agent = fakeAgent({ turn: artifactTurns(dir) })
+    const host = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
+    const out = await capture(() => runTransfer(dir, { managed: host, phases: "implement" }))
+    expect(out.code).toBe(2)
+    expect(out.lines.some((line) => line.includes("round R-01 does not pass its round-close checks, so it cannot close yet — fix them, commit, then re-run: opencode-auto transfer"))).toBe(true)
+    // The named rows: the close-due row's remedy names the constructed unit;
+    // the mechanical row's names the receipt; the accrue row never blocks.
+    expect(
+      out.lines.some(
+        (line) =>
+          line ===
+          `  ✗ assurance cover set: S-20 (clean-room independence) is due at this close and uncovered — an adjudication receipt (an audit findings document naming S-20 with Result: PASS) covers it; the close-audit unit T-002 stands (docs/T-002/todo.md) — execute it with: opencode-auto run ${dir}, then re-run this close`,
+      ),
+    ).toBe(true)
+    expect(out.lines.some((line) => line === "  ✗ assurance cover set: S-21 (suite green at close) is due at this close and uncovered — a green lane receipt at the closing tree deciding src, test covers it")).toBe(true)
+    expect(out.lines.some((line) => line.includes("S-22"))).toBe(false)
+    // The construction: the unit in the terminal phase, the phase re-opened
+    // (its completion restored pending, the index line un-ticked) so `run`
+    // dispatches it through the ordinary pipeline.
+    expect(out.lines.some((line) => line.includes("✓ close-audit unit T-002 constructed in docs/R-01/P01-implement"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("the terminal phase P01-implement Implementation re-opened for it"))).toBe(true)
+    expect(await Bun.file(join(dir, "docs/R-01/P01-implement/tasks.md")).text()).toContain("- [ ] T-002 Adjudicate the due assurance rows (R-01)")
+    expect(existsSync(join(dir, "docs/R-01/P01-implement/todo.md"))).toBe(true)
+    expect(existsSync(join(dir, "docs/R-01/P01-implement/done.md"))).toBe(false)
+    expect((await Bun.file(join(dir, "docs/R-01/phases.md")).text()).trimEnd().endsWith("- [ ] P01 implement")).toBe(true)
+    // The todo: the marker field, the due rows and the delta — nothing else.
+    const todo = await Bun.file(join(dir, "docs/T-002/todo.md")).text()
+    expect(todo).toContain("Close-audit: R-01")
+    expect(todo).toContain("- S-20 (clean-room independence) — watched surface: crossing events; cadence: every-round; close: close-due")
+    expect(todo).toContain("docs/T-002/findings.md")
+    expect(todo).toContain("the round's measured delta (driver-measured)")
+    // The stale handover the advance's distillation wrote is gone (the phase
+    // distills again after the unit runs), all on the driver's own commits.
+    expect(existsSync(join(dir, "docs/R-01/P01-implement/handover.md"))).toBe(false)
+    expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+    const subjects = (await git(dir, "log", "--format=%s")).split("\n")
+    expect(subjects).toContain("PLAN close-audit T-002 (R-01)")
+    expect(subjects).toContain("PLAN close-audit R-01: remove the stale handover")
+    // The construction is idempotent: a re-run of the advance refuses the
+    // same way over the standing unit, nothing re-constructed.
+    const again = await capture(() => runTransfer(dir, { managed: host, phases: "implement" }))
+    expect(again.code).toBe(2)
+    expect(again.lines.some((line) => line.includes("✓ close-audit unit T-003 constructed"))).toBe(false)
+    expect(existsSync(join(dir, "docs/T-003"))).toBe(false)
+  })
+
+  test("the open close arm: the uncovered close-due row holds the open close, the unit constructed in the open phase, the accrue row riding unnamed", async () => {
+    const dir = await repo()
+    await Bun.write(join(dir, ".gitignore"), ".auto/\ntmp/\n/AGENTS.md\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "ignore the block")
+    await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 open — absorb fixes and small features"]))
+    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "round start")
+    const state = (await readPhases(dir, 1))!
+    await addTask(dir, state.phases[0]!, "fix the login crash")
+    const index = join(dir, state.phases[0]!.dir, "tasks.md")
+    await Bun.write(index, (await Bun.file(index).text()).replace("- [ ] T-001", "- [x] T-001"))
+    rmSync(join(dir, "docs/T-001/todo.md"))
+    await Bun.write(join(dir, "docs/T-001/done.md"), taskDoc("T-001", "R-01.P01"))
+    const brief = join(dir, "docs/R-01/round.md")
+    const text = await Bun.file(brief).text()
+    await Bun.write(brief, `${text.split("## Close")[0]!}## Close\n\n- The fixes are restated in the target's own docs; nothing accepted as lost.\n`)
+    await Bun.write(join(dir, "docs/assurance.md"), table([S_CLOSE_DUE, S_ACCRUE]))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "task done, close intent, the table declared")
+    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(out.code).toBe(2)
+    expect(out.lines.some((line) => line.includes("round R-01 does not pass its round-close checks, so the open round cannot close yet — nothing was closed"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("✗ assurance cover set: S-20 (clean-room independence) is due at this close and uncovered"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("execute it with: opencode-auto run"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("S-22"))).toBe(false)
+    // The open phase was never ticked — no re-open, the unit simply lands.
+    expect(out.lines.some((line) => line.includes("✓ close-audit unit T-002 constructed in docs/R-01/P01-implement"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("re-opened"))).toBe(false)
+    expect(existsSync(join(dir, "docs/R-01/P01-implement/todo.md"))).toBe(true)
+    expect((await Bun.file(join(dir, "docs/R-01/phases.md")).text()).trimEnd().endsWith("- [ ] P01 implement")).toBe(true)
+    expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+    // The floor beside it: the same state without the table closes
+    // byte-identically — no cover-set line, no unit (the P10 floor).
+    await rmSync(join(dir, "docs/assurance.md"))
+    await rmSync(join(dir, "docs/T-002/todo.md"))
+    rmSync(join(dir, "docs/T-002"), { recursive: true, force: true })
+    await Bun.write(index, (await Bun.file(index).text()).replace("- [ ] T-002 Adjudicate the due assurance rows (R-01)\n", ""))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "remove the table and the unit")
+    const floor = await capture(() => runTransfer(dir, { phases: "mt" }))
+    expect(floor.code).toBe(0)
+    expect(floor.lines.some((line) => line.includes("✓ open round R-01 closed"))).toBe(true)
+    expect(floor.lines.some((line) => line.includes("assurance"))).toBe(false)
+    expect(floor.lines.some((line) => line.includes("close-audit"))).toBe(false)
   })
 })

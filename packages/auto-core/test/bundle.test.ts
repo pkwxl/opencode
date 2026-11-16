@@ -8,7 +8,8 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { materializeIntentBundle, parseIntentBundle, registerIntentBundle, registeredIntentBundles, resolveIntentBundle, type IntentBundleFiles } from "../src/bundle"
+import { materializeIntentBundle, bundleFileMap, parseIntentBundle, registerIntentBundle, registeredIntentBundles, resolveIntentBundle, type IntentBundleFiles } from "../src/bundle"
+import { dueSet, readAssuranceTable } from "../src/assurance"
 import { loadIntents, packSubsection, parseIntentFile, planningInputScaffold } from "../src/intent/load"
 import { guaranteesProblem, parseGuaranteeAsserts } from "../src/intent/guarantees"
 import { parseTestLanes, testLanesProblem } from "../src/intent/test-lanes"
@@ -16,6 +17,7 @@ import { loadModes } from "../src/mode"
 import { loadPhaseTypes } from "../src/phases/custom"
 import { resolvePhases } from "../src/phases/registry"
 import { promptFacts } from "../src/prompt-facts"
+import { renderText } from "../src/template"
 
 // The Clean-Room fixture (plans/0079 §1.1): spec-read and audit custom types
 // around the builtins, the cleanroom pack (with the repair duties the
@@ -593,12 +595,233 @@ describe("bundle sources", () => {
         // whole/subtask asserts pin.
         expect(loadModes(dir)[name]?.exec).toContain(FAITHFUL_ANCHORS[name].mode)
         // A materialized project adds exactly the survey type (plans/0081
-        // D14); the builtin registry resolves the rest of the sequence.
+        // D14); the builtin registry resolves the rest.
         expect(loadPhaseTypes(dir).filter((entry) => entry.origin === "project").map((entry) => entry.type)).toEqual(["survey"])
         expect(resolvePhases("survey,analysis,design,implement,test,acceptance", loadPhaseTypes(dir))).not.toBeNull()
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }
+    }
+  })
+})
+
+// The 0244 data family (plans/0244 D7, S5): the bundle duty copy re-keys from
+// the standing surface to the due set — the cleanroom audit duty's
+// delta-keyed mandate and carried-dimension grammar, the assurance-table
+// seed (D2: the eight standing dimensions as rows, installed create-only
+// with the bundle), the faithful family's t/v duties split by the delta's
+// changed families with the standing suite once per tree state, and the
+// packs' round-brief rules keying proposed verification to what the delta
+// reaches. The mode files stay prose and gain nothing (0243 A; D7's last
+// sentence — the due set owns owed verification, rhetoric cannot buy or
+// waive evidence).
+describe("the 0244 data family (plans/0244 D7)", () => {
+  test("a malformed or rowless assurance seed is refused at the bundle parse, never materialized", () => {
+    const header = `${["| id | invariant | kind | watched surface | cadence | close | baseline |", "| --- | --- | --- | --- | --- | --- | --- |"].join("\n")}\n`
+    const cases: Array<[IntentBundleFiles, RegExp]> = [
+      [{ ...CLEANROOM, "docs/assurance.md": `${header}| S-01 | x | vibes | src | on-reach | accrue |  |\n` }, /seed does not parse: .*kind must be judgment or mechanical/],
+      [{ ...CLEANROOM, "docs/assurance.md": "# no table here\n" }, /seed does not parse: .*declares no rows/],
+    ]
+    for (const [files, pattern] of cases) expect(() => parseIntentBundle(files)).toThrow(pattern)
+  })
+
+  test("the cleanroom assurance seed ships, parses under the landed table grammar, and installs create-only", async () => {
+    const files = await resolveIntentBundle("cleanroom")
+    const bundle = parseIntentBundle(files!)
+    // The seed rides the bundle (the registration law: the template file and
+    // its table entry in the same change).
+    expect(bundle.files.docs?.["docs/assurance.md"]).toBeDefined()
+    // The provenance sidecar covers the tool-owned .opencode/auto surfaces
+    // alone: the table is the target's living data (the audits cite it, the
+    // close-audit rewrites its baselines) — sync must never be taught to
+    // revert it.
+    expect(bundleFileMap(bundle)).not.toHaveProperty("docs/assurance.md")
+    const dir = tempDir()
+    try {
+      const written = await materializeIntentBundle(dir, bundle)
+      expect(written).toContain("docs/assurance.md")
+      // The eight standing dimensions as rows, each judged from how the
+      // audits actually ran: judgment work throughout, on-reach wherever the
+      // dimension's findings walk a named surface (the catalog, the
+      // deliverable root — the neutral `src` placeholder the seed's prose
+      // teaches the person to re-point), accrue for the repair-routed
+      // findings, and clean-room independence the one every-round close-due
+      // row — its evidence is round-process (crossing events, similarity
+      // flags), not a reachable path.
+      const rows = (await readAssuranceTable(dir))!
+      expect(rows.map((row) => [row.id, row.kind, row.cadence, row.close])).toEqual([
+        ["S-01", "judgment", "on-reach", "accrue"],
+        ["S-02", "judgment", "on-reach", "accrue"],
+        ["S-03", "judgment", "on-reach", "accrue"],
+        ["S-04", "judgment", "on-reach", "accrue"],
+        ["S-05", "judgment", "on-reach", "accrue"],
+        ["S-06", "judgment", "every-round", "close-due"],
+        ["S-07", "judgment", "on-reach", "accrue"],
+        ["S-08", "judgment", "on-reach", "accrue"],
+      ])
+      expect(rows.find((row) => row.id === "S-06")!.facts.sort()).toEqual(["crossing events", "similarity flags"])
+      expect(rows.find((row) => row.id === "S-01")!.paths).toContain("docs/capability-catalog.md")
+      expect(rows.every((row) => row.baseline === "")).toBe(true)
+      // The seed's own prose teaches the existing-project act (the person's
+      // manual transcription) and the create-only discipline. Wrap-insensitive.
+      const seed = (await Bun.file(join(dir, "docs", "assurance.md")).text()).replace(/\s+/g, " ")
+      expect(seed).toContain("transcribes its last audit's conclusions into rows by hand")
+      expect(seed).toContain("never overwrites a table that stands")
+      // Create-only: a table that stands is the target's — re-materialization
+      // (or a bundle arriving at an existing project) forces nothing.
+      const raw = await Bun.file(join(dir, "docs", "assurance.md")).text()
+      const edited = raw.replace("| S-01 |", "| S-01x |")
+      writeFileSync(join(dir, "docs", "assurance.md"), edited)
+      await materializeIntentBundle(dir, bundle)
+      expect(await Bun.file(join(dir, "docs", "assurance.md")).text()).toBe(edited)
+      // And the keying the seed buys (the R-07 census shape): a test-only
+      // delta owes exactly the every-round row; a code delta owes the
+      // code-reached dimensions — never the standing shell for its own sake.
+      const testOnly = { round: 1, roots: [{ label: "the target repository", prefix: "", anchor: "a", head: "b", commits: 1, files: [{ path: "test/one.test.ts", status: "M", added: 72, removed: 9 }] }] }
+      expect(dueSet(rows, { delta: testOnly }).map((due) => due.row.id)).toEqual(["S-06"])
+      const codeDelta = { round: 1, roots: [{ label: "the target repository", prefix: "", anchor: "a", head: "b", commits: 2, files: [{ path: "src/impl.ts", status: "M", added: 5, removed: 0 }] }] }
+      expect(dueSet(rows, { delta: codeDelta }).map((due) => due.row.id)).toEqual(["S-01", "S-02", "S-03", "S-04", "S-06", "S-07", "S-08"])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the cleanroom audit duty is delta-keyed: the due set reaches, carried dimensions adjudicated, row ids named (plans/0244 D7)", async () => {
+    const files = await resolveIntentBundle("cleanroom")
+    const bundle = parseIntentBundle(files!)
+    const pack = parseIntentFile("cleanroom", files!["intents/cleanroom.md"]!)
+    // The phase file's own duties (the tier that wins for a custom type) and
+    // the pack's `### audit` subsection carry the same re-keying —
+    // wrap-insensitive pins over both carriers.
+    const flat = (text: string) => text.replace(/\s+/g, " ")
+    for (const carrier of [bundle.types.find((entry) => entry.type === "audit")!.planDuties!, packSubsection(pack, "phaseDuties", "audit")!]) {
+      const text = flat(carrier)
+      // The mandate re-keys from the standing surface to the due set, with
+      // the floor: a dimension no due row covers keeps the standing mandate
+      // (a project with no table audits as before, P10).
+      expect(text).toContain("compliance dimension the due set reaches")
+      expect(text).toContain("keeps the standing mandate")
+      // The carried-dimension grammar: adjudicated in the closing task
+      // against the cited baseline, the carry argument recorded, every
+      // dimension named either way.
+      expect(text).toContain("carry argument recorded")
+      expect(text).toContain("names every dimension either way")
+    }
+    // The phase file spells the due set's derivation and the carried arm in
+    // full; the S4 linkage is taught as data there (the findings documents
+    // NAME the row ids they adjudicate — only a PASS names-covered row
+    // adjudicates) beside the once-per-tree-state discipline.
+    const duties = flat(bundle.types.find((entry) => entry.type === "audit")!.planDuties!)
+    expect(duties).toContain("measured delta block and the assurance table")
+    expect(duties).toContain("carried, never skipped")
+    expect(duties).toContain("names the assurance row id")
+    expect(duties).toContain("only a findings document that names the row id and carries `Result: PASS` adjudicates it")
+    expect(duties).toContain("once per tree state")
+    expect(duties).toContain("`Tree:`")
+    expect(duties).toContain("`Decides:`")
+    expect(duties).toContain("determinism of changed sections is proven by running them twice")
+    // The charter reconciles with the duty (the plan-step verifier judges the
+    // composed prompt against it): the due-set reach and the carried
+    // adjudication named there too, beside the once-per-tree-state citation
+    // rule that replaced the unconditional re-run.
+    const charter = flat(packSubsection(pack, "guarantees", "verify-plan-audit")!)
+    expect(charter).toContain("the due set reaches")
+    expect(charter).toContain("carry argument recorded")
+    expect(charter).toContain("once per tree state")
+    expect(charter).toContain("`Tree:`")
+    // The load-bearing protocol phrases the asserts pin survive the rewrite.
+    for (const phrase of ["verdict.md", "Result: PASS", "paradigm conformance", "contract coverage"]) expect(duties).toContain(phrase)
+  })
+
+  test("the bundles' t/v duties are delta-keyed with a byte-identical floor (plans/0244 D7)", async () => {
+    // The pre-0244 duty bodies, pinned as the floor: rendered without the
+    // delta fact (planDutyText's trimEnd contract) the sections keep exactly
+    // these bytes — the `{{#if delta}}` clauses vanish whole, a tag alone on
+    // its line swallowing its line.
+    const faithfulT = [
+      "4. Splitting and artifact criteria for this phase: verify parity against the behavior baseline —",
+      "split by verification layer or scenario family (build checks, functional tests, black-box",
+      "acceptance against the baseline, one item per baseline behavior family); every item names the",
+      "behavior proven and records the observed evidence, never a bare \"tests passed\"; keep writing checks",
+      "apart from fixing defects — defects the checks expose are appended as separate fix items, not mixed",
+      "into the check-writing item.",
+    ].join("\n")
+    const cleanroomT = [
+      "4. Splitting and artifact criteria for this phase: split by verification layer or scenario",
+      "family — build checks, functional tests, and black-box acceptance (one item per",
+      "acceptance criterion family, each verifying Given/When/Then against the specification)",
+      "each become an item; every acceptance item maps the criterion to the check that proves",
+      "it and records the observed evidence, never a bare \"tests passed\"; keep writing checks",
+      "apart from fixing defects — defects the checks expose are appended as separate fix",
+      "items, not mixed into the check-writing item.",
+    ].join("\n")
+    const faithfulV = [
+      "4. Splitting and artifact criteria for this phase:",
+      "   - One item per parity dimension (external behavior, interface contracts, state and",
+      "     lifecycle, error semantics, structural fidelity); each item verifies the implementation",
+      "     against the reference's behavior baseline and writes its findings with evidence;",
+      "   - The closing item consolidates the findings into the verdict document verdict.md in this",
+      "     phase directory, ending with the result line `Result: PASS` or `Result: FAIL <reason>` —",
+      "     a driver protocol string, written verbatim: the verdict judges parity and follows the",
+      "     findings, never optimism;",
+    ].join("\n")
+    const leanV = [
+      "4. Splitting and artifact criteria for this phase:",
+      "   - One item per verification dimension (external behavior, interface contracts, state and",
+      "     lifecycle, error semantics, debt-removal accounting); each item verifies the",
+      "     implementation against the reference's behavior baseline and writes its findings with",
+      "     evidence — the debt-removal accounting item lists every internal removal the work made",
+      "     and where its justification lives;",
+      "   - The closing item consolidates the findings into the verdict document verdict.md in this",
+      "     phase directory, ending with the result line `Result: PASS` or `Result: FAIL <reason>` —",
+      "     a driver protocol string, written verbatim: the verdict judges external parity plus the",
+      "     debt-removal accounting and follows the findings, never optimism;",
+    ].join("\n")
+    const floors = { cleanroom: { t: cleanroomT }, faithful: { t: faithfulT, v: faithfulV }, "faithful-lean": { t: faithfulT, v: leanV } }
+    for (const name of ["cleanroom", "faithful", "faithful-lean"] as const) {
+      const files = await resolveIntentBundle(name)
+      const pack = parseIntentFile(name, files![`intents/${name}.md`]!)
+      const t = packSubsection(pack, "phaseDuties", "t")!
+      // The floor: no measured delta renders the pre-0244 bytes exactly.
+      expect(renderText(t, {}).trimEnd(), name).toBe(floors[name].t)
+      if (name === "cleanroom") continue
+      const v = packSubsection(pack, "phaseDuties", "v")!
+      expect(renderText(v, {}).trimEnd(), name).toBe(floors[name].v)
+      // The keyed copy: split by the delta's changed families, the standing
+      // baseline suite once per tree state as the regression bound (receipt
+      // validity carried by `Tree:`/`Decides:`), determinism ×2 on changed
+      // sections — and the v side keys the dimensions' depth the same way.
+      const keyed = renderText(t, { delta: true }).replace(/\s+/g, " ")
+      expect(keyed).toContain("changed families")
+      expect(keyed).toContain("code, test, docs")
+      expect(keyed).toContain("once per tree state as the regression bound")
+      expect(keyed).toContain("`Tree:`")
+      expect(keyed).toContain("`Decides:`")
+      expect(keyed).toContain("prove determinism by running twice")
+      const keyedV = renderText(v, { delta: true }).replace(/\s+/g, " ")
+      expect(keyedV).toContain("delta block keys the dimensions' depth")
+      expect(keyedV).toContain("cites the round's standing evidence")
+    }
+  })
+
+  test("every bundle pack declares the round-brief rules; the mode files gain nothing (plans/0244 D7, 0243 A)", async () => {
+    for (const name of ["cleanroom", "faithful", "faithful-lean"] as const) {
+      const files = await resolveIntentBundle(name)
+      const pack = parseIntentFile(name, files![`intents/${name}.md`]!)
+      // The pack's `### round-brief` rules: the measured delta is the
+      // standing input, the verification the brief demands keys to what it
+      // reaches (the due rows when a table stands), and the brief stays the
+      // person's. Wrap-insensitive.
+      const rules = packSubsection(pack, "acceptance", "round-brief")!.replace(/\s+/g, " ")
+      expect(rules, name).toContain("measured delta block")
+      expect(rules).toContain("due rows")
+      expect(rules).toContain("never a re-run of the standing surface for its own sake")
+      expect(rules).toContain("never edit round.md")
+      // 0243 A / D7's last sentence: the mode layer stays prose — no owed
+      // verification vocabulary may leak into it (the due set owns what a
+      // round owes; rhetoric cannot buy or waive evidence).
+      const mode = files![`modes/${name}.md`]!
+      for (const word of ["due set", "due rows", "measured delta", "assurance"]) expect(mode, name).not.toContain(word)
     }
   })
 })

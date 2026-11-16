@@ -9,6 +9,9 @@ import {
   analysisProblems,
   analysisText,
   ANALYSIS_SECTIONS,
+  askVsCharterBlock,
+  askVsCharterNearMisses,
+  ASK_VS_CHARTER_HEADING,
   renderAnalysisStub,
   releasedRoundBriefProposal,
   resolveRoundPhases,
@@ -217,6 +220,10 @@ describe("the project analysis document (plans/0084)", () => {
 })
 
 describe("the round-brief proposals (plans/0115)", () => {
+  // Both proposals re-word their roadmap lines' goals (R-01 narrows the
+  // line's "port the core and its tests", R-02 re-voices it), so each
+  // carries its `#### Ask vs charter` block — the well-formed shape since
+  // plans/0244 D6 (the divergence-keyed requirement's own tests below).
   const WITH_BRIEFS = [
     RELEASED.replace("\nClarified: yes", ""),
     "## Round briefs",
@@ -227,9 +234,19 @@ describe("the round-brief proposals (plans/0115)", () => {
     "",
     "- Acceptance: the e2e suite passes on the ported core.",
     "",
+    "#### Ask vs charter",
+    "",
+    "The line asks `port the core and its tests`; this round ports the retry ladder and the",
+    "protocol strings only — the config port rides R-02's acceptance pass.",
+    "",
     "### R-02",
     "",
     "The acceptance pass and the knowledge distillation.",
+    "",
+    "#### Ask vs charter",
+    "",
+    "The line's goal — acceptance pass and knowledge — drafted whole; the distillation names",
+    "the knowledge work. No narrowing.",
     "",
   ].join("\n")
 
@@ -240,8 +257,13 @@ describe("the round-brief proposals (plans/0115)", () => {
     expect(analysisProblems(RELEASED, BUILTIN_PHASE_TYPES)).toEqual([])
     // With it: each subsection's body runs to the next `###`/`##` heading.
     const briefs = roundBriefProposals(WITH_BRIEFS)
-    expect(briefs.get(1)).toBe("Port the retry ladder and the protocol strings with their tests.\n\n- Acceptance: the e2e suite passes on the ported core.")
-    expect(briefs.get(2)).toBe("The acceptance pass and the knowledge distillation.")
+    expect(briefs.get(1)).toBe(
+      "Port the retry ladder and the protocol strings with their tests.\n\n- Acceptance: the e2e suite passes on the ported core.\n\n" +
+        "#### Ask vs charter\n\nThe line asks `port the core and its tests`; this round ports the retry ladder and the\nprotocol strings only — the config port rides R-02's acceptance pass.",
+    )
+    expect(briefs.get(2)).toBe(
+      "The acceptance pass and the knowledge distillation.\n\n#### Ask vs charter\n\nThe line's goal — acceptance pass and knowledge — drafted whole; the distillation names\nthe knowledge work. No narrowing.",
+    )
     // Unpadded ids parse, the roadmap's rule; a commented-out subsection is
     // not content.
     const unpadded = WITH_BRIEFS.replace("### R-02", "### R-2").replace("### R-01", "<!-- ### R-09 -->\n### R-1")
@@ -252,7 +274,10 @@ describe("the round-brief proposals (plans/0115)", () => {
   })
 
   test("an empty subsection and a near-miss heading are named problems — only when the section is present", () => {
-    const empty = WITH_BRIEFS.replace("The acceptance pass and the knowledge distillation.\n", "")
+    const empty = WITH_BRIEFS.replace(
+      "The acceptance pass and the knowledge distillation.\n\n#### Ask vs charter\n\nThe line's goal — acceptance pass and knowledge — drafted whole; the distillation names\nthe knowledge work. No narrowing.\n",
+      "",
+    )
     expect(analysisProblems(empty, BUILTIN_PHASE_TYPES)).toEqual([
       "round-brief proposals that hold no content: `### R-02` — fill each with that round's brief (goal, acceptance and release criteria) or remove it; an empty proposal installs nothing",
     ])
@@ -290,7 +315,11 @@ describe("the round-brief proposals (plans/0115)", () => {
       expect(await releasedRoundBriefProposal(dir, 1)).toContain("retry ladder")
       expect(await releasedRoundBriefProposal(dir, 2)).toContain("acceptance pass")
       expect(await releasedRoundBriefProposal(dir, 3)).toBeUndefined()
-      const empty = WITH_BRIEFS.replace("The acceptance pass and the knowledge distillation.\n", "") + "\nClarified: yes\n"
+      const empty =
+        WITH_BRIEFS.replace(
+          "The acceptance pass and the knowledge distillation.\n\n#### Ask vs charter\n\nThe line's goal — acceptance pass and knowledge — drafted whole; the distillation names\nthe knowledge work. No narrowing.\n",
+          "",
+        ) + "\nClarified: yes\n"
       await Bun.write(join(dir, "docs/analysis.md"), empty)
       expect(await releasedRoundBriefProposal(dir, 2)).toBeUndefined()
     } finally {
@@ -307,7 +336,9 @@ describe("the round-brief proposals (plans/0115)", () => {
   test("a near-miss heading after a released subsection terminates it — its body never rides into the earlier round's brief (plans/0158 D3)", async () => {
     const doc = `${WITH_BRIEFS}#### R-03 notes\n\nDrafted later; reads as a brief for R-03.\n`
     const briefs = roundBriefProposals(doc)
-    expect(briefs.get(2)).toBe("The acceptance pass and the knowledge distillation.")
+    expect(briefs.get(2)).toBe(
+      "The acceptance pass and the knowledge distillation.\n\n#### Ask vs charter\n\nThe line's goal — acceptance pass and knowledge — drafted whole; the distillation names\nthe knowledge work. No narrowing.",
+    )
     expect(briefs.has(3)).toBe(false)
     expect(roundBriefNearMisses(doc)).toEqual(["#### R-03 notes"])
     // The release-time scan still names it where it runs (the project start).
@@ -366,7 +397,9 @@ describe("the round-brief proposals (plans/0115)", () => {
     expect(briefs.get(1)).toContain("#### Release criteria")
     expect(briefs.get(1)).toContain("byte-checked")
     expect(briefs.get(1)).toContain("No process reference in the deliverable.")
-    expect(briefs.get(2)).toBe("The acceptance pass and the knowledge distillation.")
+    expect(briefs.get(2)).toBe(
+      "The acceptance pass and the knowledge distillation.\n\n#### Ask vs charter\n\nThe line's goal — acceptance pass and knowledge — drafted whole; the distillation names\nthe knowledge work. No narrowing.",
+    )
     // The grammar checks pass: no false "holds no content" for a proposal
     // opening with a sub-heading, no near-miss named, nothing stranded.
     expect(roundBriefNearMisses(sectioned)).toEqual([])
@@ -392,7 +425,7 @@ describe("the round-brief proposals (plans/0115)", () => {
       "",
       "### R-01",
       "",
-      "Port the core.",
+      "Port the core and its tests.",
       "",
       "## Notes",
       "",
@@ -403,9 +436,11 @@ describe("the round-brief proposals (plans/0115)", () => {
       "The acceptance pass.",
       "",
     ].join("\n")
-    // R-01 keeps its body to the `##` heading; R-02 never parses.
+    // R-01 keeps its body to the `##` heading; R-02 never parses. R-01
+    // drafts its line's goal verbatim (the D6 floor — no block required),
+    // so the stranded head stays this fixture's one problem.
     const briefs = roundBriefProposals(stranded)
-    expect(briefs.get(1)).toBe("Port the core.")
+    expect(briefs.get(1)).toBe("Port the core and its tests.")
     expect(briefs.has(2)).toBe(false)
     // The release scan names the stranded heads (capped naming, the family
     // convention), teaching the move.
@@ -450,6 +485,100 @@ describe("the round-brief proposals (plans/0115)", () => {
     expect(stub).toContain("a `##` -->\n<!-- heading ends this section, so keep every proposal above any later `##` heading")
     // The comment-only stub still parses to nothing.
     expect(roundBriefProposals(stub).size).toBe(0)
+  })
+})
+
+describe("the ask-vs-charter reconciliation (plans/0244 D6)", () => {
+  // Finding 5's shape: the person's ask (the released roadmap line's goal)
+  // re-framed at drafting. The channel mechanically holds both texts, so
+  // the requirement keys on their divergence — the driver never judges
+  // narrowing (P7), it demands the block that lets the person judge (P2).
+  const DIVERGENT = [
+    RELEASED.replace("\nClarified: yes", ""),
+    "## Round briefs",
+    "",
+    "### R-01",
+    "",
+    "Classify the five; code defects route to a successor round.",
+    "",
+  ].join("\n")
+
+  test("a divergent proposal without the block is a named problem; with the block the grammar passes", () => {
+    const problems = analysisProblems(DIVERGENT, BUILTIN_PHASE_TYPES)
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain("round-brief proposals that re-frame their roadmap line's goal with no `#### Ask vs charter` block: `### R-01`")
+    expect(problems[0]).toContain("what this round will not do that the goal implied, and where that work goes instead")
+    expect(problems[0]).toContain("state it even when the charter drafts the ask whole")
+    // The block present with content: the grammar passes — whether it
+    // reconciles honestly is the person's read at the release (P7).
+    const withBlock = DIVERGENT.replace(
+      "Classify the five; code defects route to a successor round.",
+      "Classify the five; code defects route to a successor round.\n\n#### Ask vs charter\n\nThe line asks `port the core and its tests`; this charter classifies instead — the port lands in the successor round it names.",
+    )
+    expect(analysisProblems(withBlock, BUILTIN_PHASE_TYPES)).toEqual([])
+    // The block rides the proposal verbatim (it installs with the body).
+    expect(askVsCharterBlock(roundBriefProposals(withBlock).get(1)!)).toBe(
+      "The line asks `port the core and its tests`; this charter classifies instead — the port lands in the successor round it names.",
+    )
+  })
+
+  test("the floor: a proposal drafting its line's goal verbatim — casing aside — needs no block; a round no line covers carries no mechanical ask", () => {
+    // Verbatim up to sentence casing: the ask is drafted whole, absence
+    // legal, the document reads exactly as before D6 (P10).
+    const verbatim = DIVERGENT.replace(
+      "Classify the five; code defects route to a successor round.",
+      "Port the core and its tests, with the retry ladder intact.",
+    )
+    expect(analysisProblems(verbatim, BUILTIN_PHASE_TYPES)).toEqual([])
+    expect(askVsCharterBlock(roundBriefProposals(verbatim).get(1)!)).toBeUndefined()
+    // R-03 has no roadmap line: no mechanical ask in the channel, the block
+    // stays optional.
+    const uncovered = DIVERGENT.replace("### R-01", "### R-03")
+    expect(analysisProblems(uncovered, BUILTIN_PHASE_TYPES)).toEqual([])
+    // No section at all: nothing of D6 fires (the channel's own floor).
+    expect(askVsCharterNearMisses(RELEASED)).toEqual([])
+  })
+
+  test("the block's grammar: extraction round-trip to the next heading, an empty block a named problem, the near-miss family named", () => {
+    // Extraction: the content under the exact heading, ended by the next
+    // heading of any level.
+    const body = ["Open.", "", "#### Ask vs charter", "", "The difference, named.", "", "#### Release criteria", "", "No process reference."].join("\n")
+    expect(askVsCharterBlock(body)).toBe("The difference, named.")
+    expect(askVsCharterBlock("No block here.")).toBeUndefined()
+    // An empty block: present, contentless — its own named problem (a block
+    // that reads as reconciliation says nothing).
+    const emptyBlock = DIVERGENT.replace(
+      "Classify the five; code defects route to a successor round.",
+      "Classify the five; code defects route to a successor round.\n\n#### Ask vs charter",
+    )
+    expect(askVsCharterBlock(roundBriefProposals(emptyBlock).get(1)!)).toBe("")
+    // One problem, the empty-block arm: its remedy (fill it with the ask
+    // restated and the difference named) covers the divergence too — the
+    // block stands, it says nothing.
+    const problems = analysisProblems(emptyBlock, BUILTIN_PHASE_TYPES)
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain("round-brief proposals whose `#### Ask vs charter` block holds no content: `### R-01`")
+    // Near-misses: same words, not the frozen spelling — named always (they
+    // ride verbatim into an installed brief while never parsing as the
+    // block), and under divergence the missing arm fires beside them.
+    const near = DIVERGENT.replace(
+      "Classify the five; code defects route to a successor round.",
+      "Classify the five; code defects route to a successor round.\n\n#### Ask vs. charter\n\nThe difference, named.",
+    )
+    expect(askVsCharterNearMisses(near)).toEqual(["#### Ask vs. charter"])
+    const nearProblems = analysisProblems(near, BUILTIN_PHASE_TYPES)
+    expect(nearProblems).toHaveLength(2)
+    expect(nearProblems.some((problem) => problem.includes("ask-vs-charter block headings that do not parse (the block is one heading `#### Ask vs charter` — exactly, like its `#### Acceptance criteria` siblings): `#### Ask vs. charter`"))).toBe(true)
+    expect(nearProblems.some((problem) => problem.includes("with no `#### Ask vs charter` block: `### R-01`"))).toBe(true)
+    // The level family too: an `### ask vs charter` is body, never the block.
+    const leveled = near.replace("#### Ask vs. charter", "### ask vs charter")
+    expect(askVsCharterNearMisses(leveled)).toEqual(["### ask vs charter"])
+  })
+
+  test("the stub teaches the block", () => {
+    const stub = renderAnalysisStub()
+    expect(stub).toContain("`#### Ask vs charter` block: the line's goal (the ask) restated beside the drafted")
+    expect(stub).toContain("a proposal drafting the goal verbatim needs none")
   })
 })
 

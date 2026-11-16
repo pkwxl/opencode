@@ -107,6 +107,13 @@ export type Task = {
   // equals the owning index's phase; a hand-written look-alike behaves as a
   // normal task.
   formulate?: string
+  // The close-audit marker (plans/0244 D5): the driver-written
+  // `Close-audit:` field's value — the round name (R-NN) whose close-due
+  // assurance rows this task adjudicates. Like `Formulate:` a driver-owned
+  // marker a planning session never carries (newTaskProblems refuses it);
+  // the constructor (src/close-audit.ts) recognizes its own unit by it,
+  // wherever the row sits.
+  closeAudit?: string
   // The dependency park (plans/0096 D7): the blocker task id this task
   // parked on — runtime state (.auto/units.json), never a document. Set when
   // the whole-task session ends through `Status: park <blocker id>` and its
@@ -332,6 +339,7 @@ export function renderTaskTodo(input: {
   title: string
   phase?: string
   formulate?: string
+  closeAudit?: string
   decompose?: string
   depends?: string
   touches?: string
@@ -345,6 +353,7 @@ export function renderTaskTodo(input: {
     `# ${input.id}: ${input.title}`,
     ...(input.phase ? [`Phase: ${input.phase}`] : []),
     ...(input.formulate !== undefined ? [`Formulate: ${input.formulate}`] : []),
+    ...(input.closeAudit !== undefined ? [`Close-audit: ${input.closeAudit}`] : []),
     ...(input.decompose !== undefined ? [`Decompose: ${input.decompose}`] : []),
     ...(input.depends !== undefined ? [`Depends: ${input.depends}`] : []),
     ...(input.touches !== undefined ? [`Touches: ${input.touches}`] : []),
@@ -653,6 +662,7 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
       ...(leadUsed !== undefined ? { leadUsed } : {}),
       body: taskBody(doc),
       ...(unit.fields.formulate !== undefined ? { formulate: unit.fields.formulate } : {}),
+      ...(unit.fields["close-audit"] !== undefined ? { closeAudit: unit.fields["close-audit"] } : {}),
       ...(parkedOf(runtime) !== undefined && !done ? { parked: parkedOf(runtime)! } : {}),
       ...(unit.fields.phase ? { phase: unit.fields.phase } : {}),
       ...(unit.depends !== undefined ? { depends: unit.depends } : {}),
@@ -1141,6 +1151,7 @@ export async function newTaskProblems(
   // `Closed:` is the done.md closure record's field; on a pending document
   // it is nothing at all.
   if (fields.formulate !== undefined) problems.push(`${paths.pending} carries a \`Formulate:\` field — the driver's marker of the phase's formulation unit; remove the field line`)
+  if (fields["close-audit"] !== undefined) problems.push(`${paths.pending} carries a \`Close-audit:\` field — the driver's marker of the round's close-audit unit (plans/0244 D5); remove the field line`)
   if (fields.closed !== undefined) problems.push(`${paths.pending} carries a \`Closed:\` field — the closure record belongs to a done.md; remove the field line`)
   if (fields.prefix !== undefined) problems.push(`${paths.pending} carries a \`Prefix:\` field — the driver's record of the formulation unit's pre-existing tasks; remove the field line`)
   if (fields["floor-digest"] !== undefined) problems.push(`${paths.pending} carries a \`Floor-Digest:\` field — the driver's record of the formulation unit's floor assembly; remove the field line`)
@@ -1157,7 +1168,7 @@ export async function newTaskProblems(
 // the mandatory `Phase:`, the dependency/execution fields of the unit
 // grammar, the whole-task consumables declaration (0096 D6) and the driver's
 // own markers a session must never carry (0171 D6 / 0205 D2).
-const TASK_FIELD_SCAN = ["Phase", "Depends", "Touches", "Decompose", "Artifacts", "Formulate", "Closed", "Prefix", "Floor-Digest"] as const
+const TASK_FIELD_SCAN = ["Phase", "Depends", "Touches", "Decompose", "Artifacts", "Formulate", "Close-audit", "Closed", "Prefix", "Floor-Digest"] as const
 
 // Plan-time inversion detection (plans/0096 D6): the soft warns the
 // formulation collect logs when a task's `## Scope` references a consumable

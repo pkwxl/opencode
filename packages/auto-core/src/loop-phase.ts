@@ -17,6 +17,7 @@ import { ANALYSIS_DOC, reportForUserPath, roundDirName } from "./docpaths"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { awaitingFormulation } from "./formulate"
+import { closeAuditStopLines, ensureCloseAudit, updateAssuranceBaselines } from "./close-audit"
 import { banner, dirtyStopLines, log, unreadableStopLines } from "./log"
 import { sessionOpts } from "./opts"
 import { appendPlan, appendWithStep } from "./loop-append"
@@ -570,16 +571,26 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       // is unaffected — for run and plan. transfer (plans/0101 D2 shape 3)
       // is the one command that performs the round close: the checks gate
       // its stop (exit 2 naming them), and the passing stop is the person's
-      // moment with the round's close before the next round opens.
+      // moment with the round's close before the next round opens. The
+      // formulate stop is transfer's advance alone (its only caller), so the
+      // close-audit construction (plans/0244 D5) rides this branch: a
+      // non-empty close-due set without receipts constructs the unit before
+      // the close may land, the refusal teaching its execution; the green
+      // cover set's baseline citations (the table stays the single memory)
+      // land on their own commit before the stop.
       const { bin } = shellProfile()
       const close = await roundCloseProblems(directory, state.round, { build: opts.build, scanExempt: opts.scanExempt })
       if (opts.stopBefore === "formulate") {
-        if (close.problems.length) {
+        const audit = await ensureCloseAudit(directory, state.round)
+        for (const line of closeAuditStopLines(audit)) log(line)
+        const gated = audit.type === "constructed" ? await roundCloseProblems(directory, state.round, { build: opts.build, scanExempt: opts.scanExempt }) : close
+        if (gated.problems.length) {
           log(`⏸ round ${roundDirName(state.round)} does not pass its round-close checks, so it cannot close yet — fix them, commit, then re-run: ${bin} transfer ${directory}`)
-          for (const line of roundCloseLines(close, "transfer")) log(line)
+          for (const line of roundCloseLines(gated, "transfer")) log(line)
           return 2
         }
-        for (const line of roundCloseLines(close)) log(line)
+        for (const line of await updateAssuranceBaselines(directory, state.round)) log(line)
+        for (const line of roundCloseLines(gated)) log(line)
         // The close listing is the review act; a report names itself only
         // when one was written (plans/0109 D5 — the report is optional).
         const reportText = (await Bun.file(join(directory, reportForUserPath(state.round))).text().catch(() => "")).trim()

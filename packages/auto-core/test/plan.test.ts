@@ -1057,7 +1057,10 @@ describe("planPrelude: the pre-round project analysis, m mode (rows 0a–0d, pla
       mkdirSync(join(dir, "docs"), { recursive: true })
       writeFileSync(
         join(dir, "docs/analysis.md"),
-        FILLED_ANALYSIS.replace("\nClarified: yes", "\n## Round briefs\n\n### R-01\n\nPort the core with the retry ladder intact.\n\n- Acceptance: the suite passes.\n\nClarified: yes"),
+        FILLED_ANALYSIS.replace(
+          "\nClarified: yes",
+          "\n## Round briefs\n\n### R-01\n\nPort the core with the retry ladder intact.\n\n- Acceptance: the suite passes.\n\n#### Ask vs charter\n\nThe line asks the core and its tests ported; this round lands the core with the ladder\nintact — the tests ride the suite the acceptance round runs.\n\nClarified: yes",
+        ),
       )
       const result = await planPrelude(dir, { phases: "m" })
       expect(result.type).toBe("stop")
@@ -1114,7 +1117,10 @@ describe("planPrelude: the pre-round project analysis, m mode (rows 0a–0d, pla
       mkdirSync(join(dir, "docs"), { recursive: true })
       writeFileSync(
         join(dir, "docs/analysis.md"),
-        FILLED_ANALYSIS.replace("\nClarified: yes", "\n## Round briefs\n\n### R-01\n\nPort the core with the retry ladder intact.\n\n- Acceptance: the suite passes.\n\nClarified: yes"),
+        FILLED_ANALYSIS.replace(
+          "\nClarified: yes",
+          "\n## Round briefs\n\n### R-01\n\nPort the core with the retry ladder intact.\n\n- Acceptance: the suite passes.\n\n#### Ask vs charter\n\nThe line asks the core and its tests ported; this round lands the core with the ladder\nintact — the tests ride the suite the acceptance round runs.\n\nClarified: yes",
+        ),
       )
       writeFileSync(join(dir, "scratch.txt"), "the person's private note\n")
       const result = await planPrelude(dir, { phases: "m" })

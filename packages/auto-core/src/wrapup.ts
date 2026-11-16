@@ -466,7 +466,7 @@ function previousTaskId(plan: Plan, id: string): string[] {
   return at > 0 ? [plan.tasks[at - 1]!.id] : []
 }
 
-async function laneGate(dir: string, task: Task, opts: Opts, plan: Plan, drain?: () => Promise<void>): Promise<LaneGate> {
+async function laneGate(dir: string, task: Task, opts: Opts, plan: Plan, drain?: () => Promise<void>, baseline?: UnitBaseline): Promise<LaneGate> {
   // The channel's derived condition, the same line runExecSession gates on
   // (plans/0083 D9): the config flag AND the phase type's codeWork (a
   // phase-less opts resolves onto implement, so bare runs keep the raw-flag
@@ -517,7 +517,9 @@ async function laneGate(dir: string, task: Task, opts: Opts, plan: Plan, drain?:
     }
   }
   const anchor = anchorLaneOf(acceptanceSection(task.body), lanes)
-  const set = await runTestLanes(dir, task.id, lanes, { idleMs: opts.idleMs, maxMs: opts.maxMs, git: gitOf(opts) })
+  // The unit-start baseline rides along (plans/0244 D3): the receipts'
+  // `Tree:` ranges open at it — the state this unit's wrap-up gate judges.
+  const set = await runTestLanes(dir, task.id, lanes, { idleMs: opts.idleMs, maxMs: opts.maxMs, git: gitOf(opts), ...(baseline ? { baseline } : {}) })
   if (set.violation?.kind === "head") {
     return {
       kind: "stop",
@@ -655,7 +657,7 @@ export async function runWrapup(
     // the same spot leaves. Fires at every iteration (the initial entry and
     // each re-verification), always after the persist.
     opts.control?.maybeExit("wrapup", `${task.id} wrap-up entry${round > 0 ? ` (after fix round ${round})` : ""}`)
-    const gate = await laneGate(dir, task, opts, plan, input.drain)
+    const gate = await laneGate(dir, task, opts, plan, input.drain, input.baseline)
     if (gate.kind === "stop") return gate.stop
     let reason: string
     if (gate.kind === "red") {

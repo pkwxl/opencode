@@ -97,6 +97,7 @@
 import { join } from "node:path"
 import { GUIDANCE } from "./agents-block"
 import { analysisProblems } from "./analysis"
+import { coverSetObservation } from "./assurance"
 import { releasedRoadmapRounds } from "./roadmap"
 import { choiceMark, readBlockageDocs, rejectedMark } from "./blockage"
 import { provenanceComparison } from "./bundle"
@@ -244,6 +245,17 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   // target. The round report channel retired with the report's mandate
   // (plans/0109 D1/D5).
   const roundCloseRow = async (closed: number): Promise<boolean> => {
+    // The assurance cover set (plans/0244 D4): the round's due rows and
+    // their cover states ride the close listing as observations — every line
+    // names the receipt, adjudication or cited baseline that covers (or
+    // would cover) its row; the blocking half is the round-close checks
+    // below (their named-rows refusals render in this listing's stop lines,
+    // the same problems the close gate holds on at its own stop). Read-only
+    // like the brief's every other row. The floor: no docs/assurance.md
+    // declared ⇒ the observation renders nothing and the brief keeps today's
+    // bytes exactly.
+    const cover = await coverSetObservation(dir, closed)
+    if (cover !== undefined) facts.push(...cover)
     const close = await roundCloseProblems(dir, closed, { scanExempt: opts.scanExempt, buildSkipped: opts.build !== undefined })
     if (!close.problems.length) return false
     stopLines.push(...roundCloseRefusalLines(dir, closed, closed + 1, close, "transfer"))

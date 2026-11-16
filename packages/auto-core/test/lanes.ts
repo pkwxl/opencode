@@ -25,6 +25,9 @@ export const REPO_LANE: readonly string[] = [
   "test/agent-pool.test.ts",
   "test/agent-server.test.ts",
   "test/append-loop.test.ts",
+  // The assurance family (plans/0244): the delta measurement drives real
+  // git repositories (establishment anchors, nested repositories).
+  "test/assurance.test.ts",
   "test/artifact.test.ts",
   "test/auto-doc-shape.test.ts",
   // The 0082 consented-remediation family: the executor and the diagnosis
@@ -37,6 +40,10 @@ export const REPO_LANE: readonly string[] = [
   "test/boundary.test.ts",
   "test/capability.test.ts",
   "test/close.test.ts",
+  // The close-audit unit's lifecycle (plans/0244 D5): the loop harness over
+  // real git repositories — the construction commits, the re-opened phase,
+  // the ordinary pipeline's dispatch and the baseline citations.
+  "test/close-audit.test.ts",
   // The person's release command (plans/0116): real git repositories — the
   // release commits, the fold of the person's uncommitted fill, and the
   // advance fixtures beside survey-gate's and transfer's.

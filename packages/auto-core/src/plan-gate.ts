@@ -34,9 +34,12 @@ export const planFacts = (ctx: LoopCtx) => promptFacts({ dir: ctx.directory, hum
 // phase duties`, then the core shared partial, rendered through the active
 // library so overlays apply. The ctx (plans/0095 D4) threads the two facts
 // the pack texts reference, fixing the empty-paren / dropped-conditional
-// render of the empty-ctx era.
-export const planDuties = (ctx: LoopCtx, entry: PhaseUnit["entry"]): string =>
-  planDutyText(planFacts(ctx), entry, { phaseName: entry.name, ...(ctx.opts.testByDriver ? { testByDriver: true } : {}) })
+// render of the empty-ctx era; delta (plans/0244 D7) is the append's twin
+// of the formulation todo's fact — the measured-delta block the caller
+// spliced keys the t/v duty copy's `{{#if delta}}` clauses, absent keeps
+// the paragraph's pre-0244 bytes (the P10 floor).
+export const planDuties = (ctx: LoopCtx, entry: PhaseUnit["entry"], delta?: boolean): string =>
+  planDutyText(planFacts(ctx), entry, { phaseName: entry.name, ...(ctx.opts.testByDriver ? { testByDriver: true } : {}), ...(delta ? { delta: true } : {}) })
 
 // The plan-step consistency gate (plans/0080 §5): before a planning or append
 // session runs, its composed prompt is judged against the active pack's

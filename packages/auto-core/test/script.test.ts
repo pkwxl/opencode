@@ -3,6 +3,8 @@ import { chmod, mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DEFAULT_KILL_GRACE_MS, DEFAULT_SCRIPT_IDLE_MS, DEFAULT_SCRIPT_POLL_MS, laneLogDir, runScript, scriptTmpDir, writeLaneReceipt, type LaneRun } from "../src/script"
+import { parseLaneReceipt } from "../src/intent/test-lanes"
+import { EMPTY_TREE } from "../src/assurance"
 import { EOF_MARK } from "../src/doccheck"
 
 describe("scriptTmpDir", () => {
@@ -227,7 +229,9 @@ describe("runScript", () => {
 // once — in the common field array, where every receipt's reader looks — and
 // the red branch never duplicates it. The exact field sequences are pinned:
 // a future single-field consumer must never have to choose between two
-// identical lines.
+// identical lines. The pinned sequence grew the `Tree:` line after `Heads:`
+// (plans/0244 D3/D8 — one conscious lockstep move of this pin); with no
+// bases every root renders the degenerate head..head range.
 describe("writeLaneReceipt: the Log field stated once (plans/0239 D4)", () => {
   let dir: string
   beforeEach(async () => {
@@ -260,6 +264,9 @@ describe("writeLaneReceipt: the Log field stated once (plans/0239 D4)", () => {
         "",
         "Lane: verify-full",
         "Heads: .=abc123",
+        // No bases passed: the degenerate range, valid at exactly this tree
+        // (plans/0244 D3) — the floor every pre-baseline caller writes.
+        "Tree: .=abc123..abc123",
         "Start: 2026-11-09T10:00:00Z",
         "End: 2026-11-09T10:01:00Z",
         "Verdict: red",
@@ -297,5 +304,110 @@ describe("writeLaneReceipt: the Log field stated once (plans/0239 D4)", () => {
     const text = await read()
     expect(text).toContain("Carried: docs/T-000/testhands/verify-full.md")
     expect(text).not.toContain("Log:")
+  })
+})
+
+// plans/0244 D3 (enacting S2): the receipt's two validity fields. `Tree:`
+// follows `Heads:` — one token per head root, a matching base opening the
+// root's validity range, an empty base (a repository with no commits at the
+// base moment) the well-known empty tree, and a root the bases miss the
+// degenerate head..head range that claims no range; `Decides:` follows
+// `Verdict:` only when the run declares surfaces — the paths whose verdict
+// the receipt carries. Every writer arm pinned here, and the round-trip:
+// what writeLaneReceipt writes, parseLaneReceipt reads back.
+describe("writeLaneReceipt: the Tree and Decides fields (plans/0244 D3)", () => {
+  let dir: string
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-script-receipt-"))
+  })
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  const run = (over: Partial<LaneRun>): LaneRun => ({
+    lane: "verify-full",
+    verdict: "green",
+    code: 0,
+    ms: 10,
+    log: "/tmp/driver-side.log",
+    receipt: join("docs", "T-001", "testhands", "verify-full.md"),
+    start: "2026-11-09T10:00:00Z",
+    end: "2026-11-09T10:01:00Z",
+    ...over,
+  })
+  const read = async () => await Bun.file(join(dir, "docs", "T-001", "testhands", "verify-full.md")).text()
+
+  test("bases open each root's range: a matching base the opening, an empty base the empty tree, a missed root the degenerate head..head", async () => {
+    await writeLaneReceipt(
+      dir,
+      run({}),
+      [
+        { root: ".", sha: "def567" },
+        { root: "nested", sha: "beef000" },
+        { root: "tool", sha: "cab1234" },
+      ],
+      [
+        { root: ".", sha: "abc123" },
+        { root: "nested", sha: "" },
+      ],
+    )
+    // One token per head root, the same root spelling as Heads: the covered
+    // root opens at its base, the empty-base root at the empty tree, and the
+    // uncovered root (no baseline entry — the writer's no-range-claimed
+    // floor) stays degenerate.
+    expect(await read()).toContain(`Tree: .=abc123..def567; nested=${EMPTY_TREE}..beef000; tool=cab1234..cab1234`)
+  })
+
+  test("no bases: every root degenerate (valid at exactly this tree); a headless receipt writes no Tree line at all", async () => {
+    await writeLaneReceipt(dir, run({}), [
+      { root: ".", sha: "def567" },
+      { root: "nested", sha: "beef000" },
+    ])
+    expect(await read()).toContain("Tree: .=def567..def567; nested=beef000..beef000")
+    // A receipt born outside git (no heads) has nothing to range over.
+    await writeLaneReceipt(dir, run({}), [])
+    expect(await read()).not.toContain("Tree:")
+  })
+
+  test("Decides: one line, comma-space joined, only when the run declares surfaces", async () => {
+    await writeLaneReceipt(dir, run({ surfaces: ["src/", "test/lane/"] }), [{ root: ".", sha: "def567" }])
+    const text = await read()
+    expect(text).toContain("Decides: src/, test/lane/")
+    expect(text.match(/^Decides: /gm)?.length).toBe(1)
+    // An empty or absent surface set writes no line: the receipt claims no
+    // decided paths.
+    await writeLaneReceipt(dir, run({ surfaces: [] }), [{ root: ".", sha: "def567" }])
+    expect(await read()).not.toContain("Decides:")
+    await writeLaneReceipt(dir, run({}), [{ root: ".", sha: "def567" }])
+    expect(await read()).not.toContain("Decides:")
+  })
+
+  test("round-trip: a receipt written with bases and surfaces parses back with tree and decides intact", async () => {
+    await writeLaneReceipt(
+      dir,
+      run({ surfaces: ["src/", "include/"] }),
+      [
+        { root: ".", sha: "def567" },
+        { root: "nested", sha: "beef000" },
+      ],
+      [
+        { root: ".", sha: "abc123" },
+        { root: "nested", sha: "0f1e2d3" },
+      ],
+    )
+    expect(parseLaneReceipt(await read())).toEqual({
+      lane: "verify-full",
+      heads: [
+        { root: ".", sha: "def567" },
+        { root: "nested", sha: "beef000" },
+      ],
+      tree: [
+        { root: ".", base: "abc123", head: "def567" },
+        { root: "nested", base: "0f1e2d3", head: "beef000" },
+      ],
+      verdict: "green",
+      end: "2026-11-09T10:01:00Z",
+      decides: ["src/", "include/"],
+    })
   })
 })

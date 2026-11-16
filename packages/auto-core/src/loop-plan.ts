@@ -10,6 +10,7 @@
 // loop-append.
 import { dirname, join } from "node:path"
 import type { BlockMapEntry } from "./blockage"
+import { roundDeltaBlock } from "./assurance"
 import { BRIEF_FILE, projectBriefText } from "./brief"
 import { awaitingFormulation, constructFormulation, formulationAcceptance, formulationNumber, standingFormulation } from "./formulate"
 import { floorBlocks, formulationParts, previewFormulationDocument, readFormulationSources } from "./formulate-parts"
@@ -184,6 +185,12 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       : standing !== undefined && prefixIds.length
         ? Math.max(taskNumber(standing.id) ?? 0, ...prefixIds.map((id) => taskNumber(id) ?? 0)) + 1
         : (await formulationNumber(directory, phase)) + 1
+    // The round's measured delta (plans/0244 D1), measured per compose pass:
+    // a remediation's inline write can move the tree between two passes, and
+    // the composed document judges what stands at its own composition. The
+    // floor — nothing measurable, or a quiet round — leaves the todo
+    // byte-identical (roundDeltaBlock renders nothing).
+    const delta = await roundDeltaBlock(directory, ctx.manual ? await currentRound(directory) : parts!.state.round)
     const baseInput = ctx.manual
       ? {
           phaseId,
@@ -195,6 +202,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           mode: opts.mode,
           parallel: opts.parallel,
           maxSessions: opts.maxSessions,
+          ...(delta ? { delta } : {}),
           charter,
           ...(existingTasks ? { existingTasks } : {}),
         }
@@ -217,6 +225,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           parallel: opts.parallel,
           maxSessions: opts.maxSessions,
           testByDriver: opts.testByDriver,
+          ...(delta ? { delta } : {}),
           charter,
           ...(existingTasks ? { existingTasks } : {}),
         }
@@ -227,9 +236,15 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     // preview carries the prefix field (plans/0205 D2) so the digest moves
     // with an add — never the Floor-Digest value itself (the digest of
     // itself); that field construction renders beside the todo it describes.
+    // The measured-delta block (plans/0244 D1) is a dated measurement, never
+    // a digest input: the todo's own construction commit moves the tree, so
+    // a digest over the delta would miss on every re-run and the digest-keep
+    // (0097 D6 / 0205 D3) would reconstruct every standing todo. The digest
+    // judges the assembly without it; the landed document below carries it.
     const floorTodo = renderFormulationTodo(facts, baseInput)
     const floorDocument = previewFormulationDocument(floorTodo, phaseId, prefixIds.length ? prefixIds : undefined)
-    const digest = floorDigest(floorDocument)
+    const digest = floorDigest(previewFormulationDocument(renderFormulationTodo(facts, { ...baseInput, delta: undefined }), phaseId, prefixIds.length ? prefixIds : undefined))
+    const deltaBlocks: BlockMapEntry[] = delta ? [{ block: "measured delta", source: "the driver's git measurement of this round's change (plans/0244 D1)" }] : []
     // The digest-keep (plans/0097 D6, widened by plans/0101 D4 to the
     // standing predicate — the todo keeps its place beside hand-added tasks;
     // the digest's home moved into the landed todo's own `Floor-Digest:`
@@ -262,7 +277,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     const phaseEntryOf = charterPhaseEntry(ctx, phase)
     const resolved = resolvedVerifyPlan(facts.pack, phaseEntryOf)
     if (verifyPlanCharterText(resolved) === undefined) {
-      return { todo: floorTodo, document: floorDocument, blocks: floorBlocks(phase, input, brief, taskIndex, parts), audit: [], digest, landed: false }
+      return { todo: floorTodo, document: floorDocument, blocks: [...deltaBlocks, ...floorBlocks(phase, input, brief, taskIndex, parts)], audit: [], digest, landed: false }
     }
     // The synthesis source list (D3's evidential sources) and its health
     // findings (the crux: a missing must-exist source is named, never
@@ -295,7 +310,10 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       phaseStep: phaseKey(phase).id,
       sources,
       missing,
-      duties: ctx.manual ? "" : planDuties(ctx, phase.entry),
+      // The constructor's duty text carries the delta fact (plans/0244 D7):
+      // it describes the same duties the rendered todo's own planDutyText
+      // renders beside the measured block, so the two must not diverge.
+      duties: ctx.manual ? "" : planDuties(ctx, phase.entry, delta !== undefined),
       // The composed-Scope guarantee check (D4.3): an assert miss over the
       // synthesized document is a retry cause, never exit 2 — the validator
       // renders the candidate and reports the violation back to the session.
@@ -319,11 +337,11 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     })
     if (outcome.kind === "off") {
       log(`ℹ formulation synthesis off: ${outcome.reason}`)
-      return { todo: floorTodo, document: floorDocument, blocks: floorBlocks(phase, input, brief, taskIndex, parts), audit: [], digest, landed: false }
+      return { todo: floorTodo, document: floorDocument, blocks: [...deltaBlocks, ...floorBlocks(phase, input, brief, taskIndex, parts)], audit: [], digest, landed: false }
     }
     if (outcome.kind === "fallback") {
       log(`⚠ formulation synthesis fell back to the Stage-1 deterministic floor: ${outcome.reason} (this round's docs/R-NN/prompt-audit.md carries the record)`)
-      return { todo: floorTodo, document: floorDocument, blocks: floorBlocks(phase, input, brief, taskIndex, parts), audit: outcome.audit, digest, landed: false }
+      return { todo: floorTodo, document: floorDocument, blocks: [...deltaBlocks, ...floorBlocks(phase, input, brief, taskIndex, parts)], audit: outcome.audit, digest, landed: false }
     }
     const todo = renderFormulationTodo(facts, {
       ...baseInput,
@@ -341,6 +359,7 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
         { block: "formulation todo (synthesized)", source: "the driver frame + the constructor session's brief and ledger (plans/0097)" },
         { block: "sources brief", source: "the constructor session, under the charter" },
         { block: "obligations ledger", source: "the DRIVER's seeded protocol rows + the constructor session's rows" },
+        ...deltaBlocks,
         ...floorBlocks(phase, input, brief, taskIndex, parts),
       ],
       audit: outcome.audit,

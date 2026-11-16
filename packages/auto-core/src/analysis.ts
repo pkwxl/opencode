@@ -64,6 +64,62 @@ const ROUND_BRIEF_HEAD = /^###\s+R-(\d+)$/
 // D2's enumeration slip, corrected by plans/0209 D1).
 const ROUND_BRIEF_NEAR = /^\s*#{3,6}\s*R-\d+\b/
 
+// The ask-vs-charter reconciliation block (plans/0244 D6): the frozen
+// sub-heading a proposal carries when it re-frames the person's ask — the
+// roadmap line's goal restated beside the drafted charter, the difference
+// named. Level-pinned to `####` exactly like the stub's invited siblings
+// (`#### Acceptance criteria`), one spelling (D8-adjacent: frozen here, the
+// channel's own near-miss family below teaching every other shape).
+export const ASK_VS_CHARTER_HEADING = "#### Ask vs charter"
+
+// One heading line's reconciliation shape: the same three words, any casing
+// or punctuation (`#### Ask vs. charter`, `### ask-vs-charter`) — the
+// near-miss family's test. Normalized to letters and digits, so the frozen
+// heading and every misspelling of its words compare as one token.
+const askVsCharterShaped = (line: string): boolean =>
+  line.trim().toLowerCase().replace(/[^a-z0-9]/g, "") === "askvscharter"
+
+// The reconciliation block of one proposal body (plans/0244 D6): the content
+// under the exact frozen heading, running to the next heading of any level;
+// undefined when the proposal carries no block, "" when the heading stands
+// with nothing under it (a named problem — a block that reads as
+// reconciliation says nothing). The body comes from roundBriefProposals, so
+// it is already comment-stripped. Pure, shared by the problems scan and the
+// review listing (clarify's release arm).
+export function askVsCharterBlock(body: string): string | undefined {
+  const lines = body.split("\n")
+  const start = lines.findIndex((line) => line.trim() === ASK_VS_CHARTER_HEADING)
+  if (start === -1) return undefined
+  const content: string[] = []
+  for (const line of lines.slice(start + 1)) {
+    if (/^#{1,6}\s/.test(line.trim())) break
+    content.push(line)
+  }
+  return content.join("\n").trim()
+}
+
+// Headings under `## Round briefs` that read as the reconciliation block but
+// are not its exact frozen spelling (plans/0244 D6): an `#### Ask vs.
+// charter`, an `### ask vs charter` — like the round near-misses they ride
+// verbatim into an installed brief while never parsing as the block, and the
+// divergence requirement below would fire under them ("the block is
+// required") while the author believes they carried it. [] when the section
+// or no such heading exists.
+export function askVsCharterNearMisses(text: string): string[] {
+  const lines = stripComments(text).split("\n")
+  const start = lines.findIndex((line) => line.trim() === ROUND_BRIEFS_HEADING)
+  if (start === -1) return []
+  const heads: string[] = []
+  for (const line of lines.slice(start + 1)) {
+    const trimmed = line.trim()
+    if (/^#{1,2}\s/.test(trimmed)) break
+    if (/^#{3,6}\s/.test(trimmed) && trimmed !== ASK_VS_CHARTER_HEADING && askVsCharterShaped(trimmed)) {
+      heads.push(trimmed.length > 48 ? `${trimmed.slice(0, 48)}…` : trimmed)
+    }
+  }
+  return heads
+}
+
 // The `### R-NN` proposal bodies under `## Round briefs`, comments stripped:
 // round → body ("" when the subsection holds no content — a problem
 // analysisProblems names). The body is free markdown (0115 D2): only a
@@ -260,6 +316,10 @@ export function renderAnalysisStub(): string {
     "<!-- proposal keeps the round-start gate, where you write its round.md by hand. A subsection -->",
     "<!-- may be drafted into this living document between rounds — added, committed, and -->",
     "<!-- installed at that round's open. -->",
+    "<!-- A proposal that re-words its roadmap line's goal carries an -->",
+    "<!-- `#### Ask vs charter` block: the line's goal (the ask) restated beside the drafted -->",
+    "<!-- charter, the difference named — what this round will not do that the goal implied, -->",
+    "<!-- and where that work goes instead; a proposal drafting the goal verbatim needs none. -->",
     "",
   ].join("\n")
 }
@@ -403,6 +463,45 @@ export function analysisProblems(text: string, types: readonly PhaseTypeEntry[])
   if (stranded.length) {
     problems.push(
       `round-brief proposals after the section's end: ${stranded.slice(0, 3).map((head) => `\`${head}\``).join(", ")}${stranded.length > 3 ? ` (+${stranded.length - 3} more)` : ""} — a \`##\` heading ends \`## Round briefs\`, so these never install; move each proposal above the heading that ends the section (or demote that heading below \`##\`) and commit`,
+    )
+  }
+  // The ask-vs-charter reconciliation (plans/0244 D6, finding 5): the channel
+  // mechanically holds both texts — the roadmap line's goal (the person's
+  // released ask) and the proposal body (the drafted charter), one document,
+  // one release mark — so the requirement keys on their divergence. The
+  // driver never judges narrowing (P7): a body that does not carry its
+  // line's goal verbatim (case-insensitive containment — sentence casing is
+  // typography, not re-framing) is the narrowing *surface*, and the block
+  // makes the difference a decision the person sees at the release (P2),
+  // never a sentence riding inside the drafted line. A proposal drafting the
+  // goal verbatim, or a round with no roadmap line (no mechanical ask),
+  // needs no block — today's documents read unchanged (P10).
+  const goals = new Map(rounds.map((entry) => [entry.round, entry.goal]))
+  const head = (round: number): string => `### R-${String(round).padStart(2, "0")}`
+  const reframed: string[] = []
+  const emptyBlocks: string[] = []
+  for (const [round, body] of briefs) {
+    if (!body) continue // the empty-proposal problem owns that shape
+    const block = askVsCharterBlock(body)
+    if (block !== undefined && !block) emptyBlocks.push(head(round))
+    const goal = goals.get(round)
+    if (goal === undefined || body.toLowerCase().includes(goal.toLowerCase())) continue
+    if (block === undefined) reframed.push(head(round))
+  }
+  if (reframed.length) {
+    problems.push(
+      `round-brief proposals that re-frame their roadmap line's goal with no \`${ASK_VS_CHARTER_HEADING}\` block: ${reframed.slice(0, 3).map((item) => `\`${item}\``).join(", ")}${reframed.length > 3 ? ` (+${reframed.length - 3} more)` : ""} — the block restates the line's goal (the ask) beside the drafted charter and names the difference: what this round will not do that the goal implied, and where that work goes instead (state it even when the charter drafts the ask whole); add it, or draft the goal verbatim inside the proposal`,
+    )
+  }
+  if (emptyBlocks.length) {
+    problems.push(
+      `round-brief proposals whose \`${ASK_VS_CHARTER_HEADING}\` block holds no content: ${emptyBlocks.slice(0, 3).map((item) => `\`${item}\``).join(", ")}${emptyBlocks.length > 3 ? ` (+${emptyBlocks.length - 3} more)` : ""} — fill it with the line's goal restated beside the drafted charter and the difference named, or remove the heading (a proposal that drafts its roadmap line's goal verbatim needs no block)`,
+    )
+  }
+  const nearBlocks = askVsCharterNearMisses(text)
+  if (nearBlocks.length) {
+    problems.push(
+      `ask-vs-charter block headings that do not parse (the block is one heading \`${ASK_VS_CHARTER_HEADING}\` — exactly, like its \`#### Acceptance criteria\` siblings): ${nearBlocks.slice(0, 3).map((item) => `\`${item}\``).join("; ")}${nearBlocks.length > 3 ? ` (+${nearBlocks.length - 3} more)` : ""}`,
     )
   }
   return problems

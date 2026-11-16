@@ -1971,8 +1971,11 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       // The person releases an analysis whose R-01 roadmap line (amt)
       // differs from config (am), carrying a round-brief proposal for R-01
       // (plans/0115): the release approves both the phase list and the brief.
-      await Bun.write(
-        join(dir, "docs/analysis.md"),
+      // The proposal re-frames the line's goal with no reconciliation block
+      // first (auto-core plans/0244 D6): the gate holds the release naming
+      // the proposal — a narrowing must become a block the person reads,
+      // never a sentence riding inside the drafted line.
+      const analysis = (askVsCharter: readonly string[]): string =>
         [
           "# Project analysis",
           "",
@@ -2000,9 +2003,30 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
           "",
           "- Acceptance: the suite passes on the ported core.",
           "",
+          ...askVsCharter,
           "Clarified: yes",
           "",
-        ].join("\n"),
+        ].join("\n")
+      await Bun.write(join(dir, "docs/analysis.md"), analysis([]))
+      const held = await runCli(["transfer", dir], on)
+      expect(held.code).toBe(2)
+      expect(held.out).toContain("docs/analysis.md has problems that hold its release")
+      expect(held.out).toContain(
+        "round-brief proposals that re-frame their roadmap line's goal with no `#### Ask vs charter` block: `### R-01`",
+      )
+      // The person adds the block (D6): the ask restated beside the drafted
+      // charter, the difference named with where the work goes — the release
+      // then approves the narrowing as a decision, not a drafted sentence.
+      await Bun.write(
+        join(dir, "docs/analysis.md"),
+        analysis([
+          "#### Ask vs charter",
+          "",
+          "The line asks the core and its tests ported; this charter takes the retry ladder",
+          "and the protocol strings with their tests — the remaining modules wait for the",
+          "next round's roadmap line, this round taking the risk area first.",
+          "",
+        ]),
       )
       const established = await runCli(["transfer", dir], on)
       expect(established.code).toBe(0)
@@ -2023,6 +2047,10 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(established.out).not.toContain("round-start gate): review the round setup")
       const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
       expect(round).toContain("Port the retry ladder and the protocol strings with their tests.")
+      // The reconciliation block rides the verbatim install (the body keeps
+      // every sub-heading, 0115's law) — the person's approved difference is
+      // part of the round's own record.
+      expect(round).toContain("#### Ask vs charter")
       expect(round).toContain("## Close")
       // The coverage refusal retired with the channel itself (plans/0137,
       // absorbing 0114 D3): amend --phases refuses outright whatever the

@@ -38,6 +38,7 @@ import tplDecomposeM from "../templates/prompts/decompose-m.md" with { type: "fi
 import tplDecomposeT from "../templates/prompts/decompose-t.md" with { type: "file" }
 import tplDecomposeV from "../templates/prompts/decompose-v.md" with { type: "file" }
 import tplClassifyError from "../templates/prompts/classify-error.md" with { type: "file" }
+import tplCloseAudit from "../templates/prompts/close-audit.md" with { type: "file" }
 import tplContextBase from "../templates/prompts/context-base.md" with { type: "file" }
 import tplDefaultCheck from "../templates/prompts/default-check.md" with { type: "file" }
 import tplDiagnose from "../templates/prompts/diagnose.md" with { type: "file" }
@@ -91,6 +92,12 @@ const embedded: Record<string, string> = {
   "decompose-t": tplDecomposeT,
   "decompose-v": tplDecomposeV,
   "classify-error": tplClassifyError,
+  // The close-audit unit's task body (plans/0244 D5): the due rows, the
+  // measured delta and the audit artifact grammar (the findings document +
+  // its `Result:` verdict) rendered into the todo the ordinary whole-task
+  // session reads — the round's last task unit, constructed by the driver at
+  // the close arms (src/close-audit.ts).
+  "close-audit": tplCloseAudit,
   "context-base": tplContextBase,
   // The record-time charter check (plans/0082 §10 D12) and the planning
   // input's admission warn (D14b): one bare one-shot over the charter and a
@@ -246,6 +253,12 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // dropping gaps.md converts every FAIL verdict into a hidden blockage (the
   // shape gate re-prompts for a file the session was never told to write).
   wrapup: ["Result: PASS", "Result: FAIL", "gaps.md"],
+  // The close-audit unit's task body (plans/0244 D5): the three task sections
+  // (the constructor splits the rendered body on them — renderTaskTodo writes
+  // them back), the verdict vocabulary verbatim (0083, the adjudication
+  // receipt the driver parses), and the due rows + findings document the
+  // session's whole assignment hangs on.
+  "close-audit": ["## Goal", "## Scope", "## Acceptance", "Result: PASS", "Result: FAIL", "{{dueRows}}", "{{findingsDoc}}"],
   // The dependency park's release note (plans/0096 D7): the blocker id and
   // the handover path are the note's whole content — an override dropping
   // either steers a resumption at nothing.

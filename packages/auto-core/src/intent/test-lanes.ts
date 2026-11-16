@@ -160,23 +160,39 @@ export function testLanesProblem(pack: IntentPack): string | undefined {
 //   Heads: <root>=<sha>[; <root>=<sha>…]   (one pair per repository, the
 //                                           target-relative root, "." = the
 //                                           target directory itself)
+//   Tree: <root>=<base>..<head>[; …]       (plans/0244 D3 — each root's
+//                                           validity range, the same root
+//                                           spelling as Heads; a degenerate
+//                                           head..head token claims no range)
 //   Start: <ISO 8601> / End: <ISO 8601>
 //   Verdict: green | red
+//   Decides: <path>[, <path>…]             (plans/0244 D3 — the lane's
+//                                           declared surfaces, the paths
+//                                           whose verdict the receipt carries)
 //   Log: <the lane's log path (the lane-log dir, /tmp/opencode/ by default
 //                                          — plans/0151 D1's seam may redirect it)>
 //   Carried: <receipt path>                (carry receipts only)
 // The three machine fields (Lane/Heads/Verdict) are what carry-forward and
 // the anchor pre-gate read; everything else is evidence for the sessions.
+// Tree and Decides are additive (plans/0244 D3): receipts written before
+// them carry neither and parse unchanged.
 
 // One receipt's machine-read fields. heads are the tree HEADs the receipt's
 // verdict vouches for — the carry-forward diff's range end (git diff
 // <heads>..HEAD); an empty list (a receipt born outside git) never carries.
-// end is the ISO end time, the "last green receipt" ordering key.
+// end is the ISO end time, the "last green receipt" ordering key. tree and
+// decides (plans/0244 D3) are the receipt's validity claim: the per-root
+// base..head range the verdict was produced over, and the paths it decides —
+// both optional, absent on receipts written before the fields (and on any
+// receipt whose token is malformed, which claims nothing — the no-reuse
+// direction, P12).
 type LaneReceipt = {
   lane: string
   heads: { root: string; sha: string }[]
   verdict: "green" | "red"
   end?: string
+  tree?: { root: string; base: string; head: string }[]
+  decides?: string[]
 }
 
 // Parse a receipt's machine fields; undefined when the text does not carry
@@ -185,22 +201,49 @@ type LaneReceipt = {
 export function parseLaneReceipt(text: string): LaneReceipt | undefined {
   let lane: string | undefined
   let heads: { root: string; sha: string }[] | undefined
+  let tree: { root: string; base: string; head: string }[] | undefined
   let verdict: "green" | "red" | undefined
+  let decides: string[] | undefined
   let end: string | undefined
   for (const raw of text.split("\n")) {
-    const field = /^(Lane|Heads|Verdict|End):[ \t]*(.*)$/.exec(raw.trim())
+    const field = /^(Lane|Heads|Tree|Verdict|Decides|End):[ \t]*(.*)$/.exec(raw.trim())
     if (!field) continue
     const value = field[2]!.trim()
     if (field[1] === "Lane") {
       if (lane === undefined) lane = value
     } else if (field[1] === "Heads") {
       if (heads === undefined) heads = parseHeads(value)
+    } else if (field[1] === "Tree") {
+      if (tree === undefined) tree = parseTree(value)
     } else if (field[1] === "Verdict") {
       if (verdict === undefined) verdict = value === "green" || value === "red" ? value : undefined
+    } else if (field[1] === "Decides") {
+      if (decides === undefined) decides = parseDecides(value)
     } else if (end === undefined) end = value
   }
   if (!lane || heads === undefined || verdict === undefined) return undefined
-  return { lane, heads, verdict, ...(end ? { end } : {}) }
+  return { lane, heads, verdict, ...(end ? { end } : {}), ...(tree ? { tree } : {}), ...(decides ? { decides } : {}) }
+}
+
+// `.=abc1234..def5678; nested=0000000..beef0000` → the per-root validity
+// ranges; undefined on a malformed or empty value (the receipt then claims
+// no range — the reader treats the field as absent).
+function parseTree(value: string): { root: string; base: string; head: string }[] | undefined {
+  if (!value) return undefined
+  const tree: { root: string; base: string; head: string }[] = []
+  for (const token of value.split(";")) {
+    const range = /^([^=]+)=([0-9a-f]{4,40})\.\.([0-9a-f]{4,40})$/.exec(token.trim())
+    if (!range) return undefined
+    tree.push({ root: range[1]!.trim(), base: range[2]!, head: range[3]! })
+  }
+  return tree
+}
+
+// The `Decides:` reader — the Surfaces grammar (comma-separated
+// repository-relative paths); undefined on an empty value.
+function parseDecides(value: string): string[] | undefined {
+  const paths = value.split(",").map((token) => token.trim()).filter(Boolean)
+  return paths.length ? paths : undefined
 }
 
 // `.=abc1234; nested=def5678` → the heads list; [] for an empty value (a

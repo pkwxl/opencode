@@ -118,6 +118,12 @@ export function renderPhaseAppend(facts: PromptFacts, input: {
   // The run's width (plans/0126 D1): the doc-concurrency teaching renders
   // for doc phases at --max-sessions ≥ 2 — the width that executes doc lanes.
   maxSessions?: number
+  // The round's measured delta (plans/0244 D1): the pre-rendered block
+  // (assurance.renderDeltaBlock) spliced verbatim — the driver-measured
+  // commit range / grouped stat / changed names the appended plan keys its
+  // verification to. Absent or blank = nothing measured (or a quiet round)
+  // and the prompt renders byte-identically (the P10 floor).
+  delta?: string
 }): string {
   const type = input.phase
   // The two guidance blocks split by phase kind (plans/0126 D1/D2): the
@@ -143,6 +149,7 @@ export function renderPhaseAppend(facts: PromptFacts, input: {
     modeName: input.mode?.name,
     modeInit: input.mode && modeText(input.mode.init),
     planDuties: input.planDuties,
+    delta: input.delta?.trim() || undefined,
     ...(codePhase ? parallelismVars(facts, input.parallel) : {}),
     ...(!codePhase ? docConcurrencyVars(facts, input.maxSessions) : {}),
   })
@@ -207,6 +214,13 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
   // for doc phases at --max-sessions ≥ 2 — the width that executes doc lanes.
   maxSessions?: number
   testByDriver?: boolean
+  // The round's measured delta (plans/0244 D1): the pre-rendered block
+  // (assurance.renderDeltaBlock) spliced verbatim after the mode preamble —
+  // the driver-measured commit range / grouped stat / changed names every
+  // shape of this document renders (floor and synthesis alike: measurement,
+  // not an evidential source). Absent or blank = nothing measured (or a
+  // quiet round) and the document renders byte-identically (the P10 floor).
+  delta?: string
   charter: string
   // The synthesis payload (plans/0097 D3): brief = the constructor's
   // re-voiced sources, ledger = the pre-rendered rows (seeded + session),
@@ -289,6 +303,14 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
   if (input.mode) {
     parts.push(["## Input: scenario-mode preamble (" + input.mode.name + ")", "", modeText(input.mode.init).trim(), ""].join("\n"))
   }
+  // The measured-delta block (plans/0244 D1): spliced verbatim — its copy is
+  // assurance.renderDeltaBlock's own (renderer-owned measured-run-state
+  // feedback under 0221's named class), one home serving both planning
+  // surfaces. Both document shapes render it: it is driver measurement,
+  // never an evidential source the synthesis re-voices.
+  if (input.delta?.trim()) {
+    parts.push(input.delta.trim() + "\n")
+  }
   const precedence = intentText(facts, "guarantees", "precedence", {})
   if (precedence) {
     parts.push(
@@ -363,7 +385,17 @@ export function renderFormulationTodo(facts: PromptFacts, input: {
     }
   }
   if (!manual) {
-    const duties = planDutyText(facts, input.phase!, { phaseName: input.phase!.name, ...(input.testByDriver ? { testByDriver: true } : {}) })
+    // The duty render's delta fact (plans/0244 D7): the measured-delta block
+    // above keys the t/v duty copy's verification teaching — the pack tiers
+    // and the plan-duties-<key> partials carry `{{#if delta}}` clauses that
+    // render only beside a measured block, so every state without one keeps
+    // the duty paragraph's pre-0244 bytes exactly (the P10 floor; the fact
+    // is a boolean presence, the block's own copy renders at its splice).
+    const duties = planDutyText(facts, input.phase!, {
+      phaseName: input.phase!.name,
+      ...(input.testByDriver ? { testByDriver: true } : {}),
+      ...(input.delta?.trim() ? { delta: true } : {}),
+    })
     parts.push(
       [
         "## Phase duties and artifact conventions",

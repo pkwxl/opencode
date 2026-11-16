@@ -2,9 +2,10 @@ import { access, constants, mkdir } from "node:fs/promises"
 import { scrubDriverEnv } from "./agent/opencode/server"
 import { statSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
+import { EMPTY_TREE } from "./assurance"
 import { laneReceiptDoc } from "./docpaths"
 import { EOF_MARK } from "./doccheck"
-import { rangeChangedFiles, scriptGuardCheck, scriptGuardSnapshot, git, commitTree, type GitOps, type ScriptGuardViolation } from "./git"
+import { rangeChangedFiles, scriptGuardCheck, scriptGuardSnapshot, git, commitTree, receiptDriverCommitted, type GitOps, type ScriptGuardViolation } from "./git"
 import { laneTouches, parseLaneReceipt, type TestLane } from "./intent/test-lanes"
 import { log } from "./log"
 
@@ -292,7 +293,9 @@ export const LANE_EVIDENCE_LINES = 30
 // evidence is a red run's bounded log tail, what the synthesized gap list
 // cites. receipt is the driver-written receipt's target-relative path;
 // start/end are the run's wall-clock bounds (a carried run's both equal the
-// carry judgment's moment), the receipt's two time lines.
+// carry judgment's moment), the receipt's two time lines. surfaces is the
+// lane's declared `Touches:` set — the receipt's `Decides:` line (plans/0244
+// D3): the paths whose verdict this run carries.
 export type LaneRun = {
   lane: string
   verdict: "green" | "red"
@@ -306,6 +309,7 @@ export type LaneRun = {
   timeoutReason?: "idle" | "max"
   carried?: string
   evidence?: string[]
+  surfaces?: string[]
 }
 
 // The whole set's outcome: every row's run (launched or carried) plus the
@@ -340,7 +344,7 @@ export async function runTestLanes(
   dir: string,
   taskId: string,
   lanes: readonly TestLane[],
-  opts: { idleMs?: number; maxMs?: number; pollMs?: number; killGraceMs?: number; logDir?: string; git?: Pick<GitOps, "commitTree"> } = {},
+  opts: { idleMs?: number; maxMs?: number; pollMs?: number; killGraceMs?: number; logDir?: string; git?: Pick<GitOps, "commitTree">; baseline?: { root: string; sha: string }[] } = {},
 ): Promise<LaneSetResult> {
   const idleMs = opts.idleMs ?? DEFAULT_SCRIPT_IDLE_MS
   const maxMs = opts.maxMs ?? 0
@@ -353,6 +357,12 @@ export async function runTestLanes(
   // tree HEADs — the tree every verdict of this set vouches for.
   const guard = await scriptGuardSnapshot(dir)
   const heads = guard.map((shot) => ({ root: relative(dir, shot.root) || ".", sha: shot.head }))
+  // The receipts' `Tree:` bases (plans/0244 D3): the caller's unit-start SHA
+  // baseline (absolute roots, relabeled target-relative beside its heads
+  // twin) — the range each verdict of this set is valid over opens at the
+  // unit's start. A root the baseline misses keeps the writer's degenerate
+  // head..head range (valid at exactly this tree — no range claimed).
+  const bases = opts.baseline?.map(({ root, sha }) => ({ root: relative(dir, root) || ".", sha }))
   const timing = { idleMs, maxMs, pollMs, killGraceMs, logDir }
   const rows = lanes.filter((lane) => lane.cost !== "regression")
   const runs: LaneRun[] = []
@@ -361,7 +371,7 @@ export async function runTestLanes(
     const carried = await laneCarry(dir, lane)
     if (carried) {
       const now = new Date().toISOString()
-      runs.push({ lane: lane.name, verdict: "green", code: 0, ms: 0, log: "", receipt: laneReceiptDoc(taskId, lane.name), start: now, end: now, carried })
+      runs.push({ lane: lane.name, verdict: "green", code: 0, ms: 0, log: "", receipt: laneReceiptDoc(taskId, lane.name), start: now, end: now, carried, surfaces: lane.surfaces })
       log(`  ↻ ${taskId} lane ${lane.name} carries its green receipt ${carried}; its surfaces are untouched since`)
     } else pending.push(lane)
   }
@@ -376,7 +386,7 @@ export async function runTestLanes(
   const violation = await scriptGuardCheck(dir, guard)
   if (violation) logGuardViolation("a driver-run test lane", violation)
   // Receipts after the guard check, so the driver's own writes never meet it.
-  for (const run of runs) await writeLaneReceipt(dir, run, heads)
+  for (const run of runs) await writeLaneReceipt(dir, run, heads, bases)
   // The receipts' janitor commit (plans/0171 D2): the introducing commit is a
   // `testhands`-stage driver commit, the witness the carry rule reads — a
   // receipt left to ride the round's unified commit would read as unprovenanced
@@ -420,25 +430,6 @@ export async function newestGreenReceipt(dir: string, pattern: string): Promise<
     return undefined
   }
   return best
-}
-
-// The receipts' provenance witness (plans/0171 D2, enacting S20-05): the
-// commit that introduced the receipt's current bytes must be one of the
-// driver's receipt janitor commits (the `regression` and `testhands` stages
-// — the only writers of receipts are the lane runners, and they commit
-// through those stages), and the tree must hold no uncommitted change to
-// the file. A receipt a session forged rides whatever unified commit was
-// next (stage execute/wrapup/subtask) — rejected; a person-committed one
-// carries no Auto-Stage at all — rejected; unreadable git (P12) — rejected:
-// every rejection degrades toward the lane re-running, the fail-safe
-// direction that self-heals with a fresh janitor receipt.
-export async function receiptDriverCommitted(dir: string, rel: string): Promise<boolean> {
-  const dirty = await git(dir, ["status", "--porcelain", "--", rel]).catch(() => undefined)
-  if (dirty === undefined || dirty.code !== 0 || dirty.out.trim().length > 0) return false
-  const read = await git(dir, ["log", "-1", "--format=%B", "--", rel]).catch(() => undefined)
-  if (read === undefined || read.code !== 0) return false
-  const stages = [...read.out.matchAll(/^Auto-Stage: (.+)$/gm)].map((match) => match[1]!.trim())
-  return stages.includes("regression") || stages.includes("testhands")
 }
 
 // The receipts' janitor commit (plans/0171 D2): every lane run commits its
@@ -622,6 +613,7 @@ async function laneOutcome(taskId: string, run: { lane: TestLane; log: string; s
     end: new Date(end).toISOString(),
     ...(run.timedOut ? { timedOut: true, ...(run.timeoutReason ? { timeoutReason: run.timeoutReason } : {}) } : {}),
     ...(evidence ? { evidence } : {}),
+    surfaces: run.lane.surfaces,
   }
 }
 
@@ -629,18 +621,40 @@ async function laneOutcome(taskId: string, run: { lane: TestLane; log: string; s
 // fields parseLaneReceipt reads back. A carried run records no Log of its own
 // (the Carried line names the receipt that has one); a red run carries the
 // bounded evidence block. heads are the set's recorded tree HEADs — the tree
-// every verdict of this set vouches for. Exported since plans/0098 D4: the
-// regression lane's receipts are the same format at a round-scoped path,
-// written by the background slot through this one writer.
-export async function writeLaneReceipt(dir: string, run: LaneRun, heads: { root: string; sha: string }[]): Promise<void> {
+// every verdict of this set vouches for. bases (plans/0244 D3) open each
+// root's `Tree:` validity range: a matching base SHA is the range's opening,
+// an empty one (a repository with no commits at the base moment) opens at
+// the empty tree, and a root the bases miss renders the degenerate
+// head..head range — valid at exactly this tree, no range claimed. run's
+// surfaces are the `Decides:` line — the paths whose verdict this receipt
+// carries. Exported since plans/0098 D4: the regression lane's receipts are
+// the same format at a round-scoped path, written by the background slot
+// through this one writer.
+export async function writeLaneReceipt(
+  dir: string,
+  run: LaneRun,
+  heads: { root: string; sha: string }[],
+  bases?: { root: string; sha: string }[],
+): Promise<void> {
   const lines = [
     `# Lane ${run.lane}`,
     "",
     `Lane: ${run.lane}`,
     `Heads: ${heads.map((head) => `${head.root}=${head.sha}`).join("; ")}`,
+    ...(heads.length
+      ? [
+          `Tree: ${heads
+            .map((head) => {
+              const base = bases?.find((entry) => entry.root === head.root)?.sha
+              return `${head.root}=${base === undefined ? head.sha : base || EMPTY_TREE}..${head.sha}`
+            })
+            .join("; ")}`,
+        ]
+      : []),
     `Start: ${run.start}`,
     `End: ${run.end}`,
     `Verdict: ${run.verdict}`,
+    ...(run.surfaces?.length ? [`Decides: ${run.surfaces.join(", ")}`] : []),
     ...(run.carried ? [`Carried: ${run.carried}`] : run.log ? [`Log: ${run.log}`] : []),
     "",
   ]

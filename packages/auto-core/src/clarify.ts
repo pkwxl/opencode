@@ -46,7 +46,7 @@
 // phase index). The commit is the driver's own, Auto-Stage: clarify, the PLAN
 // family the release's other halves (PLAN brief install …) sit in.
 import { join } from "node:path"
-import { analysisProblems, roundBriefProposals, ROUND_BRIEFS_HEADING } from "./analysis"
+import { analysisProblems, askVsCharterBlock, ASK_VS_CHARTER_HEADING, roundBriefProposals, ROUND_BRIEFS_HEADING } from "./analysis"
 import { briefProposal, BRIEF_PROPOSAL_HEADING } from "./brief"
 import { ANALYSIS_DOC, roundDirName } from "./docpaths"
 import { EOF_MARK } from "./doccheck"
@@ -141,10 +141,18 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
         `the release of ${ANALYSIS_DOC} puts in force, as written:`,
         ...roadmapRounds(raw).map((entry) => `  - ${roundDirName(entry.round)} ${entry.phases} — ${entry.goal}`),
         ...(briefs.size
-          ? [...briefs.keys()].map(
-              (round) =>
-                `  - ${roundDirName(round)} — its round-brief proposal installs verbatim as its round.md when it opens (that round's round-start gate passes on this release)`,
-            )
+          ? [...briefs.keys()].map((round) => {
+              // D6's carry (plans/0244): the reconciliation block rides the
+              // review listing — the person's yes reads the named difference
+              // beside the roadmap line printed above. A proposal without a
+              // block (drafting its line's goal verbatim, or a round the
+              // roadmap does not cover) keeps today's row byte-identically.
+              const block = askVsCharterBlock(briefs.get(round)!)
+              return (
+                `  - ${roundDirName(round)} — its round-brief proposal installs verbatim as its round.md when it opens (that round's round-start gate passes on this release)` +
+                (block ? `; its \`${ASK_VS_CHARTER_HEADING}\` block restates the roadmap line's goal above beside the drafted charter, naming the difference — this release approves that difference` : "")
+              )
+            })
           : [`  - no \`${ROUND_BRIEFS_HEADING}\` proposals — every round keeps its round-start gate, where you write its round.md by hand`]),
         ...forkLines(raw).map((line) => `  ${line.trim()}`),
         `  ${

@@ -129,7 +129,13 @@ Test lanes (this project's suites — the table below, declared in the intent pa
 
 - Bring the test suite to cover the delivered work, giving the behaviour regression coverage; artifacts
   are the test code plus the task artifacts under docs/T-NNN/.
-
+{{#if delta}}
+- Key this phase's verification to the round's measured delta in this document, not to the standing surface: the
+  changed families it groups (code, test, docs) set the coverage targets, the standing baseline suite runs once per
+  tree state as the regression bound (a check whose committed receipt stands at this tree — its `Tree:` range covering
+  the tree, its `Decides:` paths naming the surfaces it decided — is cited, never re-executed; a later motion of the
+  tree re-verifies exactly the surfaces it moved), and changed test sections prove determinism by running twice.
+{{/if}}
 ## plan-duties-v
 
 - Complete overall acceptance against the baseline and requirements; the acceptance verdict is anchored per task,
@@ -137,6 +143,11 @@ Test lanes (this project's suites — the table below, declared in the intent pa
 - Lay out a closing task that writes this phase's verdict to verdict.md in this phase directory, ending with the result
   line `Result: PASS` or `Result: FAIL <reason>` (a driver protocol string, verbatim): `Result: FAIL` holds the phase
   open for a person to plan the fix.
+{{#if delta}}
+- Key the acceptance reading to the round's measured delta in this document: the changed families it groups name the
+  surfaces the acceptance evidence must cover; a family the delta does not reach cites the round's standing evidence
+  for it, the citation recorded in the findings — never a re-derivation of the whole standing surface for its own sake.
+{{/if}}
 
 ## plan-duties-k
 

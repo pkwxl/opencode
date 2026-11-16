@@ -172,13 +172,29 @@ each become an item; every acceptance item maps the criterion to the check that 
 it and records the observed evidence, never a bare "tests passed"; keep writing checks
 apart from fixing defects — defects the checks expose are appended as separate fix
 items, not mixed into the check-writing item.
+{{#if delta}}
+When this document's round-measured delta block stands, it keys the split: the changed
+families it groups (code, test, docs) set the verification targets — each changed
+family's checks are their own items keyed to what the round actually changed, never to
+the standing surface — the standing suite runs once per tree state as the regression
+bound (a check whose committed receipt stands at this tree — its `Tree:` range covering
+the tree, its `Decides:` paths naming the surfaces it decided — is cited, never
+re-executed; a later motion of the tree re-verifies exactly the surfaces it moved), and
+changed test sections prove determinism by running twice.
+{{/if}}
 
 ### audit
 
 4. Splitting and artifact criteria for this phase ({{phaseName}}):
-   - One item per compliance dimension (coverage, behavior, interface, scope, spec
-     hygiene, clean-room independence, paradigm conformance, contract coverage); each
-     item audits the implementation against the specification and writes its findings;
+   - One item per compliance dimension the due set reaches (coverage, behavior,
+     interface, scope, spec hygiene, clean-room independence, paradigm conformance,
+     contract coverage — the assurance table's due rows over the round's measured
+     delta; a dimension no due row covers keeps the standing mandate); each item
+     audits the implementation against the specification and writes its findings,
+     naming the assurance row id it adjudicates;
+   - A dimension the due set does not reach is carried: the closing item adjudicates
+     it against its cited baseline with the carry argument recorded — the
+     consolidation names every dimension either way, audited or carried;
    - The closing item consolidates the findings into the verdict document: every finding
      carries its evidence and severity, and the Result line follows the findings, never
      optimism;
@@ -222,6 +238,15 @@ verification against the specification. `Result: PASS` means every acceptance cr
 the task asked for was actually observed to pass, with the evidence written in this
 report; `Result: FAIL` means a required check failed, could not be run, or the goal is
 not met — say why in one line. Never write PASS for a check you did not run or observe.
+
+### round-brief
+
+Treat the round brief's goal and acceptance criteria as the measure of this phase's
+plan, and key the verification they demand to what the round's measured delta block
+reaches: the assurance table's due rows (docs/assurance.md) are the owed set, so
+criteria and plans name the verification the delta actually owes — never a re-run of
+the standing surface for its own sake, and never a criterion quietly narrowed below
+what the brief asks. The round brief belongs to the human — never edit round.md.
 
 ## governance
 
@@ -453,25 +478,32 @@ deferred.
 
 ### verify-plan-audit
 
-The audit plan must render the round's compliance verdict from evidence on disk, re-running
-every deciding check itself: a prior phase's green report is context, never the verdict.
+The audit plan must render the round's compliance verdict from evidence on disk, first-hand
+where its reach demands it: a prior phase's green report is context, never the verdict.
 Independently inspect the round's requirements, the specification notes the spec-read phase
 distilled, the design artifacts, the implementation and test changes, and the round's
 recorded deviations, deferrals and open findings, and derive the plan's verdict structure
 from these — never invent criteria. The plan is an item-by-item adjudication, never a
-summary: each compliance dimension — coverage of the MUST requirements, behavioral
-conformance, public interface conformance, scope discipline, spec hygiene, clean-room
-independence, paradigm conformance, contract coverage — is its own audit task with its
-findings written to its own findings document (`docs/T-NNN/findings.md`, the phase's
-declared task artifact), the closing task consolidating the findings documents into
-audit.md, and no criterion is accepted on prose, merged, or silently dropped. Explicitly address:
+summary: each compliance dimension the due set reaches — coverage of the MUST requirements,
+behavioral conformance, public interface conformance, scope discipline, spec hygiene,
+clean-room independence, paradigm conformance, contract coverage — is its own audit task
+with its findings written to its own findings document (`docs/T-NNN/findings.md`, the
+phase's declared task artifact) naming the assurance row id it adjudicates, a dimension
+the due set does not reach adjudicated in the closing task against its cited baseline with
+the carry argument recorded, the closing task consolidating the findings documents into
+audit.md with every dimension named either way, and no criterion is accepted on prose,
+merged, or silently dropped. Explicitly address:
 
 - **Negative scope** — the plan's first deliverable states what this round does not deliver:
   every deferred, descoped or postponed item with the record that owns it, so a passing
   verdict cannot read as the whole mission being complete;
-- **Re-run, never cite** — every entry names the command, check or committed artifact that
-  decides it, re-executed at audit time on the final tree; recorded counts and ledgers the
-  round kept are re-derived from the tree, and drift is a finding, never an edit;
+- **Re-run, never cite — once per tree state** — every entry names the command, check or
+  committed artifact that decides it, re-executed at audit time on the tree it judges
+  unless a committed receipt already stands at that tree (its `Tree:` range covering the
+  tree, its `Decides:` paths naming the surfaces it decided — cited then, never
+  re-executed; a later motion of the tree re-verifies exactly the surfaces it moved);
+  recorded counts and ledgers the round kept are re-derived from the tree, and drift is
+  a finding, never an edit;
 - **Divergence receipts, the one carve-out** — driver-run divergence receipts are cited
   and adjudicated, never re-executed: audit sessions are clean rooms, they never see the
   corpus, and the divergence lane is the single class of evidence the audit takes on the

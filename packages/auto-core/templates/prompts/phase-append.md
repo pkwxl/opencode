@@ -46,6 +46,9 @@ on the existing tasks above.
 
 {{modeInit}}
 
+{{/if}}{{#if delta}}
+{{delta}}
+
 {{/if}}{{#if precedence}}
 ## Authority order (intent guarantees)
 

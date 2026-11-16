@@ -186,10 +186,48 @@ describe("the runner (runRegressionLane — one lane, both modes, plans/0098 D4)
       const text = await Bun.file(join(dir, run.receipt)).text()
       const parsed = parseLaneReceipt(text)
       expect(parsed).toMatchObject({ lane: "verify-full", verdict: "green", heads: [{ root: ".", sha: head }] })
+      // plans/0244 D3: this fixture wires no round establishment, so no
+      // anchor is derivable (measureRoundDelta reads none) — the Tree base
+      // keeps the writer's degenerate range, valid at exactly this tree; the
+      // lane's declared surfaces are the Decides line.
+      expect(parsed?.tree).toEqual([{ root: ".", base: head, head }])
+      expect(parsed?.decides).toEqual(["src/", "include/"])
       expect(text.trimEnd().endsWith(EOF_MARK)).toBe(true)
       expect(await Bun.file(run.log).text()).toContain("LANE_RC=0")
       // Green at these heads: the coverage predicate now passes.
       expect((await regressionCovered(dir, 1, lane)).covered).toBe(true)
+    } finally {
+      clean([dir, logDir])
+    }
+  })
+
+  // plans/0244 D3: the regression receipt's `Tree:` bases come from the
+  // round delta's per-root anchors — the same measureRoundDelta derivation
+  // the delta block renders, one measurement. The base is the round's
+  // establishment commit (the first commit that introduced the round's phase
+  // index), the head the tree the run vouched for; `Decides:` carries the
+  // lane's declared surfaces. The establishment is wired exactly as the
+  // corpus's own proportion — two fixture commits, no full round machinery.
+  test("the receipt's Tree base is the round's establishment anchor, its Decides the lane's surfaces (plans/0244 D3)", async () => {
+    const dir = await freshRepo()
+    const logDir = mkdtempSync(join(tmpdir(), "auto-regression-logs-"))
+    try {
+      await git(dir, "commit", "--allow-empty", "-qm", "before the round")
+      // The establishment: the G1 commit that first introduces the round's
+      // phase index — the delta's anchor.
+      mkdirSync(join(dir, "docs", "R-01"), { recursive: true })
+      writeFileSync(join(dir, "docs", "R-01", "phases.md"), "# R-01 phases\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "R-01 establishment")
+      const anchor = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      writeFileSync(join(dir, "src.ts"), "// round work\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "round work")
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      const run = await runRegressionLane(dir, 1, { ...lane, command: "echo full-gate-green" }, { isolate: false, logDir })
+      const parsed = parseLaneReceipt(await Bun.file(join(dir, run.receipt)).text())
+      expect(parsed?.tree).toEqual([{ root: ".", base: anchor, head }])
+      expect(parsed?.decides).toEqual(["src/", "include/"])
     } finally {
       clean([dir, logDir])
     }

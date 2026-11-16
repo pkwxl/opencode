@@ -38,6 +38,7 @@ import { changedFiles, pendingChanges, rangeChangedFiles, scriptGuardCheck, scri
 import { probeReflink } from "./git-worktree"
 import { laneTouches, parseTestLanes, type TestLane } from "./intent/test-lanes"
 import { log } from "./log"
+import { measureRoundDelta } from "./assurance"
 import { codeWork } from "./phases/registry"
 import { phaseKey, phaseLabel } from "./phases"
 import type { PhaseUnit } from "./phases"
@@ -194,6 +195,12 @@ export async function runRegressionLane(
   // in-tree, the guard.
   const guard = await scriptGuardSnapshot(dir)
   const heads = guard.map((shot) => ({ root: relative(dir, shot.root) || ".", sha: shot.head }))
+  // The receipt's `Tree:` bases (plans/0244 D3): the round delta's per-root
+  // anchors — the same derivation the delta block renders, one measurement.
+  // A root the delta cannot anchor (no git, an underivable round) keeps the
+  // writer's degenerate head..head range.
+  const delta = await measureRoundDelta(dir, round)
+  const bases = delta?.roots.map((root) => ({ root: root.prefix || ".", sha: root.anchor }))
   const copy = opts.isolate ? await materializeCopy(dir, opts.reflink ?? true) : undefined
   const logPath = join(logDir, `regression-${seq}-${lane.name}-${Date.now()}.log`)
   const started = new Date()
@@ -229,8 +236,9 @@ export async function runRegressionLane(
     // The declaring lane's channel, else the bounded raw-log tail (plans/0177 D2).
     ...(verdict === "red" ? { evidence: await redLaneEvidence(dir, lane, text) } : {}),
     ...(violation ? { violation } : {}),
+    surfaces: lane.surfaces,
   }
-  await writeLaneReceipt(dir, run, heads)
+  await writeLaneReceipt(dir, run, heads, bases)
   // The receipt's janitor commit (plans/0171 D2): the introducing commit is
   // a `regression`-stage driver commit — the provenance witness the coverage
   // readers (regressionCovered, dependencyComplete) demand. The pathspec

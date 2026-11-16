@@ -241,16 +241,21 @@ describe("session-side rendering (plans/0096 D4 — no driver machinery)", () =>
 // —— Stage 3, the driver's half (plans/0096 D5) ——
 
 // A receipt as the driver writes it (script.ts writeLaneReceipt): the three
-// machine fields plus the times, the log path, the terminator.
+// machine fields plus the times, the log path, the terminator — and, since
+// plans/0244 D3, the two validity fields (`Tree:` after `Heads:`, `Decides:`
+// after `Verdict:`), rendered only when the caller passes them so the
+// default fixture stays the pre-0244 shape below.
 const receipt = (over: Record<string, string> = {}) =>
   [
     "# Lane lint",
     "",
     `Lane: ${over.lane ?? "lint"}`,
     `Heads: ${over.heads ?? ".=abc1234"}`,
+    ...(over.tree ? [`Tree: ${over.tree}`] : []),
     "Start: 2026-10-15T10:00:00.000Z",
     `End: ${over.end ?? "2026-10-15T10:03:12.123Z"}`,
     `Verdict: ${over.verdict ?? "green"}`,
+    ...(over.decides ? [`Decides: ${over.decides}`] : []),
     ...(over.carried ? [`Carried: ${over.carried}`] : []),
     ...(over.carried ? [] : [`Log: ${over.log ?? "/tmp/opencode/T-001-lint-1.log"}`]),
     "",
@@ -288,6 +293,54 @@ describe("the receipt parse (parseLaneReceipt — the driver reads its own recei
       heads: [{ root: ".", sha: "abc1234" }],
       verdict: "green",
     })
+  })
+
+  // plans/0244 D3 (enacting S2): the two validity fields. Tree splits per
+  // root exactly like Heads (the same root spelling), Decides is the
+  // Surfaces grammar (comma-separated paths).
+  test("the validity fields parse: Tree per-root ranges, Decides the decided paths (plans/0244 D3)", () => {
+    expect(parseLaneReceipt(receipt({ tree: ".=abc1234..def5678; sub/deep=0001111..beef000", decides: "src/, include/" }))).toEqual({
+      lane: "lint",
+      heads: [{ root: ".", sha: "abc1234" }],
+      tree: [
+        { root: ".", base: "abc1234", head: "def5678" },
+        { root: "sub/deep", base: "0001111", head: "beef000" },
+      ],
+      verdict: "green",
+      end: "2026-10-15T10:03:12.123Z",
+      decides: ["src/", "include/"],
+    })
+  })
+
+  // The compatibility arm D3's additive grammar stands on (P10's floor at
+  // the receipt reader): every receipt written before the fields parses
+  // unchanged, claiming neither a range nor decided paths.
+  test("a pre-0244 receipt (Lane/Heads/Verdict/End alone) parses unchanged: no tree, no decides (plans/0244 D3)", () => {
+    const parsed = parseLaneReceipt("Lane: lint\nHeads: .=abc1234\nVerdict: green\nEnd: 2026-10-15T10:03:12.123Z")
+    expect(parsed).toEqual({
+      lane: "lint",
+      heads: [{ root: ".", sha: "abc1234" }],
+      verdict: "green",
+      end: "2026-10-15T10:03:12.123Z",
+    })
+    expect(parsed?.tree).toBeUndefined()
+    expect(parsed?.decides).toBeUndefined()
+  })
+
+  // A malformed Tree token makes the whole field absent — the receipt claims
+  // no range (the no-reuse direction, P12): a later reader re-verifies
+  // rather than trusting an unreadable claim. An empty Decides value claims
+  // no paths the same way.
+  test("a malformed Tree token or an empty Decides claims nothing: the field reads absent (plans/0244 D3, P12)", () => {
+    const fields = (extra: string) => `Lane: lint\nHeads: .=abc1234\n${extra}Verdict: green`
+    for (const bad of ["Tree: .=not-a-range\n", "Tree: .\n"]) {
+      const parsed = parseLaneReceipt(fields(bad))
+      expect(parsed).toEqual({ lane: "lint", heads: [{ root: ".", sha: "abc1234" }], verdict: "green" })
+      expect(parsed?.tree).toBeUndefined()
+    }
+    const noPaths = parseLaneReceipt(fields("Decides: \n"))
+    expect(noPaths).toEqual({ lane: "lint", heads: [{ root: ".", sha: "abc1234" }], verdict: "green" })
+    expect(noPaths?.decides).toBeUndefined()
   })
 })
 
@@ -466,6 +519,40 @@ describe("runTestLanes (the driver-run lane set over real repositories)", () => 
       const seen = await marks(file)
       expect(seen.filter((m) => m === "lint")).toHaveLength(2)
       expect(seen.filter((m) => m === "hdr")).toHaveLength(2)
+    } finally {
+      clean([dir, scratch, logDir])
+    }
+  })
+
+  // The compatibility arm at the fields' one in-tree consumer: laneCarry
+  // reads receipts through parseLaneReceipt, and a green receipt written
+  // before plans/0244 D3 (neither Tree nor Decides — exactly the bytes a
+  // pre-0244 driver committed) must still carry. The fields are additive
+  // (P10's floor at the carry rule): existing receipts read unchanged.
+  test("a pre-0244 green receipt still carries: the validity fields are additive, the old grammar remains carry basis (plans/0244 D3)", async () => {
+    const dir = await freshRepo()
+    const logDir = mkdtempSync(join(tmpdir(), "auto-lane-logs-"))
+    const { scratch, file } = markers()
+    try {
+      writeFileSync(join(dir, "src.ts"), "// baseline\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      // The pre-field receipt (0096's grammar before 0244 grew it), landed
+      // the way the driver lands receipts — a janitor commit the provenance
+      // witness accepts (plans/0171 D2).
+      const old = join("docs", "T-000", "testhands", "lint.md")
+      mkdirSync(join(dir, old, ".."), { recursive: true })
+      writeFileSync(
+        join(dir, old),
+        ["# Lane lint", "", "Lane: lint", `Heads: .=${head}`, "Start: 2026-10-15T10:00:00.000Z", "End: 2026-10-15T10:03:12.123Z", "Verdict: green", "Log: /tmp/opencode/T-000-lint-1.log", "", EOF_MARK, ""].join("\n"),
+      )
+      await git(dir, "add", "--", old)
+      await git(dir, "commit", "-qm", "T-000 testhands receipts (lint)", "-m", "Auto-Task: T-000", "-m", "Auto-Stage: testhands")
+      const result = await runTestLanes(dir, "T-001", withMark([lane({ name: "lint" })], file), { logDir })
+      expect(result.runs.find((r) => r.lane === "lint")).toMatchObject({ verdict: "green", carried: old })
+      // The lane never launched: the old bytes are carry basis as before.
+      expect(await marks(file)).toEqual([])
     } finally {
       clean([dir, scratch, logDir])
     }

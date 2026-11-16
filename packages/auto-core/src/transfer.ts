@@ -49,6 +49,7 @@
 // state — establishment deliberately does not, its G1 stop is the point).
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
+import { closeAuditStopLines, ensureCloseAudit, updateAssuranceBaselines } from "./close-audit"
 import { releasedRoundBriefProposal, roundBriefNearMissNote } from "./analysis"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
@@ -340,17 +341,24 @@ async function openRoundAdvance(
   return await openRoundClose(directory, round, route.phase, opts)
 }
 
-// The open round's close arm (plans/0243 B): the round-close checks gate the
-// close (the build, the restatement listing; their refusal is the person's
-// fix — nothing closed yet), then the completion rename and the transition
-// commit land it, and the stop is the close listing — the same review moment
-// a phased round's close is. No handover distills (the open round's phases
-// never distill; its record is the task documents, the brief and the
-// commits), and the commit's pathspec is the close's own write surface — the
-// index tick and the phase directory (plans/0207 D1's discipline) — so the
-// person's unrelated dirt stays for the clean gate that owns judging it.
+// The open round's close arm (plans/0243 B, its D4 amendment by plans/0244):
+// the round-close checks gate the close (the build, the restatement listing,
+// the assurance cover set beside them); their refusal is the person's
+// fix — nothing closed yet. A non-empty close-due set without receipts
+// constructs the close-audit unit BEFORE the close may land (plans/0244 D5),
+// so the refusal that follows teaches its execution. Then the completion
+// rename and the transition commit land the close, and the stop is the close
+// listing — the same review moment a phased round's close is. No handover
+// distills (the open round's phases never distill; its record is the task
+// documents, the brief and the commits), and the commit's pathspec is the
+// close's own write surface — the index tick and the phase directory
+// (plans/0207 D1's discipline) — so the person's unrelated dirt stays for
+// the clean gate that owns judging it. The green cover set's baseline
+// citations (plans/0244 D5: the table stays the single memory) land on their
+// own commit ahead of the transition, every kill point re-derivable.
 async function openRoundClose(directory: string, round: number, phase: PhaseUnit, opts: RunAllOpts): Promise<number> {
   const { bin } = shellProfile()
+  for (const line of closeAuditStopLines(await ensureCloseAudit(directory, round))) log(line)
   const close = await roundCloseProblems(directory, round, { build: opts.build, scanExempt: opts.scanExempt })
   if (close.problems.length) {
     log(`⏸ round ${roundDirName(round)} does not pass its round-close checks, so the open round cannot close yet — nothing was closed`)
@@ -358,6 +366,11 @@ async function openRoundClose(directory: string, round: number, phase: PhaseUnit
     log(`next: fix them, commit, then re-run: ${bin} transfer ${directory}`)
     return 2
   }
+  // Green cover set ⇒ the table's memory updates before the close proceeds
+  // (plans/0244 D5): each adjudicated row's baseline cell cited to its
+  // findings document's introducing commit, the update's own pathspec
+  // commit — idempotent, so every kill point below re-derives.
+  for (const line of await updateAssuranceBaselines(directory, round)) log(line)
   // The phase's own gates (an acceptanceGate config covering implement is
   // honored): read-only ahead of the rename, like the handover path's
   // pre-check; completePhase's own re-check is the choke point either way.
@@ -576,6 +589,10 @@ async function roundOpen(directory: string, round: number, opts: RunAllOpts): Pr
     for (const line of roundCloseRefusalLines(directory, round, round + 1, close, "transfer")) log(line)
     return 2
   }
+  // The green cover set's baseline citations (plans/0244 D5) — the close
+  // arms' own update, fired here too so a kill between a close and its
+  // citation re-derives (idempotent: cited cells write nothing).
+  for (const line of await updateAssuranceBaselines(directory, round)) log(line)
   const roadmap = await releasedRoadmapRounds(directory)
   if (roadmap !== undefined && !roadmap.some((entry) => entry.round === round + 1)) {
     for (const line of roadmapExhaustedLines(directory, round)) log(line)

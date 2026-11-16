@@ -8,6 +8,7 @@ import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle } from "../src/bundle"
 import { renderKnowledge, renderPhaseHandover, renderPriorKnowledge } from "../src/prompt"
 import { existingTaskList, planDutyText, renderFormulationTodo, renderPhaseAppend } from "../src/prompt-plan"
+import { planDuties } from "../src/plan-gate"
 import { formulationAcceptance } from "../src/formulate"
 import { promptFacts } from "../src/prompt-facts"
 import { usePromptLibrary, renderText } from "../src/template"
@@ -652,5 +653,68 @@ describe("planDutyText tiers (plans/0080 §4)", () => {
       expect(text).toContain("PACK-M-DUTIES implement to parity.")
       expect(text).not.toContain("Complete the implementation work")
     })
+  })
+
+  // The builtin duty floor's delta keying (plans/0244 D7): the plan-duties-t/-v
+  // partials take the same delta-keyed phrasing as the bundle packs, shaped to
+  // render byte-identically when no measured delta block stands — the P10
+  // floor is load-bearing (the partials are the tier every pack without its
+  // own `### t`/`### v` falls back to).
+  test("the plan-duties-t/-v partials keep their pre-0244 bytes without a delta, and key to it when one renders (plans/0244 D7)", () => {
+    // The pre-0244 partial bodies, byte for byte (the load-bearing floor:
+    // a pack user without a measured block sees exactly these).
+    const tFloor = [
+      "- Bring the test suite to cover the delivered work, giving the behaviour regression coverage; artifacts",
+      "  are the test code plus the task artifacts under docs/T-NNN/.",
+    ].join("\n")
+    const vFloor = [
+      "- Complete overall acceptance against the baseline and requirements; the acceptance verdict is anchored per task,",
+      "  written into docs/T-NNN/.",
+      "- Lay out a closing task that writes this phase's verdict to verdict.md in this phase directory, ending with the result",
+      "  line `Result: PASS` or `Result: FAIL <reason>` (a driver protocol string, verbatim): `Result: FAIL` holds the phase",
+      "  open for a person to plan the fix.",
+    ].join("\n")
+    withPack("# default\n", (facts) => {
+      expect(planDutyText(facts, L("t"))).toBe(tFloor)
+      expect(planDutyText(facts, L("v"))).toBe(vFloor)
+      // With the delta fact: the same first bullets plus the keyed clause —
+      // changed families, once per tree state, receipt validity, determinism
+      // ×2 on the t side; the acceptance reading keyed to the delta on v.
+      const t = planDutyText(facts, L("t"), { delta: true })
+      expect(t).toContain(tFloor)
+      const flatT = t.replace(/\s+/g, " ")
+      expect(flatT).toContain("changed families it groups (code, test, docs) set the coverage targets")
+      expect(flatT).toContain("once per tree state as the regression bound")
+      expect(flatT).toContain("`Tree:`")
+      expect(flatT).toContain("`Decides:`")
+      expect(flatT).toContain("changed test sections prove determinism by running twice")
+      const v = planDutyText(facts, L("v"), { delta: true })
+      expect(v).toContain(vFloor)
+      expect(v.replace(/\s+/g, " ")).toContain("a family the delta does not reach cites the round's standing evidence")
+    })
+    // The threading end to end: renderFormulationTodo passes its measured
+    // delta down to the duty render — the todo's duties carry the keyed copy
+    // beside the block, and the floor (no delta) never does.
+    const block = "## Input: the round's measured delta (driver-measured)\n\n- the target repository: 1 commit(s) in abc1234..def5678 — code 1 file(s) (+2/−0), test 0 file(s), docs 0 file(s)\n"
+    withPack("# default\n", (facts) => {
+      const base = { phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-test/tasks.md", numberStart: 2, input: "Prompt.", charter: formulationAcceptance(facts) }
+      const withDelta = renderFormulationTodo(facts, { ...base, phase: L("t"), delta: block })
+      expect(withDelta.scope.replace(/\s+/g, " ")).toContain("once per tree state as the regression bound")
+      const floor = renderFormulationTodo(facts, { ...base, phase: L("t") })
+      expect(floor.scope.replace(/\s+/g, " ")).not.toContain("once per tree state")
+      expect(floor.scope).toContain("- Bring the test suite to cover the delivered work")
+    })
+    // The append side threads the same fact (plan-gate's planDuties is the
+    // append prompt's duty render; loop-append passes its measured delta).
+    const dir = mkdtempSync(join(tmpdir(), "auto-duty-delta-"))
+    try {
+      mkdirSync(join(dir, ".opencode", "auto", "intents"), { recursive: true })
+      writeFileSync(join(dir, ".opencode", "auto", "intents", "default.md"), "# default\n")
+      const ctx = { directory: dir, opts: {} } as unknown as Parameters<typeof planDuties>[0]
+      expect(planDuties(ctx, L("t"), true).replace(/\s+/g, " ")).toContain("once per tree state as the regression bound")
+      expect(planDuties(ctx, L("t"))).toBe(planDutyText(promptFacts({ dir }), L("t")))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -233,6 +233,16 @@ export const PLAN_INPUT_NAME = "plan-input.md"
 // would read as freeform, the deliverable side P1 protects.
 export const ANALYSIS_DOC = join("docs", "analysis.md")
 
+// The assurance table (plans/0244 D2): docs/assurance.md, the capability
+// catalog's twin applied to assurance itself — target-declared committed
+// data, one markdown table row per standing invariant (watched surface,
+// kind, cadence, close behavior, cited baseline), seeded by the pack and
+// transcribed for an existing project from its last audit's conclusions.
+// Absent = the byte-identical floor: no due rows, nothing renders. Like the
+// catalog it stays an unclassified in-tree document (the deliverable's own
+// standing data, session-readable); the loader is src/assurance.ts.
+export const ASSURANCE_DOC = join("docs", "assurance.md")
+
 // —— Archived copies of the test handover document (test-handover
 // front-loading design D4) ——
 //

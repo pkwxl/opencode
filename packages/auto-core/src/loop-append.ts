@@ -11,6 +11,7 @@
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import { requireArtifact } from "./artifact"
+import { roundDeltaBlock } from "./assurance"
 import type { BlockMapEntry } from "./blockage"
 import { BRIEF_FILE, projectBriefText } from "./brief"
 import { earlierHandovers } from "./formulate-parts"
@@ -290,6 +291,11 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   }
   const compose = async (): Promise<{ prompt: string; blocks: BlockMapEntry[] }> => {
     await freshen()
+    // The round's measured delta (plans/0244 D1), measured per compose pass —
+    // the appended plan keys its verification to the round's change, the same
+    // block the formulation todo renders (m mode reads its implicit round
+    // through the same phase state; the floor renders nothing).
+    const delta = await roundDeltaBlock(directory, (await phaseState(directory)).round)
     const prompt = ctx.manual
       ? renderPhaseAppend(planFacts(ctx), {
           phaseId,
@@ -301,8 +307,9 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
           brief,
           parallel: opts.parallel,
           maxSessions: opts.maxSessions,
+          ...(delta ? { delta } : {}),
         })
-      : await phaseAppendPrompt(ctx, phase, { brief, input: input!, taskIndex, phaseId, numberStart: promptStart, existingTasks: existingTaskList(plan.tasks) })
+      : await phaseAppendPrompt(ctx, phase, { brief, input: input!, taskIndex, phaseId, numberStart: promptStart, existingTasks: existingTaskList(plan.tasks), ...(delta ? { delta } : {}) })
     const blocks: BlockMapEntry[] = [
       { block: "template", source: "the phase-append template" },
       { block: "phase duties", source: "the active pack's phase-duties section" },
@@ -415,13 +422,15 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
 async function phaseAppendPrompt(
   ctx: LoopCtx,
   phase: PhaseUnit,
-  parts: { brief?: string; input: string; taskIndex: string; phaseId: string; numberStart: number; existingTasks: string },
+  parts: { brief?: string; input: string; taskIndex: string; phaseId: string; numberStart: number; existingTasks: string; delta?: string },
 ): Promise<string> {
   const { directory, opts } = ctx
   const state = await phaseState(directory)
   return renderPhaseAppend(planFacts(ctx), {
     phase: phase.entry,
-    planDuties: planDuties(ctx, phase.entry),
+    // The duty render's delta fact (plans/0244 D7): the same block the prompt
+    // splices below keys the pack/partial duty copy's `{{#if delta}}` clauses.
+    planDuties: planDuties(ctx, phase.entry, parts.delta !== undefined),
     phaseId: parts.phaseId,
     taskIndex: parts.taskIndex,
     numberStart: parts.numberStart,
@@ -434,6 +443,7 @@ async function phaseAppendPrompt(
     mode: opts.mode,
     parallel: opts.parallel,
     maxSessions: opts.maxSessions,
+    delta: parts.delta,
   })
 }
 
