@@ -54,8 +54,11 @@ checks specified below.
 3. Inside a git work tree where a commit can succeed (a commit identity resolves): committing is the completion
    condition of every unit here — outside git this file does not apply.
 4. Clean worktree: `git status --porcelain` lists nothing — in this repository and in every nested repository
-   the target holds (work inside a gitignored nested repository leaves the outer status clean). Every task
-   starts from a clean tree (the driver's clean gate); a dirty tree is the person's to commit or clean first.
+   the target holds (work inside a gitignored nested repository leaves the outer status clean) — besides a
+   task's `docs/T-NNN/gaps.md`, the one sanctioned transient (a pending fix round's gap list: on disk, never
+   in a commit; the run-start ignore set below makes it invisible from this run on). Every task
+   starts from a clean tree (the driver's clean gate); any other dirty area is the person's to commit or
+   clean first.
 5. You can launch child sessions (your platform's subagent facility) that work in this same directory, and the
    five companion files are available to you verbatim. A platform that withholds the facility (some providers
    disallow child sessions) has exactly one shape left: the hand-over line's `mode: single` (the
@@ -68,6 +71,42 @@ checks specified below.
    (`opencode-auto run`) for these tasks, or `amend`s the config.
 8. The config's `acceptanceGate` key is unset (or empty): this suite drafts no acceptance.md and runs no
    acceptance review. Set → stop: the person runs the driver itself for those phases, or `amend`s the config.
+
+## The run-start ignore set
+
+After the preflight passes, ensure the target's `.gitignore` carries the suite's one transient: the entry
+`docs/T-*/gaps.md`, root-anchored, covering every task's gap list. The gap list lives on disk through a fix
+round — written by an INCOMPLETE verification, read by the fix session, deleted by a passing close-out — and
+never in a commit; its presence on disk is the pending-fix state the loop and the park/resume rules key on,
+while the entry keeps it out of the porcelain, so the seam between a verification and its fix round (and a
+restart inside one) reads clean like every other seam. Append the entry when missing and land the delta as
+your own housekeeping commit — the driver's own run-start commit grammar — message:
+
+     PLAN housekeeping ignore set
+
+     Auto-Task: PLAN
+     Auto-Stage: housekeeping
+
+The trailers are written verbatim, never omitted, and the `Auto-Nested:` lines ride it as they ride every
+commit you land in this repository. An already-present entry commits nothing — the ensure is idempotent.
+One exemption, the restart case: when the tree holds uncommitted work — a child broke mid-session, the
+park/resume rules relaunch its successor on that tree — never absorb the tree into a PLAN commit; append
+the entry (when missing) and let the delta ride the resumed child's next share instead.
+
+Residue — untracked scratch a task or fix session (most often a relaunched retry) left behind without it
+being its work — gets the same treatment the moment it surfaces: at a share landing, before the add pass,
+or at a child-launch seam. Residue is untracked files only — a modified or deleted tracked file is
+unlanded work, a killed session's writes riding its successor's share, never the ignore set's business —
+and never anything under `docs/`. The characteristic kinds: patch and merge leftovers (`*.orig`, `*.rej`),
+tool backups (`*.bak`, `*~`), scratch and log files (`*.log`, `*.tmp`), lock files, build or test output
+directories. Append one root-anchored entry per file or directory — in this repository's `.gitignore` and,
+when a nested repository holds residue, in its own — landing the deltas as `PLAN housekeeping ignore set`
+commits, one per repository that changed (nested repositories first; an unchanged set commits nothing);
+never delete or edit the files themselves — the ignore entry is the sweep's only write. A file you cannot
+so classify may be work: let it ride the share as before and name it in your report. Under
+`parallel: <n>` a sweep defers to the drain — it runs when no child is in flight, never overlapping a
+verification's flight. Residue never counts as a session's writes (the loop's zero-write check judges
+work).
 
 ## Keep your own context small
 
@@ -156,10 +195,12 @@ yours to read; every other unit's documents stay pointer-only as ever, the Singl
 - When the target holds nested git repositories, the baseline is multi-repo: record HEAD of this repository
   and of each nested one, and run every HEAD check and dirty-tree check of the loop against them all.
 - After a task or fix child session you land its share yourself (the loop's step 3, the INCOMPLETE branch for
-  fix children): afterwards HEAD has advanced by exactly one commit per repository that changed, and the
-  porcelain lists only the transient gap list (`docs/T-NNN/gaps.md`) — anything else is
-  residue: stop and report. A commit command inside a child session is a hard failure — the share commits are
-  yours alone, the close-out's are the verification child's. Never push, stash, reset, rebase or amend.
+  fix children), sweeping residue first (the run-start ignore set section): afterwards HEAD has advanced by
+  exactly one commit per repository that changed — plus the ignore-set commit where a sweep appended — and
+  the porcelain lists nothing (the transient gap list `docs/T-NNN/gaps.md` is ignored by the run-start set);
+  anything else stops and reports. A commit command inside a child session is a hard failure — the share
+  commits are yours alone, the close-out's are the verification child's. Never push, stash, reset, rebase or
+  amend.
 - Terminator discipline, enforced by the verification child sessions and by you for the report: every Markdown
   document a child session created or rewrote in full must end, once finished, with a line holding only
   `<!-- auto: eof -->` as its last line of body text (only blank lines may follow) — the handover document
@@ -225,7 +266,8 @@ iteration.
 3. When the child ends — the completion notification of the background launch, the call's return of a
    foreground one (the launching section's wait): the session changed something — `git status --porcelain`
    must list something besides the session files (`docs/T-NNN/handoff.md`, `docs/T-NNN/gaps.md`; a
-   handover document alone is not a share — it rides one, never forms one): a zero-write session is never
+   handover document alone is not a share — it rides one, never forms one; residue never counts either —
+   the run-start ignore set's classification, not the session's work): a zero-write session is never
    completion. Zero writes → relaunch the task child session once, appending one line of feedback ("your
    previous session ended without writing anything — carry the task out"); still
    zero writes → stop and report. Otherwise land the share — the driver's unified commit after a session: the
@@ -247,7 +289,8 @@ iteration.
    commit of this pass already landed: a repository that changed this share shows the SHA just landed, an
    untouched one its recorded baseline. The lines never ride the nested repositories' own commits (the two
    trailers alone), and they ride every commit you land in this repository — the park commit below, the fix
-   shares, the phase-transfer commits — so any commit of this repository aligns cross-repository state.
+   shares, the housekeeping commit (the run-start ignore set section), the phase-transfer commits — so any
+   commit of this repository aligns cross-repository state.
 
    When the session left `docs/T-NNN/handoff.md` — it ended by handing over — the subject carries the share
    ordinal: `<task id> exec <short title> [<k>]`, `<k>` one past the count of this task's landed exec shares
@@ -263,8 +306,9 @@ iteration.
    empty; the task id identifies the unit, the full title stays in the task document and the run's
    state files — a mechanical rule over the title's form, never its content — truncated so the
    subject, ordinal included, stays within 100 characters; the trailers are written
-   verbatim, never omitted. Afterwards HEAD has advanced by exactly one commit per changed repository, and
-   the porcelain lists only the transient gap list.
+   verbatim, never omitted. Afterwards HEAD has advanced by exactly one commit per changed repository —
+   plus the ignore-set commit where a residue sweep appended first (the run-start ignore set section) — and
+   the porcelain lists nothing (the transient gap list is ignored).
 4. Hand over or finish: when `docs/T-NNN/handoff.md` exists, tail its last body line — the status line.
    `Status: continue` → relaunch the task child session (step 2; it reads the handover itself — label the
    relaunch as a continuation). `Status: done`, or no handover document, → the task's sessions are finished;
@@ -398,9 +442,10 @@ Per child end, the loop's steps 3–4 run as written with one change — the sco
 child's share with the add limited to its task's effective scope (the gap-list unstaging unchanged inside
 it; a docs scope never reaches a nested repository, so the share is this repository's alone), never the
 whole tree: a sibling still in flight has its own uncommitted writes, and a full-tree add would absorb
-them into the wrong share. Afterwards the porcelain may list the transient gap lists, the live tasks'
+them into the wrong share. Afterwards the porcelain may list the live tasks'
 scope paths, an ended task's scope whose landing waits out a verification's flight, and a held park
-handover — anything else is residue: stop and report. The zero-write check is
+handover — the transient gap lists are ignored (the run-start ignore set section), untracked residue is
+swept when no child is in flight (the drain), and anything else stops and reports. The zero-write check is
 the same check taken over the unit's own paths. `Status: continue` relaunches into the freed slot;
 `Status: done` (or no handover) moves the task to its verification, launched under the one-at-a-time rule
 above and before any new task child — the freed slot then refills with the next admitted ready task, the
@@ -462,7 +507,9 @@ The loop under `single`, the deltas:
 - The pick, the boundary check and the loop's steps 1, 3, 4 and 7 stand as written — you are the master
   control throughout, and every commit the loop names is yours to make at the moment it names it: one
   commit per role share at each role boundary (a task's execution share when its work ends or hands
-  over, a fix round's share, the close-out's wrapup and done, the park commit), never a heap of
+  over, a fix round's share, the close-out's wrapup and done, the park commit, the ignore-set
+  housekeeping commit — the run-start ignore set section, its ensure at your first action and a residue
+  sweep at the same boundaries), never a heap of
   uncommitted work across tasks — each task's verification needs its committed range, and each new task
   its clean tree.
 - Step 2's launch becomes execution: read `docs/T-NNN/todo.md` yourself and carry the task under
@@ -685,7 +732,8 @@ person's restart repeats them.
   with `window` alone among the modes, and `parallel: <n>` never rides with it.
 
 Park and resume (every run, mode or none): a parked run sits at a legal boundary — the last share
-committed, the tree clean except the transient gap list, a report of what remains. On the restart,
+committed, the tree clean in the porcelain (the transient gap list ignored, still on disk as the
+pending-fix state), a report of what remains. On the restart,
 uncommitted content means a child broke mid-session: identify its role from the task's last share commit
 (`T-NNN exec …` → the task child, `T-NNN fix …` → the fix child), read the `Status:` tail of
 `docs/T-NNN/handoff.md` and the presence of `gaps.md` for its state,
@@ -707,9 +755,10 @@ relaunching it (the Single-session runs section's restart rule).
   round/phase documents (`docs/R-NN/round.md`, `phases.md`) and never
   plan new work — planning is a planning session's business. The verification child's close-out is the one
   sanctioned writer of the state writes and the `units.json` record removal — none of it is yours.
-- You make no edits and no state writes of your own: everything on disk was written by child sessions; your
-  writes are the share commit after each task or fix session (step 3 / the INCOMPLETE branch — the driver's
-  unified commit after a session), the phase-close lane receipts with their commit (the Phase transfer
+- You make no edits and no state writes of your own: everything else on disk was written by child sessions;
+  your writes are the share commit after each task or fix session (step 3 / the INCOMPLETE branch — the
+  driver's unified commit after a session), the ignore-set append with its housekeeping commit (the
+  run-start ignore set section), the phase-close lane receipts with their commit (the Phase transfer
   section's holds), and the phase-plan commit (the Phase transfer section) — the task
   close-out is the verification child's and the phase close-out the handover child's, not yours. (Under
   `mode: single` the same writes happen with you in every role: each write named a child's here is yours

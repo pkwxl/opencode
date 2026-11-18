@@ -9,11 +9,12 @@ whether the task session's output genuinely completes the task — and, when it 
 close-out: the driver's completion commits and state writes. You write no implementation code and you fix
 nothing — a finding is reported, not repaired; the repair belongs to a separate fix session. The unit's
 entire output is the committed range `<baseline commit>..HEAD` — each task or fix session's share, landed by
-the master control as its own commit at the session's end; the worktree is clean except the transient gap
-list (`docs/<task id>/gaps.md`) — the handover (`docs/<task id>/handoff.md`) is committed content, riding
+the master control as its own commit at the session's end; the worktree is clean in the porcelain — the
+transient gap list (`docs/<task id>/gaps.md`) is gitignored, on-disk state a fix round reads whose write
+never dirties the tree — and the handover (`docs/<task id>/handoff.md`) is committed content, riding
 each share. In a parallel wave (your prompt names the sibling task ids live beside this one) the worktree
-also carries those siblings' uncommitted writes, each inside its own declared scope — as tolerated as the
-gap list — and the range holds their interleaved commits: the exclusions below name both.
+also carries those siblings' uncommitted writes, each inside its own declared scope — tolerated — and the
+range holds their interleaved commits: the exclusions below name both.
 
 Every commit subject below that carries the task's title carries its short form: the title's first
 clause, cut at the first `:` / `(` / em-dash (where long titles park their parenthetical detail), capped
@@ -35,16 +36,20 @@ else — and overwrite that gap list with the current one.
    `<baseline commit>..HEAD` carries the `Auto-Task: <task id>` trailer and the share grammar — subject
    `<task id> exec <short title>` or `<task id> fix <n>.<session> <short title>`, each optionally ending in the
    share ordinal ` [<k>]` (the master control appends it when the session ended by handing over),
-   trailer `Auto-Stage: execute` — the master control's share commits. Two more commit shapes belong to
+   trailer `Auto-Stage: execute` — the master control's share commits. Three more commit shapes belong to
    the range legitimately: the task's own park commits — subject `<task id> park <short title>`, trailers
    `Auto-Task: <task id>` and `Auto-Stage: park`, the master control's landing when the task parked on
    another task's work — whose content (the parked handoff, the blocker's `Depends:` amendment) is
-   protocol state, excluded from check 3's diff; and other tasks' own commits (an `Auto-Task:` trailer
-   naming another task id) that landed between this task's shares
+   protocol state, excluded from check 3's diff; the master control's housekeeping commits — subject
+   `PLAN housekeeping ignore set`, trailers `Auto-Task: PLAN` and `Auto-Stage: housekeeping`, the
+   ignore-set maintenance that keeps the transient gap list and a session's residue out of the porcelain,
+   never work content — protocol state, excluded from check 3's diff; and other tasks' own commits (an
+   `Auto-Task:` trailer naming another task id) that landed between this task's shares
    while it sat in the park or ran beside its siblings in a parallel wave — out of
    unit, excluded from every check. Anything else in the range was committed inside a task or fix
-   session: a hard failure — report it as such. The worktree is clean except the transient gap list —
-   and, in a parallel wave, the live siblings' scope writes and a held park handover.
+   session: a hard failure — report it as such. The worktree is clean in the porcelain (the transient
+   gap list is gitignored) — and, in a parallel wave, the live siblings' scope writes and a held park
+   handover are the tolerated exceptions.
 2. The driver's state files are untouched: `docs/<task id>/todo.md` still present, no `done.md`, the task's
    index line still unticked.
 3. The task's required actions: every `## Scope` item acted on and every `## Acceptance` criterion actually met —

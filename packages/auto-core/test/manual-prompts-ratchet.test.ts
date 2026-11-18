@@ -1024,4 +1024,53 @@ describe("manual-driver prompt ratchet", () => {
     expect(runHandover).toContain("plus the task's own artifacts and the verification's report.md")
     expect(runHandover).not.toContain("artifacts such as report.md")
   })
+
+  // plans/0245: the gap-list ignore set — the suite's one sanctioned transient
+  // (`docs/T-NNN/gaps.md`: written by an INCOMPLETE verification, read by the
+  // fix session, deleted by a passing close-out, never in a commit, its
+  // presence on disk the pending-fix hint) moved from tolerated porcelain
+  // dirt to a gitignored entry the master control ensures at run start. The
+  // field incident: the gap list sat dirty in the porcelain between a
+  // verification and its fix round — and across restarts inside one — so
+  // every clean-seam check carried a transient exception and a mid-fix-round
+  // restart strained the preflight clean gate; retry residue (untracked
+  // scratch a relaunched session left behind) met the same stop-and-report.
+  // The landing: the entry `docs/T-*/gaps.md` appended idempotently at run
+  // start, its delta in the driver's own housekeeping grammar (no new
+  // vocabulary — the PLAN housekeeping stage is the driver's own run-start
+  // commit, the coupling pin below), residue appended the same way the moment
+  // it surfaces — never deleted, an unclassifiable file riding the share as
+  // work — and every seam's check now reads a porcelain that lists nothing.
+  test("the gap-list ignore set and the residue sweep (plans/0245)", () => {
+    const run = text("run.md")
+    const verify = text("run-verify.md")
+    // The entry, its landing grammar and its idempotence, in run.md's own
+    // section.
+    expect(run).toContain("`docs/T-*/gaps.md`")
+    expect(run).toContain("PLAN housekeeping ignore set")
+    expect(run).toContain("Auto-Stage: housekeeping")
+    expect(run).toContain("An already-present entry commits nothing")
+    // The residue arm: untracked-only, never deleted, an unclassifiable file
+    // rides the share as work.
+    expect(run).toContain("Residue is untracked files only")
+    expect(run).toContain("never delete or edit the files themselves")
+    expect(run).toContain("let it ride the share")
+    // The clean-seam restatement: the porcelain-transient exception family is
+    // gone — the retired stop-and-report residue rule with it.
+    expect(run).not.toContain("porcelain lists only the transient gap list")
+    expect(run).not.toContain("anything else is residue: stop and report")
+    expect(run).not.toContain("the tree clean except the transient gap list")
+    // The verification child expects a clean porcelain and accepts the
+    // housekeeping shape in the unit's range (protocol state, never work
+    // content).
+    expect(verify).toContain("The worktree is clean in the porcelain")
+    expect(verify).toContain("`Auto-Stage: housekeeping`")
+    expect(verify).toContain("never work content")
+    expect(verify).not.toContain("clean except the transient gap list")
+    expect(verify).not.toContain("as tolerated as the")
+    // The coupling arm (plans/0203's two-sided form): the manual grammar
+    // mirrors the driver's own run-start housekeeping commit — the stage
+    // exists producer-side.
+    expect(src("loop-preflight.ts")).toContain('stage: "housekeeping"')
+  })
 })
