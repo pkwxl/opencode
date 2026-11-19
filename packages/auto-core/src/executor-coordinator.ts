@@ -122,13 +122,37 @@ function shareMessage(grant: Grant, parked = false): string {
   return message(grant.id, { id: grant.unit }, grant.kind === "verify" ? "wrapup" : grant.kind === "fix" ? "fix" : "exec", [], `Executor lease ${grant.lease}`)
 }
 
+// 0246 D4 i's never-list stated as path grammar for the fence's own input
+// (0259, completing the widening below): with the role test yielding inside a
+// declared scope, the driver-exclusive docs surfaces need their own arms —
+// the unit state files todo.md/done.md (task, stream and phase-planning
+// shapes), the index family (docs/R-NN/phases.md and the phase's tasks.md)
+// and docs/T-NNN/subtasks.md, plus the root config opencode.json (.opencode/
+// refused on the first line, .auto/ by workdirEntry, git metadata never
+// riding a status row). Every shape here is non-freeform, so the undeclared
+// floor below refuses them identically (P10).
+const UNIT_STATE_DOC = /^docs\/(?:T-\d+(?:\/S\d+)?|R-\d+\/P\d{2,}-[a-z][a-z0-9-]*)\/(?:todo|done)\.md$/
+const INDEX_DOC = /^docs\/R-\d+\/(?:phases|P\d{2,}-[a-z][a-z0-9-]*\/tasks)\.md$/
+const SUBTASKS_DOC = /^docs\/T-\d+\/subtasks\.md$/
+function driverExclusive(path: string): boolean {
+  return path === "opencode.json" || UNIT_STATE_DOC.test(path) || INDEX_DOC.test(path) || SUBTASKS_DOC.test(path)
+}
+
 function permitted(entry: Entry, path: string): boolean {
   if (workdirEntry(path) || path === ".opencode" || path.startsWith(".opencode/") || path.split("/").includes("AGENTS.md")) return false
+  if (driverExclusive(path)) return false
   const docs = taskDocPaths(entry.grant.unit)
   if (entry.grant.kind === "verify") return path === docs.report || path === docs.gaps
   if (path === docs.handoff) return true
   const scope = entry.scope ?? entry.touches
-  return roleOf(path) === "freeform" && (scope === undefined || withinScopes(path, scope))
+  // The role test yields inside a declared scope (0259): the ruled permitted
+  // set is the unit's effective scope plus the per-kind artifact paths
+  // (0248 D5), so an in-scope artifact-role document — a unit whose `Touches:`
+  // declares its register, receipts or evidence under docs/ — is task work,
+  // never an out-of-contract write. With no declaration the freeform-only
+  // serial floor stands unchanged (P10).
+  if (scope !== undefined) return withinScopes(path, scope)
+  return roleOf(path) === "freeform"
 }
 
 function sameDocument(left: string | undefined, right: string): boolean {

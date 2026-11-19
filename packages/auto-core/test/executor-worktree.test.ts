@@ -255,3 +255,47 @@ for (const interrupted of ["landing-booked", "lane-landed"] as const) {
     }
   })
 }
+
+test("a mixed code-and-docs declaration settles its artifact-role writes from the lane", async () => {
+  // 0259: the role test yields inside scope at every tier — a lane whose
+  // declaration names a docs/T-NNN artifact writes it as ordinary work where
+  // the freeform-only gate fenced it.
+  const dir = project(["src/one.ts, docs/T-001/notes.md"])
+  const base = git(dir, "rev-parse", "HEAD")
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const execute = await claim(coordinator, worker, "T-001", "execute")
+    write(execute.workspace, "src/one.ts", "export const one = 1\n")
+    write(execute.workspace, "docs/T-001/notes.md", "# Notes\n\n<!-- auto: eof -->\n")
+    expect(await coordinator.report(worker, execute.id, execute.lease, "ended")).toMatchObject({ kind: "landed" })
+    expect(git(dir, "rev-parse", "HEAD")).toBe(base)
+    const verify = await claim(coordinator, verifier, execute.unit, "verify")
+    write(verify.workspace, "docs/T-001/report.md", pass)
+    const receipt = await coordinator.report(verifier, verify.id, verify.lease, "ended")
+    expect(receipt).toMatchObject({ kind: "landed", verdict: "pass" })
+    expect(readFileSync(join(dir, "src/one.ts"), "utf8")).toBe("export const one = 1\n")
+    expect(readFileSync(join(dir, "docs/T-001/notes.md"), "utf8")).toBe("# Notes\n\n<!-- auto: eof -->\n")
+    expect(git(dir, "status", "--porcelain")).toBe("")
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("a lane fences the root config even when a declaration names it", async () => {
+  // 0246 D4 i's never-list completed by 0259: opencode.json is driver-exclusive
+  // surface even inside a scope that declares it.
+  const dir = project(["opencode.json"])
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await claim(coordinator, worker, "T-001", "execute")
+    write(grant.workspace, "opencode.json", "{}\n")
+    write(grant.workspace, "docs/T-001/handoff.md", "# Handoff\n\nStatus: done\n")
+    expect(await coordinator.report(worker, grant.id, grant.lease, "ended")).toMatchObject({
+      kind: "blocked", reason: "isolation", detail: expect.stringContaining("opencode.json"),
+    })
+    rmSync(join(grant.workspace, "opencode.json"))
+    expect(await coordinator.report(worker, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
+  } finally {
+    await coordinator.close()
+  }
+})

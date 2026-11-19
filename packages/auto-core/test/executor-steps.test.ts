@@ -1158,3 +1158,128 @@ test("an explicitly targeted code task keeps serial ownership until it settles",
     await coordinator.close()
   }
 })
+
+// The 0257-02 reproduction shape: a document-deliverable task — its `Touches:`
+// declaring its own document surfaces (a register under docs/T-001/, receipts
+// under docs/T-001/testhands/, an evidence doc under a sibling task's
+// directory) — which the freeform-only role gate could never settle (0259
+// serves what 0248 D5's scope-based permitted set always ruled).
+function docDeliverableProject() {
+  const dir = project()
+  const path = phase(dir, "implement")
+  write(dir, `${path}/tasks.md`, "# Tasks\n\n- [ ] T-001 Record the register\n- [ ] T-002 Sibling\n")
+  write(dir, "docs/T-001/todo.md", "# Record the register\n\nDepends: none\nTouches: docs/T-001/register.md, docs/T-001/testhands/lane.md, docs/T-002/evidence.md\n\n## Scope\n\nWrite the register and its receipts.\n")
+  write(dir, "docs/T-002/todo.md", "# Sibling\n\nDepends: none\nTouches: docs/T-002/own.md\n")
+  commitFixture(dir)
+  return dir
+}
+
+test("a document-deliverable task settles its declared artifact-role writes and closes", async () => {
+  const dir = docDeliverableProject()
+  const base = git(dir, "rev-parse", "HEAD").trim()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await coordinator.claim(holder)
+    if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+    // The evidence declaration overlaps the sibling's own directory, so its
+    // reservation waits until this unit settles (0253's disjointness).
+    expect(await coordinator.claim(secondWorker, "T-002", "execute")).toMatchObject({ kind: "wait", reason: "lease-held" })
+    write(dir, "docs/T-001/register.md", "# Register\n\n<!-- auto: eof -->\n")
+    write(dir, "docs/T-001/testhands/lane.md", "# Receipt\n\n<!-- auto: eof -->\n")
+    write(dir, "docs/T-002/evidence.md", "# Evidence\n\n<!-- auto: eof -->\n")
+    // The widening is scope-bounded: an out-of-scope artifact-role path still fences.
+    write(dir, "docs/T-009/stray.md", "# Stray\n")
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({
+      kind: "blocked", reason: "isolation", detail: expect.stringContaining("docs/T-009/stray.md"),
+    })
+    rmSync(join(dir, "docs/T-009"), { recursive: true, force: true })
+    write(dir, "docs/T-001/handoff.md", "# Handoff\n\nThe register and its receipts are written.\n\nStatus: done\n")
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
+    expect(git(dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").trim().split("\n").sort()).toEqual([
+      "docs/T-001/handoff.md", "docs/T-001/register.md", "docs/T-001/testhands/lane.md", "docs/T-002/evidence.md",
+    ])
+    expect(git(dir, "rev-list", "--count", `${base}..HEAD`).trim()).toBe("1")
+
+    const verify = await coordinator.claim(verifier, "T-001", "verify")
+    if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
+    write(dir, "docs/T-001/report.md", docPass)
+    expect(await coordinator.report(verifier, verify.id, verify.lease, "ended")).toMatchObject({ kind: "landed", verdict: "pass" })
+    expect(git(dir, "ls-files", "--", "docs/T-001/done.md").trim()).toBe("docs/T-001/done.md")
+    expect(await coordinator.claim(secondWorker, "T-002", "execute")).toMatchObject({ kind: "execute", unit: "T-002" })
+  } finally {
+    await coordinator.close()
+  }
+})
+
+function undeclaredProject() {
+  const dir = project()
+  const path = phase(dir, "implement")
+  write(dir, `${path}/tasks.md`, "# Tasks\n\n- [ ] T-001 Undeclared work\n")
+  write(dir, "docs/T-001/todo.md", "# Undeclared work\n\n## Scope\n\nNo declared surfaces.\n")
+  commitFixture(dir)
+  return dir
+}
+
+test("an undeclared unit keeps the freeform-only serial floor over process-tree paths", async () => {
+  const dir = undeclaredProject()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await coordinator.claim(holder)
+    if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+    write(dir, "src/anywhere.ts", "export const free = 1\n")
+    write(dir, "docs/notes-free.md", "# A freeform docs path\n")
+    write(dir, "docs/T-001/context.md", "# A process-tree artifact\n")
+    const blocked = await coordinator.report(holder, grant.id, grant.lease, "ended")
+    if (blocked.kind !== "blocked") throw new Error(JSON.stringify(blocked))
+    expect(blocked.detail).toContain("docs/T-001/context.md")
+    expect(blocked.detail).not.toContain("docs/notes-free.md")
+    rmSync(join(dir, "docs/T-001/context.md"))
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
+    expect(git(dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").trim().split("\n").sort()).toEqual([
+      "docs/notes-free.md", "src/anywhere.ts",
+    ])
+  } finally {
+    await coordinator.close()
+  }
+})
+
+// A scope that declares all of docs/ (the widest document deliverable): the
+// never-list's docs members must stay fenced even inside it (0246 D4 i).
+function wideDocsProject() {
+  const dir = project()
+  const path = phase(dir, "implement")
+  write(dir, `${path}/tasks.md`, "# Tasks\n\n- [ ] T-001 Write the corpus\n- [ ] T-002 Neighbor\n")
+  write(dir, "docs/T-001/todo.md", "# Write the corpus\n\nDepends: none\nTouches: docs/\n\n## Scope\n\nEverything under docs is the deliverable.\n")
+  write(dir, "docs/T-002/todo.md", "# Neighbor\n\nDepends: none\nTouches: src/neighbor.ts\n")
+  commitFixture(dir)
+  return dir
+}
+
+test("driver-exclusive docs surfaces stay fenced inside a scope that declares them", async () => {
+  const dir = wideDocsProject()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await coordinator.claim(holder)
+    if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+    write(dir, "docs/T-001/register.md", "# Register\n\n<!-- auto: eof -->\n")
+    write(dir, "docs/T-002/todo.md", "# Forged unit state\n")
+    write(dir, "docs/R-01/phases.md", "# Forged ledger\n")
+    write(dir, "docs/R-01/P01-implement/tasks.md", "# Forged index\n")
+    write(dir, "docs/T-001/subtasks.md", "# Forged checklist\n")
+    const blocked = await coordinator.report(holder, grant.id, grant.lease, "ended")
+    if (blocked.kind !== "blocked") throw new Error(JSON.stringify(blocked))
+    for (const refused of ["docs/T-002/todo.md", "docs/R-01/phases.md", "docs/R-01/P01-implement/tasks.md", "docs/T-001/subtasks.md"]) {
+      expect(blocked.detail).toContain(refused)
+    }
+    expect(blocked.detail).not.toContain("docs/T-001/register.md")
+    git(dir, "checkout", "--", "docs/T-002/todo.md", "docs/R-01/phases.md", "docs/R-01/P01-implement/tasks.md")
+    rmSync(join(dir, "docs/T-001/subtasks.md"))
+    write(dir, "docs/T-001/handoff.md", "# Handoff\n\nThe corpus register is written.\n\nStatus: done\n")
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
+    expect(git(dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").trim().split("\n").sort()).toEqual([
+      "docs/T-001/handoff.md", "docs/T-001/register.md",
+    ])
+  } finally {
+    await coordinator.close()
+  }
+})
