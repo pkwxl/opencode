@@ -615,3 +615,25 @@ describe("config key scanExempt (plans/0059 X2)", () => {
     expect(splitGlobList("")).toEqual([])
   })
 })
+
+describe("config key executorLease (plans/0260: the executor lease clock's budget, 0246 §C's deferral discharged)", () => {
+  test("absent loads as undefined (the coordinator's default clock); a value in 1..1440 reads back; out-of-range or mistyped values throw naming the key and range", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, "{}")
+      expect((await loadProjectConfig(dir)).executorLease).toBeUndefined()
+      for (const value of [1, 60, 1440]) {
+        writeConfig(dir, JSON.stringify({ executorLease: value }))
+        expect((await loadProjectConfig(dir)).executorLease).toBe(value)
+      }
+      for (const value of [0, -1, 1441, 1.5, "60", null]) {
+        writeConfig(dir, JSON.stringify({ executorLease: value }))
+        await expect(loadProjectConfig(dir)).rejects.toThrow(
+          "executorLease must be an integer in 1..1440 (minutes; the executor lease budget — window and cap derive from it)",
+        )
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

@@ -99,9 +99,20 @@ type Menu = {
 type ScopedTask = { task: Task; worktree: boolean }
 type Checkpoint = "booked" | "committed" | "park-recorded" | "close-index-written" | "closed-files" | "closed-commit" | "gate-booked" | "gate-marked" | "gate-committed" |
   "workspace-booked" | "workspace-created" | "landing-booked" | "lane-landed" | "nested-committed"
-const EXECUTE_BUDGET_MINUTES = 60
-const LEASE_WINDOW_MS = (EXECUTE_BUDGET_MINUTES + 5) * 60_000
-const MAX_LEASE_AGE_MS = 2 * LEASE_WINDOW_MS
+// The lease clock (0260, discharging 0246 §C's deferral): the budget is
+// configured per project (config key executorLease, P16 — never hardcoded),
+// this 60 the absent-key default (0246 D4 c's advisory figure); the window
+// and the hard cap stay the lease grammar's fixed relations of whichever
+// budget a grant carries (0246 D4 l: budget + grace, the cap twice the
+// window). Both clock sites below derive them from the grant's own budget,
+// so a lease keeps the clock it was issued under across a mid-lease config
+// edit — the next grant carries the new value (P20: clock changes land at
+// the issuance boundary, never under a live lease).
+const DEFAULT_LEASE_BUDGET_MINUTES = 60
+const LEASE_GRACE_MINUTES = 5
+function leaseWindowMs(budget: number): number {
+  return (budget + LEASE_GRACE_MINUTES) * 60_000
+}
 const MAX_ATTEMPTS = 3
 const MAX_RESPONSE_BYTES = 256 * 1024
 const ANSWER_PAGE_BYTES = 192 * 1024
@@ -1350,12 +1361,16 @@ export async function openExecutorCoordinator(
         return { kind: "blocked", reason: "isolation", detail: "HEAD moved before the grant." }
       }
       const { touches, scope, worktree: _, ...work } = step.kind === "verify" ? { ...step, touches: undefined } : step
+      // The grant's budget is the project's declared executorLease (0260);
+      // select's admission arm already proved the config loads, so a throw
+      // here is a hand edit landing mid-claim and fails loud.
+      const budget = (await loadProjectConfig(dir)).executorLease ?? DEFAULT_LEASE_BUDGET_MINUTES
       const issued = now()
       const id = stepID(step)
       const grant: Grant = {
         ...work, id, lease: randomUUID(), attempt: attempts(id) + 1,
         workspace: workspace ? executorWorkspacePath(dir, workspace) : dir,
-        deadline: issued + LEASE_WINDOW_MS, budget: EXECUTE_BUDGET_MINUTES,
+        deadline: issued + leaseWindowMs(budget), budget,
       }
       const brief = withAnswers(holder, grant)
       if (brief.kind === "blocked") return brief
@@ -1403,7 +1418,11 @@ export async function openExecutorCoordinator(
       const at = now()
       const renewed = entries.map((entry) => {
         if (!requested.has(entry) || !sameHolder(entry.holder, holder) || !live(entry, at)) return entry
-        const deadline = Math.min(at + LEASE_WINDOW_MS, entry.issued + MAX_LEASE_AGE_MS)
+        // Renewal derives the window and cap from the grant's own budget
+        // (0260): a lease keeps the clock it was issued under even after a
+        // config edit mid-lease; the hard cap stays twice that window.
+        const window = leaseWindowMs(entry.grant.budget)
+        const deadline = Math.min(at + window, entry.issued + 2 * window)
         return deadline > entry.grant.deadline ? { ...entry, grant: { ...entry.grant, deadline } } : entry
       })
       if (renewed.some((entry, i) => entry !== entries[i])) await persist(renewed)

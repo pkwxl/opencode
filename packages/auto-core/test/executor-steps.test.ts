@@ -410,6 +410,78 @@ test("a same-channel zombie cannot renew or settle its successor's lease", async
   }
 })
 
+// The lease clock (plans/0260, discharging 0246 §C's deferral): the config key
+// executorLease tunes the grant's budget, the window and cap deriving from it;
+// absent, the exact 60/65/130 defaults stand (P10 — every emitted value
+// byte-identical to the pre-key clock).
+function leaseProject(executorLease: number) {
+  const dir = project()
+  write(dir, CONFIG_FILE, JSON.stringify({ subtask: "off", executorLease }))
+  const path = phase(dir, "implement")
+  write(dir, `${path}/tasks.md`, "# Tasks\n\n- [ ] T-001 Implement widget\n")
+  write(dir, "docs/T-001/todo.md", "# Implement widget\n\nTouches: src/widget.ts\n\n## Scope\n\nImplement the widget.\n")
+  commitFixture(dir)
+  return dir
+}
+
+test("the lease clock defaults: no executorLease key — budget 60, window 65 minutes, hard cap 130 from issue", async () => {
+  const dir = executableProject()
+  let at = 10
+  const coordinator = await openExecutorCoordinator(dir, { now: () => at })
+  try {
+    const grant = await coordinator.claim(holder)
+    if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+    expect(grant.budget).toBe(60)
+    expect(grant.deadline).toBe(10 + 65 * 60_000)
+    const key = { step: grant.id, lease: grant.lease }
+    at += 100
+    const renewed = await coordinator.heartbeat(holder, [key])
+    expect(renewed.leases[0]!.deadline).toBe(110 + 65 * 60_000)
+    at = 10 + 65 * 60_000 + 90
+    const capped = await coordinator.heartbeat(holder, [key])
+    expect(capped.leases[0]!.deadline).toBe(10 + 130 * 60_000)
+    at = 10 + 130 * 60_000
+    expect((await coordinator.heartbeat(holder, [key])).leases).toEqual([])
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("an executorLease declaration carries on the grant and scales the renewal window and the hard cap", async () => {
+  const dir = leaseProject(240)
+  let at = 10
+  const coordinator = await openExecutorCoordinator(dir, { now: () => at })
+  try {
+    const grant = await coordinator.claim(holder)
+    if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+    expect(grant.budget).toBe(240)
+    expect(grant.deadline).toBe(10 + 245 * 60_000)
+    const key = { step: grant.id, lease: grant.lease }
+    at += 100
+    const renewed = await coordinator.heartbeat(holder, [key])
+    expect(renewed.leases[0]!.deadline).toBe(110 + 245 * 60_000)
+    at = 10 + 245 * 60_000 + 90
+    const capped = await coordinator.heartbeat(holder, [key])
+    expect(capped.leases[0]!.deadline).toBe(10 + 2 * 245 * 60_000)
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("an invalid executorLease value answers the blocked config step naming the key and its range", async () => {
+  const dir = executableProject()
+  write(dir, CONFIG_FILE, JSON.stringify({ subtask: "off", executorLease: 0 }))
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    expect(await coordinator.claim(holder)).toMatchObject({
+      kind: "blocked", reason: "config",
+      detail: expect.stringContaining("executorLease must be an integer in 1..1440"),
+    })
+  } finally {
+    await coordinator.close()
+  }
+})
+
 test("the attempt cap includes expired claims and leaves their workspace intact", async () => {
   const dir = executableProject()
   let at = 10

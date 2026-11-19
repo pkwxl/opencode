@@ -126,6 +126,15 @@ export type ProjectConfig = {
   // Absent (or []) = none; set with init/amend --isolate (repeatable), shared
   // with the repository like every key.
   isolate?: string[]
+  // The executor lease clock's budget (plans/0260): whole minutes of advisory
+  // wall-clock budget every executor grant carries (the wire `budget` field);
+  // the lease window (budget + 5 minutes of grace) and the hard age cap
+  // (twice the window) are the lease grammar's fixed relations of it, computed
+  // from whichever budget is in force. Hand-edited like acceptanceGate/build
+  // (no init flag); strictly validated at load so a hand edit hears the same
+  // refusal init would. Absent = the coordinator's default 60 (plans/0246
+  // D4 c), the clock byte-identical (P10).
+  executorLease?: number
 }
 
 export const CONFIG_DEFAULTS: ProjectConfig = {
@@ -472,6 +481,7 @@ export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig 
     lanes: lanesOf(record.lanes),
     scanExempt: scanExemptOf(record.scanExempt),
     isolate: isolateOf(record.isolate, dir),
+    executorLease: executorLeaseOf(record.executorLease),
   }
 }
 
@@ -503,6 +513,20 @@ function treeLanesOf(value: unknown): TreeLanesSetting | undefined {
     throw new Error(`${CONFIG_FILE} treeLanes must be off|${TREE_LANES_SETTINGS.join("|")} (the execution tier of the lanes machinery; off is the default)`)
   }
   return value as TreeLanesSetting
+}
+
+// executorLease (plans/0260, discharging 0246 §C's deferral): an integer in
+// 1..1440 — minutes of advisory wall-clock budget the executor coordinator's
+// grants carry; the lease window and hard age cap derive from it there
+// (budget + 5 minutes of grace, twice the window), so the one value tunes the
+// whole clock. Absent = undefined (the coordinator's default 60), the
+// ceiling the idle keys' day (idleMax).
+function executorLeaseOf(value: unknown): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 1440) {
+    throw new Error(`${CONFIG_FILE} executorLease must be an integer in 1..1440 (minutes; the executor lease budget — window and cap derive from it)`)
+  }
+  return value
 }
 
 // The shape of one lanes.caches rule (the record form the JSON file carries).
