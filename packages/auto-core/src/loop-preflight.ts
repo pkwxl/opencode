@@ -77,7 +77,7 @@ import { isKnowledgeDoc } from "./knowledge"
 import { roleOf } from "./document/roles"
 import { protect, unprotect } from "./protect"
 import { peekProgress } from "./resume"
-import { findWallCommit, wallDeclared } from "./wall"
+import { findWallCommit, finishInterruptedRetirement, wallDeclared } from "./wall"
 import type { AgentHost } from "./agent/types"
 import { routingFacts, dispatchCoverageProblems, type DispatchNeed } from "./routing"
 import { createServices, type RunServices } from "./services"
@@ -683,7 +683,8 @@ export async function preflight(
   // sweep would fold the interrupted unit's batch into a PLAN commit.
   let exemptResume = false
   if (!opts.dryrun) {
-    const gate = await run.git.beginUnit(directory, opts, { id: "PLAN", title: "pre-run baseline close-out" })
+    const baselineGate = () => run.git.beginUnit(directory, opts, { id: "PLAN", title: "pre-run baseline close-out" })
+    let gate = await baselineGate()
     if (gate.type === "unreadable") {
       // The strict verdict no exemption consumes (plans/0236 D4, 0165-074):
       // 0149's exemption covers an interrupted unit's resumable DIRT; a
@@ -694,48 +695,58 @@ export async function preflight(
       for (const file of gate.files) log(`  ${file}`)
       return stopBlocked(2)
     }
-    if (gate.type === "dirty") {
+    // At most one finish-and-re-gate pass (plans/0266, 0264-02's fix): the
+    // advance's own interrupted wall-retirement write, content-proven, is
+    // committed by the gate and the gate re-derives on the tree that now
+    // includes it — the baseline this run audits from is the finished tree.
+    // A second dirty read falls to the standing refusal below: the finisher
+    // is single-shot and never loops.
+    for (let pass = 0; gate.type === "dirty" && pass < 2; pass++) {
       const interrupted = await peekProgress(directory)
       if (interrupted?.active === true) {
         exemptResume = true
         log(`↻ ${interrupted.task} was interrupted mid-flight: the worktree's uncommitted changes are that unit's resumable progress, exempt from the start clean gate (the resumed unit's close commits them, or a strict-resume rollback stashes them and names the stash — git stash list shows where)`)
-      } else {
-        // The round-start gate (plans/0049 G1): the command that establishes
-        // the round (plan; init and continue did before their round steps
-        // retired) leaves the setup uncommitted on purpose — committing it is
-        // the human's review of the round. Its mark is a phase index that git
-        // has never seen.
-        const round = await currentRound(directory)
-        const index = phaseIndexPath(round)
-        if (gate.files.includes(index) && !(await fileTracked(directory, index))) {
-          const phased = opts.phases !== undefined && opts.phases !== "m"
-          // The proposal channel's shortcut (plans/0115): with a released
-          // `### R-NN` round-brief proposal waiting and the brief still the
-          // stub, committing the setup is all this gate asks — the next
-          // transfer installs the proposal verbatim ahead of the construct.
-          const proposal = phased && (await roundBriefText(directory, round)) === undefined ? await releasedRoundBriefProposal(directory, round) : undefined
-          log(
-            `⏸ round-start gate: the setup of round ${round} is not committed yet. Review it` +
-              `${phased ? `, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria)` : ""}, commit, and re-run:` +
-              (proposal !== undefined
-                ? ` (a released \`### R-${String(round).padStart(2, "0")}\` round-brief proposal of ${ANALYSIS_DOC} waits — committing the setup is enough, the next transfer installs it verbatim)`
-                : ""),
-          )
-        } else {
-          log("⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:")
-        }
-        for (const file of gate.files) log(`  ${file}`)
-        // The driver's own record-less writes named per family (plans/0236
-        // D5, 0165-078): the two kill windows no progress record and no
-        // re-derivation guard covers — the knowledge extraction (its
-        // idempotence is a non-empty test, so a committed partial would be
-        // ratified as the phase's knowledge) and the background regression
-        // receipt (committed only at the next boundary). Teaching lines only
-        // — the person's moment enforces (P8); the generic line above stays
-        // the whole teaching when no family matches (the floor).
-        for (const line of driverLeftoverLines(gate.files)) log(line)
-        return stopBlocked(2)
+        break
       }
+      if (pass === 0 && (await finishInterruptedRetirement(directory, run.git, gate.files))) {
+        gate = await baselineGate()
+        continue
+      }
+      // The round-start gate (plans/0049 G1): the command that establishes
+      // the round (plan; init and continue did before their round steps
+      // retired) leaves the setup uncommitted on purpose — committing it is
+      // the human's review of the round. Its mark is a phase index that git
+      // has never seen.
+      const round = await currentRound(directory)
+      const index = phaseIndexPath(round)
+      if (gate.files.includes(index) && !(await fileTracked(directory, index))) {
+        const phased = opts.phases !== undefined && opts.phases !== "m"
+        // The proposal channel's shortcut (plans/0115): with a released
+        // `### R-NN` round-brief proposal waiting and the brief still the
+        // stub, committing the setup is all this gate asks — the next
+        // transfer installs the proposal verbatim ahead of the construct.
+        const proposal = phased && (await roundBriefText(directory, round)) === undefined ? await releasedRoundBriefProposal(directory, round) : undefined
+        log(
+          `⏸ round-start gate: the setup of round ${round} is not committed yet. Review it` +
+            `${phased ? `, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria)` : ""}, commit, and re-run:` +
+            (proposal !== undefined
+              ? ` (a released \`### R-${String(round).padStart(2, "0")}\` round-brief proposal of ${ANALYSIS_DOC} waits — committing the setup is enough, the next transfer installs it verbatim)`
+              : ""),
+        )
+      } else {
+        log("⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:")
+      }
+      for (const file of gate.files) log(`  ${file}`)
+      // The driver's own record-less writes named per family (plans/0236
+      // D5, 0165-078): the two kill windows no progress record and no
+      // re-derivation guard covers — the knowledge extraction (its
+      // idempotence is a non-empty test, so a committed partial would be
+      // ratified as the phase's knowledge) and the background regression
+      // receipt (committed only at the next boundary). Teaching lines only
+      // — the person's moment enforces (P8); the generic line above stays
+      // the whole teaching when no family matches (the floor).
+      for (const line of driverLeftoverLines(gate.files)) log(line)
+      return stopBlocked(2)
     }
   }
   // Branch-isolation leftovers (plans/0074 §4, U-L2): round branches of

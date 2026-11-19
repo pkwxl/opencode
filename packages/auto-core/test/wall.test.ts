@@ -12,11 +12,11 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { commitTree } from "../src/git"
+import { beginUnit, commitTree } from "../src/git"
 import { establishRound, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
 import { loadPhaseTypes, parsePhaseTypeFile } from "../src/phases/custom"
 import { renderTaskIndex } from "../src/tasks"
-import { findWallCommit, sealedChannelCheck, wallBoundary, wallPrecheckFindings, wallSealingPhase, type WallCtx } from "../src/wall"
+import { findWallCommit, finishInterruptedRetirement, sealedChannelCheck, wallBoundary, wallPrecheckFindings, wallSealingPhase, type WallCtx } from "../src/wall"
 import { renderStatus } from "../src/status"
 import { admission } from "./helpers/perm-oracle"
 import { captureRun } from "./fixtures/capture"
@@ -420,6 +420,84 @@ describe("the close (D2): predicate, recorded target, idempotency, reopening, th
     expect(existsSync(join(dir, "linux"))).toBe(true)
     expect(await findWallCommit(dir)).toBeUndefined()
     expect((await opencode(dir)).permission.external_directory[`${corpus}/**`]).toBe("allow")
+  })
+})
+
+// The interrupted retirement finished at the start gate (plans/0266, 0264-02's
+// fix): the advance wrote the retirement and blocked before any commit — the
+// next run's clean gate refused the very file 0189's finisher would clean.
+// The recognition is content-proven (the working tree's bytes exactly
+// stampWallClosure over HEAD's, the record's targets), the commit rides the
+// housekeeping stage (never "wall" — findWallCommit takes the most recent
+// Auto-Stage: wall body as THE record, and the finish commit carries no
+// ledger), and every unproven shape answers false for the caller's standing
+// refusal.
+describe("the interrupted retirement finished at the start gate (plans/0266)", () => {
+  // The measured evening's shape, built over a real closed wall: the
+  // pre-retirement bytes back at HEAD (the tree the advance ran on), the
+  // retired bytes left uncommitted in the working tree.
+  const interrupted = async (): Promise<{ dir: string; corpus: string; post: string }> => {
+    const { dir, corpus, phase, ctx } = await wallProject("true", "linux", true)
+    expect(await wallBoundary(ctx, phase)).toEqual([])
+    const post = await Bun.file(join(dir, "opencode.json")).text()
+    const pre = JSON.stringify({ permission: { external_directory: { [`${corpus}/**`]: "allow" } } }, null, 2) + "\n"
+    await Bun.write(join(dir, "opencode.json"), pre)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "the advance's committed baseline (the stamp standing)")
+    await Bun.write(join(dir, "opencode.json"), post)
+    return { dir, corpus, post }
+  }
+
+  test("the proven write is committed as the family's own record; the record scan keeps the real wall; the gate re-derives clean", async () => {
+    const { dir, corpus } = await interrupted()
+    const out = await captureRun(async () => {
+      expect(await finishInterruptedRetirement(dir, { commitTree }, ["opencode.json"])).toBe(true)
+      return 0
+    })
+    expect(out.lines.join("\n")).toContain("↻ finishing the interrupted wall retirement at the start gate")
+    expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+    const head = await git(dir, "log", "-1", "--format=%B")
+    expect(head).toContain("PLAN wall retirement (interrupted advance)")
+    expect(head).toContain("Auto-Stage: housekeeping")
+    expect(head).not.toContain("Auto-Stage: wall")
+    expect(head).toContain(corpus)
+    // The finish commit carried exactly the config file.
+    expect((await git(dir, "show", "--name-status", "--format=", "HEAD")).trim()).toBe("M\topencode.json")
+    // findWallCommit still reads THE record — the finish commit's stage keeps
+    // it out of the scan.
+    const record = await findWallCommit(dir)
+    expect(record!.doors).toEqual([{ name: "linux", target: corpus }])
+    // The start gate itself now passes over the finished tree.
+    expect((await beginUnit(dir, {}, { id: "PLAN", title: "pre-run baseline close-out" })).type).toBe("ok")
+  })
+
+  test("an already-clean tree (HEAD retired) is not the interrupted shape — the idempotent derivation proves nothing", async () => {
+    const { dir } = await interrupted()
+    await finishInterruptedRetirement(dir, { commitTree }, ["opencode.json"])
+    const head = await git(dir, "log", "-1", "--format=%B")
+    expect(await finishInterruptedRetirement(dir, { commitTree }, ["opencode.json"])).toBe(false)
+    expect(await git(dir, "log", "-1", "--format=%B")).toBe(head) // no second finish commit
+  })
+
+  test("the floors: a person's edit, a second dirty file, and no wall are all the caller's refusal", async () => {
+    // A person's edit on top of the retired bytes: the derivation does not
+    // reproduce them, nothing commits.
+    const person = await interrupted()
+    const personText = JSON.stringify({ ...JSON.parse(person.post), note: "the person's own edit" }, null, 2) + "\n"
+    await Bun.write(join(person.dir, "opencode.json"), personText)
+    expect(await finishInterruptedRetirement(person.dir, { commitTree }, ["opencode.json"])).toBe(false)
+    expect((await git(person.dir, "status", "--porcelain")).trim()).not.toBe("")
+    expect(await Bun.file(join(person.dir, "opencode.json")).text()).toBe(personText)
+    // A second dirty file beside the write: not the single-file shape.
+    const second = await interrupted()
+    await Bun.write(join(second.dir, "notes.txt"), "dirt\n")
+    expect(await finishInterruptedRetirement(second.dir, { commitTree }, ["opencode.json", "notes.txt"])).toBe(false)
+    expect((await git(second.dir, "log", "-1", "--format=%B")).trim()).not.toContain("wall retirement")
+    // No wall declared: never ours.
+    const plain = await freshRepo()
+    made.push(plain)
+    await Bun.write(join(plain, "opencode.json"), "{}\n")
+    expect(await finishInterruptedRetirement(plain, { commitTree }, ["opencode.json"])).toBe(false)
   })
 })
 

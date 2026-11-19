@@ -747,3 +747,63 @@ export async function wallBoundary(ctx: WallCtx, phase: PhaseUnit): Promise<stri
   }
   return await closeWall(ctx, phase, sealing)
 }
+
+// The start gate's finisher for the interrupted wall retirement (plans/0266,
+// 0264-02's fix). 0189's own finisher lives in wallBoundary — reached only by
+// an advance, and the advance runs only on a committed tree, so the one
+// interruption shape that orphans the retirement write (the advance writes
+// it, then blocks or dies before any commit) leaves the next run's clean
+// gate refusing the very file the finisher would clean — the measured
+// evening: the handover's retirement write into the tracked opencode.json,
+// the advance blocked at the admission scan, the
+// next run's gate refusing, the person hand-committing. This is the
+// recognition the gate lacked, content-proven the way 0198's moved marker
+// is: the dirty set exactly the tracked config, and its working-tree bytes
+// exactly stampWallClosure(HEAD's bytes, the wall record's targets) — the
+// tool's own deterministic write over the committed baseline, nothing of
+// the person's in it. Proven, the caller commits it as the wall family's
+// own record and re-derives its gate clean; unproven (no wall, another
+// file besides, bytes the derivation does not reproduce — a person's edit),
+// false and the caller's standing refusal answers untouched (P10).
+export async function finishInterruptedRetirement(
+  dir: string,
+  gitOps: Pick<GitOps, "commitTree">,
+  dirtyFiles: readonly string[],
+): Promise<boolean> {
+  if (!wallDeclared(dir)) return false
+  if (dirtyFiles.length !== 1 || dirtyFiles[0] !== OPENCODE_CONFIG_FILE) return false
+  const record = await findWallCommit(dir)
+  if (record === undefined || !record.doors.length) return false
+  const head = await git(dir, ["show", `HEAD:${OPENCODE_CONFIG_FILE}`])
+  if (head.code !== 0) return false // not tracked at HEAD — not the retirement write
+  const worktree = await opencodeText(dir)
+  if (worktree === undefined) return false
+  const targets = [...new Set(record.doors.map((door) => door.target))]
+  const proven = stampWallClosure(head.out, targets)
+  // proven === head.out: the derivation is idempotent, so an already-retired
+  // HEAD reproduces itself — a clean tree, not the interrupted shape (the
+  // gate never calls here without dirt, the guard keeps the function honest
+  // on its own).
+  if (proven === undefined || proven !== worktree || proven === head.out) return false
+  const settled = await gitOps.commitTree(
+    dir,
+    { id: "PLAN", title: "wall retirement (interrupted advance)" },
+    {
+      // The housekeeping stage, never "wall": findWallCommit takes the most
+      // recent Auto-Stage: wall body as THE record, and this commit's body
+      // carries no Wall-door ledger — staging it "wall" would shadow the
+      // real record with an empty one. Housekeeping is the driver's own
+      // maintenance-commit family (0245's master commit the precedent), a
+      // driver commit for every audit and invisible to the record scan.
+      stage: "housekeeping",
+      subject: "PLAN wall retirement (interrupted advance)",
+      body: [
+        `The standing deny on the wall's recorded target(s) ${targets.join(", ")} was written by an interrupted advance over wall commit ${record.sha.slice(0, 7)} and left uncommitted; this run's start gate proved ${OPENCODE_CONFIG_FILE} exactly that write and committed it here (plans/0266).`,
+      ].join("\n"),
+    },
+    [OPENCODE_CONFIG_FILE],
+  )
+  if (!settled.ok) return false // the commit's own ⚠ lines spoke; the gate's refusal names the file
+  log(`↻ finishing the interrupted wall retirement at the start gate: ${OPENCODE_CONFIG_FILE} proven the interrupted advance's own write over wall commit ${record.sha.slice(0, 7)} and committed`)
+  return true
+}
