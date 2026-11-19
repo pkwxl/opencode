@@ -38,6 +38,8 @@ import { createHash } from "node:crypto"
 import { mkdir, stat } from "node:fs/promises"
 import { CONFIG_FILE } from "./config"
 import suiteCharter from "../prompts/charter.md" with { type: "file" }
+import suiteExecutor from "../prompts/executor.md" with { type: "file" }
+import suitePerson from "../prompts/person.md" with { type: "file" }
 import suitePlanAppend from "../prompts/plan-append.md" with { type: "file" }
 import suiteResumeSubtasks from "../prompts/resume-subtasks.md" with { type: "file" }
 import suiteRunAsSubtasks from "../prompts/run-as-subtasks.md" with { type: "file" }
@@ -52,6 +54,8 @@ import suiteRun from "../prompts/run.md" with { type: "file" }
 // PROMPT_SUITE is the list the guard test compares against the directory.
 const SUITE: readonly { readonly name: string; readonly file: string }[] = [
   { name: "charter.md", file: suiteCharter },
+  { name: "executor.md", file: suiteExecutor },
+  { name: "person.md", file: suitePerson },
   { name: "plan-append.md", file: suitePlanAppend },
   { name: "resume-subtasks.md", file: suiteResumeSubtasks },
   { name: "run-as-subtasks.md", file: suiteRunAsSubtasks },

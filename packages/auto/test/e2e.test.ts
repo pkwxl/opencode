@@ -3498,14 +3498,14 @@ describe("CLI: clarify, driver-helper and install-prompts (the shell rows of 011
       await commitFixture(dir)
       const installed = await runCli(["install-prompts", dir])
       expect(installed.code).toBe(0)
-      expect(installed.out).toContain(`prompt suite resynced into ${dir}/prompts: 10 files`)
-      expect(installed.out).toContain("rewritten: charter.md, plan-append.md, resume-subtasks.md")
+      expect(installed.out).toContain(`prompt suite resynced into ${dir}/prompts: 12 files`)
+      expect(installed.out).toContain("rewritten: charter.md, executor.md, person.md, plan-append.md, resume-subtasks.md")
       // The never-delete invariant: a person's own file under prompts/ is
       // reported and left alone; an already-current suite re-reports it.
       await Bun.write(join(dir, "prompts/my-own.md"), "# Mine\n\nLocal additions are the person's own.\n")
       const again = await runCli(["install-prompts", dir])
       expect(again.code).toBe(0)
-      expect(again.out).toContain(`prompt suite already current in ${dir}/prompts: 10 files`)
+      expect(again.out).toContain(`prompt suite already current in ${dir}/prompts: 12 files`)
       expect(again.out).toContain("left alone (not in the suite): my-own.md")
       expect(await Bun.file(join(dir, "prompts/my-own.md")).text()).toContain("Mine")
       // plans/0164 — the vintage pin and the drift gate. The install wrote
@@ -3514,7 +3514,7 @@ describe("CLI: clarify, driver-helper and install-prompts (the shell rows of 011
       // resync restores current; anything but --check is refused.
       expect(again.out).toContain("manifest: prompts/MANIFEST pins this suite")
       const manifest = JSON.parse(await Bun.file(join(dir, "prompts/MANIFEST")).text()) as { suite: string; files: Record<string, string> }
-      expect(Object.keys(manifest.files).length).toBe(10)
+      expect(Object.keys(manifest.files).length).toBe(12)
       expect(manifest.suite).toMatch(/^sha256-[0-9a-f]{64}$/)
       const clean = await runCli(["install-prompts", dir, "--check"])
       expect(clean.code).toBe(0)

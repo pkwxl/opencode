@@ -40,7 +40,7 @@ const SRC = resolve(import.meta.dir, "..", "src")
 
 // The suite's pinned file set: a file added to prompts/ joins the ratchet
 // consciously (this test fails until it is either listed or removed).
-const FILES = ["run.md", "run-task.md", "run-verify.md", "run-fix.md", "run-handover.md", "run-plan.md", "run-as-subtasks.md", "resume-subtasks.md", "plan-append.md", "charter.md"]
+const FILES = ["run.md", "run-task.md", "run-verify.md", "run-fix.md", "run-handover.md", "run-plan.md", "run-as-subtasks.md", "resume-subtasks.md", "plan-append.md", "charter.md", "executor.md", "person.md"]
 
 const text = (name: string) => readFileSync(join(PROMPTS, name), "utf8")
 const src = (name: string) => readFileSync(join(SRC, name), "utf8")
@@ -48,6 +48,54 @@ const src = (name: string) => readFileSync(join(SRC, name), "utf8")
 describe("manual-driver prompt ratchet", () => {
   test("the suite's file set is exactly the pinned one", () => {
     expect(readdirSync(PROMPTS).sort()).toEqual([...FILES].sort())
+  })
+
+  test("the executor prompt keeps work, recovery and settlement on their assigned channels", () => {
+    const executor = text("executor.md")
+    const coordinator = src("executor-coordinator.ts")
+    // The holder recovers the issued pair and resumes the existing grant.
+    expect(executor).toContain("same channel's `menu.leases` with `ready` before trying another untargeted claim")
+    expect(executor).toContain("If the menu shows a lease, claim again with its `kind` and the same channel.")
+    expect(executor).toContain("A matching `id` and `lease` recovers the held brief.")
+    expect(executor).toContain("Use the grant's `id` as request field `step` and retain its exact `lease`.")
+    expect(coordinator).toContain("sameHolder(last.holder, holder) && (kind === undefined || kind === last.grant.kind) && (task === undefined || task === last.grant.unit)")
+    expect(coordinator).toContain("requested.has(last) && sameHolder(last.holder, holder) && live(last, at)")
+    // A replay settles the original booking, while the next verification needs an independent producer.
+    expect(executor).toContain("Retry a lost report or release with its original pair and the same report outcome.")
+    expect(executor).toContain("a fresh agent context and a different token from the producer of the immediately preceding execute or fix share")
+    expect(coordinator).toContain("entry.booking.outcome !== outcome")
+    expect(coordinator).toContain("if (entry.booking.receipt) return entry.booking.receipt")
+    expect(coordinator).toContain("Verification requires a different token from the execute share's producer.")
+    // Only the coordinator can commit. The verifier's document scope is fixed.
+    expect(executor).toContain("The coordinator owns staging, commits, and driver state.")
+    expect(executor).toContain("Never run Git staging or commit operations.")
+    expect(executor).toContain("Leave `.auto/`")
+    expect(executor).toContain("Verification may write only the task's report or gap list.")
+    expect(coordinator).toContain('if (entry.grant.kind === "verify") return path === docs.report || path === docs.gaps')
+    expect(executor).toContain("Keep one live lease per project in this preview.")
+    expect(executor).not.toMatch(/\bgit\s+(?:add|commit|reset|stash)\b|Auto-Stage:/)
+  })
+
+  test("the person prompt preserves delegated authority and proposal-bound settlement", () => {
+    const executor = text("executor.md")
+    const person = text("person.md")
+    const coordinator = src("executor-coordinator.ts")
+    expect(person).toContain('Always claim with `role: "person"` and omit task and kind filters.')
+    expect(person).toContain("The coordinator returns the oldest item your grant covers.")
+    expect(coordinator).toContain("const question = questionAuthority(person) ? personStep(person) : undefined")
+    expect(coordinator).toContain("const gate = releaseAuthority(person) ? await offerGate(person) : undefined")
+    expect(coordinator).toContain("if (gatePosition < questionPosition) return gate")
+    expect(person).toContain("If the proposal changes and a new ID is offered, review it again.")
+    expect(coordinator).toContain("if (prior && prior.digest !== proposal?.digest)")
+    expect(coordinator).toContain("if (!proposal || proposal.digest !== item.digest) return")
+    expect(person).toContain("The first accepted decision and its provenance stand.")
+    expect(coordinator).toContain("if (item.answer) return")
+    expect(coordinator).toContain("if (item.intent || item.superseded) return")
+    expect(executor).toContain("the complete `task`, `step`, `lease` tuple")
+    expect(coordinator).toContain("!live(entry, now()) || !sameHolder(entry.holder, holder) || entry.grant.unit !== target.task")
+    expect(executor).toContain("send that value as `cursor` on the same brief request")
+    expect(coordinator).toContain("!sameHolder(last.holder, holder) || !live(last, now())")
+    expect(person).not.toMatch(/\bgit\s+(?:add|commit|reset|stash)\b|Clarified:\s*yes/)
   })
 
   test("the src side of the grammar table still holds (anti-rot)", () => {
