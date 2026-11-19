@@ -69,6 +69,7 @@ export const REPO_LANE: readonly string[] = [
   "test/driver-helper.test.ts",
   "test/exec-session.test.ts",
   "test/executor-steps.test.ts",
+  "test/executor-worktree.test.ts",
   "test/git.test.ts",
   "test/gitignore.test.ts",
   "test/incident-regression.test.ts",

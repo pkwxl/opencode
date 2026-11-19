@@ -1,4 +1,4 @@
-// The serial execute-share arm. The shell supplies the authenticated stable
+// The executor share coordinator. The shell supplies the authenticated stable
 // token identity and channel. This surface is internal until the routes land.
 import { createHash, randomUUID } from "node:crypto"
 import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
@@ -11,9 +11,15 @@ import { handoffStatus, parkDirective, parseResult, roleOf } from "./document/ro
 import { tickedIndex } from "./document/unit"
 import { parkCheck, STEER_CHAIN_BOUND } from "./execute"
 import { readExecutorAdmissionBlock, readExecutorParkPlan, readExecutorPreview, readExecutorFollowUp, type ExecutorPreview, type FixPreview, type VerificationPreview } from "./executor-steps"
+import {
+  ensureExecutorWorkspace, executorWorkspacePath, ExecutorWorktreeError, landExecutorWorkspace,
+  prepareExecutorLanding, removeExecutorWorkspace, validExecutorLanding, validExecutorWorkspace,
+  type ExecutorLanding, type ExecutorWorkspace,
+} from "./executor-worktree"
 import { git, identityArgs, message, repoRoots, statusEntriesRead, withinScopes, workdirEntry } from "./git"
+import { docEligible, docScope, scopesDisjoint } from "./lanes"
 import { acquireRunLock, liveRunLock } from "./lock"
-import { markDone, runtimeParked, setParked, taskStatePaths } from "./tasks"
+import { markDone, readyTasks, runtimeParked, setParked, taskStatePaths, type Task } from "./tasks"
 
 export class ExecutorRequestError extends Error {}
 
@@ -57,9 +63,9 @@ type Candidate = Execute | FixPreview | VerificationPreview
 type Grant = (Omit<Execute, "touches"> | Omit<FixPreview, "touches"> | VerificationPreview) & { id: string; lease: string; attempt: number; workspace: string; deadline: number; budget: number; answerCursor?: string | null }
 type BlockedReport = { kind: "blocked"; reason: "isolation" | "commitFailed"; detail: string }
 type VerifyVerdict = "pass" | "fail"
-type Receipt = { kind: "landed"; commit: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; parked?: string; closeCommit?: string } | { kind: "without-landing"; reason: "failed" | "zero-write" } | BlockedReport
-type CloseIntent = { share: string; tree?: string }
-type EndedBooking = { outcome: "ended"; note?: string; retireGaps?: true; intent?: { tree: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; park?: { blocker: string; previous?: string } }; close?: CloseIntent; receipt?: Receipt }
+type Receipt = { kind: "landed"; commit: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; parked?: string; closeCommit?: string; landingCommit?: string } | { kind: "without-landing"; reason: "failed" | "zero-write" } | BlockedReport
+type CloseIntent = { share: string; sourceShare?: string; tree?: string }
+type EndedBooking = { parent?: string; outcome: "ended"; note?: string; retireGaps?: true; intent?: { tree: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; park?: { blocker: string; previous?: string } }; landing?: ExecutorLanding; close?: CloseIntent; receipt?: Receipt }
 type Booking =
   | EndedBooking
   | { outcome: "failed"; note?: string; receipt: Receipt }
@@ -69,6 +75,8 @@ type Entry = {
   base: string
   issued: number
   touches?: readonly string[]
+  scope?: readonly string[]
+  worktree?: ExecutorWorkspace
   predecessor?: string
   released?: true
   booking?: Booking
@@ -76,14 +84,16 @@ type Entry = {
 type LeaseWait = { kind: "wait"; reason: "lease-held"; detail: string; deadline: number }
 type BudgetBlock = { kind: "blocked"; reason: "attemptsExhausted" | "fixBudget"; detail: string }
 type DerivedStep = Exclude<ExecutorPreview, Execute> | BlockedReport | LeaseWait | BudgetBlock | QuestionWait
-type Decision = DerivedStep | Candidate
+type Decision = DerivedStep | (Candidate & { scope?: readonly string[]; worktree?: true })
 type Claim = DerivedStep | Grant
 type LeaseKey = { step: string; lease: string }
 type Menu = {
   claimable: { unit: string; title: string; kinds: [Grant["kind"]]; touches?: readonly string[] }[]
   leases: (LeaseKey & Pick<Grant, "kind" | "deadline" | "attempt">)[]
 }
-type Checkpoint = "booked" | "committed" | "park-recorded" | "close-index-written" | "closed-files" | "closed-commit" | "gate-booked" | "gate-marked" | "gate-committed"
+type ScopedTask = { task: Task; worktree: boolean }
+type Checkpoint = "booked" | "committed" | "park-recorded" | "close-index-written" | "closed-files" | "closed-commit" | "gate-booked" | "gate-marked" | "gate-committed" |
+  "workspace-booked" | "workspace-created" | "landing-booked" | "lane-landed"
 const EXECUTE_BUDGET_MINUTES = 60
 const LEASE_WINDOW_MS = (EXECUTE_BUDGET_MINUTES + 5) * 60_000
 const MAX_LEASE_AGE_MS = 2 * LEASE_WINDOW_MS
@@ -112,7 +122,8 @@ function permitted(entry: Entry, path: string): boolean {
   const docs = taskDocPaths(entry.grant.unit)
   if (entry.grant.kind === "verify") return path === docs.report || path === docs.gaps
   if (path === docs.handoff) return true
-  return roleOf(path) === "freeform" && (entry.touches === undefined || withinScopes(path, entry.touches))
+  const scope = entry.scope ?? entry.touches
+  return roleOf(path) === "freeform" && (scope === undefined || withinScopes(path, scope))
 }
 
 function sameDocument(left: string | undefined, right: string): boolean {
@@ -170,7 +181,11 @@ export async function openExecutorCoordinator(
     entries = JSON.parse(await readState(file)) as Entry[]
     if (!Array.isArray(entries) || entries.some((entry) =>
       !entry?.grant || !entry.holder || typeof entry.base !== "string" ||
-      !Number.isFinite(entry.issued) || !Number.isFinite(entry.grant.deadline)
+      !Number.isFinite(entry.issued) || !Number.isFinite(entry.grant.deadline) ||
+      (entry.worktree !== undefined && (!validExecutorWorkspace(entry.worktree) || !entry.scope ||
+        entry.grant.workspace !== executorWorkspacePath(dir, entry.worktree))) ||
+      (entry.booking?.outcome === "ended" && entry.booking.landing !== undefined &&
+        (!entry.worktree || !entry.booking.intent || !validExecutorLanding(entry.booking.landing)))
     )) throw new Error("Invalid executor progress record.")
     questions = JSON.parse(await readState(questionFile)) as Question[]
     if (!Array.isArray(questions) || questions.some((item) =>
@@ -366,8 +381,7 @@ export async function openExecutorCoordinator(
     }
     const proposal = await gateProposal()
     if (!proposal || proposal.digest !== item.digest) return
-    const last = entries.at(-1)
-    if (last && (live(last, now()) || (last.booking && !last.booking.receipt))) {
+    if (entries.some((entry) => live(entry, now()) || (entry.booking && !entry.booking.receipt))) {
       return { kind: "wait", reason: "gate", detail: "The workspace must settle its current lease or report before releasing the gate." }
     }
     if (!await gateWorkspace(item.document)) {
@@ -428,9 +442,111 @@ export async function openExecutorCoordinator(
     return next
   }
 
+  function workspaceBlock(error: unknown): BlockedReport {
+    if (!(error instanceof ExecutorWorktreeError)) throw error
+    return { kind: "blocked", reason: "isolation", detail: error.message }
+  }
+
+  async function openCheckout(entry: Entry): Promise<string | BlockedReport> {
+    if (!entry.worktree?.established) return dir
+    try {
+      return await ensureExecutorWorkspace(dir, entry.worktree)
+    } catch (error) {
+      return workspaceBlock(error)
+    }
+  }
+
+  async function grantCheckout(holder: Holder, entry: Entry): Promise<Claim> {
+    const reply = withAnswers(holder, entry.grant)
+    if (reply.kind === "blocked" || !entry.worktree) return reply
+    try {
+      await ensureExecutorWorkspace(dir, entry.worktree)
+    } catch (error) {
+      return workspaceBlock(error)
+    }
+    if (!entry.worktree.established) {
+      checkpoint?.("workspace-created")
+      const established = { ...entry, worktree: { ...entry.worktree, established: true as const } }
+      await persist(entries.map((item) => item === entry ? established : item))
+    }
+    return reply
+  }
+
+  function latest(unit: string): Entry | undefined {
+    return entries.findLast(({ grant }) => grant.unit === unit)
+  }
+
+  function reserved(): Entry[] {
+    const units = new Map(entries.map((entry) => [entry.grant.unit, entry]))
+    return [...units.values()].filter((entry) => {
+      const receipt = entry.booking?.receipt
+      return entry.scope !== undefined && !(receipt?.kind === "landed" && (receipt.closeCommit || receipt.parked))
+    })
+  }
+
+  // Every intervening commit must be a settled coordinator write. A ref
+  // rewrite, merge, developer commit or a neighbor with an unsettled result
+  // may not be used to move a lease's landing baseline.
+  async function knownHead(base: string, head: string): Promise<boolean> {
+    if (base === head) return true
+    const known = new Map<string, boolean>()
+    for (const { booking, worktree } of entries) {
+      const receipt = booking?.receipt
+      if (receipt?.kind === "landed") {
+        if (!worktree) known.set(receipt.commit, false)
+        if (receipt.closeCommit) known.set(receipt.closeCommit, false)
+        if (receipt.landingCommit) known.set(receipt.landingCommit, true)
+      }
+    }
+    const log = await git(dir, ["rev-list", "--first-parent", "--parents", `${base}..${head}`])
+    if (log.code !== 0) return false
+    const links = log.out.trim().split("\n")
+    let current = head
+    for (const link of links) {
+      const [commit, parent, merge, extra] = link.split(" ")
+      if (commit !== current || !parent || extra || known.get(commit) !== Boolean(merge)) return false
+      current = parent
+    }
+    return current === base
+  }
+
+  function siblingDirt(unit: string, path: string, status: string): boolean {
+    return (status === "??" || status[0] === " ") &&
+      reserved().some((sibling) => !sibling.worktree && sibling.grant.unit !== unit && permitted(sibling, path))
+  }
+
+  function reportedChanges(entry: Entry, rows: NonNullable<Awaited<ReturnType<typeof statusEntriesRead>>>) {
+    return rows.filter(({ rel, status }) =>
+      !(status === "??" && workdirEntry(rel)) && !(entry.scope && !entry.worktree && siblingDirt(entry.grant.unit, rel, status)))
+  }
+
   async function settle(entry: Entry, booking: EndedBooking): Promise<Receipt> {
     if (booking.close) return closeVerified(entry, booking, booking.close)
     const finishShare = async (commit: string, evidence: NonNullable<EndedBooking["intent"]>) => {
+      let landingCommit: string | undefined
+      const { worktree, grant } = entry
+      if (worktree && (evidence.park || evidence.verdict === "pass")) {
+        if (!booking.landing) {
+          let landing: ExecutorLanding
+          try {
+            landing = await prepareExecutorLanding(dir, commit)
+          } catch (error) {
+            return workspaceBlock(error)
+          }
+          if (!await knownHead(worktree.start, landing.parent)) {
+            return blocked("Main HEAD moved outside the executor's settled shares. Inspect the retained lane before retrying.")
+          }
+          booking = { ...booking, landing }
+          entry = await book(entry, booking)
+          checkpoint?.("landing-booked")
+        }
+        try {
+          landingCommit = await landExecutorWorkspace(dir, worktree, { id: grant.unit, title: grant.title }, booking.landing!)
+        } catch (error) {
+          return workspaceBlock(error)
+        }
+        checkpoint?.("lane-landed")
+      }
       if (evidence.park) {
         const { blocker, previous } = evidence.park
         const recorded = await runtimeParked(dir, entry.grant.unit)
@@ -439,7 +555,14 @@ export async function openExecutorCoordinator(
           await setParked(dir, entry.grant.unit, blocker)
           checkpoint?.("park-recorded")
         }
-        return finish({ kind: "landed", commit, parked: blocker })
+        if (worktree) {
+          try {
+            await removeExecutorWorkspace(dir, worktree, commit)
+          } catch (error) {
+            return workspaceBlock(error)
+          }
+        }
+        return finish({ kind: "landed", commit, parked: blocker, ...(landingCommit && { landingCommit }) })
       }
       if (evidence.verdict !== "pass") {
         const { verdict, gapCount, continuation } = evidence
@@ -447,7 +570,7 @@ export async function openExecutorCoordinator(
           kind: "landed", commit, ...(verdict && { verdict }), ...(gapCount && { gapCount }), ...(continuation && { continuation }),
         })
       }
-      const close = { share: commit }
+      const close = landingCommit ? { share: landingCommit, sourceShare: commit } : { share: commit }
       const closing = { ...booking, close }
       return closeVerified(await book(entry, closing), closing, close)
     }
@@ -456,24 +579,36 @@ export async function openExecutorCoordinator(
       return receipt
     }
     const blocked = (detail: string): BlockedReport => ({ kind: "blocked", reason: "isolation", detail })
-    const { grant, base } = entry
-    const head = await gitRead(dir, "rev-parse", "HEAD")
+    if (booking.landing && booking.intent) {
+      const { share } = booking.landing
+      const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", share)
+      if (witness !== `${booking.parent ?? entry.base}\n${booking.intent.tree}\n${shareMessage(entry.grant, !!booking.intent.park)}`) {
+        return blocked("The lane share no longer matches the booked landing.")
+      }
+      return finishShare(share, booking.intent)
+    }
+    const checkout = await openCheckout(entry)
+    if (typeof checkout !== "string") return checkout
+    const { grant } = entry
+    const head = await gitRead(checkout, "rev-parse", "HEAD")
+    const base = booking.parent ?? (entry.scope && !entry.worktree ? head : entry.base)
     if (head !== base) {
-      const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", head)
+      const witness = await gitRead(checkout, "show", "-s", "--format=%P%n%T%n%B", head)
       if (booking.intent && witness === `${base}\n${booking.intent.tree}\n${shareMessage(grant, !!booking.intent.park)}`) {
         return finishShare(head, booking.intent)
       }
       return blocked("HEAD moved outside the booked share. Inspect the commit and executor progress before resuming.")
     }
+    if (entry.scope && !entry.worktree && !await knownHead(entry.base, base)) {
+      return blocked("HEAD moved outside the executor's settled shares.")
+    }
 
-    const roots = await repoRoots(dir)
-    if (roots.length !== 1 || roots[0] !== dir) return blocked("The executor requires a single repository.")
-    let status = await statusEntriesRead(dir, dir)
+    const roots = await repoRoots(checkout)
+    if (roots.length !== 1 || roots[0] !== checkout) return blocked("The executor requires a single repository.")
+    let status = await statusEntriesRead(checkout, checkout)
     if (!status) return { kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable. Inspect the index before replaying." }
     const { gaps, handoff } = taskDocPaths(grant.unit)
-    const observedChanges = (rows: NonNullable<typeof status>) =>
-      rows.filter(({ rel, status }) => status !== "??" || !workdirEntry(rel))
-    let changes = observedChanges(status)
+    let changes = reportedChanges(entry, status)
     const rejected = changes.filter(({ rel, status }) =>
       !permitted(entry, rel) && !(booking.retireGaps && rel === gaps && /^[ D]{2}$/.test(status))
     )
@@ -482,13 +617,13 @@ export async function openExecutorCoordinator(
     let park: NonNullable<EndedBooking["intent"]>["park"]
     let artifact: { path: string; text: string } | undefined
     if (grant.kind !== "verify" && changes.some(({ rel }) => rel === handoff)) {
-      const text = await Bun.file(join(dir, handoff)).text().catch(() => "")
+      const text = await Bun.file(join(checkout, handoff)).text().catch(() => "")
       const blocker = parkDirective(text)
       if (blocker && grant.kind === "execute") {
         const plan = await readExecutorParkPlan(dir)
         const task = plan?.tasks.find(({ id }) => id === grant.unit)
         if (!plan || !task) return blocked("The parked task is outside the current phase.")
-        const check = await parkCheck(dir, plan, task, blocker)
+        const check = await parkCheck(checkout, plan, task, blocker)
         if (check.type !== "ok") return {
           kind: "blocked", reason: "commitFailed",
           detail: check.type === "foreign" ? `${blocker} is outside this phase's index.` : check.problems.join("; "),
@@ -508,15 +643,15 @@ export async function openExecutorCoordinator(
       // removal is a driver effect, booked before mutation, so the reverify
       // turn can write identical FAIL evidence as a genuinely new artifact.
       if (!booking.retireGaps) {
-        const original = await git(dir, ["ls-tree", base, "--", gaps])
+        const original = await git(checkout, ["ls-tree", base, "--", gaps])
         if (original.code !== 0 || !original.out) return blocked("The landed fix input is missing from Git.")
         booking = { ...booking, retireGaps: true }
         entry = await book(entry, booking)
       }
-      await rm(join(dir, gaps), { force: true })
-      status = await statusEntriesRead(dir, dir)
+      await rm(join(checkout, gaps), { force: true })
+      status = await statusEntriesRead(checkout, checkout)
       if (!status) return { kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable after retiring the gap list." }
-      changes = observedChanges(status)
+      changes = reportedChanges(entry, status)
     }
     const paths = changes.map(({ rel }) => rel)
     if (booking.retireGaps && !paths.some((path) => path !== gaps)) {
@@ -527,8 +662,8 @@ export async function openExecutorCoordinator(
     if (grant.kind === "verify") {
       const { report, gaps } = taskDocPaths(grant.unit)
       const [reportText, gapText] = await Promise.all([
-        Bun.file(join(dir, report)).text().catch(() => ""),
-        Bun.file(join(dir, gaps)).text().catch(() => ""),
+        Bun.file(join(checkout, report)).text().catch(() => ""),
+        Bun.file(join(checkout, gaps)).text().catch(() => ""),
       ])
       if (paths.length === 1 && paths[0] === report &&
           parseResult(reportText)?.type === "pass" && docShapeProblems(reportText, report).length === 0) {
@@ -549,27 +684,27 @@ export async function openExecutorCoordinator(
     }
 
     const stage = changes.filter(({ status }) => status[1] !== " ").map(({ rel }) => `:(literal)${rel}`)
-    if (stage.length) await gitRead(dir, "add", "-A", "--", ...stage)
-    const tree = await gitRead(dir, "write-tree")
+    if (stage.length) await gitRead(checkout, "add", "-A", "--", ...stage)
+    const tree = await gitRead(checkout, "write-tree")
     if (booking.intent && (tree !== booking.intent.tree || verdict !== booking.intent.verdict || gapCount !== booking.intent.gapCount || continuation !== booking.intent.continuation || park?.blocker !== booking.intent.park?.blocker || park?.previous !== booking.intent.park?.previous)) {
       return blocked("The workspace no longer matches the booked share. Restore its contents before replaying.")
     }
     // Verify the complete staged set before the hooked commit, then prove the
     // resulting parent, tree, and operation identity before recording success.
-    const staged = await git(dir, ["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", base, tree])
+    const staged = await git(checkout, ["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", base, tree])
     const stagedPaths = staged.out.split("\0").filter(Boolean)
     const observed = new Set(paths)
     if (staged.code !== 0 || stagedPaths.some((path) => !observed.has(path) || (!permitted(entry, path) && !(booking.retireGaps && path === gaps)))) {
       return blocked("The staged tree contains an unverified path. Inspect the index before replaying.")
     }
     if (booking.retireGaps) {
-      const retired = await git(dir, ["ls-tree", tree, "--", gaps])
+      const retired = await git(checkout, ["ls-tree", tree, "--", gaps])
       if (retired.code !== 0 || retired.out || !stagedPaths.some((path) => path !== gaps)) {
         return blocked("The staged fix must include work and retire the previous gap list.")
       }
     }
     if (artifact) {
-      const stagedArtifact = await git(dir, ["show", `${tree}:${artifact.path}`])
+      const stagedArtifact = await git(checkout, ["show", `${tree}:${artifact.path}`])
       if (stagedArtifact.code !== 0 || !sameDocument(stagedArtifact.out, artifact.text)) {
         return blocked("The staged verdict or handoff differs from the evidence read on disk.")
       }
@@ -577,18 +712,18 @@ export async function openExecutorCoordinator(
     if (!stagedPaths.length) return finish({ kind: "without-landing", reason: "zero-write" })
     const evidence = { tree, verdict, gapCount, continuation, park }
     if (!booking.intent) {
-      booking = { ...booking, intent: evidence }
+      booking = { ...booking, parent: base, intent: evidence }
       entry = await book(entry, booking)
     }
     const specs = stagedPaths.map((path) => `:(literal)${path}`)
     const commitMessage = shareMessage(grant, !!park)
-    const committed = await git(dir, [...await identityArgs(dir), "commit", "-m", commitMessage, "--", ...specs])
+    const committed = await git(checkout, [...await identityArgs(checkout), "commit", "-m", commitMessage, "--", ...specs])
     if (committed.code !== 0) {
       return { kind: "blocked", reason: "commitFailed", detail: committed.err.trim() || committed.out.trim() }
     }
     checkpoint?.("committed")
-    const landed = await gitRead(dir, "rev-parse", "HEAD")
-    const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", landed)
+    const landed = await gitRead(checkout, "rev-parse", "HEAD")
+    const witness = await gitRead(checkout, "show", "-s", "--format=%P%n%T%n%B", landed)
     if (witness !== `${base}\n${tree}\n${commitMessage}`) {
       return blocked("The new commit differs from the booked share. Inspect Git history before resuming.")
     }
@@ -605,7 +740,17 @@ export async function openExecutorCoordinator(
     const paths = new Set([pending, complete, index])
     const commitMessage = message(`${unit} done`, { id: unit }, "done", [], `Executor close ${grant.lease}`)
     const finish = async (closeCommit: string): Promise<Receipt> => {
-      const receipt = { kind: "landed", commit: intent.share, verdict: "pass", closeCommit } as const
+      if (entry.worktree && intent.sourceShare) {
+        try {
+          await removeExecutorWorkspace(dir, entry.worktree, intent.sourceShare)
+        } catch (error) {
+          return workspaceBlock(error)
+        }
+      }
+      const receipt = {
+        kind: "landed", commit: intent.sourceShare ?? intent.share, verdict: "pass", closeCommit,
+        ...(intent.sourceShare && { landingCommit: intent.share }),
+      } as const
       await book(entry, { ...booking, receipt })
       return receipt
     }
@@ -623,8 +768,8 @@ export async function openExecutorCoordinator(
       statusEntriesRead(dir, dir),
     ])
     if (oldGaps.code === 0) paths.add(gaps)
-    if (todo.code !== 0 || oldIndex.code !== 0 || !status || status.some(({ rel, status }) =>
-      !paths.has(rel) && !(status === "??" && workdirEntry(rel))
+    if (todo.code !== 0 || oldIndex.code !== 0 || !status || reportedChanges(entry, status).some(({ rel }) =>
+      !paths.has(rel)
     )) return block("Inspect unexpected workspace changes before replaying task close-out.")
 
     const [pendingText, doneText, indexText, gapText] = await Promise.all(
@@ -651,7 +796,7 @@ export async function openExecutorCoordinator(
     if (oldGaps.code === 0) await rm(join(dir, gaps), { force: true })
     checkpoint?.("closed-files")
     const changed = await statusEntriesRead(dir, dir)
-    if (!changed || changed.some(({ rel, status }) => !paths.has(rel) && !(status === "??" && workdirEntry(rel)))) {
+    if (!changed || reportedChanges(entry, changed).some(({ rel }) => !paths.has(rel))) {
       return block("Unexpected workspace changes appeared during task close-out.")
     }
     const prepare = changed.filter(({ rel, status }) => paths.has(rel) && status[1] !== " ").map(({ rel }) => `:(literal)${rel}`)
@@ -716,8 +861,7 @@ export async function openExecutorCoordinator(
     return `${prefix}${completed + 1}`
   }
 
-  async function preview(at: number): Promise<Decision> {
-    const last = entries.at(-1)
+  async function preview(at: number, last: Entry | null | undefined = entries.at(-1), task?: string, scoped = false): Promise<Decision> {
     if (last && live(last, at)) return leaseWait(last)
     const previous = last?.booking?.receipt
     const closedUnit = previous?.kind === "landed" && previous.closeCommit !== undefined
@@ -740,7 +884,10 @@ export async function openExecutorCoordinator(
       : undefined
     const priorHandoff = priorLanded?.booking?.receipt?.kind === "landed" && priorLanded.booking.receipt.continuation ? priorLanded : undefined
     const resumeUnit = (continuation ?? handedOver ?? priorHandoff)?.grant.unit
-    const step = await readExecutorPreview(dir, resumeUnit)
+    const route = task ?? resumeUnit
+    const checkout = last && !terminal(last) ? await openCheckout(last) : dir
+    if (typeof checkout !== "string") return checkout
+    const step = await readExecutorPreview(dir, resumeUnit, route ? { task: route, scoped } : undefined, checkout)
     if (step.kind !== "execute") return step
     if (attempts(stepID(step)) >= MAX_ATTEMPTS) {
       return { kind: "blocked", reason: "attemptsExhausted", detail: `${step.unit} has reached the ${MAX_ATTEMPTS}-attempt limit.` }
@@ -748,15 +895,15 @@ export async function openExecutorCoordinator(
     const roots = await repoRoots(dir)
     const top = await gitRead(dir, "rev-parse", "--show-toplevel")
     if (top !== dir || roots.length !== 1 || roots[0] !== dir) {
-      return { kind: "blocked", reason: "isolation", detail: "The serial executor requires a standalone Git repository." }
+      return { kind: "blocked", reason: "isolation", detail: "The executor requires a standalone Git repository." }
     }
     const handoff = handedOver ?? priorHandoff
     if (handoff?.grant.unit === step.unit) {
-      const status = await statusEntriesRead(dir, dir)
-      const head = await gitRead(dir, "rev-parse", "HEAD")
+      const status = await statusEntriesRead(checkout, checkout)
+      const head = await gitRead(checkout, "rev-parse", "HEAD")
       const receipt = handoff.booking?.receipt
-      if (!status || receipt?.kind !== "landed" || head !== receipt.commit ||
-          (!continuation && status.some(({ rel, status }) => !(status === "??" && workdirEntry(rel))))) {
+      if (!status || receipt?.kind !== "landed" || !(scoped && !handoff.worktree ? await knownHead(receipt.commit, head) : head === receipt.commit) ||
+          (!continuation && reportedChanges(handoff, status).length > 0)) {
         return { kind: "blocked", reason: "isolation", detail: "The handed-over workspace must still match the landed share." }
       }
       if (entries.filter(({ grant, booking }) => grant.unit === step.unit &&
@@ -764,12 +911,11 @@ export async function openExecutorCoordinator(
         return { kind: "blocked", reason: "attemptsExhausted", detail: "The execution handover chain reached its bound." }
       }
     }
-    if (continuation?.grant.unit === step.unit) {
-      const status = await statusEntriesRead(dir, dir)
-      const head = await gitRead(dir, "rev-parse", "HEAD")
-      if (!status || head !== continuation.base || status.some(({ rel, status }) =>
-        !(status === "??" && workdirEntry(rel)) && !permitted(continuation, rel)
-      )) {
+    if (continuation?.grant.unit === step.unit && (!continuation.worktree || continuation.worktree.established)) {
+      const status = await statusEntriesRead(checkout, checkout)
+      const head = await gitRead(checkout, "rev-parse", "HEAD")
+      if (!status || !(scoped && !continuation.worktree ? await knownHead(continuation.base, head) : head === continuation.base) ||
+          reportedChanges(continuation, status).some(({ rel }) => !permitted(continuation, rel))) {
         return { kind: "blocked", reason: "isolation", detail: "The previous attempt's workspace needs inspection before continuation." }
       }
     }
@@ -777,19 +923,22 @@ export async function openExecutorCoordinator(
   }
 
   async function menu(holder: Holder, at: number): Promise<Menu> {
-    const last = entries.at(-1)
-    if (last && live(last, at) && sameHolder(last.holder, holder)) {
-      const { id: step, lease, kind, deadline, attempt } = last.grant
-      return { claimable: [], leases: [{ step, lease, kind, deadline, attempt }] }
-    }
-    const step = await select(holder, at)
+    const leases = entries.filter((entry) => live(entry, at) && sameHolder(entry.holder, holder))
+      .map(({ grant: { id: step, lease, kind, deadline, attempt } }) => ({ step, lease, kind, deadline, attempt }))
+    if (leases.length) return { claimable: [], leases }
     const claimable: Menu["claimable"] = []
-    if (step.kind === "execute" || step.kind === "verify" || step.kind === "fix") {
-      claimable.push({
-        unit: step.unit, title: step.title, kinds: [step.kind], ...(step.kind !== "verify" ? { touches: step.touches } : {}),
-      })
+    const tasks = await scopeCandidates()
+    const decisions = tasks.length
+      ? await Promise.all(tasks.map(({ task }) => select(holder, at, undefined, task.id, tasks)))
+      : [await select(holder, at)]
+    for (const step of decisions) {
+      if (step.kind === "execute" || step.kind === "verify" || step.kind === "fix") {
+        claimable.push({
+          unit: step.unit, title: step.title, kinds: [step.kind], ...(step.kind !== "verify" ? { touches: step.touches } : {}),
+        })
+      }
     }
-    return { claimable, leases: [] }
+    return { claimable, leases }
   }
 
   function withoutGrant(step: Decision): DerivedStep {
@@ -803,12 +952,11 @@ export async function openExecutorCoordinator(
   }
 
   function waitForSuccessor(entry: Entry, at: number): LeaseWait | undefined {
-    const last = entries.at(-1)
+    const last = latest(entry.grant.unit)
     if (last && last !== entry && last.grant.id === entry.grant.id && live(last, at)) return leaseWait(last)
   }
 
-  async function verification(holder: Holder, at: number): Promise<DerivedStep | VerificationPreview> {
-    const last = entries.at(-1)
+  async function verification(holder: Holder, at: number, last: Entry | null | undefined = entries.at(-1)): Promise<DerivedStep | VerificationPreview> {
     if (!last) return nextWithoutGrant(at)
     if (live(last, at)) return leaseWait(last)
     if (last.booking && !last.booking.receipt) return nextWithoutGrant(at)
@@ -818,16 +966,18 @@ export async function openExecutorCoordinator(
         : { kind: "wait", reason: "in-flight", detail: "The verification verdict awaits fix routing." }
     }
     if (last.grant.kind !== "verify" && last.booking?.receipt?.kind !== "landed") return nextWithoutGrant(at)
-    const producer = entries.findLast((entry) => entry.grant.kind !== "verify" && entry.booking?.receipt?.kind === "landed")
+    const producer = entries.findLast((entry) => entry.grant.unit === last.grant.unit && entry.grant.kind !== "verify" && entry.booking?.receipt?.kind === "landed")
     const booking = producer?.booking
     const receipt = booking?.receipt
     if (!producer || receipt?.kind !== "landed" || (receipt.continuation || receipt.parked)) return nextWithoutGrant(at)
     if (booking?.outcome !== "ended" || !booking.intent || !producer.holder.token) {
       return { kind: "blocked", reason: "isolation", detail: "The landed share lacks durable producer provenance." }
     }
-    const head = await gitRead(dir, "rev-parse", "HEAD")
-    const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", head)
-    if (head !== receipt.commit || witness !== `${producer.base}\n${booking.intent.tree}\n${shareMessage(producer.grant)}`) {
+    const checkout = await openCheckout(producer)
+    if (typeof checkout !== "string") return checkout
+    const head = await gitRead(checkout, "rev-parse", "HEAD")
+    const witness = await gitRead(checkout, "show", "-s", "--format=%P%n%T%n%B", receipt.commit)
+    if (!(producer.scope && !producer.worktree ? await knownHead(receipt.commit, head) : head === receipt.commit) || witness !== `${booking.parent ?? producer.base}\n${booking.intent.tree}\n${shareMessage(producer.grant)}`) {
       return { kind: "blocked", reason: "isolation", detail: "The recorded execute share no longer matches Git history." }
     }
     if (producer.holder.token === holder.token) {
@@ -839,11 +989,10 @@ export async function openExecutorCoordinator(
     const original = entries.find(({ grant, booking }) => grant.unit === producer.grant.unit &&
       grant.kind === "execute" && booking?.receipt?.kind === "landed"
     )
-    return readExecutorFollowUp(dir, { kind: "verify", unit: producer.grant.unit, baseline: original?.base ?? producer.base, head })
+    return readExecutorFollowUp(dir, { kind: "verify", unit: producer.grant.unit, baseline: original?.base ?? producer.base, head }, false, !!producer.scope, checkout)
   }
 
-  async function fixing(at: number): Promise<DerivedStep | FixPreview> {
-    const last = entries.at(-1)
+  async function fixing(at: number, last: Entry | null | undefined = entries.at(-1)): Promise<DerivedStep | FixPreview> {
     if (!last || live(last, at) || (last.booking && !last.booking.receipt)) return nextWithoutGrant(at)
     const failures = entries.filter(({ grant, booking }) =>
       grant.unit === last.grant.unit && booking?.receipt?.kind === "landed" && booking.receipt.verdict === "fail"
@@ -880,27 +1029,117 @@ export async function openExecutorCoordinator(
         attempts(`${unit} fix ${round}.${fixChain.length + 1}`) >= MAX_ATTEMPTS) {
       return { kind: "blocked", reason: "attemptsExhausted", detail: `${unit} has reached the fix attempt limit.` }
     }
-    const head = await gitRead(dir, "rev-parse", "HEAD")
+    const checkout = await openCheckout(last)
+    if (typeof checkout !== "string") return checkout
+    const head = await gitRead(checkout, "rev-parse", "HEAD")
     const handedOver = fixChain.at(-1)?.booking?.receipt
-    if (head !== (handedOver?.kind === "landed" ? handedOver.commit : receipt.commit)) {
+    const expected = handedOver?.kind === "landed" ? handedOver.commit : receipt.commit
+    if (!(last.scope && !last.worktree ? await knownHead(expected, head) : head === expected)) {
       return { kind: "blocked", reason: "isolation", detail: "HEAD no longer matches the landed gap list or fix handover." }
     }
-    const roots = await repoRoots(dir)
-    const dirty = await statusEntriesRead(dir, dir)
+    const roots = await repoRoots(checkout)
+    const dirty = await statusEntriesRead(checkout, checkout)
     const continuation = last.grant.kind === "fix"
     const ownedDirt = latest?.kind !== "landed"
-    if (roots.length !== 1 || !dirty || (continuation && dirty.some(({ rel, status }) =>
-      !(status === "??" && workdirEntry(rel)) && (!ownedDirt || !permitted(last, rel))
+    if (roots.length !== 1 || !dirty || (continuation && reportedChanges(last, dirty).some(({ rel }) => !ownedDirt || !permitted(last, rel)
     ))) {
       return { kind: "blocked", reason: "isolation", detail: "Inspect the fix workspace before continuing." }
     }
-    return readExecutorFollowUp(dir, { kind: "fix", unit, round, head }, continuation)
+    return readExecutorFollowUp(dir, { kind: "fix", unit, round, head }, continuation, !!last.scope, checkout)
   }
 
-  async function select(holder: Holder, at: number, kind?: Grant["kind"]): Promise<Decision> {
+  const terminal = (entry: Entry) => {
+    const receipt = entry.booking?.receipt
+    return receipt?.kind === "landed" && (receipt.closeCommit !== undefined || receipt.parked !== undefined)
+  }
+
+  function pendingReport() {
+    return entries.find((entry) => entry.booking?.outcome === "ended" && !entry.booking.receipt)
+  }
+
+  function serialReservation(): Entry | undefined {
     const last = entries.at(-1)
-    if (last && live(last, at)) return leaseWait(last)
-    if (last?.booking && !last.booking.receipt) return preview(at)
+    if (last && !last.scope && !terminal(last)) return last
+  }
+
+  async function scopeCandidates(target?: string): Promise<ScopedTask[]> {
+    if (serialReservation()) return []
+    const plan = await readExecutorParkPlan(dir)
+    if (!plan) return []
+    const reservations = reserved()
+    const worktrees = (await loadProjectConfig(dir).catch(() => undefined))?.treeLanes === "on"
+    const candidates = readyTasks(plan).map((task): ScopedTask | undefined => {
+      const active = reservations.find(({ grant }) => grant.unit === task.id)
+      if (active) return { task, worktree: !!active.worktree }
+      if (docEligible(task)) return { task, worktree: false }
+      if (worktrees && task.touches?.length && (task.decompose === undefined || task.decompose === "whole")) {
+        return { task, worktree: true }
+      }
+    })
+    const first = target === undefined ? candidates[0] : candidates.find((entry) => entry?.task.id === target)
+    const mode = reservations.length ? !!reservations[0].worktree : first?.worktree
+    return candidates.filter((entry): entry is ScopedTask => !!entry && entry.worktree === mode)
+  }
+
+  async function scopedDecision(
+    holder: Holder, at: number, kind: Grant["kind"] | undefined, task: string, route?: ScopedTask,
+  ): Promise<Decision> {
+    const last = latest(task)
+    const reservation = last?.scope && !terminal(last) ? last : undefined
+    const neighbors = reserved().filter(({ grant }) => grant.unit !== task)
+    if (!route) {
+      const held = neighbors.find((entry) => live(entry, at))
+      return held ? leaseWait(held) : { kind: "wait", reason: "not-ready", detail: `${task} is not ready in the current workspace tier.` }
+    }
+    const scope = reservation?.scope ?? docScope(route.task)
+    const conflict = neighbors.find((entry) => !scopesDisjoint(scope, entry.scope!))
+    if (conflict || (reservation && live(reservation, at))) {
+      const held = conflict ?? reservation!
+      return live(held, at) ? leaseWait(held) : { kind: "wait", reason: "in-flight", detail: `${held.grant.unit} reserves an overlapping scope until settlement.` }
+    }
+    const status = await statusEntriesRead(dir, dir)
+    let dirt = status?.filter(({ rel, status }) => !(status === "??" && workdirEntry(rel)) && !siblingDirt(task, rel, status))
+    if (route.worktree) {
+      if (!dirt || dirt.length) return { kind: "blocked", reason: "isolation", detail: "Resolve main checkout changes before continuing worktree leases." }
+      const head = await gitRead(dir, "rev-parse", "HEAD")
+      for (const { worktree } of reserved()) {
+        if (worktree && !await knownHead(worktree.start, head)) {
+          return { kind: "blocked", reason: "isolation", detail: "Main HEAD moved outside the executor's settled shares. Inspect the retained lanes before retrying." }
+        }
+      }
+      if (reservation?.worktree?.established) {
+        const checkout = await openCheckout(reservation)
+        if (typeof checkout !== "string") return checkout
+        const edits = await statusEntriesRead(checkout, checkout)
+        dirt = edits && reportedChanges(reservation, edits)
+      }
+    }
+    const previous = reservation?.booking?.receipt
+    const continuing = reservation && previous?.kind !== "landed"
+    if (!dirt || dirt.some(({ rel }) => !continuing || !permitted(reservation, rel))) {
+      return { kind: "blocked", reason: "isolation", detail: "Resolve workspace changes outside the reserved scopes before continuing." }
+    }
+    const step = await unitDecision(holder, at, kind, reservation, task, true)
+    return step.kind === "execute" || step.kind === "verify" || step.kind === "fix"
+      ? { ...step, scope, ...(route.worktree && { worktree: true as const }) } : step
+  }
+
+  async function unitDecision(holder: Holder, at: number, kind: Grant["kind"] | undefined, last?: Entry, task?: string, scoped = false): Promise<Decision> {
+    const result = last?.booking?.receipt
+    const needsFix = (result?.kind === "landed" && result.verdict === "fail") ||
+      (last?.grant.kind === "fix" && (result?.kind !== "landed" || result.continuation))
+    const needsVerification = (result?.kind === "landed" && !result.closeCommit && !result.continuation && !result.parked) ||
+      (last?.grant.kind === "verify" && result?.kind !== "landed")
+    if (kind === "execute" || (kind === undefined && !needsFix && !needsVerification)) return preview(at, last ?? null, task, scoped)
+
+    return kind === "fix" || (kind === undefined && needsFix) ? fixing(at, last ?? null) : verification(holder, at, last ?? null)
+  }
+
+  async function select(holder: Holder, at: number, kind?: Grant["kind"], task?: string, candidates?: ScopedTask[]): Promise<Decision> {
+    const last = entries.at(-1)
+    const serial = serialReservation()
+    if (serial && live(serial, at)) return leaseWait(serial)
+    if (pendingReport()) return { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." }
 
     const pending = questions.filter((item) => !item.answer)
     if (pending.some((item) => sameHolder(item.asker, holder))) {
@@ -912,29 +1151,47 @@ export async function openExecutorCoordinator(
     const admission = await readExecutorAdmissionBlock(dir)
     if (admission) return admission
 
-    const result = last?.booking?.receipt
-    const needsFix = (result?.kind === "landed" && result.verdict === "fail") ||
-      (last?.grant.kind === "fix" && (result?.kind !== "landed" || result.continuation))
-    const needsVerification = (result?.kind === "landed" && !result.closeCommit && !result.continuation && !result.parked) ||
-      (last?.grant.kind === "verify" && result?.kind !== "landed")
-    if (kind === "execute" || (kind === undefined && !needsFix && !needsVerification)) return preview(at)
+    const previous = task ? latest(task)?.booking?.receipt : undefined
+    if (previous?.kind === "landed" && previous.closeCommit) {
+      return withoutGrant(await select(holder, at))
+    }
 
-    return kind === "fix" || (kind === undefined && needsFix) ? fixing(at) : verification(holder, at)
+    const scopedTasks = candidates ?? await scopeCandidates(task)
+    const route = task ? scopedTasks.find((entry) => entry.task.id === task) : undefined
+    const hasReservations = reserved().length > 0
+    if (task && !serial && !hasReservations && !route && !scopedTasks.length) {
+      const plan = await readExecutorParkPlan(dir)
+      const declaration = plan?.tasks.find(({ id }) => id === task)
+      if (declaration && docEligible(declaration)) return scopedDecision(holder, at, kind, task)
+      if (kind === undefined || kind === "execute") return preview(at, null, task)
+      return { kind: "wait", reason: "not-ready", detail: `${task} has no ${kind} step to claim.` }
+    }
+    if (hasReservations || scopedTasks.length) {
+      if (task) return scopedDecision(holder, at, kind, task, route)
+      let wait: DerivedStep | undefined
+      for (const scoped of scopedTasks) {
+        const step = await scopedDecision(holder, at, kind, scoped.task.id, scoped)
+        if (step.kind === "execute" || step.kind === "verify" || step.kind === "fix") return step
+        wait ??= step
+      }
+      if (wait) return wait
+      return { kind: "wait", reason: "in-flight", detail: "The current workspace tier must settle before other work starts." }
+    }
+    return unitDecision(holder, at, kind, last)
   }
 
   return {
     claim: (holder, task, kind) => serialize(async () => {
       const at = now()
-      const last = entries.at(-1)
-      if (last && live(last, at)) {
-        return sameHolder(last.holder, holder) && (kind === undefined || kind === last.grant.kind) && (task === undefined || task === last.grant.unit)
-          ? withAnswers(holder, last.grant)
-          : leaseWait(last)
-      }
+      const held = entries.findLast((entry) => live(entry, at) && sameHolder(entry.holder, holder))
+      if (held) return (kind === undefined || kind === held.grant.kind) && (task === undefined || task === held.grant.unit)
+        ? grantCheckout(holder, held)
+        : leaseWait(held)
       // The report already authorized settlement. A replacement's claim can
       // finish it without impersonating the original holder or booking again.
-      if (last?.booking?.outcome === "ended" && !last.booking.receipt) {
-        const result = await settle(last, last.booking)
+      const booked = pendingReport()
+      if (booked?.booking?.outcome === "ended") {
+        const result = await settle(booked, booked.booking)
         if (result.kind === "blocked") return result
       }
       const pending = pendingGate()
@@ -942,39 +1199,54 @@ export async function openExecutorCoordinator(
         const blocked = await settleGate(pending)
         if (blocked) return blocked
       }
-      const step = await select(holder, now(), kind)
+      const step = await select(holder, now(), kind, task)
       if (step.kind !== "execute" && step.kind !== "verify" && step.kind !== "fix") return step
       if (task !== undefined && task !== step.unit) {
         return { kind: "wait", reason: "not-ready", detail: `${task} is not the next serial unit.` }
       }
-      const base = await gitRead(dir, "rev-parse", "HEAD")
+      const last = latest(step.unit)
+      const retained = step.worktree && last && !terminal(last) ? last.worktree : undefined
+      const workspace = step.worktree
+        ? retained ?? { id: randomUUID(), start: await gitRead(dir, "rev-parse", "HEAD") }
+        : undefined
+      const checkout = workspace && last && retained ? await openCheckout(last) : dir
+      if (typeof checkout !== "string") return checkout
+      const base = workspace && !workspace.established ? workspace.start : await gitRead(checkout, "rev-parse", "HEAD")
       if (step.kind !== "execute" && base !== step.head) {
         return { kind: "blocked", reason: "isolation", detail: "HEAD moved before the grant." }
       }
-      const { touches, ...work } = step.kind === "verify" ? { ...step, touches: undefined } : step
+      const { touches, scope, worktree: _, ...work } = step.kind === "verify" ? { ...step, touches: undefined } : step
       const issued = now()
       const id = stepID(step)
       const grant: Grant = {
-        ...work, id, lease: randomUUID(), attempt: attempts(id) + 1, workspace: dir,
+        ...work, id, lease: randomUUID(), attempt: attempts(id) + 1,
+        workspace: workspace ? executorWorkspacePath(dir, workspace) : dir,
         deadline: issued + LEASE_WINDOW_MS, budget: EXECUTE_BUDGET_MINUTES,
       }
       const brief = withAnswers(holder, grant)
       if (brief.kind === "blocked") return brief
       const predecessor = last?.grant.id === grant.id ? last.grant.lease : undefined
-      await persist([...entries, { grant, holder: { ...holder }, base, issued, touches, predecessor }])
-      return brief
+      const entry = { grant, holder: { ...holder }, base, issued, touches, scope, predecessor, worktree: workspace }
+      await persist([...entries, entry])
+      if (workspace && !retained) checkpoint?.("workspace-booked")
+      return workspace ? grantCheckout(holder, entry) : brief
     }),
     ready: (holder) => serialize(() => menu(holder, now())),
     brief: (holder, task, kind) => serialize(async () => {
-      const last = entries.at(-1)
-      if (last && last.grant.unit === task && (kind === undefined || kind === last.grant.kind) && live(last, now())) {
-        return sameHolder(last.holder, holder) ? withAnswers(holder, last.grant) : leaseWait(last)
+      const last = latest(task)
+      if (last && (kind === undefined || kind === last.grant.kind) && live(last, now())) {
+        if (!sameHolder(last.holder, holder)) return leaseWait(last)
+        if (last.worktree && !last.worktree.established) {
+          return { kind: "wait", reason: "in-flight", detail: "Retry the claim to complete workspace creation." }
+        }
+        const checkout = await openCheckout(last)
+        return typeof checkout === "string" ? withAnswers(holder, last.grant) : checkout
       }
       return { kind: "wait", reason: "not-ready", detail: `This channel has no live brief for ${task}.` }
     }),
     briefAnswers: (holder, task, after, kind) => serialize(async () => {
-      const last = entries.at(-1)
-      if (!last || last.grant.unit !== task || (kind !== undefined && last.grant.kind !== kind) || !sameHolder(last.holder, holder) || !live(last, now())) {
+      const last = latest(task)
+      if (!last || (kind !== undefined && last.grant.kind !== kind) || !sameHolder(last.holder, holder) || !live(last, now())) {
         throw new ExecutorRequestError("This channel has no live brief for the requested task.")
       }
       const all = applicableAnswers(holder, task)
@@ -988,17 +1260,19 @@ export async function openExecutorCoordinator(
       const next = cursor + 1 + answers.length < all.length ? answers.at(-1)?.id : undefined
       return { answers, ...(next && { next }) }
     }),
-    verification: (holder) => serialize(() => verification(holder, now())),
+    verification: (holder) => serialize(async () => {
+      const step = await select(holder, now(), "verify")
+      return step.kind === "verify" ? step : withoutGrant(step)
+    }),
     heartbeat: (holder, leases) => serialize(async () => {
       const requested = new Set(leases.map(({ step, lease }) => lookup(step, lease)))
       const at = now()
-      const last = entries.at(-1)
-      if (last && requested.has(last) && sameHolder(last.holder, holder) && live(last, at)) {
-        const deadline = Math.min(at + LEASE_WINDOW_MS, last.issued + MAX_LEASE_AGE_MS)
-        if (deadline > last.grant.deadline) {
-          await persist([...entries.slice(0, -1), { ...last, grant: { ...last.grant, deadline } }])
-        }
-      }
+      const renewed = entries.map((entry) => {
+        if (!requested.has(entry) || !sameHolder(entry.holder, holder) || !live(entry, at)) return entry
+        const deadline = Math.min(at + LEASE_WINDOW_MS, entry.issued + MAX_LEASE_AGE_MS)
+        return deadline > entry.grant.deadline ? { ...entry, grant: { ...entry.grant, deadline } } : entry
+      })
+      if (renewed.some((entry, i) => entry !== entries[i])) await persist(renewed)
       return menu(holder, at)
     }),
     release: (holder, step, lease) => serialize(async () => {
@@ -1015,11 +1289,15 @@ export async function openExecutorCoordinator(
       const at = now()
       if (outcome !== "ended" && outcome !== "failed") throw new Error("Invalid report outcome.")
       if (!sameHolder(entry.holder, holder)) return live(entry, at) ? leaseWait(entry) : withoutGrant(await select(holder, at))
+      if (entry.worktree && !entry.worktree.established) {
+        return { kind: "wait", reason: "in-flight", detail: "Retry the claim to complete workspace creation before reporting." }
+      }
       if (entry.booking) {
         if (entry.booking.outcome !== outcome) throw new ExecutorRequestError("The report outcome conflicts with the booked outcome.")
         if (entry.booking.receipt) return entry.booking.receipt
       } else {
         if (!live(entry, at)) return waitForSuccessor(entry, at) ?? withoutGrant(await select(holder, at))
+        if (pendingReport()) return { kind: "wait", reason: "in-flight", detail: "A previous report requires settlement first." }
         entry = await book(entry, outcome === "failed"
           ? { outcome, note, receipt: { kind: "without-landing", reason: "failed" } }
           : { outcome, note })
@@ -1068,10 +1346,7 @@ export async function openExecutorCoordinator(
     answerGate: (person, id, decision, rationale) => serialize(async () =>
       (await approveGate(person, id, decision, rationale)) ?? offerGate(person)),
     next: (holder) => serialize(async () => withoutGrant(await select(holder, now()))),
-    busy: () => serialize(async () => {
-      const last = entries.at(-1)
-      return last !== undefined && (live(last, now()) || !!(last.booking && !last.booking.receipt))
-    }),
+    busy: () => serialize(async () => entries.some((entry) => live(entry, now())) || pendingReport() !== undefined),
     async close() {
       closed = true
       await tail

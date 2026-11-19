@@ -45,6 +45,7 @@ import {
   parseDecompose,
   parseIndex,
   parseUnitDoc,
+  readyUnitIds,
   renameUnitDone,
   resolveDepends,
   scanUnitStates,
@@ -767,13 +768,22 @@ export function strandedParks(plan: Plan): Task[] {
 // Blocked tasks are candidates like pending ones (resumed directly); a
 // parked task counts as done while its blocker is undone (withParked) and
 // selects again once the blocker closed.
-export function next(plan: Plan): Task | undefined {
+function readyDone(plan: Plan): Set<string> {
   const own = new Set(plan.tasks.map((task) => task.id))
   const done = new Set(plan.tasks.filter((task) => task.status === "done").map((task) => task.id))
   for (const task of plan.tasks) {
     if (Array.isArray(task.depends)) for (const dep of task.depends) if (!own.has(dep)) done.add(dep)
   }
-  const id = nextReady(plan.tasks.map(declOf), withParked(plan.tasks, done))
+  return withParked(plan.tasks, done)
+}
+
+export function readyTasks(plan: Plan): Task[] {
+  const ready = new Set(readyUnitIds(plan.tasks.map(declOf), readyDone(plan)))
+  return plan.tasks.filter(({ id }) => ready.has(id))
+}
+
+export function next(plan: Plan): Task | undefined {
+  const id = nextReady(plan.tasks.map(declOf), readyDone(plan))
   return plan.tasks.find((task) => task.id === id)
 }
 

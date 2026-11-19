@@ -550,6 +550,7 @@ const CLASSIFIED: Record<string, Domain> = {
   "work-order": "driver",
   "executor-steps": "driver",
   "executor-coordinator": "driver",
+  "executor-worktree": "driver",
   // The blockage dossier and honest block line (plans/0082 §2 D1/D2), the
   // strict remediation-plan parser and the blockage document's shape (§4
   // D5 / §5 D6): the pure half every covered block site builds on.
@@ -642,6 +643,7 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // the lane-worktree family and the branch-isolation/landing family, both
   // importing the spawn helper and shared vocabulary from their root.
   "git-worktree": "kernel",
+  "executor-worktree": "kernel",
   "git-land": "kernel",
   "git-ops": "kernel",
   "unit-commit": "kernel",

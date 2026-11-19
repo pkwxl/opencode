@@ -138,7 +138,7 @@ without the route's scope. Scopes: `read` (status/observability/models),
 and beside the scope it takes an explicit `confirm` field and the
 per-daemon 10-minute rate window).
 
-## Serial executor preview
+## Executor preview
 
 Issue a token with `token issue --scopes executor` to use the worker routes
 for a registered, standalone Git project configured with `subtask: off`.
@@ -184,8 +184,20 @@ The live brief owner can follow `answerCursor` by passing its value as
 has `kind: "answers"`, an `answers` array, and a `next` cursor when more
 answers are available.
 
-Each project admits one worker lease at a time. Different projects can hold
-worker leases concurrently.
+Different projects can hold worker leases concurrently. Within a project,
+use `ready` to see which task and step pairs the coordinator can offer. Use
+a distinct channel for each concurrent worker. A worker may start only
+after `claim` grants its lease and must stay inside the returned `workspace`
+and task scope.
+
+Ready whole-task units with disjoint documentation-only `Touches` scopes
+can share the project checkout. With `treeLanes: on`, ready code units with
+disjoint declared scopes can lease separate Git worktrees. Use the returned
+`workspace` again on takeover. The coordinator retains the workspace across
+attempts and lands verified work or a dependency park in the main checkout.
+Same-tree work and worktree work run in separate groups. Tasks without a
+declared scope run alone. Worktree landing requires Git with
+`merge-tree --write-tree` support.
 
 ### Create a project under a declared root
 

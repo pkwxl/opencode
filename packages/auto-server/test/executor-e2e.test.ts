@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { liveRunLock } from "@opencode-ai/auto-core/lock"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
-import { fixtureProject, gitOf, TASK } from "./fixtures/project"
+import { fixtureProject, gitOf, TASK, TASK_2 } from "./fixtures/project"
 
 test("the daemon routes authenticated executor requests to one launcher-confined coordinator and recovers across restarts", async () => {
   const directory = await fixtureProject("auto-executor-e2e-", { subtask: "off" })
@@ -177,6 +177,63 @@ exec "$@"
     await Bun.write(join(directory, "docs", TASK, "report.md"), "# Verification\n\nThe widget is exported with the expected value, and the source changes are limited to the approved path. The implementation satisfies the task acceptance criteria.\n\nResult: PASS\n\n<!-- auto: eof -->\n")
     expect((await call("report", { step: reverify.id, lease: reverify.lease, outcome: "ended" }, verifier)).step).toMatchObject({ kind: "phase-boundary" })
     expect(await Bun.file(join(directory, "docs", TASK, "done.md")).exists()).toBe(true)
+  } finally {
+    await daemon?.stop()
+    await rm(dataDir, { recursive: true, force: true })
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 20_000)
+
+test("the daemon grants and settles concurrent worktree leases through protocol 1", async () => {
+  const directory = await fixtureProject("auto-executor-lanes-e2e-", { subtask: "off", treeLanes: "on" }, 2)
+  const dataDir = await mkdtemp(join(tmpdir(), "auto-executor-lanes-data-"))
+  const store = new DaemonStore(dataDir)
+  const project = store.register(directory)
+  const worker = store.issueToken("executor", "worker").token
+  const verifier = store.issueToken("executor", "verifier").token
+  const git = gitOf(directory)
+  let daemon: DaemonHandle | undefined
+  const tasks = [TASK, TASK_2]
+  async function call(operation: string, body: Record<string, unknown>, token = worker) {
+    const response = await fetch(`${daemon!.url}/projects/${encodeURIComponent(project.name)}/executor/${operation}`, {
+      method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+    })
+    const result = await response.json()
+    expect(response.status, JSON.stringify(result)).toBe(200)
+    expect(result.protocol).toBe(1)
+    return result
+  }
+  try {
+    for (const unit of tasks) {
+      await Bun.write(join(directory, "docs", unit, "todo.md"), `# ${unit}: a widget\n\nDepends: none\nTouches: src/${unit}.ts\n\n## Scope\n\nExport the widget.\n`)
+    }
+    await git("add", "-A")
+    await git("commit", "-qm", "Declare independent scopes")
+    daemon = await startDaemon({ dataDir, port: 0 })
+
+    const { menu } = await call("ready", {})
+    expect(menu.claimable.map(({ unit }: { unit: string }) => unit)).toEqual(tasks)
+    const claims = await Promise.all(tasks.map(async (unit) => {
+      const { step } = await call("claim", { channel: unit, task: unit, kind: "execute" })
+      expect(step).toMatchObject({ kind: "execute", unit })
+      expect(step.workspace).not.toBe(directory)
+      await Bun.write(join(step.workspace, "src", `${unit}.ts`), "export const widget = true\n")
+      return step
+    }))
+    expect(claims[0].workspace).not.toBe(claims[1].workspace)
+    for (const { unit, id, lease, workspace } of claims) {
+      await call("report", { channel: unit, step: id, lease, outcome: "ended" })
+      expect(await Bun.file(join(directory, "src", `${unit}.ts`)).exists()).toBe(false)
+      const { step } = await call("claim", { task: unit, kind: "verify" }, verifier)
+      expect(step).toMatchObject({ kind: "verify", unit, workspace })
+      await Bun.write(join(workspace, "docs", unit, "report.md"), "# Verification\n\nThe declared source exports the widget with the expected value. The implementation satisfies the task acceptance criteria and changes no paths outside the declared scope.\n\nResult: PASS\n\n<!-- auto: eof -->\n")
+      const settled = await call("report", { step: step.id, lease: step.lease, outcome: "ended" }, verifier)
+      expect(await Bun.file(join(directory, "docs", unit, "done.md")).exists(), JSON.stringify(settled.step)).toBe(true)
+      expect(await Bun.file(join(directory, "src", `${unit}.ts`)).text()).toBe("export const widget = true\n")
+    }
+    expect((await call("claim", {})).step).toMatchObject({ kind: "phase-boundary" })
+    expect((await git("status", "--porcelain")).trim()).toBe("")
+    expect((await git("rev-list", "--count", "--merges", "HEAD")).trim()).toBe("2")
   } finally {
     await daemon?.stop()
     await rm(dataDir, { recursive: true, force: true })

@@ -905,3 +905,154 @@ test("parallel projects keep simultaneous leases, renewal and settled replay iso
     await Promise.all([first.close(), second.close()])
   }
 })
+
+function docLeaseProject() {
+  const dir = project()
+  const path = phase(dir, "implement")
+  write(dir, `${path}/tasks.md`, "# Tasks\n\n- [ ] T-001 First\n- [ ] T-002 Second\n- [ ] T-003 Overlap\n- [ ] T-004 Dependent\n- [ ] T-005 Code\n")
+  write(dir, "docs/T-001/todo.md", "# First\n\nTouches: docs/first.md\n")
+  write(dir, "docs/T-002/todo.md", "# Second\n\nDepends: none\nTouches: docs/second.md\n")
+  write(dir, "docs/T-003/todo.md", "# Overlap\n\nDepends: none\nTouches: docs/T-001/notes.md\n")
+  write(dir, "docs/T-004/todo.md", "# Dependent\n\nDepends: T-001\nTouches: docs/dependent.md\n")
+  write(dir, "docs/T-005/todo.md", "# Code\n\nDepends: none\nTouches: src/code.ts\n")
+  commitFixture(dir)
+  return dir
+}
+
+const secondWorker = { token: "worker-2", channel: "child-2" }
+const verifier = { token: "verifier", channel: "verify-doc" }
+const docPass = "# Verification\n\nInspected the documentation changes and confirmed they match the task.\n\nResult: PASS\n\n<!-- auto: eof -->\n"
+
+test("same-tree documentation leases reserve effective scopes and land only their own changes", async () => {
+  const dir = docLeaseProject()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    expect((await coordinator.ready(holder)).claimable.map(({ unit }) => unit)).toEqual(["T-001", "T-002", "T-003"])
+    const first = await coordinator.claim(holder, "T-001", "execute")
+    if (first.kind !== "execute") throw new Error(JSON.stringify(first))
+    write(dir, "docs/first.md", "# First\n")
+    expect(await coordinator.claim(secondWorker, "T-003", "execute")).toMatchObject({ kind: "wait", reason: "lease-held" })
+    expect(await coordinator.claim(secondWorker, "T-004", "execute")).toMatchObject({ kind: "wait" })
+    expect(await coordinator.claim(secondWorker, "T-005", "execute")).toMatchObject({ kind: "wait" })
+    const second = await coordinator.claim(secondWorker, "T-002", "execute")
+    if (second.kind !== "execute") throw new Error(JSON.stringify(second))
+    expect(second.workspace).toBe(first.workspace)
+    expect(await coordinator.brief(holder, "T-001")).toEqual(first)
+    write(dir, "docs/second.md", "# Second\n")
+    const share = await coordinator.report(holder, first.id, first.lease, "ended")
+    expect(share).toMatchObject({ kind: "landed" })
+    expect(git(dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")).toBe("docs/first.md\n")
+    expect(git(dir, "status", "--porcelain", "--", "docs/second.md")).toBe("?? docs/second.md\n")
+    expect(await coordinator.claim(holder, "T-001", "verify")).toMatchObject({ kind: "wait", detail: expect.stringContaining("different token") })
+    const verify = await coordinator.claim(verifier, "T-001", "verify")
+    if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
+    write(dir, "docs/T-001/report.md", docPass)
+    const closed = await coordinator.report(verifier, verify.id, verify.lease, "ended")
+    expect(closed).toMatchObject({ kind: "landed", verdict: "pass" })
+    expect(closed.kind === "landed" && typeof closed.closeCommit).toBe("string")
+    expect(git(dir, "status", "--porcelain", "--", "docs/second.md")).toBe("?? docs/second.md\n")
+    const other = await coordinator.report(secondWorker, second.id, second.lease, "ended")
+    expect(other).toMatchObject({ kind: "landed" })
+    expect(git(dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")).toBe("docs/second.md\n")
+    expect(await coordinator.report(secondWorker, second.id, second.lease, "ended")).toEqual(other)
+    expect((await coordinator.ready(holder)).claimable.map(({ unit }) => unit)).toContain("T-004")
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("same-tree takeover fences stale reports across restart and preserves sibling dirt", async () => {
+  const dir = docLeaseProject()
+  let at = 1000
+  const now = () => at
+  let coordinator = await openExecutorCoordinator(dir, { now })
+  try {
+    const first = await coordinator.claim(holder, "T-001", "execute")
+    if (first.kind !== "execute") throw new Error(JSON.stringify(first))
+    at += 10_000
+    const second = await coordinator.claim(secondWorker, "T-002", "execute")
+    if (second.kind !== "execute") throw new Error(JSON.stringify(second))
+    write(dir, "docs/first.md", "# First before takeover\n")
+    write(dir, "docs/second.md", "# Second\n")
+    at = first.deadline
+    await coordinator.close()
+    coordinator = await openExecutorCoordinator(dir, { now })
+    const replacement = await coordinator.claim(verifier, "T-001", "execute")
+    if (replacement.kind !== "execute") throw new Error(JSON.stringify(replacement))
+    expect(replacement.attempt).toBe(2)
+    expect(await coordinator.report(holder, first.id, first.lease, "ended")).toMatchObject({ kind: "wait", reason: "lease-held" })
+    expect(git(dir, "status", "--porcelain", "--", "docs/first.md", "docs/second.md")).toBe("?? docs/first.md\n?? docs/second.md\n")
+    expect(await coordinator.report(secondWorker, second.id, second.lease, "ended")).toMatchObject({ kind: "landed" })
+    expect(await coordinator.report(verifier, replacement.id, replacement.lease, "ended")).toMatchObject({ kind: "landed" })
+    expect(git(dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")).toBe("docs/first.md\n")
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("same-tree reports refuse unreserved dirt and staged sibling paths", async () => {
+  const dir = docLeaseProject()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const first = await coordinator.claim(holder, "T-001")
+    const second = await coordinator.claim(secondWorker, "T-002")
+    if (first.kind !== "execute" || second.kind !== "execute") throw new Error(JSON.stringify({ first, second }))
+    write(dir, "docs/first.md", "# First\n")
+    write(dir, "docs/second.md", "# Second\n")
+    write(dir, "docs/unowned.md", "# Unowned\n")
+    const before = git(dir, "rev-parse", "HEAD")
+    expect(await coordinator.report(holder, first.id, first.lease, "ended")).toMatchObject({ kind: "blocked", detail: expect.stringContaining("docs/unowned.md") })
+    rmSync(join(dir, "docs/unowned.md"))
+    git(dir, "add", "--", "docs/second.md")
+    expect(await coordinator.report(holder, first.id, first.lease, "ended")).toMatchObject({ kind: "blocked", detail: expect.stringContaining("docs/second.md") })
+    expect(git(dir, "rev-parse", "HEAD")).toBe(before)
+    git(dir, "restore", "--staged", "--", "docs/second.md")
+    expect(await coordinator.report(holder, first.id, first.lease, "ended")).toMatchObject({ kind: "landed" })
+    expect(git(dir, "status", "--porcelain", "--", "docs/second.md")).toBe("?? docs/second.md\n")
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("same-tree settlement replay proves the booked parent after a sibling share", async () => {
+  const dir = docLeaseProject()
+  const coordinator = await openExecutorCoordinator(dir)
+  const first = await coordinator.claim(holder, "T-001")
+  const second = await coordinator.claim(secondWorker, "T-002")
+  if (first.kind !== "execute" || second.kind !== "execute") throw new Error(JSON.stringify({ first, second }))
+  write(dir, "docs/first.md", "# First\n")
+  write(dir, "docs/second.md", "# Second\n")
+  const firstShare = await coordinator.report(holder, first.id, first.lease, "ended")
+  if (firstShare.kind !== "landed") throw new Error(JSON.stringify(firstShare))
+  await coordinator.close()
+  await crashReport(dir, secondWorker, second.id, second.lease, "committed")
+  const recovered = await openExecutorCoordinator(dir)
+  try {
+    const secondShare = await recovered.report(secondWorker, second.id, second.lease, "ended")
+    expect(secondShare).toMatchObject({ kind: "landed" })
+    expect(await recovered.report(secondWorker, second.id, second.lease, "ended")).toEqual(secondShare)
+    expect(git(dir, "rev-parse", "HEAD^").trim()).toBe(firstShare.commit)
+    expect(git(dir, "log", "-1", "--format=%s", "HEAD").trim()).toBe(second.id)
+  } finally {
+    await recovered.close()
+  }
+})
+
+test("an explicitly targeted code task keeps serial ownership until it settles", async () => {
+  const dir = docLeaseProject()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const code = await coordinator.claim(holder, "T-005", "execute")
+    if (code.kind !== "execute") throw new Error(JSON.stringify(code))
+    expect(await coordinator.claim(secondWorker, "T-001", "execute")).toMatchObject({ kind: "wait", reason: "lease-held" })
+    write(dir, "src/code.ts", "export const code = 1\n")
+    expect(await coordinator.report(holder, code.id, code.lease, "ended")).toMatchObject({ kind: "landed" })
+    const verify = await coordinator.claim(verifier, "T-005", "verify")
+    if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
+    write(dir, "docs/T-005/report.md", docPass)
+    expect(await coordinator.report(verifier, verify.id, verify.lease, "ended")).toMatchObject({ kind: "landed", verdict: "pass" })
+    expect(await coordinator.claim(secondWorker, "T-001", "execute")).toMatchObject({ kind: "execute", unit: "T-001" })
+  } finally {
+    await coordinator.close()
+  }
+})

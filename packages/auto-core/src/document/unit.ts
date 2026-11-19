@@ -490,7 +490,13 @@ function cycles(graph: Map<string, string[]>): string[] {
 // graph is acyclic over known ids, so while any unit is not done some unit is
 // ready unless it waits on an external id that is not done. With G3's defaults
 // this is exactly today's serial order.
-export function nextReady(units: readonly UnitDecl[], done: ReadonlySet<string>): string | undefined {
+export function* readyUnitIds(units: readonly UnitDecl[], done: ReadonlySet<string>): Iterable<string> {
   const deps = resolveDepends(units)
-  return units.find((unit) => !done.has(unit.id) && (deps.get(unit.id) ?? []).every((dep) => done.has(dep)))?.id
+  for (const unit of units) {
+    if (!done.has(unit.id) && (deps.get(unit.id) ?? []).every((dep) => done.has(dep))) yield unit.id
+  }
+}
+
+export function nextReady(units: readonly UnitDecl[], done: ReadonlySet<string>): string | undefined {
+  for (const id of readyUnitIds(units, done)) return id
 }

@@ -242,8 +242,12 @@ export async function deleteBranch(dir: string, branch: string): Promise<Worktre
 // textual merge survives — so the merge resolves them onto the main tree's
 // side and concludes; the re-derivation right after sets the true ticks. Any
 // other conflicted path is a real conflict and aborts.
+export function laneLandingMessage(task: { id: string; title: string }): string {
+  return message(commitTitle(`${task.id} landing ${shortTitle(task.title)}`), task, "landing")
+}
+
 export async function landBranch(dir: string, branch: string, task: { id: string; title: string }, own: readonly string[] = []): Promise<LandResult> {
-  const subject = message(commitTitle(`${task.id} landing ${shortTitle(task.title)}`), task, "landing")
+  const subject = laneLandingMessage(task)
   // The identity fallback applies to the merge commit like any other.
   const merged = await git(dir, [...(await identityArgs(dir)), "merge", "--no-ff", "-m", subject, branch])
   if (merged.code === 0) return { type: "ok" }

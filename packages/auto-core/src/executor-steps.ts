@@ -12,7 +12,7 @@ import { currentPhase, phaseGateProblems, phaseGates, phaseSurveyDoc, readPhases
 import { renderFix, renderWhole, renderWrapup, type PromptFacts } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { peekProgress } from "./resume"
-import { loadPlan, next, promptViews, strandedParks, taskIndexPath, type Plan } from "./tasks"
+import { loadPlan, next, promptViews, readyTasks, strandedParks, taskIndexPath, type Plan } from "./tasks"
 
 type BlockReason = "config" | "subtask" | "unreadable" | "cleanTree" | "mutualPark"
 type Blocked = { kind: "blocked"; reason: BlockReason; detail: string }
@@ -31,6 +31,7 @@ export type ExecutorSnapshot = {
   activeProgress: boolean
   continuationUnit?: string
   continuationHandoff?: boolean
+  route?: { task: string; scoped?: boolean }
   round?: {
     complete: boolean
     open: boolean
@@ -80,9 +81,11 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
   if (state.activeProgress) {
     return { kind: "wait", reason: "in-flight", detail: "An active progress record requires continuation or settlement." }
   }
-  const task = current && next(current.plan)
+  const task = current && (state.route
+    ? readyTasks(current.plan).find(({ id }) => id === state.route?.task)
+    : next(current.plan))
   const continuation = task !== undefined && task.id === state.continuationUnit
-  if (state.tree === "dirty" && !continuation) {
+  if (state.tree === "dirty" && !continuation && !state.route?.scoped) {
     return { kind: "blocked", reason: "cleanTree", detail: "Inspect and resolve uncommitted changes before starting work." }
   }
   if (!current) {
@@ -103,6 +106,7 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
     const prompt = renderWhole(current.facts, views.plan, views.task, taskDocPaths(task.id), { phase, mode: current.mode, continuation: continuation && state.continuationHandoff })
     return { kind: "execute", unit: task.id, title: task.title, touches: task.touches, prompt }
   }
+  if (state.route) return { kind: "wait", reason: "not-ready", detail: `${state.route.task} is not ready.` }
   const parks = strandedParks(plan)
   if (parks.length) {
     return { kind: "blocked", reason: "mutualPark", detail: parks.map((task) => `${task.id} parks on ${task.parked}`).join(", ") }
@@ -124,7 +128,7 @@ async function readExecutorTree(dir: string): Promise<ExecutorSnapshot["tree"]> 
   return dirty ? "dirty" : "clean"
 }
 
-async function readExecutorSnapshot(dir: string, continuationUnit?: string): Promise<ExecutorSnapshot | Blocked> {
+async function readExecutorSnapshot(dir: string, continuationUnit?: string, checkout = dir): Promise<ExecutorSnapshot | Blocked> {
   if (!(await Bun.file(join(dir, CONFIG_FILE)).exists())) {
     return { kind: "blocked", reason: "config", detail: `Initialize the project to create ${CONFIG_FILE}.` }
   }
@@ -145,7 +149,7 @@ async function readExecutorSnapshot(dir: string, continuationUnit?: string): Pro
   if (!round) return state
   const phase = currentPhase(round)
   if (continuationUnit) {
-    const handoff = await Bun.file(join(dir, taskDocPaths(continuationUnit).handoff)).text().catch(() => "")
+    const handoff = await Bun.file(join(checkout, taskDocPaths(continuationUnit).handoff)).text().catch(() => "")
     state.continuationHandoff = handoffStatus(handoff) === "continue"
   }
   state.activeProgress = (await peekProgress(dir))?.active === true
@@ -172,9 +176,10 @@ export async function readExecutorAdmissionBlock(dir: string) {
   return "kind" in state ? state : admissionBlock(state)
 }
 
-export async function readExecutorPreview(dir: string, continuationUnit?: string): Promise<ExecutorPreview> {
-  const state = await readExecutorSnapshot(dir, continuationUnit)
+export async function readExecutorPreview(dir: string, continuationUnit?: string, route?: ExecutorSnapshot["route"], checkout?: string): Promise<ExecutorPreview> {
+  const state = await readExecutorSnapshot(dir, continuationUnit, checkout)
   if ("kind" in state) return state
+  state.route = route
   const step = deriveExecutorPreview(state)
   const current = state.round?.current
   if (step.kind === "execute" && current) {
@@ -220,19 +225,27 @@ type FollowUpBlock = Exclude<ExecutorPreview, { kind: "execute" }>
 export function readExecutorFollowUp(
   dir: string,
   share: Extract<FollowUp, { kind: "verify" }>,
+  continuation?: false,
+  scoped?: boolean,
+  checkout?: string,
 ): Promise<VerificationPreview | FollowUpBlock>
 export function readExecutorFollowUp(
   dir: string,
   share: Extract<FollowUp, { kind: "fix" }>,
   continuation: boolean,
+  scoped?: boolean,
+  checkout?: string,
 ): Promise<FixPreview | FollowUpBlock>
 export async function readExecutorFollowUp(
   dir: string,
   share: FollowUp,
   continuation = false,
+  scoped = false,
+  checkout?: string,
 ): Promise<VerificationPreview | FixPreview | FollowUpBlock> {
-  const state = await readExecutorSnapshot(dir, continuation ? share.unit : undefined)
+  const state = await readExecutorSnapshot(dir, continuation ? share.unit : undefined, checkout)
   if ("kind" in state) return state
+  state.route = { task: share.unit, scoped }
   const step = deriveExecutorPreview(state)
   if (step.kind !== "execute") return step
   const current = state.round?.current

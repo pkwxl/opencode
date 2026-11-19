@@ -58,8 +58,9 @@ describe("manual-driver prompt ratchet", () => {
     expect(executor).toContain("If the menu shows a lease, claim again with its `kind` and the same channel.")
     expect(executor).toContain("A matching `id` and `lease` recovers the held brief.")
     expect(executor).toContain("Use the grant's `id` as request field `step` and retain its exact `lease`.")
-    expect(coordinator).toContain("sameHolder(last.holder, holder) && (kind === undefined || kind === last.grant.kind) && (task === undefined || task === last.grant.unit)")
-    expect(coordinator).toContain("requested.has(last) && sameHolder(last.holder, holder) && live(last, at)")
+    expect(coordinator).toContain("(kind === undefined || kind === held.grant.kind) && (task === undefined || task === held.grant.unit)")
+    expect(coordinator).toContain("live(entry, at) && sameHolder(entry.holder, holder)")
+    expect(coordinator).toContain("!requested.has(entry) || !sameHolder(entry.holder, holder) || !live(entry, at)")
     // A replay settles the original booking, while the next verification needs an independent producer.
     expect(executor).toContain("Retry a lost report or release with its original pair and the same report outcome.")
     expect(executor).toContain("a fresh agent context and a different token from the producer of the immediately preceding execute or fix share")
@@ -72,7 +73,8 @@ describe("manual-driver prompt ratchet", () => {
     expect(executor).toContain("Leave `.auto/`")
     expect(executor).toContain("Verification may write only the task's report or gap list.")
     expect(coordinator).toContain('if (entry.grant.kind === "verify") return path === docs.report || path === docs.gaps')
-    expect(executor).toContain("Keep one live lease per project in this preview.")
+    expect(executor).toContain("Start work only after the coordinator grants a lease for that task.")
+    expect(executor).toContain("Use a separate channel for each concurrent worker and keep each worker inside its assigned workspace and scope.")
     expect(executor).not.toMatch(/\bgit\s+(?:add|commit|reset|stash)\b|Auto-Stage:/)
   })
 
@@ -178,10 +180,10 @@ describe("manual-driver prompt ratchet", () => {
     expect(wrapupSrc).toContain('await rm(join(dir, taskDoc(task.id, "gaps")), { force: true })')
     const unitSrc = src("document/unit.ts")
     // 0200 D3's phase selector (the unticked line; the tick the completion
-    // record) → nextReady's first-not-done find over the Depends graph — the
+    // record) → nextReady takes the first readyUnitIds result over the Depends graph — the
     // done set is the tick, so tick beats order (currentPhase delegates
     // here).
-    expect(unitSrc).toContain("return units.find((unit) => !done.has(unit.id) && (deps.get(unit.id) ?? []).every((dep) => done.has(dep)))?.id")
+    expect(unitSrc).toContain("if (!done.has(unit.id) && (deps.get(unit.id) ?? []).every((dep) => done.has(dep))) yield unit.id")
     // 0200 D2's unit-state law ("exactly one of" todo.md / done.md) →
     // scanUnitStates' both/neither illegal scan.
     expect(unitSrc).toContain('if (state === "both" || state === "neither") illegal.push({ id: ref.id, kind: state })')
