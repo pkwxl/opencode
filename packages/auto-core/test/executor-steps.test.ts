@@ -140,6 +140,22 @@ function nestedProject() {
   return dir
 }
 
+// The 0262-01 reproduction shape: an ignore entry holding a per-kind
+// artifact's path grammar — the manual suite's standing housekeeping entry
+// (0245; squashfs line 7 from the tool's own housekeeping commit, erofs line 9
+// landed inside an executor settle, in the field record) — the settlement
+// serving the shadowed artifact anyway (0263) while every other ignored
+// surface stays invisible exactly as 0249 words it.
+function ignoredArtifactProject(entry: string) {
+  const dir = project()
+  write(dir, ".gitignore", entry)
+  const path = phase(dir, "implement")
+  write(dir, `${path}/tasks.md`, "# Tasks\n\n- [ ] T-001 Implement widget\n")
+  write(dir, "docs/T-001/todo.md", "# Implement widget\n\nTouches: src/widget.ts\n\n## Scope\n\nImplement the widget.\n")
+  commitFixture(dir)
+  return dir
+}
+
 async function crashReport(dir: string, actor: typeof holder, step: string, lease: string, point: string) {
   const source = new URL("../src/executor-coordinator.ts", import.meta.url).href
   const child = Bun.spawn([process.execPath, "-e", `
@@ -655,6 +671,120 @@ test("FAIL routes to fix and fresh verification keeps the task's original baseli
     expect(await coordinator.report(verifier, verify.id, verify.lease, "ended")).toMatchObject({ kind: "landed", verdict: "pass" })
     expect(git(dir, "ls-files", "--", "docs/T-001/gaps.md")).toBe("")
     expect(await coordinator.claim(holder)).toMatchObject({ kind: "phase-boundary" })
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("the verify FAIL lands where the ignore entry holds the gap list ignored, and the fix round derives (0262-01)", async () => {
+  const dir = ignoredArtifactProject("docs/T-*/gaps.md\n")
+  const coordinator = await openExecutorCoordinator(dir)
+  const worker = { ...holder, token: "worker-2" }
+  const verifier = { ...holder, token: "verifier" }
+  try {
+    const execute = await coordinator.claim(holder)
+    if (execute.kind !== "execute") throw new Error(JSON.stringify(execute))
+    write(dir, "src/widget.ts", "export const widget = 1\n")
+    expect(await coordinator.report(holder, execute.id, execute.lease, "ended")).toMatchObject({ kind: "landed" })
+
+    const verify = await coordinator.claim(verifier, "T-001", "verify")
+    if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
+    write(dir, "docs/T-001/gaps.md", "# Verification\n\n## Gaps\n\n### Gap 1 — Fix the value\n\nResult: FAIL expected value 2\n")
+    // The shadow itself, pinned: plain porcelain never sees the artifact.
+    expect(git(dir, "status", "--porcelain", "--", "docs/T-001/gaps.md")).toBe("")
+    const failed = await coordinator.report(verifier, verify.id, verify.lease, "ended")
+    expect(failed).toMatchObject({ kind: "landed", verdict: "fail", gapCount: 1 })
+    expect(git(dir, "ls-files", "--", "docs/T-001/gaps.md").trim()).toBe("docs/T-001/gaps.md")
+    expect(git(dir, "show", "HEAD:docs/T-001/gaps.md")).toContain("Result: FAIL")
+
+    const fix = await coordinator.claim(worker, "T-001", "fix")
+    if (fix.kind !== "fix") throw new Error(JSON.stringify(fix))
+    expect(fix.prompt).toContain("gaps.md")
+    write(dir, "src/widget.ts", "export const widget = 2\n")
+    expect(await coordinator.report(worker, fix.id, fix.lease, "ended")).toMatchObject({ kind: "landed" })
+
+    const reverify = await coordinator.claim(verifier, "T-001", "verify")
+    if (reverify.kind !== "verify") throw new Error(JSON.stringify(reverify))
+    write(dir, "docs/T-001/report.md",
+      "# Verification\n\nThe widget exports the corrected value, and the earlier gap is resolved. The diff contains the agreed source change and no other functional changes.\n\nResult: PASS\n\n<!-- auto: eof -->\n")
+    expect(await coordinator.report(verifier, reverify.id, reverify.lease, "ended")).toMatchObject({ kind: "landed", verdict: "pass" })
+    expect(git(dir, "ls-files", "--", "docs/T-001/gaps.md")).toBe("")
+    expect(git(dir, "status", "--porcelain", "--", "docs", "src")).toBe("")
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("a shadowed gap list of bad grammar blocks visibly, never a wrong verdict (P12)", async () => {
+  const dir = ignoredArtifactProject("docs/T-*/gaps.md\n")
+  const coordinator = await openExecutorCoordinator(dir)
+  const verifier = { ...holder, token: "verifier" }
+  try {
+    const execute = await coordinator.claim(holder)
+    if (execute.kind !== "execute") throw new Error(JSON.stringify(execute))
+    write(dir, "src/widget.ts", "export const widget = 1\n")
+    expect(await coordinator.report(holder, execute.id, execute.lease, "ended")).toMatchObject({ kind: "landed" })
+    const verify = await coordinator.claim(verifier, "T-001", "verify")
+    if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
+    write(dir, "docs/T-001/gaps.md", "# Verification\n\nNo countable gap headings here.\n\nResult: FAIL expected value 2\n")
+    expect(await coordinator.report(verifier, verify.id, verify.lease, "ended")).toMatchObject({
+      kind: "blocked", reason: "commitFailed",
+      detail: "Verification must write one valid PASS report or one countable FAIL gap list.",
+    })
+    expect(git(dir, "ls-files", "--", "docs/T-001/gaps.md")).toBe("")
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("the verify PASS lands and closes where the report path is shadowed (the concession's other arm)", async () => {
+  const dir = ignoredArtifactProject("docs/T-*/report.md\n")
+  const coordinator = await openExecutorCoordinator(dir)
+  const verifier = { ...holder, token: "independent-verifier" }
+  try {
+    const execute = await coordinator.claim(holder)
+    if (execute.kind !== "execute") throw new Error(JSON.stringify(execute))
+    write(dir, "src/widget.ts", "export const widget = 1\n")
+    expect(await coordinator.report(holder, execute.id, execute.lease, "ended")).toMatchObject({ kind: "landed" })
+    const verify = await coordinator.claim(verifier, "T-001", "verify")
+    if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
+    write(dir, "docs/T-001/report.md",
+      "# Verification\n\nThe widget exports the expected value. The single changed source file implements the recorded contract.\n\nResult: PASS\n\n<!-- auto: eof -->\n")
+    const result = await coordinator.report(verifier, verify.id, verify.lease, "ended")
+    expect(result).toMatchObject({ kind: "landed", verdict: "pass", closeCommit: git(dir, "rev-parse", "HEAD").trim() })
+    expect(git(dir, "ls-files", "--", "docs/T-001/report.md").trim()).toBe("docs/T-001/report.md")
+    expect(git(dir, "ls-files", "--", "docs/T-001/done.md").trim()).toBe("docs/T-001/done.md")
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("an ignored handoff still lands as the execute share's artifact", async () => {
+  const dir = ignoredArtifactProject("docs/T-*/handoff.md\n")
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const execute = await coordinator.claim(holder)
+    if (execute.kind !== "execute") throw new Error(JSON.stringify(execute))
+    write(dir, "src/widget.ts", "export const widget = 1\n")
+    write(dir, "docs/T-001/handoff.md", "# Handoff\n\nThe widget landed.\n\nStatus: done\n")
+    expect(await coordinator.report(holder, execute.id, execute.lease, "ended")).toMatchObject({ kind: "landed" })
+    expect(git(dir, "ls-files", "--", "docs/T-001/handoff.md").trim()).toBe("docs/T-001/handoff.md")
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("an ignored non-artifact write stays invisible — the 0249 floor unchanged (P10)", async () => {
+  const dir = ignoredArtifactProject("notes.md\n")
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const before = git(dir, "rev-parse", "HEAD").trim()
+    const execute = await coordinator.claim(holder)
+    if (execute.kind !== "execute") throw new Error(JSON.stringify(execute))
+    write(dir, "notes.md", "session scribble outside every permitted set\n")
+    expect(await coordinator.report(holder, execute.id, execute.lease, "ended")).toMatchObject({ kind: "without-landing", reason: "zero-write" })
+    expect(git(dir, "ls-files", "--", "notes.md")).toBe("")
+    expect(git(dir, "rev-parse", "HEAD").trim()).toBe(before)
   } finally {
     await coordinator.close()
   }

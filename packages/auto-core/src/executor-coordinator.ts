@@ -198,6 +198,35 @@ async function workspaceStatus(checkout: string, roots?: readonly string[]): Pro
   return rows
 }
 
+// The settlement observes the grant's own per-kind artifact paths
+// ignore-aware (0263, 0262-01's fix): 0249's perimeter letters keep porcelain
+// blind to ignored paths — those surfaces stay forbidden, the fence unchanged
+// — but the per-kind artifacts (report/gaps on verify, the handoff else) are
+// the protocol's own landed evidence (0248 D5), and 0245's ignore set holds
+// exactly that path grammar ignored in targets the manual suite has run. The
+// concession is confined to the artifact paths absent from the plain rows:
+// every other ignored path stays invisible exactly as 0249 words it, and an
+// unreadable confined read adds nothing — the plain rows stand, and a
+// shadowed artifact of bad grammar then blocks visibly at the verdict check,
+// never a wrong verdict (P12). The "!!" rows ride `changes` into the fence
+// (which permits the artifact paths per kind) and the staging force-adds
+// them: git refuses an ignored pathspec without -f, and the evidence must
+// land. Once landed the artifact is tracked and the ignore rule is inert for
+// it — the manual suite's transient posture governs untracked instances only,
+// so the two lifecycles compose on the one path grammar (0263's letter).
+async function ignoredArtifactRows(checkout: string, grant: Grant, plain: readonly { rel: string }[]): Promise<{ rel: string; status: string }[]> {
+  const docs = taskDocPaths(grant.unit)
+  const artifacts = grant.kind === "verify" ? [docs.report, docs.gaps] : [docs.handoff]
+  const seen = new Set(plain.map(({ rel }) => rel))
+  const ask = artifacts.filter((path) => !seen.has(path))
+  if (!ask.length) return []
+  const read = await git(checkout, ["status", "--porcelain", "-z", "--no-renames", "-uall", "--ignored", "--", ...ask.map((path) => `:(literal)${path}`)])
+  if (read.code !== 0) return []
+  return read.out.split("\0")
+    .filter((entry) => entry.startsWith("!! "))
+    .map((entry) => ({ rel: entry.slice(3), status: "!!" }))
+}
+
 // Every booked nested root's commit still sits witnessed at its HEAD (0258):
 // the replay of a landed multi-root share proves each root, never the top
 // repository alone. gitRead trims its output, so a session-created root's
@@ -695,7 +724,7 @@ export async function openExecutorCoordinator(
     let status = await workspaceStatus(checkout, roots)
     if (!status) return { kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable. Inspect the index before replaying." }
     const { gaps, handoff } = taskDocPaths(grant.unit)
-    let changes = reportedChanges(entry, status)
+    let changes = [...reportedChanges(entry, status), ...await ignoredArtifactRows(checkout, grant, status)]
     const rejected = changes.filter(({ rel, status }) =>
       !permitted(entry, rel) && !(booking.retireGaps && rel === gaps && /^[ D]{2}$/.test(status))
     )
@@ -738,7 +767,7 @@ export async function openExecutorCoordinator(
       await rm(join(checkout, gaps), { force: true })
       status = await workspaceStatus(checkout, roots)
       if (!status) return { kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable after retiring the gap list." }
-      changes = reportedChanges(entry, status)
+      changes = [...reportedChanges(entry, status), ...await ignoredArtifactRows(checkout, grant, status)]
     }
     const paths = changes.map(({ rel }) => rel)
     if (booking.retireGaps && !paths.some((path) => path !== gaps)) {
@@ -785,8 +814,11 @@ export async function openExecutorCoordinator(
       for (const { rel } of rows) claimedRows.delete(rel)
       if (!rows.length) continue
       const rootBase = root === checkout ? base : await headOf(root)
-      const stage = rows.filter(({ status }) => status[1] !== " ").map(({ rel }) => `:(literal)${prefix ? rel.slice(prefix.length + 1) : rel}`)
+      const literal = ({ rel }: { rel: string }) => `:(literal)${prefix ? rel.slice(prefix.length + 1) : rel}`
+      const stage = rows.filter(({ status }) => status[1] !== " " && status !== "!!").map(literal)
+      const shadowed = rows.filter(({ status }) => status === "!!").map(literal)
       if (stage.length) await gitRead(root, "add", "-A", "--", ...stage)
+      if (shadowed.length) await gitRead(root, "add", "-f", "--", ...shadowed)
       const rootTree = await gitRead(root, "write-tree")
       const diff = await git(root, ["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", rootBase || EMPTY_TREE, rootTree])
       const staged = diff.out.split("\0").filter(Boolean)
