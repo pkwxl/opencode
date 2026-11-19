@@ -154,6 +154,31 @@ test("a claim retries the same checkout when materialization was interrupted", a
   }
 })
 
+test("a repository created inside a lane worktree cannot ride its landing", async () => {
+  const dir = project()
+  const base = git(dir, "rev-parse", "HEAD")
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await claim(coordinator, worker, "T-001", "execute")
+    write(grant.workspace, "src/one.ts", "export const one = 1\n")
+    // A lane lands as one commit on the main tree; a repository the session
+    // created inside the lane has no ride (0258 — the root check that stands).
+    const inner = join(grant.workspace, "inner")
+    write(inner, "lib.ts", "export const inner = 1\n")
+    git(inner, "init")
+    git(inner, "add", ".")
+    git(inner, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Session-made repository")
+    expect(await coordinator.report(worker, grant.id, grant.lease, "ended")).toMatchObject({
+      kind: "blocked", reason: "isolation", detail: expect.stringContaining("single repository inside a lane checkout"),
+    })
+    expect(git(dir, "rev-parse", "HEAD")).toBe(base)
+    expect(git(dir, "status", "--porcelain")).toBe("")
+    expect(readFileSync(join(grant.workspace, "src/one.ts"), "utf8")).toBe("export const one = 1\n")
+  } finally {
+    await coordinator.close()
+  }
+})
+
 test("a lane refuses out-of-scope changes and preserves its uncommitted workspace", async () => {
   const dir = project()
   const coordinator = await openExecutorCoordinator(dir)

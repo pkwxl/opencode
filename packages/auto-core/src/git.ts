@@ -947,7 +947,7 @@ export async function unitAddedLines(dir: string, baseline: UnitBaseline, scope?
 
 // git's empty-tree hash (a fixed constant): a commit-less repository's
 // "diff against the baseline" uses it as the empty baseline end.
-const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 // The trailer block of a commit message (plans/0173 D2, 0165-140): the last
 // paragraph of the body, witnessed only when every line of it is

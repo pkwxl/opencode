@@ -2,7 +2,7 @@
 // token identity and channel. This surface is internal until the routes land.
 import { createHash, randomUUID } from "node:crypto"
 import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import { readClarificationProposal } from "./clarify"
 import { loadProjectConfig } from "./config"
 import { docShapeProblems } from "./doccheck"
@@ -16,7 +16,7 @@ import {
   prepareExecutorLanding, removeExecutorWorkspace, validExecutorLanding, validExecutorWorkspace,
   type ExecutorLanding, type ExecutorWorkspace,
 } from "./executor-worktree"
-import { git, identityArgs, message, repoRoots, statusEntriesRead, withinScopes, workdirEntry } from "./git"
+import { EMPTY_TREE, git, identityArgs, message, repoRoots, statusEntriesRead, withinScopes, workdirEntry } from "./git"
 import { docEligible, docScope, scopesDisjoint } from "./lanes"
 import { acquireRunLock, liveRunLock } from "./lock"
 import { markDone, readyTasks, runtimeParked, setParked, taskStatePaths, type Task } from "./tasks"
@@ -65,7 +65,12 @@ type BlockedReport = { kind: "blocked"; reason: "isolation" | "commitFailed"; de
 type VerifyVerdict = "pass" | "fail"
 type Receipt = { kind: "landed"; commit: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; parked?: string; closeCommit?: string; landingCommit?: string } | { kind: "without-landing"; reason: "failed" | "zero-write" } | BlockedReport
 type CloseIntent = { share: string; sourceShare?: string; tree?: string }
-type EndedBooking = { parent?: string; outcome: "ended"; note?: string; retireGaps?: true; intent?: { tree: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; park?: { blocker: string; previous?: string } }; landing?: ExecutorLanding; close?: CloseIntent; receipt?: Receipt }
+// A nested repository's booked share evidence (0258): the root's checkout-
+// relative path, its HEAD at booking, and its staged tree — the per-root
+// witness a multi-root settlement replays against, beside the top
+// repository's own booked tree.
+type NestedEvidence = { root: string; base: string; tree: string }
+type EndedBooking = { parent?: string; outcome: "ended"; note?: string; retireGaps?: true; intent?: { tree: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; park?: { blocker: string; previous?: string }; nested?: NestedEvidence[] }; landing?: ExecutorLanding; close?: CloseIntent; receipt?: Receipt }
 type Booking =
   | EndedBooking
   | { outcome: "failed"; note?: string; receipt: Receipt }
@@ -93,7 +98,7 @@ type Menu = {
 }
 type ScopedTask = { task: Task; worktree: boolean }
 type Checkpoint = "booked" | "committed" | "park-recorded" | "close-index-written" | "closed-files" | "closed-commit" | "gate-booked" | "gate-marked" | "gate-committed" |
-  "workspace-booked" | "workspace-created" | "landing-booked" | "lane-landed"
+  "workspace-booked" | "workspace-created" | "landing-booked" | "lane-landed" | "nested-committed"
 const EXECUTE_BUDGET_MINUTES = 60
 const LEASE_WINDOW_MS = (EXECUTE_BUDGET_MINUTES + 5) * 60_000
 const MAX_LEASE_AGE_MS = 2 * LEASE_WINDOW_MS
@@ -134,6 +139,44 @@ async function gitRead(dir: string, ...args: string[]): Promise<string> {
   const result = await git(dir, args)
   if (result.code !== 0) throw new Error(result.err.trim() || `git ${args[0]} failed`)
   return result.out.trim()
+}
+
+// A root's HEAD, "" when the repository has no commits yet (a session-created
+// nested root the settlement gives its first commit, 0258).
+async function headOf(root: string): Promise<string> {
+  const got = await git(root, ["rev-parse", "HEAD"])
+  return got.code === 0 ? got.out.trim() : ""
+}
+
+// The workspace's dirt across every repository root, rows checkout-relative
+// (0258): the nested-first posture the push path's unified commit already
+// carries (0073) — each root read through statusEntriesRead, which remaps
+// nested output to checkout-relative paths. undefined = any root unreadable
+// (P12: never a silent clean verdict).
+async function workspaceStatus(checkout: string, roots?: readonly string[]): Promise<{ rel: string; status: string }[] | undefined> {
+  const rows: { rel: string; status: string }[] = []
+  for (const root of roots ?? await repoRoots(checkout)) {
+    const read = await statusEntriesRead(checkout, root)
+    if (!read) return undefined
+    rows.push(...read)
+  }
+  return rows
+}
+
+// Every booked nested root's commit still sits witnessed at its HEAD (0258):
+// the replay of a landed multi-root share proves each root, never the top
+// repository alone. gitRead trims its output, so a session-created root's
+// parentless first commit compares without the leading blank line.
+async function nestedWitnesses(checkout: string, grant: Grant, intent: NonNullable<EndedBooking["intent"]>): Promise<boolean> {
+  const messageText = shareMessage(grant, !!intent.park)
+  for (const record of intent.nested ?? []) {
+    const root = join(checkout, record.root)
+    const head = await headOf(root)
+    const witness = head ? await gitRead(root, "show", "-s", "--format=%P%n%T%n%B", head) : ""
+    const expected = record.base ? `${record.base}\n${record.tree}\n${messageText}` : `${record.tree}\n${messageText}`
+    if (witness !== expected) return false
+  }
+  return true
 }
 
 export async function openExecutorCoordinator(
@@ -268,11 +311,12 @@ export async function openExecutorCoordinator(
   }
 
   async function gateWorkspace(document: string): Promise<boolean> {
-    const roots = await repoRoots(dir)
     const path = join(dir, document)
-    if (roots.length !== 1 || roots[0] !== dir || await realpath(path).catch(() => undefined) !== path ||
+    if (await realpath(path).catch(() => undefined) !== path ||
         !(await stat(path).catch(() => undefined))?.isFile()) return false
-    const status = await statusEntriesRead(dir, dir)
+    // Every repository root judged, not one (0258): nested dirt outside the
+    // gate document holds the release exactly as top-repository dirt does.
+    const status = await workspaceStatus(dir)
     return status !== undefined && status.every(({ rel, status }) =>
       rel === document || (status === "??" && workdirEntry(rel))
     )
@@ -594,7 +638,8 @@ export async function openExecutorCoordinator(
     const base = booking.parent ?? (entry.scope && !entry.worktree ? head : entry.base)
     if (head !== base) {
       const witness = await gitRead(checkout, "show", "-s", "--format=%P%n%T%n%B", head)
-      if (booking.intent && witness === `${base}\n${booking.intent.tree}\n${shareMessage(grant, !!booking.intent.park)}`) {
+      if (booking.intent && witness === `${base}\n${booking.intent.tree}\n${shareMessage(grant, !!booking.intent.park)}` &&
+          await nestedWitnesses(checkout, grant, booking.intent)) {
         return finishShare(head, booking.intent)
       }
       return blocked("HEAD moved outside the booked share. Inspect the commit and executor progress before resuming.")
@@ -604,8 +649,15 @@ export async function openExecutorCoordinator(
     }
 
     const roots = await repoRoots(checkout)
-    if (roots.length !== 1 || roots[0] !== checkout) return blocked("The executor requires a single repository.")
-    let status = await statusEntriesRead(checkout, checkout)
+    // A lane worktree lands as one commit on the main tree, so a repository
+    // created inside the lane cannot ride its landing (0258 — the one root
+    // check the findings adjudicate legitimate). The main tree settles root
+    // by root instead, nested first — the posture the push path's unified
+    // commit already carries (0073).
+    if (entry.worktree?.established && (roots.length !== 1 || roots[0] !== checkout)) {
+      return blocked("The executor requires a single repository inside a lane checkout.")
+    }
+    let status = await workspaceStatus(checkout, roots)
     if (!status) return { kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable. Inspect the index before replaying." }
     const { gaps, handoff } = taskDocPaths(grant.unit)
     let changes = reportedChanges(entry, status)
@@ -649,7 +701,7 @@ export async function openExecutorCoordinator(
         entry = await book(entry, booking)
       }
       await rm(join(checkout, gaps), { force: true })
-      status = await statusEntriesRead(checkout, checkout)
+      status = await workspaceStatus(checkout, roots)
       if (!status) return { kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable after retiring the gap list." }
       changes = reportedChanges(entry, status)
     }
@@ -683,23 +735,66 @@ export async function openExecutorCoordinator(
       return finish({ kind: "without-landing", reason: "zero-write" })
     }
 
-    const stage = changes.filter(({ status }) => status[1] !== " ").map(({ rel }) => `:(literal)${rel}`)
-    if (stage.length) await gitRead(checkout, "add", "-A", "--", ...stage)
-    const tree = await gitRead(checkout, "write-tree")
+    // Stage and prove every repository root that carries observed changes
+    // (0258): each root stages its own rows and the staged set must name
+    // exactly the rows observed there — the single-root settlement's
+    // complete-staged-set proof, per root. Nested roots commit deepest-first
+    // beneath the top repository's share (repoRoots' order, the unified
+    // commit's own — 0073), which alone the booking's tree witnesses.
+    const bookedRoots = booking.intent?.nested ?? []
+    const claimedRows = new Set(changes.map(({ rel }) => rel))
+    const shares: { root: string; prefix: string; base: string; tree: string; staged: string[] }[] = []
+    for (const root of roots) {
+      const prefix = relative(checkout, root).replaceAll("\\", "/")
+      const rows = changes.filter(({ rel }) => claimedRows.has(rel) && (prefix === "" || rel.startsWith(`${prefix}/`)))
+      for (const { rel } of rows) claimedRows.delete(rel)
+      if (!rows.length) continue
+      const rootBase = root === checkout ? base : await headOf(root)
+      const stage = rows.filter(({ status }) => status[1] !== " ").map(({ rel }) => `:(literal)${prefix ? rel.slice(prefix.length + 1) : rel}`)
+      if (stage.length) await gitRead(root, "add", "-A", "--", ...stage)
+      const rootTree = await gitRead(root, "write-tree")
+      const diff = await git(root, ["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", rootBase || EMPTY_TREE, rootTree])
+      const staged = diff.out.split("\0").filter(Boolean)
+      const observed = new Set(rows.map(({ rel }) => (prefix ? rel.slice(prefix.length + 1) : rel)))
+      if (diff.code !== 0 || staged.some((path) => !observed.has(path) ||
+          (!permitted(entry, prefix ? `${prefix}/${path}` : path) && !(booking.retireGaps && prefix === "" && path === gaps)))) {
+        return blocked("The staged tree contains an unverified path. Inspect the index before replaying.")
+      }
+      if (root !== checkout) {
+        const record = bookedRoots.find((item) => item.root === prefix)
+        if (booking.intent && (!record || record.base !== rootBase || record.tree !== rootTree)) {
+          return blocked("The workspace no longer matches the booked share. Restore its contents before replaying.")
+        }
+      }
+      shares.push({ root, prefix, base: rootBase, tree: rootTree, staged })
+    }
+    const top = shares.find((share) => share.root === checkout)
+    if (!top) {
+      if (booking.intent) return blocked("The booked share's changes are missing. Restore them before replaying.")
+      return blocked("The share's landing anchors the target repository's own commit; a settlement that changes only nested repositories cannot witness one. Include a top-repository path such as the unit's handoff.")
+    }
+    const tree = top.tree
+    for (const record of bookedRoots) {
+      if (shares.some((share) => share.prefix === record.root)) continue
+      // A booked nested root with no observed rows at replay: its commit
+      // must already sit witnessed at the root's HEAD, else its booked
+      // changes vanished (0258).
+      const root = join(checkout, record.root)
+      const head = await headOf(root)
+      const witness = head ? await gitRead(root, "show", "-s", "--format=%P%n%T%n%B", head) : ""
+      const messageText = shareMessage(grant, !!booking.intent?.park)
+      const expected = record.base ? `${record.base}\n${record.tree}\n${messageText}` : `${record.tree}\n${messageText}`
+      if (head === record.base || witness !== expected) {
+        return blocked("The booked share's changes are missing. Restore them before replaying.")
+      }
+    }
     if (booking.intent && (tree !== booking.intent.tree || verdict !== booking.intent.verdict || gapCount !== booking.intent.gapCount || continuation !== booking.intent.continuation || park?.blocker !== booking.intent.park?.blocker || park?.previous !== booking.intent.park?.previous)) {
       return blocked("The workspace no longer matches the booked share. Restore its contents before replaying.")
     }
-    // Verify the complete staged set before the hooked commit, then prove the
-    // resulting parent, tree, and operation identity before recording success.
-    const staged = await git(checkout, ["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", base, tree])
-    const stagedPaths = staged.out.split("\0").filter(Boolean)
-    const observed = new Set(paths)
-    if (staged.code !== 0 || stagedPaths.some((path) => !observed.has(path) || (!permitted(entry, path) && !(booking.retireGaps && path === gaps)))) {
-      return blocked("The staged tree contains an unverified path. Inspect the index before replaying.")
-    }
     if (booking.retireGaps) {
       const retired = await git(checkout, ["ls-tree", tree, "--", gaps])
-      if (retired.code !== 0 || retired.out || !stagedPaths.some((path) => path !== gaps)) {
+      const work = shares.some((share) => share.staged.some((path) => share.root !== checkout || path !== gaps))
+      if (retired.code !== 0 || retired.out || !work) {
         return blocked("The staged fix must include work and retire the previous gap list.")
       }
     }
@@ -709,23 +804,36 @@ export async function openExecutorCoordinator(
         return blocked("The staged verdict or handoff differs from the evidence read on disk.")
       }
     }
-    if (!stagedPaths.length) return finish({ kind: "without-landing", reason: "zero-write" })
-    const evidence = { tree, verdict, gapCount, continuation, park }
+    if (!top.staged.length) return finish({ kind: "without-landing", reason: "zero-write" })
+    const nestedEvidence = shares.filter((share) => share.root !== checkout).map(({ prefix, base, tree }) => ({ root: prefix, base, tree }))
+    const evidence: NonNullable<EndedBooking["intent"]> = { tree, verdict, gapCount, continuation, park, ...(nestedEvidence.length ? { nested: nestedEvidence } : {}) }
     if (!booking.intent) {
       booking = { ...booking, parent: base, intent: evidence }
       entry = await book(entry, booking)
     }
-    const specs = stagedPaths.map((path) => `:(literal)${path}`)
+    // Verify the complete staged set before the hooked commit, then prove the
+    // resulting parent, tree, and operation identity before recording success.
     const commitMessage = shareMessage(grant, !!park)
-    const committed = await git(checkout, [...await identityArgs(checkout), "commit", "-m", commitMessage, "--", ...specs])
-    if (committed.code !== 0) {
-      return { kind: "blocked", reason: "commitFailed", detail: committed.err.trim() || committed.out.trim() }
+    for (const share of shares) {
+      const specs = share.staged.map((path) => `:(literal)${path}`)
+      const committed = await git(share.root, [...await identityArgs(share.root), "commit", "-m", commitMessage, "--", ...specs])
+      if (committed.code !== 0) {
+        return { kind: "blocked", reason: "commitFailed", detail: committed.err.trim() || committed.out.trim() }
+      }
+      if (share.root !== checkout) checkpoint?.("nested-committed")
     }
     checkpoint?.("committed")
-    const landed = await gitRead(checkout, "rev-parse", "HEAD")
-    const witness = await gitRead(checkout, "show", "-s", "--format=%P%n%T%n%B", landed)
-    if (witness !== `${base}\n${tree}\n${commitMessage}`) {
-      return blocked("The new commit differs from the booked share. Inspect Git history before resuming.")
+    let landed = ""
+    for (const share of shares) {
+      const head = await headOf(share.root)
+      // gitRead trims its output, so a session-created root's parentless
+      // first commit compares without the leading blank line (0258).
+      const witness = head ? await gitRead(share.root, "show", "-s", "--format=%P%n%T%n%B", head) : ""
+      const expected = share.base ? `${share.base}\n${share.tree}\n${commitMessage}` : `${share.tree}\n${commitMessage}`
+      if (!head || witness !== expected) {
+        return blocked("The new commit differs from the booked share. Inspect Git history before resuming.")
+      }
+      if (share.root === checkout) landed = head
     }
     return finishShare(landed, evidence)
   }
@@ -760,12 +868,11 @@ export async function openExecutorCoordinator(
       if (intent.tree && witness === `${intent.share}\n${intent.tree}\n${commitMessage}`) return finish(head)
       return block("HEAD moved outside the booked task close-out.")
     }
-    if ((await repoRoots(dir)).length !== 1) return block("The task close-out requires a single repository.")
     const [todo, oldIndex, oldGaps, status] = await Promise.all([
       git(dir, ["show", `${intent.share}:${pending}`]),
       git(dir, ["show", `${intent.share}:${index}`]),
       git(dir, ["show", `${intent.share}:${gaps}`]),
-      statusEntriesRead(dir, dir),
+      workspaceStatus(dir),
     ])
     if (oldGaps.code === 0) paths.add(gaps)
     if (todo.code !== 0 || oldIndex.code !== 0 || !status || reportedChanges(entry, status).some(({ rel }) =>
@@ -795,7 +902,7 @@ export async function openExecutorCoordinator(
     await markDone({ dir, index }, unit)
     if (oldGaps.code === 0) await rm(join(dir, gaps), { force: true })
     checkpoint?.("closed-files")
-    const changed = await statusEntriesRead(dir, dir)
+    const changed = await workspaceStatus(dir)
     if (!changed || reportedChanges(entry, changed).some(({ rel }) => !paths.has(rel))) {
       return block("Unexpected workspace changes appeared during task close-out.")
     }
@@ -892,14 +999,18 @@ export async function openExecutorCoordinator(
     if (attempts(stepID(step)) >= MAX_ATTEMPTS) {
       return { kind: "blocked", reason: "attemptsExhausted", detail: `${step.unit} has reached the ${MAX_ATTEMPTS}-attempt limit.` }
     }
-    const roots = await repoRoots(dir)
+    // The admission shape (0258): the target directory must itself be a Git
+    // work-tree root — the git-anchored settlement posture (P4). Repositories
+    // nested under it are workspace surface inherited from the push path
+    // (0073's nested-first unified commit), fenced and settled root by root,
+    // never an admission criterion.
     const top = await gitRead(dir, "rev-parse", "--show-toplevel")
-    if (top !== dir || roots.length !== 1 || roots[0] !== dir) {
-      return { kind: "blocked", reason: "isolation", detail: "The executor requires a standalone Git repository." }
+    if (top !== dir) {
+      return { kind: "blocked", reason: "isolation", detail: "The executor requires the target directory to be its own Git work-tree root." }
     }
     const handoff = handedOver ?? priorHandoff
     if (handoff?.grant.unit === step.unit) {
-      const status = await statusEntriesRead(checkout, checkout)
+      const status = await workspaceStatus(checkout)
       const head = await gitRead(checkout, "rev-parse", "HEAD")
       const receipt = handoff.booking?.receipt
       if (!status || receipt?.kind !== "landed" || !(scoped && !handoff.worktree ? await knownHead(receipt.commit, head) : head === receipt.commit) ||
@@ -912,7 +1023,7 @@ export async function openExecutorCoordinator(
       }
     }
     if (continuation?.grant.unit === step.unit && (!continuation.worktree || continuation.worktree.established)) {
-      const status = await statusEntriesRead(checkout, checkout)
+      const status = await workspaceStatus(checkout)
       const head = await gitRead(checkout, "rev-parse", "HEAD")
       if (!status || !(scoped && !continuation.worktree ? await knownHead(continuation.base, head) : head === continuation.base) ||
           reportedChanges(continuation, status).some(({ rel }) => !permitted(continuation, rel))) {
@@ -1037,11 +1148,10 @@ export async function openExecutorCoordinator(
     if (!(last.scope && !last.worktree ? await knownHead(expected, head) : head === expected)) {
       return { kind: "blocked", reason: "isolation", detail: "HEAD no longer matches the landed gap list or fix handover." }
     }
-    const roots = await repoRoots(checkout)
-    const dirty = await statusEntriesRead(checkout, checkout)
+    const dirty = await workspaceStatus(checkout)
     const continuation = last.grant.kind === "fix"
     const ownedDirt = latest?.kind !== "landed"
-    if (roots.length !== 1 || !dirty || (continuation && reportedChanges(last, dirty).some(({ rel }) => !ownedDirt || !permitted(last, rel)
+    if (!dirty || (continuation && reportedChanges(last, dirty).some(({ rel }) => !ownedDirt || !permitted(last, rel)
     ))) {
       return { kind: "blocked", reason: "isolation", detail: "Inspect the fix workspace before continuing." }
     }
@@ -1097,7 +1207,7 @@ export async function openExecutorCoordinator(
       const held = conflict ?? reservation!
       return live(held, at) ? leaseWait(held) : { kind: "wait", reason: "in-flight", detail: `${held.grant.unit} reserves an overlapping scope until settlement.` }
     }
-    const status = await statusEntriesRead(dir, dir)
+    const status = await workspaceStatus(dir)
     let dirt = status?.filter(({ rel, status }) => !(status === "??" && workdirEntry(rel)) && !siblingDirt(task, rel, status))
     if (route.worktree) {
       if (!dirt || dirt.length) return { kind: "blocked", reason: "isolation", detail: "Resolve main checkout changes before continuing worktree leases." }

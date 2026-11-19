@@ -121,6 +121,25 @@ function executableProject() {
   return dir
 }
 
+// The 0257-01 reproduction shape: a target that is its own repository whose
+// deliverable includes a nested repository (its own .git, listed in the outer
+// .gitignore, named by config isolate), the task's declared deliverable under
+// it (0258 serves the shape the push path always has).
+function nestedProject() {
+  const dir = project()
+  write(dir, ".gitignore", "/vendor/\n")
+  write(dir, "vendor/src/lib.ts", "export const lib = 0\n")
+  git(join(dir, "vendor"), "init")
+  git(join(dir, "vendor"), "add", ".")
+  git(join(dir, "vendor"), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Nested fixture")
+  write(dir, CONFIG_FILE, JSON.stringify({ subtask: "off", isolate: ["vendor"] }))
+  const path = phase(dir, "implement")
+  write(dir, `${path}/tasks.md`, "# Tasks\n\n- [ ] T-001 Ship the nested change\n")
+  write(dir, "docs/T-001/todo.md", "# Ship the nested change\n\nTouches: vendor/src/lib.ts\n\n## Scope\n\nUpdate the nested library.\n")
+  commitFixture(dir)
+  return dir
+}
+
 async function crashReport(dir: string, actor: typeof holder, step: string, lease: string, point: string) {
   const source = new URL("../src/executor-coordinator.ts", import.meta.url).href
   const child = Bun.spawn([process.execPath, "-e", `
@@ -181,6 +200,89 @@ for (const point of ["booked", "committed"] as const) {
     }
   })
 }
+
+test("a nested destination repository is servable: claim, nested-first settle, and close-out", async () => {
+  const dir = nestedProject()
+  const top0 = git(dir, "rev-parse", "HEAD").trim()
+  const nested0 = git(join(dir, "vendor"), "rev-parse", "HEAD").trim()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await coordinator.claim(holder)
+    if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+    write(dir, "vendor/src/lib.ts", "export const lib = 1\n")
+    write(dir, "vendor/src/other.ts", "export const other = 1\n")
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({
+      kind: "blocked", reason: "isolation", detail: expect.stringContaining("vendor/src/other.ts"),
+    })
+    rmSync(join(dir, "vendor/src/other.ts"))
+    // Nested-only changes cannot witness the share's top-repository landing.
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({
+      kind: "blocked", reason: "isolation", detail: expect.stringContaining("only nested repositories"),
+    })
+    expect(git(dir, "rev-parse", "HEAD").trim()).toBe(top0)
+    expect(git(join(dir, "vendor"), "rev-parse", "HEAD").trim()).toBe(nested0)
+    write(dir, "docs/T-001/handoff.md", "# Handoff\n\nThe nested change landed.\n\nStatus: continue\n")
+    const landed = await coordinator.report(holder, grant.id, grant.lease, "ended")
+    expect(landed).toMatchObject({ kind: "landed", continuation: true })
+    expect(git(dir, "rev-list", "--count", `${top0}..HEAD`).trim()).toBe("1")
+    expect(git(join(dir, "vendor"), "rev-list", "--count", `${nested0}..HEAD`).trim()).toBe("1")
+    expect(git(join(dir, "vendor"), "log", "-1", "--format=%s").trim()).toBe(grant.id)
+    expect(readFileSync(join(dir, "vendor/src/lib.ts"), "utf8")).toBe("export const lib = 1\n")
+
+    const worker = { ...holder, token: "worker-2" }
+    const resume = await coordinator.claim(worker)
+    if (resume.kind !== "execute") throw new Error(JSON.stringify(resume))
+    expect(resume.prompt).toContain("docs/T-001/handoff.md")
+    write(dir, "vendor/src/lib.ts", "export const lib = 2\n")
+    write(dir, "docs/T-001/handoff.md", "# Handoff\n\nDone.\n\nStatus: done\n")
+    expect(await coordinator.report(worker, resume.id, resume.lease, "ended")).toMatchObject({ kind: "landed" })
+
+    const verify = await coordinator.claim(verifier, "T-001", "verify")
+    if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
+    write(dir, "docs/T-001/report.md",
+      "# Verification\n\nThe nested library carries the declared change and nothing else landed beside it.\n\nResult: PASS\n\n<!-- auto: eof -->\n")
+    const closed = await coordinator.report(verifier, verify.id, verify.lease, "ended")
+    expect(closed).toMatchObject({ kind: "landed", verdict: "pass", closeCommit: git(dir, "rev-parse", "HEAD").trim() })
+    expect(readFileSync(join(dir, "docs/R-01/P01-implement/tasks.md"), "utf8")).toContain("- [x] T-001")
+    expect(git(dir, "ls-files", "--", "docs/T-001/done.md").trim()).toBe("docs/T-001/done.md")
+    expect(git(join(dir, "vendor"), "rev-list", "--count", `${nested0}..HEAD`).trim()).toBe("2")
+    expect(git(join(dir, "vendor"), "status", "--porcelain")).toBe("")
+    expect(git(dir, "status", "--porcelain", "--", "docs")).toBe("")
+    expect(await coordinator.claim(holder)).toMatchObject({ kind: "phase-boundary" })
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("a multi-root settlement replays after a death between its nested and top commits", async () => {
+  const dir = nestedProject()
+  const top0 = git(dir, "rev-parse", "HEAD").trim()
+  const nested0 = git(join(dir, "vendor"), "rev-parse", "HEAD").trim()
+  const coordinator = await openExecutorCoordinator(dir)
+  const grant = await coordinator.claim(holder)
+  await coordinator.close()
+  if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+  write(dir, "vendor/src/lib.ts", "export const lib = 1\n")
+  write(dir, "docs/T-001/handoff.md", "# Handoff\n\nThe nested change landed.\n\nStatus: done\n")
+  await crashReport(dir, holder, grant.id, grant.lease, "nested-committed")
+  // Nested-first: the nested root committed, the top repository's share did not.
+  expect(git(join(dir, "vendor"), "rev-list", "--count", `${nested0}..HEAD`).trim()).toBe("1")
+  expect(git(dir, "rev-parse", "HEAD").trim()).toBe(top0)
+  const recovered = await openExecutorCoordinator(dir)
+  try {
+    const receipt = await recovered.report(holder, grant.id, grant.lease, "ended")
+    expect(receipt).toMatchObject({ kind: "landed" })
+    expect(await recovered.report(holder, grant.id, grant.lease, "ended")).toEqual(receipt)
+    // The replay proved the booked nested witness instead of committing twice.
+    expect(git(join(dir, "vendor"), "rev-list", "--count", `${nested0}..HEAD`).trim()).toBe("1")
+    expect(git(dir, "rev-list", "--count", `${top0}..HEAD`).trim()).toBe("1")
+    expect(git(join(dir, "vendor"), "log", "-1", "--format=%s").trim()).toBe(grant.id)
+    expect(git(join(dir, "vendor"), "status", "--porcelain")).toBe("")
+    expect(git(dir, "status", "--porcelain", "--", "docs")).toBe("")
+  } finally {
+    await recovered.close()
+  }
+})
 
 test("the serial coordinator refuses an unconflicting out-of-scope edit and fences reports", async () => {
   const dir = executableProject()
