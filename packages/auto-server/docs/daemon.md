@@ -948,6 +948,41 @@ layout, where every run died bash's 127) — and a path that is not a
 readable file is refused with exit 1 before the daemon serves, never
 discovered missing at the first spawned run.
 
+## The environment carrier (`serve --env-file <path>`, plans/0265)
+
+The daemon's environment is the carrier the launcher reads (the paragraph
+above), and by default every restart re-derives it from the launching
+shell's memory — the adoption site measured the cost of that shape: three
+restarts, each surfacing a new lost name one blocked run at a time (the
+model keys first, then a PATH entry a seat needed). The pin has three
+parts, all additive and all names-never-values:
+
+- `serve --env-file <path>` — `NAME=VALUE` declarations (`#` comments,
+  blank lines, a later duplicate wins, values literal bytes — no quoting,
+  no interpolation) loaded at boot into the daemon's environment, the
+  file's names **winning over** the inherited shell's. The path resolves
+  against the serve command's working directory (the `--launch` truth) and
+  must be a readable file; a malformed line refuses at its line number,
+  never echoing the line's bytes — a value may be a secret.
+- The boot manifest: every start writes the effective environment's names
+  (presence only; the `OPENCODE_AUTO_*` switch layer excluded, matching the
+  spawn filter — those names never reach a child) to
+  `<data-dir>/env-manifest.json`. Plain state, daemon-owned, in the data
+  directory — never a project's.
+- The boot self-check: the previous manifest's names are diffed against the
+  current environment (each lost name one ⚠ naming it and the previous
+  boot's instant), and the tool's own references resolve at boot — the
+  model registry through the core's `checkModelReferences`, the same
+  wording a worker's run surfaces, hours earlier. Warnings only (P8): the
+  daemon still starts; a broken registry layer is one warning naming its
+  first problem. The boundary is the tool's own references (P16) — the
+  site's seat names and PATH entries ride the site's declared surfaces,
+  discovered through their own contracts.
+
+The report rides the daemon handle as `bootWarnings` (computed once at
+`startDaemon`); the serve entry prints it after its banner, and an
+embedding host reads the field.
+
 ## Supervision and the daemon's lifetime
 
 Workers are cattle, not pets. Exit, crash and kill are all observed and recorded

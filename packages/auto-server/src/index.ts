@@ -17,7 +17,9 @@
 // dependencies. test/isolation.test.ts holds that line as an assertion.
 import { resolve } from "node:path"
 import { accessSync, constants, statSync } from "node:fs"
+import { readFile } from "node:fs/promises"
 import { applyServerProfile } from "./profile"
+import { parseEnvFile } from "./env-boot"
 import { DEFAULT_HOSTNAME, DEFAULT_PORT, deriveWorkerCommand, startDaemon } from "./daemon"
 import { defaultDataDir, DaemonStore, SCOPES, StoreError } from "./store"
 import { VERSION } from "./version"
@@ -26,7 +28,7 @@ import { runWorker } from "./worker"
 const USAGE = `usage:
   opencode-auto-server --help
   opencode-auto-server --version
-  opencode-auto-server serve [--port <n>] [--host <addr>] [--data-dir <dir>] [--launch <script>] [--open --root <dir> …]
+  opencode-auto-server serve [--port <n>] [--host <addr>] [--data-dir <dir>] [--launch <script>] [--env-file <path>] [--open --root <dir> …]
   opencode-auto-server register <directory> [--data-dir <dir>]
   opencode-auto-server unregister <name-or-directory> [--data-dir <dir>]
   opencode-auto-server projects [--data-dir <dir>]
@@ -110,6 +112,17 @@ serve — the daemon (P1c/P1d/P1e/P3/P4). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PO
   the launcher is the launcher's own (a container launcher's run may outlive
   its wrapper), and the core's interruption recovery heals the directory on
   the next run. Without --launch, workers spawn bare exactly as before.
+  --env-file <path> — the daemon's environment declaration (plans/0265):
+  NAME=VALUE lines ('#' comments, blank lines, a later duplicate wins; values
+  literal bytes — no quoting, no interpolation) loaded at boot into the
+  daemon's environment, the file's names winning over the inherited shell's.
+  The durable form of the carrier the confinement launcher reads, so a
+  restart does not depend on the launching shell's memory. Beside it, every
+  start writes the effective environment's NAMES (presence only, never
+  values) to <data-dir>/env-manifest.json and warns at boot about names the
+  carrier lost since the previous boot and about model-registry references
+  that do not resolve — the blocked-run discoveries of the adoption site's
+  evening, moved to the boot line.
 
 register — add a target directory to the daemon's whitelist. The whitelist
   is absolute: POST /runs names a registered project (by name or by its
@@ -394,6 +407,7 @@ if (command === "serve") {
   let port = DEFAULT_PORT
   let host = DEFAULT_HOSTNAME
   let launch: string | undefined
+  let envFile: string | undefined
   let open = false
   const openRoots: string[] = []
   for (let at = 0; at < rest.length; at++) {
@@ -421,8 +435,12 @@ if (command === "serve") {
       if (value === undefined || value.startsWith("--")) refuse("--launch takes the confinement launcher script (invoked per spawned run as: bash <script> <project-dir> -- <worker command...>; it execs the command and its exit code is the run's)")
       launch = value
       at++
+    } else if (flag === "--env-file") {
+      if (value === undefined || value.startsWith("--")) refuse("--env-file takes the daemon's environment declaration file (NAME=VALUE lines; its names win over the inherited shell's)")
+      envFile = value
+      at++
     } else {
-      refuse(`unknown serve argument "${flag}" (serve takes --port, --host, --data-dir, --launch, --open and --root)`)
+      refuse(`unknown serve argument "${flag}" (serve takes --port, --host, --data-dir, --launch, --env-file, --open and --root)`)
     }
   }
   if (open !== (openRoots.length > 0)) refuse("--open and at least one --root are required together.")
@@ -452,6 +470,31 @@ if (command === "serve") {
       refuse(`--launch takes the confinement launcher script — a readable file: ${launch} (resolved against the serve command's working directory) is ${isFile ? "not readable" : "not a file"}`)
     }
   }
+  // The environment declaration (plans/0265): resolved and checked at the
+  // operator's own act like --launch above, parsed and applied BEFORE the
+  // daemon starts so the boot manifest records the effective carrier. A
+  // malformed line refuses at its line number, never echoing the line's
+  // bytes — a value may be a secret.
+  if (envFile !== undefined) {
+    const resolvedEnvFile = resolve(envFile)
+    let envFileReadable = false
+    try {
+      accessSync(resolvedEnvFile, constants.R_OK)
+      envFileReadable = statSync(resolvedEnvFile).isFile()
+    } catch {
+      // stat/access spoke: refused below.
+    }
+    if (!envFileReadable) {
+      refuse(`--env-file takes the daemon's environment declaration — a readable file: ${resolvedEnvFile} (resolved against the serve command's working directory) is not a readable file`)
+    }
+    let declared: Record<string, string>
+    try {
+      declared = parseEnvFile(await readFile(resolvedEnvFile, "utf8"))
+    } catch (error) {
+      refuse(`--env-file ${resolvedEnvFile}: ${(error as Error).message}`)
+    }
+    for (const [name, value] of Object.entries(declared)) process.env[name] = value
+  }
   const store = new DaemonStore(dataDir)
   const projects = store.listProjects()
   const tokens = store.listTokens()
@@ -469,6 +512,10 @@ if (command === "serve") {
   if (launch !== undefined) {
     console.log(`confinement launcher: every spawned run (plain, planning, transfer) starts as bash ${launch} <project-dir> -- <worker command...> — the launcher owns the run's environment and writable surface, execs the command, and its exit code is the run's; the daemon's environment is the carrier the launcher reads`)
   }
+  // The environment boot report (plans/0265): the carrier's losses and the
+  // unresolvable references, at the boot line instead of one blocked run at
+  // a time — names only, every value never printed.
+  for (const warning of daemon.bootWarnings) console.log(warning)
 } else {
   // Nothing else exists: refuse with the usage text rather than pretending.
   console.error(`opencode-auto-server: unknown command ${command ?? "(none)"} — the command surface is serve, register, unregister, projects, token, transfer and worker`)

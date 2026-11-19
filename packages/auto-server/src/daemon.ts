@@ -74,6 +74,7 @@ import { liveRunLock, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { createHub, freshRunSecret, interactiveHandlers, settleOpenQuestions, type InteractiveHub, type SocketData } from "./interactive-ws"
 import { appendJournal, compactJournal, foldJournal, journalRunFloor, readJournal } from "./question-journal"
 import { readStatusModel, statusEventsResponse, tailResponse, type TailChannel } from "./observe"
+import { environmentBootReport } from "./env-boot"
 import { OP_DEFINITIONS, type OpOutcome } from "./ops"
 import { CLIENT_APP_JS, CLIENT_INDEX_HTML } from "./web/client"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
@@ -247,6 +248,11 @@ export type DaemonHandle = {
   hostname: string
   url: string
   store: DaemonStore
+  // The environment boot report (plans/0265): the lines the serve entry
+  // prints after its banner — the carrier's lost names since the previous
+  // boot, the registry references unresolvable at boot. Computed once at
+  // start; an embedding host reads the field where the CLI prints.
+  bootWarnings: string[]
   // Test/CLI observability: the registry as plain views.
   runs(): RunView[]
   stop(): Promise<void>
@@ -271,6 +277,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // closeUnit's undo lines) names this shell's bin either way.
   applyServerProfile()
   const store = new DaemonStore(options.dataDir)
+  // The environment boot report (plans/0265, 0264-01's fix) — before every
+  // spawned run exists: the carrier the launcher will read is checked and
+  // pinned at the one moment it can be, the daemon's own start.
+  const bootWarnings = await environmentBootReport(options.dataDir)
   const creation = options.openRoots?.length ? openProjectCreation(store, options.openRoots) : undefined
   const worker = options.worker ?? workerCommand()
   // The spawn cwd is arbitrary (the run target is the registry's absolute
@@ -1400,6 +1410,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // serve banner and the web client link read this string.
     url: `http://${connectHost(server.hostname ?? options.hostname ?? DEFAULT_HOSTNAME)}:${server.port ?? options.port ?? DEFAULT_PORT}`,
     store,
+    bootWarnings,
     runs: () => [...runs.values()].map(view),
     stop: async () => {
       // Ordinary workers finish independently. Coordinator workers depend

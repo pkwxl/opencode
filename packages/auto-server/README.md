@@ -12,7 +12,7 @@ gate and status; this README is the landed shape at a glance.
 ```
 opencode-auto-server register <dir>              # the whitelist (absolute)
 opencode-auto-server token issue --scopes read,control,answer,config
-opencode-auto-server serve [--port 4770] [--host 127.0.0.1] [--data-dir <dir>] [--launch <confinement script>] [--open --root <dir> …]
+opencode-auto-server serve [--port 4770] [--host 127.0.0.1] [--data-dir <dir>] [--launch <confinement script>] [--env-file <declaration file>] [--open --root <dir> …]
 # then: open the daemon's URL in a browser, paste a token — or talk REST.
 ```
 
@@ -119,6 +119,26 @@ outlive its wrapper; the run lock arbitrates any successor and the core's
 interruption recovery heals the directory on the next run), and the run's
 recorded pid is the wrapper's. Without `--launch`, nothing changes: bare
 spawns exactly as before.
+
+## The environment carrier — `serve --env-file <path>` (plans/0265)
+
+The daemon's environment is the carrier the launcher (or a bare spawn)
+reads; by default every restart re-derives it from the launching shell's
+memory. `--env-file` makes it a durable declaration: `NAME=VALUE` lines
+(`#` comments, blank lines, a later duplicate wins; values are literal
+bytes) loaded at boot, **the file's names winning over the inherited
+shell's** — resolved and validated at the serve command's own act, a
+malformed line refused at its line number (never echoing the line's bytes:
+a value may be a secret).
+
+Beside it, every start pins the carrier two ways, names only — never
+values: the effective environment's names (presence only, the
+`OPENCODE_AUTO_*` switch layer excluded — it never reaches a child) are
+written to `<data-dir>/env-manifest.json`, and the boot warns about names
+the carrier **lost since the previous boot** (the diff against that
+manifest) and about model-registry references that do not resolve at boot —
+the discoveries that used to cost one blocked run each, moved to the boot
+line.
 
 ## The surface
 
