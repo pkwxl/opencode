@@ -68,6 +68,7 @@ export const REPO_LANE: readonly string[] = [
   // case spawns a holder process for the lock to name.
   "test/driver-helper.test.ts",
   "test/exec-session.test.ts",
+  "test/executor-steps.test.ts",
   "test/git.test.ts",
   "test/gitignore.test.ts",
   "test/incident-regression.test.ts",

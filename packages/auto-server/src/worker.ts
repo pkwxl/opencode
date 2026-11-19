@@ -49,6 +49,7 @@ import { legacyLayoutProblem } from "@opencode-ai/auto-core/phases"
 import { runTransfer } from "@opencode-ai/auto-core/transfer"
 import type { Interactive } from "@opencode-ai/auto-core/control-types"
 import { BRIDGE_TOKEN_ENV, CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseLane, parsePlan, requestTooLarge, parseSwitches, parseTransfer, parseTransport, type LanePayload, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
+import { runExecutorWorker } from "./executor-worker"
 import { wsInteractive } from "./worker-interactive"
 
 // The run request (the payload the daemon sends; the transport — here one
@@ -177,6 +178,14 @@ export async function runWorker(argv: string[]): Promise<void> {
     if (tooLarge !== undefined) refuse(tooLarge)
   }
   const request = document as Record<string, unknown>
+  if (request.executor === true) {
+    try {
+      await runExecutorWorker(request)
+      process.exit(0)
+    } catch (error) {
+      refuseRequest(error)
+    }
+  }
   for (const key of Object.keys(request)) {
     if (key === "directory" || key === "options" || key === "switches" || key === "transport" || key === "plan" || key === "transfer" || key === "lane") continue
     // A dedicated config carrier gets the same answer as a config key in

@@ -1977,16 +1977,23 @@ export async function bootstrapRepository(dir: string): Promise<BootstrapResult>
   if (read.problem) {
     return { type: "failed", error: `git refuses the directory's work tree (${read.problem}) — refusing to nest a repository inside a repository git cannot read; run the same git command directly to see its remedy (an ownership refusal teaches its safe.directory fix)` }
   }
+  return initializeRepository(dir)
+}
+
+// Initialize a standalone work tree in a directory the caller owns. New
+// projects use it in private staging, even under an enclosing repository.
+export async function initializeRepository(dir: string): Promise<Exclude<BootstrapResult, { type: "existing" }>> {
+  const local = ["--git-dir=.git", "--work-tree=."]
   // init.defaultBranch decides when the person set it (global/system/whatever
   // git reads in this environment); its absence is the -b main fallback.
-  const setting = await git(dir, ["config", "--get", "init.defaultBranch"]).catch(() => undefined)
-  const created = await git(dir, setting?.code === 0 && setting.out.trim() ? ["init"] : ["init", "-b", "main"])
+  const setting = await git(dir, [...local, "config", "--get", "init.defaultBranch"]).catch(() => undefined)
+  const created = await git(dir, [...local, "init", ...(setting?.code === 0 && setting.out.trim() ? [] : ["-b", "main"])])
   if (created.code !== 0) {
     return { type: "failed", error: firstLine(created.err || created.out) || `git init exit code ${created.code}` }
   }
   // The unborn HEAD's symbolic name (symbolic-ref works before the first
   // commit, where rev-parse HEAD does not) — what the caller prints loudly.
-  const named = await git(dir, ["symbolic-ref", "--short", "HEAD"])
+  const named = await git(dir, [...local, "symbolic-ref", "--short", "HEAD"])
   const branch = named.code === 0 ? named.out.trim() : ""
   if (!branch) return { type: "failed", error: "the created repository's branch is unreadable (git symbolic-ref failed)" }
   return { type: "created", branch }

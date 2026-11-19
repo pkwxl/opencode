@@ -61,6 +61,9 @@ describe("the interactive transport protocol (typed, versioned)", () => {
     roundTrip({ type: "pong" }, "pong")
     roundTrip({ type: "hello", run: "run-000001", state: "running", worker: true }, "hello")
     roundTrip({ type: "error", message: "no open question q9" }, "error")
+    roundTrip({ type: "step-request", id: "r1", route: "heartbeat", token: "token-identity", body: { leases: [] } }, "executor request")
+    roundTrip({ type: "step-request", id: "r2", route: "answer", token: "person-identity", delegation: ["questions"], body: { item: "q1", decision: "Proceed" } }, "delegated answer")
+    roundTrip({ type: "step-done", id: "r1", status: 200, body: { protocol: 1, menu: { leases: [], claimable: [] } } }, "executor reply")
   })
 
   test("a version skew, an unknown type and misshapen frames are fatal protocol errors", () => {
@@ -83,6 +86,9 @@ describe("the interactive transport protocol (typed, versioned)", () => {
     fatal(JSON.stringify({ v: PROTOCOL_VERSION, type: "control", action: "selfdestruct" }), /"action"/)
     fatal(JSON.stringify({ v: PROTOCOL_VERSION, type: "control", action: "failback", order: ["prov/a", ""] }), /"order"/)
     fatal(JSON.stringify({ v: PROTOCOL_VERSION, type: "hello", run: "run-1", state: "running" }), /"worker"/)
+    fatal(JSON.stringify({ v: PROTOCOL_VERSION, type: "step-request", id: "r1", route: "ready", body: {} }), /invalid step-request/)
+    fatal(JSON.stringify({ v: PROTOCOL_VERSION, type: "step-request", id: "r2", route: "answer", token: "person-identity", delegation: ["control"], body: {} }), /invalid person delegation/)
+    fatal(JSON.stringify({ v: PROTOCOL_VERSION, type: "step-done", id: "r1", status: 200, body: [] }), /invalid step-done/)
   })
 })
 

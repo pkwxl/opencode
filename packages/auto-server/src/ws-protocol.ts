@@ -1,3 +1,10 @@
+export const executorRoutes = ["ready", "claim", "brief", "report", "heartbeat", "release", "question", "answer"] as const
+export type ExecutorRoute = (typeof executorRoutes)[number]
+export type PersonDelegation = "unrestricted" | readonly ("questions" | "releases")[]
+export type StepRequest = { v: 1; type: "step-request"; id: string; route: ExecutorRoute; token: string; delegation?: PersonDelegation; body: unknown }
+export type StepDone = { v: 1; type: "step-done"; id: string; status: 200 | 400 | 500; body: Record<string, unknown> }
+
+
 // The interactive transport's wire protocol (P3b, auto-core plans/0067 §四):
 // the typed, versioned frame vocabulary the worker's injected Interactive
 // implementation (src/worker-interactive.ts, built on the P3a
@@ -99,6 +106,8 @@ export type WsFrame =
   // ask it came to answer.
   | { v: number; type: "hello"; run: string; state: string; worker: boolean }
   // A refusal (the named shape below).
+  | StepRequest
+  | StepDone
   | ErrorFrame
 
 export type WsFrameType = WsFrame["type"]
@@ -146,6 +155,23 @@ export function parseFrame(raw: string): ParsedFrame {
   const str = (key: string): string | undefined => (typeof parsed[key] === "string" ? (parsed[key] as string) : undefined)
   const num = (key: string): number | undefined => (typeof parsed[key] === "number" && Number.isFinite(parsed[key]) ? (parsed[key] as number) : undefined)
   switch (type) {
+    case "step-request": {
+      const id = str("id")
+      const token = str("token")
+      const route = parsed.route as ExecutorRoute
+      if (!id || !token || !executorRoutes.includes(route) || !isRecord(parsed.body)) return bad("invalid step-request frame")
+      const delegation = parsed.delegation
+      if (delegation !== undefined && delegation !== "unrestricted" &&
+          (!Array.isArray(delegation) || !delegation.length || delegation.length > 2 ||
+           !delegation.every((grant) => grant === "questions" || grant === "releases"))) return bad("invalid person delegation")
+      return { ok: true, frame: { v: 1, type, id, token, route, body: parsed.body, ...(delegation !== undefined && { delegation }) } }
+    }
+    case "step-done": {
+      const id = str("id")
+      const { status, body } = parsed
+      if (!id || (status !== 200 && status !== 400 && status !== 500) || !isRecord(body)) return bad("invalid step-done frame")
+      return { ok: true, frame: { v: 1, type, id, status, body } }
+    }
     case "question": {
       const id = str("id")
       const text = str("text")

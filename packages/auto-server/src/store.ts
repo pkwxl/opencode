@@ -18,12 +18,12 @@
 //
 // Concurrency shape: the CLI commands (register/token) and a running daemon
 // share these files, so every read goes to disk (the files are tiny and
-// local) and every write is atomic (temp file + rename, the core's own
-// state-file pattern) — a token issued while the daemon serves is honored
-// by the very next request, with no restart and no lock protocol.
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs"
+// local) and every write is atomic (temp file + rename). Project mutations
+// also share a lock so an open creation cannot lose a concurrent CLI edit.
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, resolve } from "node:path"
+import { acquireRunLock } from "@opencode-ai/auto-core/lock"
 
 // The token scopes, the authorization tiers of the assessment's §8 Q6:
 //   read    status, logs, events (and the SSE feeds of P1e)
@@ -36,10 +36,10 @@ import { basename, isAbsolute, join, resolve } from "node:path"
 //           token set (it burns tokens by starting agents; beside the scope
 //           the route takes an explicit confirm field and the daemon's
 //           per-daemon rate window)
-export const SCOPES = ["read", "control", "config", "answer", "probe"] as const
+export const SCOPES = ["read", "control", "config", "answer", "probe", "executor", "projects", "person", "person-questions", "person-releases"] as const
 export type Scope = (typeof SCOPES)[number]
 
-export type RegisteredProject = { name: string; directory: string; registered: string }
+export type RegisteredProject = { name: string; directory: string; registered: string; creation?: { dev: string; ino: string } }
 export type StoredToken = { name: string; hash: string; scopes: Scope[]; created: string }
 
 export class StoreError extends Error {}
@@ -82,7 +82,24 @@ export class DaemonStore {
   // —— the whitelist ——
 
   listProjects(): RegisteredProject[] {
+    return this.readProjects().filter(({ directory, creation }) => {
+      if (!creation) return true
+      try {
+        if (realpathSync(directory) !== directory) return false
+        const info = lstatSync(directory, { bigint: true })
+        return info.isDirectory() && String(info.dev) === creation.dev && String(info.ino) === creation.ino
+      } catch {
+        return false
+      }
+    })
+  }
+
+  private readProjects(): RegisteredProject[] {
     return this.readJson(PROJECTS_FILE, []) as RegisteredProject[]
+  }
+
+  registerCreated(directory: string, creation: NonNullable<RegisteredProject["creation"]>): RegisteredProject {
+    return this.updateProjects(() => this.addProject(directory, creation))
   }
 
   // Registers dir as a runnable project. The directory must exist (a
@@ -97,6 +114,10 @@ export class DaemonStore {
   // identifies the project equally, so a name collision costs nothing
   // beyond typing the path.
   register(rawDir: string): RegisteredProject {
+    return this.updateProjects(() => this.addProject(rawDir))
+  }
+
+  private addProject(rawDir: string, creation?: RegisteredProject["creation"]): RegisteredProject {
     // The existence check names directories and means them: a regular file
     // at the path is not a directory a worker can spawn into, and refusing
     // it here keeps the error text truthful (the same wording realpath
@@ -108,7 +129,7 @@ export class DaemonStore {
     } catch {
       throw new StoreError(`cannot register ${rawDir}: ${rawDir} cannot be resolved`)
     }
-    const projects = this.listProjects()
+    const projects = this.readProjects()
     if (projects.some((project) => project.directory === directory)) {
       throw new StoreError(`${directory} is already registered (as "${projects.find((project) => project.directory === directory)!.name}")`)
     }
@@ -117,18 +138,38 @@ export class DaemonStore {
       const other = projects.find((project) => project.name === name)!
       throw new StoreError(`the name "${name}" is already taken by ${other.directory}; register ${directory} anyway is not possible under the same name — requests may name the registered absolute path instead (or unregister that project first)`)
     }
-    const project: RegisteredProject = { name, directory, registered: new Date().toISOString() }
+    if (creation) {
+      const info = lstatSync(rawDir, { bigint: true })
+      if (directory !== rawDir || !info.isDirectory() || String(info.dev) !== creation.dev || String(info.ino) !== creation.ino) {
+        throw new StoreError("The published creation directory was replaced before registration.")
+      }
+    }
+    const project: RegisteredProject = { name, directory, registered: new Date().toISOString(), ...(creation && { creation }) }
     this.writeJson(PROJECTS_FILE, [...projects, project])
     return project
   }
 
   unregister(nameOrDirectory: string): RegisteredProject {
-    const projects = this.listProjects()
-    const at = projects.findIndex((project) => project.name === nameOrDirectory || project.directory === nameOrDirectory)
-    if (at === -1) throw new StoreError(`no registered project "${nameOrDirectory}"`)
-    const [removed] = projects.splice(at, 1)
-    this.writeJson(PROJECTS_FILE, projects)
-    return removed!
+    return this.updateProjects(() => {
+      const projects = this.readProjects()
+      const at = projects.findIndex((project) => project.name === nameOrDirectory || project.directory === nameOrDirectory)
+      if (at === -1) throw new StoreError(`no registered project "${nameOrDirectory}"`)
+      const [removed] = projects.splice(at, 1)
+      this.writeJson(PROJECTS_FILE, projects)
+      return removed!
+    })
+  }
+
+  private updateProjects<T>(update: () => T): T {
+    const directory = join(this.dataDir, "project-registry")
+    mkdirSync(directory, { recursive: true })
+    const lock = acquireRunLock(realpathSync(directory), "project registry")
+    if (!lock.ok) throw new StoreError("The project registry is being updated. Retry the same request.")
+    try {
+      return update()
+    } finally {
+      lock.release()
+    }
   }
 
   // The whitelist lookup: a request's `project` is resolved ONLY against

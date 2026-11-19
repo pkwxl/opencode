@@ -187,14 +187,19 @@ export function parseIndex(text: string, level: UnitLevel): { entries: IndexEntr
 // one's write; the mutations commute (different lines), so ordering is all
 // the safety there is to buy. Pass-through at concurrency 1: the serial
 // floor's behavior is unchanged.
+export function tickedIndex(text: string, id: string): string {
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const line = new RegExp(`^([-*] \\[) (\\]\\s+${escaped}(?::|\\s|$))`, "m")
+  return text.replace(line, "$1x$2")
+}
+
 let tickQueue: Promise<unknown> = Promise.resolve()
 export function tickIndexLine(file: string, id: string): Promise<void> {
   const run = tickQueue.then(async () => {
     const text = await Bun.file(file).text().catch(() => undefined)
     if (text === undefined) return
-    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    const line = new RegExp(`^([-*] \\[) (\\]\\s+${escaped}(?::|\\s|$))`, "m")
-    if (line.test(text)) await Bun.write(file, text.replace(line, "$1x$2"))
+    const next = tickedIndex(text, id)
+    if (next !== text) await Bun.write(file, next)
   })
   tickQueue = run.catch(() => {})
   return run

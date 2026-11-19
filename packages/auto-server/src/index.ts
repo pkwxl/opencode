@@ -26,7 +26,7 @@ import { runWorker } from "./worker"
 const USAGE = `usage:
   opencode-auto-server --help
   opencode-auto-server --version
-  opencode-auto-server serve [--port <n>] [--host <addr>] [--data-dir <dir>] [--launch <script>]
+  opencode-auto-server serve [--port <n>] [--host <addr>] [--data-dir <dir>] [--launch <script>] [--open --root <dir> …]
   opencode-auto-server register <directory> [--data-dir <dir>]
   opencode-auto-server unregister <name-or-directory> [--data-dir <dir>]
   opencode-auto-server projects [--data-dir <dir>]
@@ -126,6 +126,8 @@ token — manage bearer tokens and their scopes: read (status/logs/events),
   /projects/<project>/models — opt-in and disabled by default: carried by no
   default token set, and beside the scope the probe takes an explicit
   confirm field and the daemon's own rate window, one fire per 10 minutes).
+  The projects scope creates and initializes projects when serve is started
+  with --open and at least one --root.
   Unauthenticated requests
   get 401, a token without the route's scope 403. The plaintext token is
   printed once at issue; the store keeps only its digest.
@@ -392,10 +394,18 @@ if (command === "serve") {
   let port = DEFAULT_PORT
   let host = DEFAULT_HOSTNAME
   let launch: string | undefined
+  let open = false
+  const openRoots: string[] = []
   for (let at = 0; at < rest.length; at++) {
     const flag = rest[at]
     const value = rest[at + 1]
-    if (flag === "--port") {
+    if (flag === "--open") {
+      open = true
+    } else if (flag === "--root") {
+      if (value === undefined || value.startsWith("--")) refuse("--root takes a directory.")
+      openRoots.push(value)
+      at++
+    } else if (flag === "--port") {
       // 0..65535, refused at the flag instead of Bun.serve's throw: an
       // out-of-range port is a usage error and the refusal names the range
       // (plans/0197 D5); 0 keeps its documented meaning (pick a free one).
@@ -412,9 +422,10 @@ if (command === "serve") {
       launch = value
       at++
     } else {
-      refuse(`unknown serve argument "${flag}" (serve takes --port, --host, --data-dir and --launch)`)
+      refuse(`unknown serve argument "${flag}" (serve takes --port, --host, --data-dir, --launch, --open and --root)`)
     }
   }
+  if (open !== (openRoots.length > 0)) refuse("--open and at least one --root are required together.")
   // The launcher resolves and is checked HERE, at the operator's own act
   // (plans/0223 D3, the 0165-172 finding): verbatim, a relative --launch
   // reached the spawn, where it resolved against the spawn cwd — the
@@ -444,7 +455,7 @@ if (command === "serve") {
   const store = new DaemonStore(dataDir)
   const projects = store.listProjects()
   const tokens = store.listTokens()
-  const daemon = await startDaemon({ dataDir, port, hostname: host, ...(launch !== undefined ? { launch } : {}) })
+  const daemon = await startDaemon({ dataDir, port, hostname: host, ...(open && { openRoots }), ...(launch !== undefined ? { launch } : {}) })
   // AUTO-DECISION (default bind 127.0.0.1): v1 is single-machine (the
   // assessment's §8 Q4 boundary) and the run lock's stale detection cannot
   // cross hosts; a loopback default keeps the token-guarded control plane

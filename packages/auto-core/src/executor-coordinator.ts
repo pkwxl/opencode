@@ -1,0 +1,1081 @@
+// The serial execute-share arm. The shell supplies the authenticated stable
+// token identity and channel. This surface is internal until the routes land.
+import { createHash, randomUUID } from "node:crypto"
+import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+import { readClarificationProposal } from "./clarify"
+import { loadProjectConfig } from "./config"
+import { docShapeProblems } from "./doccheck"
+import { taskDocPaths } from "./docpaths"
+import { handoffStatus, parkDirective, parseResult, roleOf } from "./document/roles"
+import { tickedIndex } from "./document/unit"
+import { parkCheck, STEER_CHAIN_BOUND } from "./execute"
+import { readExecutorAdmissionBlock, readExecutorParkPlan, readExecutorPreview, readExecutorFollowUp, type ExecutorPreview, type FixPreview, type VerificationPreview } from "./executor-steps"
+import { git, identityArgs, message, repoRoots, statusEntriesRead, withinScopes, workdirEntry } from "./git"
+import { acquireRunLock, liveRunLock } from "./lock"
+import { markDone, runtimeParked, setParked, taskStatePaths } from "./tasks"
+
+export class ExecutorRequestError extends Error {}
+
+export type ExecutorHolder = { token: string; channel: string }
+type Holder = ExecutorHolder
+export type ExecutorPerson = ExecutorHolder & { delegation: "unrestricted" | readonly ("questions" | "releases")[] }
+type Question = {
+  id: string
+  position?: number
+  asker: Holder
+  text: string
+  task?: string
+  answer?: { person: ExecutorPerson; decision: string; rationale?: string; order?: number }
+}
+type BriefAnswer = { id: string; question: string; decision: string; rationale?: string }
+type AnswerPage = { answers: BriefAnswer[]; next?: string }
+type Gate = {
+  id: string
+  position?: number
+  gate: "project-start" | "survey-release"
+  document: string
+  digest: string
+  superseded?: true
+  intent?: {
+    answer: NonNullable<Question["answer"]>
+    base: string
+    before: string
+    after: string
+    subject: string
+    tree?: string
+    commit?: string
+  }
+}
+type GateOffer = Pick<Gate, "id" | "gate" | "document"> & { kind: "human"; proposal: string; review: string[] }
+type GateStep = GateOffer | QuestionWait | BlockedReport
+type QuestionOffer = { kind: "question"; id: string; text: string; task?: string }
+type QuestionWait = { kind: "wait"; reason: "question" | "gate" | "not-ready"; detail: string }
+type PersonStep = QuestionOffer | QuestionWait
+type Execute = Extract<ExecutorPreview, { kind: "execute" }>
+type Candidate = Execute | FixPreview | VerificationPreview
+type Grant = (Omit<Execute, "touches"> | Omit<FixPreview, "touches"> | VerificationPreview) & { id: string; lease: string; attempt: number; workspace: string; deadline: number; budget: number; answerCursor?: string | null }
+type BlockedReport = { kind: "blocked"; reason: "isolation" | "commitFailed"; detail: string }
+type VerifyVerdict = "pass" | "fail"
+type Receipt = { kind: "landed"; commit: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; parked?: string; closeCommit?: string } | { kind: "without-landing"; reason: "failed" | "zero-write" } | BlockedReport
+type CloseIntent = { share: string; tree?: string }
+type EndedBooking = { outcome: "ended"; note?: string; retireGaps?: true; intent?: { tree: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; park?: { blocker: string; previous?: string } }; close?: CloseIntent; receipt?: Receipt }
+type Booking =
+  | EndedBooking
+  | { outcome: "failed"; note?: string; receipt: Receipt }
+type Entry = {
+  grant: Grant
+  holder: Holder
+  base: string
+  issued: number
+  touches?: readonly string[]
+  predecessor?: string
+  released?: true
+  booking?: Booking
+}
+type LeaseWait = { kind: "wait"; reason: "lease-held"; detail: string; deadline: number }
+type BudgetBlock = { kind: "blocked"; reason: "attemptsExhausted" | "fixBudget"; detail: string }
+type DerivedStep = Exclude<ExecutorPreview, Execute> | BlockedReport | LeaseWait | BudgetBlock | QuestionWait
+type Decision = DerivedStep | Candidate
+type Claim = DerivedStep | Grant
+type LeaseKey = { step: string; lease: string }
+type Menu = {
+  claimable: { unit: string; title: string; kinds: [Grant["kind"]]; touches?: readonly string[] }[]
+  leases: (LeaseKey & Pick<Grant, "kind" | "deadline" | "attempt">)[]
+}
+type Checkpoint = "booked" | "committed" | "park-recorded" | "close-index-written" | "closed-files" | "closed-commit" | "gate-booked" | "gate-marked" | "gate-committed"
+const EXECUTE_BUDGET_MINUTES = 60
+const LEASE_WINDOW_MS = (EXECUTE_BUDGET_MINUTES + 5) * 60_000
+const MAX_LEASE_AGE_MS = 2 * LEASE_WINDOW_MS
+const MAX_ATTEMPTS = 3
+const MAX_RESPONSE_BYTES = 256 * 1024
+const ANSWER_PAGE_BYTES = 192 * 1024
+const STATE = join(".auto", "executor-progress.json")
+const GATE_STATE = join(".auto", "executor-gates.json")
+const PERSON_STATE = join(".auto", "executor-questions.json")
+
+function questionAuthority(person: ExecutorPerson): boolean {
+  return person.delegation === "unrestricted" || (Array.isArray(person.delegation) && person.delegation.includes("questions"))
+}
+
+function sameHolder(a: Holder, b: Holder): boolean {
+  return a.token === b.token && a.channel === b.channel
+}
+
+function shareMessage(grant: Grant, parked = false): string {
+  if (parked) return message(`${grant.unit} park ${grant.title}`, { id: grant.unit }, "park", [], `Executor lease ${grant.lease}`)
+  return message(grant.id, { id: grant.unit }, grant.kind === "verify" ? "wrapup" : grant.kind === "fix" ? "fix" : "exec", [], `Executor lease ${grant.lease}`)
+}
+
+function permitted(entry: Entry, path: string): boolean {
+  if (workdirEntry(path) || path === ".opencode" || path.startsWith(".opencode/") || path.split("/").includes("AGENTS.md")) return false
+  const docs = taskDocPaths(entry.grant.unit)
+  if (entry.grant.kind === "verify") return path === docs.report || path === docs.gaps
+  if (path === docs.handoff) return true
+  return roleOf(path) === "freeform" && (entry.touches === undefined || withinScopes(path, entry.touches))
+}
+
+function sameDocument(left: string | undefined, right: string): boolean {
+  return left !== undefined && left.replaceAll("\r\n", "\n") === right.replaceAll("\r\n", "\n")
+}
+
+async function gitRead(dir: string, ...args: string[]): Promise<string> {
+  const result = await git(dir, args)
+  if (result.code !== 0) throw new Error(result.err.trim() || `git ${args[0]} failed`)
+  return result.out.trim()
+}
+
+export async function openExecutorCoordinator(
+  directory: string,
+  options: { checkpoint?: (point: Checkpoint) => void; now?: () => number } = {},
+): Promise<{
+  claim(holder: Holder, task?: string, kind?: Grant["kind"]): Promise<Claim>
+  ready(holder: Holder): Promise<Menu>
+  brief(holder: Holder, task: string, kind?: Grant["kind"]): Promise<Claim>
+  briefAnswers(holder: Holder, task: string, after?: string, kind?: Candidate["kind"]): Promise<AnswerPage>
+  verification(holder: Holder): Promise<DerivedStep | VerificationPreview>
+  heartbeat(holder: Holder, leases: readonly LeaseKey[]): Promise<Menu>
+  release(holder: Holder, step: string, lease: string): Promise<DerivedStep>
+  report(holder: Holder, step: string, lease: string, outcome: "ended" | "failed", note?: string): Promise<Receipt | DerivedStep>
+  next(holder: Holder): Promise<DerivedStep>
+  question(holder: Holder, text: string, target?: LeaseKey & { task: string }): Promise<{ id: string; state: "raised" }>
+  claimPerson(person: ExecutorPerson): Promise<PersonStep | GateStep>
+  answerPerson(person: ExecutorPerson, id: string, decision: string, rationale?: string): Promise<PersonStep | GateStep>
+  claimQuestion(person: ExecutorPerson): Promise<PersonStep>
+  answerQuestion(person: ExecutorPerson, id: string, decision: string, rationale?: string): Promise<PersonStep>
+  claimGate(person: ExecutorPerson): Promise<GateStep>
+  answerGate(person: ExecutorPerson, id: string, decision: "approve", rationale?: string): Promise<GateStep>
+  busy(): Promise<boolean>
+  close(): Promise<void>
+}> {
+  const dir = await realpath(directory)
+  const now = options.now ?? Date.now
+  const { checkpoint } = options
+  // The shared run lock is reentrant within one process. A coordinator needs
+  // exclusive ownership even when two callers share that process.
+  if (liveRunLock(dir)) throw new Error("The project already has an active driver.")
+  const lock = acquireRunLock(dir, "executor")
+  if (!lock.ok) throw new Error("The project already has an active driver.")
+  const file = join(dir, STATE)
+  const questionFile = join(dir, PERSON_STATE)
+  const gateFile = join(dir, GATE_STATE)
+  let gates: Gate[]
+  let entries: Entry[]
+  let questions: Question[]
+  try {
+    const readState = (path: string) => readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error
+      return "[]"
+    })
+    entries = JSON.parse(await readState(file)) as Entry[]
+    if (!Array.isArray(entries) || entries.some((entry) =>
+      !entry?.grant || !entry.holder || typeof entry.base !== "string" ||
+      !Number.isFinite(entry.issued) || !Number.isFinite(entry.grant.deadline)
+    )) throw new Error("Invalid executor progress record.")
+    questions = JSON.parse(await readState(questionFile)) as Question[]
+    if (!Array.isArray(questions) || questions.some((item) =>
+      typeof item?.id !== "string" || typeof item.text !== "string" ||
+      typeof item.asker?.token !== "string" || typeof item.asker?.channel !== "string" ||
+      (item.task !== undefined && typeof item.task !== "string") ||
+      (item.answer !== undefined && typeof item.answer?.decision !== "string")
+    )) throw new Error("Invalid executor question record.")
+    gates = JSON.parse(await readState(gateFile)) as Gate[]
+    if (!Array.isArray(gates) || gates.some((item) => typeof item?.id !== "string" ||
+      (item.gate !== "project-start" && item.gate !== "survey-release") ||
+      typeof item.document !== "string" || typeof item.digest !== "string" ||
+      (item.intent !== undefined && (typeof item.intent?.base !== "string" ||
+        typeof item.intent.before !== "string" || typeof item.intent.after !== "string" ||
+        typeof item.intent.subject !== "string" || item.intent.answer?.decision !== "approve"))
+    )) throw new Error("Invalid executor gate record.")
+  } catch (error) {
+    lock.release()
+    throw error
+  }
+
+  let tail: Promise<unknown> = Promise.resolve()
+  let closed = false
+  function serialize<T>(act: () => Promise<T>): Promise<T> {
+    if (closed) return Promise.reject(new Error("The executor coordinator is closed."))
+    const run = tail.then(act)
+    tail = run.catch(() => undefined)
+    return run
+  }
+
+  async function replaceFile(path: string, text: string, mode: number, tempBase = path, beforeRename?: () => void): Promise<void> {
+    const temp = `${tempBase}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temp, text, { mode, flag: "wx" })
+      beforeRename?.()
+      await rename(temp, path)
+    } catch (error) {
+      await rm(temp, { force: true }).catch(() => undefined)
+      throw error
+    }
+  }
+
+  async function persist(next: Entry[]): Promise<void> {
+    await replaceFile(file, JSON.stringify(next), 0o600)
+    entries = next
+  }
+
+  async function persistQuestions(next: Question[]): Promise<void> {
+    await replaceFile(questionFile, JSON.stringify(next), 0o600)
+    questions = next
+  }
+
+  async function persistGates(next: Gate[]): Promise<void> {
+    await replaceFile(gateFile, JSON.stringify(next), 0o600)
+    gates = next
+  }
+
+  async function updateGate(item: Gate, next: Gate): Promise<Gate> {
+    await persistGates(gates.map((gate) => gate === item ? next : gate))
+    return next
+  }
+
+  function pendingGate(): Gate | undefined {
+    return gates.find((item) => item.intent && !item.intent.commit)
+  }
+
+  function releaseAuthority(person: ExecutorPerson): boolean {
+    return person.delegation === "unrestricted" || (Array.isArray(person.delegation) && person.delegation.includes("releases"))
+  }
+
+  async function gateProposal() {
+    const admission = await readExecutorAdmissionBlock(dir)
+    if (admission?.kind !== "human") return undefined
+    const proposal = await readClarificationProposal(dir, await loadProjectConfig(dir))
+    if (!proposal || proposal.document !== admission.document) return undefined
+    if (!(await readFile(join(dir, proposal.document))).equals(Buffer.from(proposal.before))) return undefined
+    const base = await gitRead(dir, "rev-parse", "HEAD")
+    const digest = createHash("sha256").update(JSON.stringify({ base, gate: admission.gate, proposal })).digest("hex")
+    return { ...proposal, base, digest, gate: admission.gate }
+  }
+
+  async function gateWorkspace(document: string): Promise<boolean> {
+    const roots = await repoRoots(dir)
+    const path = join(dir, document)
+    if (roots.length !== 1 || roots[0] !== dir || await realpath(path).catch(() => undefined) !== path ||
+        !(await stat(path).catch(() => undefined))?.isFile()) return false
+    const status = await statusEntriesRead(dir, dir)
+    return status !== undefined && status.every(({ rel, status }) =>
+      rel === document || (status === "??" && workdirEntry(rel))
+    )
+  }
+
+  async function settleGate(item: Gate): Promise<BlockedReport | undefined> {
+    const intent = item.intent!
+    const doc = item.document
+    const path = join(dir, doc)
+    const block = (detail: string): BlockedReport => ({ kind: "blocked", reason: "isolation", detail })
+    const messageText = message(intent.subject, { id: "PLAN" }, "clarify", [], `Executor gate ${item.id}`)
+    const head = await gitRead(dir, "rev-parse", "HEAD")
+    if (head !== intent.base) {
+      const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", head)
+      if (!intent.tree || witness !== `${intent.base}\n${intent.tree}\n${messageText}`) {
+        return block("HEAD does not match the booked gate release. Inspect the release before resuming.")
+      }
+      await updateGate(item, { ...item, intent: { ...intent, commit: head } })
+      return
+    }
+    if (!await gateWorkspace(doc)) {
+      return block(`Resolve workspace changes outside ${doc} before settling the gate release.`)
+    }
+    const current = await readFile(path)
+    if (current.equals(Buffer.from(intent.before))) {
+      const proposal = await gateProposal()
+      if (proposal?.digest !== item.digest) return block("The booked proposal no longer matches the project gate.")
+      // An interrupted temporary write stays in driver state and cannot
+      // appear as an unrelated change when the next coordinator retries.
+      await replaceFile(path, intent.after, (await stat(path)).mode & 0o777, gateFile)
+      checkpoint?.("gate-marked")
+    } else if (!current.equals(Buffer.from(intent.after))) {
+      return block(`The release document ${doc} differs from its booked before and after state.`)
+    }
+    const pathspec = `:(literal)${doc}`
+    const stage = await git(dir, ["add", "--", pathspec])
+    if (stage.code !== 0) return { kind: "blocked", reason: "commitFailed", detail: stage.err.trim() }
+    const tree = await gitRead(dir, "write-tree")
+    const [diff, content] = await Promise.all([
+      git(dir, ["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", head, tree]),
+      git(dir, ["show", `${tree}:${doc}`]),
+    ])
+    if (diff.code !== 0 || diff.out !== `${doc}\0` || content.code !== 0 || content.out !== intent.after ||
+        (intent.tree && intent.tree !== tree)) return block("The staged gate release differs from the booked document.")
+    if (!intent.tree) item = await updateGate(item, { ...item, intent: { ...intent, tree } })
+    const commit = await git(dir, [...await identityArgs(dir), "commit", "-m", messageText, "--", pathspec])
+    if (commit.code !== 0) return { kind: "blocked", reason: "commitFailed", detail: commit.err.trim() || commit.out.trim() }
+    checkpoint?.("gate-committed")
+    const landed = await gitRead(dir, "rev-parse", "HEAD")
+    const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", landed)
+    if (witness !== `${head}\n${tree}\n${messageText}`) return block("The gate commit differs from its booked release.")
+    await updateGate(item, { ...item, intent: { ...intent, tree, commit: landed } })
+  }
+
+  async function offerGate(person: ExecutorPerson): Promise<GateStep> {
+    if (!releaseAuthority(person)) return { kind: "wait", reason: "gate", detail: "Gate releases require a person with release authority." }
+    const pending = pendingGate()
+    if (pending) {
+      const blocked = await settleGate(pending)
+      if (blocked) return blocked
+    }
+    const proposal = await gateProposal()
+    const prior = gates.findLast((item) => !item.intent && !item.superseded)
+    if (prior && prior.digest !== proposal?.digest) await updateGate(prior, { ...prior, superseded: true })
+    if (!proposal) return { kind: "wait", reason: "not-ready", detail: "No validated gate awaits release." }
+    const { gate, document, digest, review, before } = proposal
+    const item = prior?.digest === digest ? prior : { id: randomUUID(), gate, document, digest, position: questions.length + gates.length }
+    const offer: GateOffer = { kind: "human", id: item.id, gate, document, proposal: before, review }
+    if (Buffer.byteLength(JSON.stringify({ protocol: 1, step: offer })) > MAX_RESPONSE_BYTES) {
+      return { kind: "blocked", reason: "isolation", detail: "The gate proposal exceeds the executor response limit." }
+    }
+    if (item !== prior) await persistGates([...gates, item])
+    return offer
+  }
+
+  function personStep(person: ExecutorPerson): PersonStep {
+    const pending = questions.find((item) => !item.answer)
+    if (!pending) return { kind: "wait", reason: "not-ready", detail: "No pending questions." }
+    if (!questionAuthority(person)) return { kind: "wait", reason: "gate", detail: "A pending question requires a person with question authority." }
+    const { id, text, task } = pending
+    return { kind: "question", id, text, task }
+  }
+
+  async function settleQuestion(person: ExecutorPerson, id: string, decision: string, rationale?: string) {
+    if (!questionAuthority(person)) throw new ExecutorRequestError("The person grant does not authorize answering questions.")
+    const item = questions.find((question) => question.id === id)
+    if (!item) throw new ExecutorRequestError("The question was never issued.")
+    if (item.answer) return
+    if (!decision.trim() || Buffer.byteLength(decision) > 8192 ||
+        (rationale !== undefined && Buffer.byteLength(rationale) > 8192)) {
+      throw new ExecutorRequestError("An answer requires a decision. The decision and rationale are limited to 8192 bytes each.")
+    }
+    const delegation = person.delegation === "unrestricted" ? person.delegation : [...person.delegation]
+    const order = questions.reduce((max, question) => Math.max(max, question.answer?.order ?? 0), 0) + 1
+    const answer = { person: { token: person.token, channel: person.channel, delegation }, decision, rationale, order }
+    await persistQuestions(questions.map((question) => question === item ? { ...question, answer } : question))
+  }
+
+  async function approveGate(person: ExecutorPerson, id: string, decision: string, rationale?: string): Promise<QuestionWait | BlockedReport | undefined> {
+    if (!releaseAuthority(person)) throw new ExecutorRequestError("The person grant does not authorize gate releases.")
+    const item = gates.find((gate) => gate.id === id)
+    if (!item) throw new ExecutorRequestError("The gate was never issued.")
+    if (item.intent || item.superseded) return
+    if (decision !== "approve" || (rationale !== undefined && Buffer.byteLength(rationale) > 8192)) {
+      throw new ExecutorRequestError("A gate decision must approve the proposal. Rationale is limited to 8192 bytes.")
+    }
+    const proposal = await gateProposal()
+    if (!proposal || proposal.digest !== item.digest) return
+    const last = entries.at(-1)
+    if (last && (live(last, now()) || (last.booking && !last.booking.receipt))) {
+      return { kind: "wait", reason: "gate", detail: "The workspace must settle its current lease or report before releasing the gate." }
+    }
+    if (!await gateWorkspace(item.document)) {
+      return { kind: "blocked", reason: "isolation", detail: `Resolve workspace changes outside ${item.document} before approving the gate release.` }
+    }
+    const delegation = person.delegation === "unrestricted" ? person.delegation : [...person.delegation]
+    const answer = { person: { token: person.token, channel: person.channel, delegation }, decision, rationale }
+    const { base, before, after, subject } = proposal
+    const booked = await updateGate(item, { ...item, intent: { answer, base, before, after, subject } })
+    checkpoint?.("gate-booked")
+    return settleGate(booked)
+  }
+
+  async function nextPerson(person: ExecutorPerson): Promise<PersonStep | GateStep> {
+    const question = questionAuthority(person) ? personStep(person) : undefined
+    const gate = releaseAuthority(person) ? await offerGate(person) : undefined
+    if (question?.kind === "question") {
+      if (gate?.kind === "human") {
+        // Legacy records lack a shared position. Keep them ahead of newly issued items.
+        const questionPosition = questions.find((item) => item.id === question.id)?.position ?? -2
+        const gatePosition = gates.find((item) => item.id === gate.id)?.position ?? -1
+        if (gatePosition < questionPosition) return gate
+      }
+      return question
+    }
+    return gate ?? question ?? { kind: "wait", reason: "gate", detail: "A person grant is required." }
+  }
+
+  function applicableAnswers(holder: Holder, task: string): BriefAnswer[] {
+    return questions
+      .filter((item) => item.answer && sameHolder(item.asker, holder) && (item.task === undefined || item.task === task))
+      .sort((a, b) => (a.answer?.order ?? 0) - (b.answer?.order ?? 0))
+      .map(({ id, text, answer }) => ({ id, question: text, decision: answer!.decision, rationale: answer!.rationale }))
+  }
+
+  function withAnswers(holder: Holder, grant: Grant): Grant | Extract<ExecutorPreview, { kind: "blocked" }> {
+    const size = (brief: Grant) => Buffer.byteLength(JSON.stringify({ protocol: 1, step: brief }))
+    if (size({ ...grant, answerCursor: null }) > MAX_RESPONSE_BYTES) {
+      return { kind: "blocked", reason: "config", detail: "The rendered brief exceeds the 256 KiB executor response limit. Shorten the project or task inputs." }
+    }
+    const answers = applicableAnswers(holder, grant.unit)
+    if (!answers.length) return grant
+    let brief: Grant = { ...grant, answerCursor: null }
+    const included: BriefAnswer[] = []
+    for (const answer of answers) {
+      included.push(answer)
+      const prompt = `${grant.prompt}\n\nPerson answers (JSON data):\n${JSON.stringify(included)}`
+      const next: Grant = { ...grant, prompt, ...(included.length < answers.length && { answerCursor: answer.id }) }
+      if (size(next) > MAX_RESPONSE_BYTES) break
+      brief = next
+    }
+    return brief
+  }
+
+  async function book(entry: Entry, booking: Booking): Promise<Entry> {
+    const next = { ...entry, booking }
+    await persist(entries.map((item) => item === entry ? next : item))
+    return next
+  }
+
+  async function settle(entry: Entry, booking: EndedBooking): Promise<Receipt> {
+    if (booking.close) return closeVerified(entry, booking, booking.close)
+    const finishShare = async (commit: string, evidence: NonNullable<EndedBooking["intent"]>) => {
+      if (evidence.park) {
+        const { blocker, previous } = evidence.park
+        const recorded = await runtimeParked(dir, entry.grant.unit)
+        if (recorded !== blocker) {
+          if (recorded !== previous) return blocked("The dependency park record changed outside the booked share.")
+          await setParked(dir, entry.grant.unit, blocker)
+          checkpoint?.("park-recorded")
+        }
+        return finish({ kind: "landed", commit, parked: blocker })
+      }
+      if (evidence.verdict !== "pass") {
+        const { verdict, gapCount, continuation } = evidence
+        return finish({
+          kind: "landed", commit, ...(verdict && { verdict }), ...(gapCount && { gapCount }), ...(continuation && { continuation }),
+        })
+      }
+      const close = { share: commit }
+      const closing = { ...booking, close }
+      return closeVerified(await book(entry, closing), closing, close)
+    }
+    const finish = async (receipt: Receipt) => {
+      await book(entry, { ...booking, receipt })
+      return receipt
+    }
+    const blocked = (detail: string): BlockedReport => ({ kind: "blocked", reason: "isolation", detail })
+    const { grant, base } = entry
+    const head = await gitRead(dir, "rev-parse", "HEAD")
+    if (head !== base) {
+      const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", head)
+      if (booking.intent && witness === `${base}\n${booking.intent.tree}\n${shareMessage(grant, !!booking.intent.park)}`) {
+        return finishShare(head, booking.intent)
+      }
+      return blocked("HEAD moved outside the booked share. Inspect the commit and executor progress before resuming.")
+    }
+
+    const roots = await repoRoots(dir)
+    if (roots.length !== 1 || roots[0] !== dir) return blocked("The executor requires a single repository.")
+    let status = await statusEntriesRead(dir, dir)
+    if (!status) return { kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable. Inspect the index before replaying." }
+    const { gaps, handoff } = taskDocPaths(grant.unit)
+    const observedChanges = (rows: NonNullable<typeof status>) =>
+      rows.filter(({ rel, status }) => status !== "??" || !workdirEntry(rel))
+    let changes = observedChanges(status)
+    const rejected = changes.filter(({ rel, status }) =>
+      !permitted(entry, rel) && !(booking.retireGaps && rel === gaps && /^[ D]{2}$/.test(status))
+    )
+    if (rejected.length) return blocked(`Resolve out-of-scope edits before replaying: ${rejected.map(({ rel }) => rel).join(", ")}.`)
+    let continuation: true | undefined
+    let park: NonNullable<EndedBooking["intent"]>["park"]
+    let artifact: { path: string; text: string } | undefined
+    if (grant.kind !== "verify" && changes.some(({ rel }) => rel === handoff)) {
+      const text = await Bun.file(join(dir, handoff)).text().catch(() => "")
+      const blocker = parkDirective(text)
+      if (blocker && grant.kind === "execute") {
+        const plan = await readExecutorParkPlan(dir)
+        const task = plan?.tasks.find(({ id }) => id === grant.unit)
+        if (!plan || !task) return blocked("The parked task is outside the current phase.")
+        const check = await parkCheck(dir, plan, task, blocker)
+        if (check.type !== "ok") return {
+          kind: "blocked", reason: "commitFailed",
+          detail: check.type === "foreign" ? `${blocker} is outside this phase's index.` : check.problems.join("; "),
+        }
+        park = { blocker, previous: task.parked }
+        artifact = { path: handoff, text }
+      } else {
+        const status = handoffStatus(text)
+        if (text && (!status || blocker)) {
+          return { kind: "blocked", reason: "commitFailed", detail: "The handoff needs a recognized Status line for this step." }
+        }
+        if (status === "continue") continuation = true
+      }
+    }
+    if (grant.kind === "fix" && !continuation && changes.some(({ rel }) => rel !== gaps)) {
+      // The old gap list is already durable in the verification commit. Its
+      // removal is a driver effect, booked before mutation, so the reverify
+      // turn can write identical FAIL evidence as a genuinely new artifact.
+      if (!booking.retireGaps) {
+        const original = await git(dir, ["ls-tree", base, "--", gaps])
+        if (original.code !== 0 || !original.out) return blocked("The landed fix input is missing from Git.")
+        booking = { ...booking, retireGaps: true }
+        entry = await book(entry, booking)
+      }
+      await rm(join(dir, gaps), { force: true })
+      status = await statusEntriesRead(dir, dir)
+      if (!status) return { kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable after retiring the gap list." }
+      changes = observedChanges(status)
+    }
+    const paths = changes.map(({ rel }) => rel)
+    if (booking.retireGaps && !paths.some((path) => path !== gaps)) {
+      return blocked("The booked fix's changes are missing. Restore them before replaying.")
+    }
+    let verdict: VerifyVerdict | undefined
+    let gapCount: number | undefined
+    if (grant.kind === "verify") {
+      const { report, gaps } = taskDocPaths(grant.unit)
+      const [reportText, gapText] = await Promise.all([
+        Bun.file(join(dir, report)).text().catch(() => ""),
+        Bun.file(join(dir, gaps)).text().catch(() => ""),
+      ])
+      if (paths.length === 1 && paths[0] === report &&
+          parseResult(reportText)?.type === "pass" && docShapeProblems(reportText, report).length === 0) {
+        verdict = "pass"
+        artifact = { path: report, text: reportText }
+      } else if (paths.length === 1 && paths[0] === gaps && !reportText.trim() &&
+          parseResult(gapText)?.type === "fail" && /^### Gap\b/m.test(gapText)) {
+        verdict = "fail"
+        artifact = { path: gaps, text: gapText }
+        gapCount = gapText.split("\n").filter((line) => /^### Gap\b/.test(line)).length
+      } else {
+        return { kind: "blocked", reason: "commitFailed", detail: "Verification must write one valid PASS report or one countable FAIL gap list." }
+      }
+    }
+    if (!paths.length) {
+      if (booking.intent) return blocked("The booked share's changes are missing. Restore them before replaying.")
+      return finish({ kind: "without-landing", reason: "zero-write" })
+    }
+
+    const stage = changes.filter(({ status }) => status[1] !== " ").map(({ rel }) => `:(literal)${rel}`)
+    if (stage.length) await gitRead(dir, "add", "-A", "--", ...stage)
+    const tree = await gitRead(dir, "write-tree")
+    if (booking.intent && (tree !== booking.intent.tree || verdict !== booking.intent.verdict || gapCount !== booking.intent.gapCount || continuation !== booking.intent.continuation || park?.blocker !== booking.intent.park?.blocker || park?.previous !== booking.intent.park?.previous)) {
+      return blocked("The workspace no longer matches the booked share. Restore its contents before replaying.")
+    }
+    // Verify the complete staged set before the hooked commit, then prove the
+    // resulting parent, tree, and operation identity before recording success.
+    const staged = await git(dir, ["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", base, tree])
+    const stagedPaths = staged.out.split("\0").filter(Boolean)
+    const observed = new Set(paths)
+    if (staged.code !== 0 || stagedPaths.some((path) => !observed.has(path) || (!permitted(entry, path) && !(booking.retireGaps && path === gaps)))) {
+      return blocked("The staged tree contains an unverified path. Inspect the index before replaying.")
+    }
+    if (booking.retireGaps) {
+      const retired = await git(dir, ["ls-tree", tree, "--", gaps])
+      if (retired.code !== 0 || retired.out || !stagedPaths.some((path) => path !== gaps)) {
+        return blocked("The staged fix must include work and retire the previous gap list.")
+      }
+    }
+    if (artifact) {
+      const stagedArtifact = await git(dir, ["show", `${tree}:${artifact.path}`])
+      if (stagedArtifact.code !== 0 || !sameDocument(stagedArtifact.out, artifact.text)) {
+        return blocked("The staged verdict or handoff differs from the evidence read on disk.")
+      }
+    }
+    if (!stagedPaths.length) return finish({ kind: "without-landing", reason: "zero-write" })
+    const evidence = { tree, verdict, gapCount, continuation, park }
+    if (!booking.intent) {
+      booking = { ...booking, intent: evidence }
+      entry = await book(entry, booking)
+    }
+    const specs = stagedPaths.map((path) => `:(literal)${path}`)
+    const commitMessage = shareMessage(grant, !!park)
+    const committed = await git(dir, [...await identityArgs(dir), "commit", "-m", commitMessage, "--", ...specs])
+    if (committed.code !== 0) {
+      return { kind: "blocked", reason: "commitFailed", detail: committed.err.trim() || committed.out.trim() }
+    }
+    checkpoint?.("committed")
+    const landed = await gitRead(dir, "rev-parse", "HEAD")
+    const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", landed)
+    if (witness !== `${base}\n${tree}\n${commitMessage}`) {
+      return blocked("The new commit differs from the booked share. Inspect Git history before resuming.")
+    }
+    return finishShare(landed, evidence)
+  }
+
+  async function closeVerified(entry: Entry, booking: EndedBooking, intent: CloseIntent): Promise<Receipt> {
+    const grant = entry.grant
+    const block = (detail: string): BlockedReport => ({ kind: "blocked", reason: "isolation", detail })
+    if (grant.kind !== "verify") return block("A close-out has no verification grant.")
+    const { unit, index } = grant
+    const { pending, complete } = taskStatePaths(unit)
+    const { gaps } = taskDocPaths(unit)
+    const paths = new Set([pending, complete, index])
+    const commitMessage = message(`${unit} done`, { id: unit }, "done", [], `Executor close ${grant.lease}`)
+    const finish = async (closeCommit: string): Promise<Receipt> => {
+      const receipt = { kind: "landed", commit: intent.share, verdict: "pass", closeCommit } as const
+      await book(entry, { ...booking, receipt })
+      return receipt
+    }
+    const head = await gitRead(dir, "rev-parse", "HEAD")
+    if (head !== intent.share) {
+      const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", head)
+      if (intent.tree && witness === `${intent.share}\n${intent.tree}\n${commitMessage}`) return finish(head)
+      return block("HEAD moved outside the booked task close-out.")
+    }
+    if ((await repoRoots(dir)).length !== 1) return block("The task close-out requires a single repository.")
+    const [todo, oldIndex, oldGaps, status] = await Promise.all([
+      git(dir, ["show", `${intent.share}:${pending}`]),
+      git(dir, ["show", `${intent.share}:${index}`]),
+      git(dir, ["show", `${intent.share}:${gaps}`]),
+      statusEntriesRead(dir, dir),
+    ])
+    if (oldGaps.code === 0) paths.add(gaps)
+    if (todo.code !== 0 || oldIndex.code !== 0 || !status || status.some(({ rel, status }) =>
+      !paths.has(rel) && !(status === "??" && workdirEntry(rel))
+    )) return block("Inspect unexpected workspace changes before replaying task close-out.")
+
+    const [pendingText, doneText, indexText, gapText] = await Promise.all(
+      [pending, complete, index, gaps].map((path) => readFile(join(dir, path), "utf8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error
+        return undefined
+      })),
+    )
+    const nextIndex = tickedIndex(oldIndex.out, unit)
+    const validUnit = (sameDocument(pendingText, todo.out) && doneText === undefined) ||
+      (pendingText === undefined && sameDocument(doneText, todo.out))
+    if ((gapText !== undefined && (oldGaps.code !== 0 || !sameDocument(gapText, oldGaps.out))) || !validUnit || nextIndex === oldIndex.out || (!sameDocument(indexText, oldIndex.out) && !sameDocument(indexText, nextIndex))) {
+      return block("The task documents no longer match the close-out's before or after state.")
+    }
+
+    // Post the tick atomically before markDone's idempotent rename and
+    // runtime cleanup. Both the original and ticked index are replayable.
+    if (indexText !== undefined && !sameDocument(indexText, nextIndex)) {
+      const indexFile = join(dir, index)
+      await replaceFile(indexFile, tickedIndex(indexText, unit), (await stat(indexFile)).mode & 0o777, file,
+        () => checkpoint?.("close-index-written"))
+    }
+    await markDone({ dir, index }, unit)
+    if (oldGaps.code === 0) await rm(join(dir, gaps), { force: true })
+    checkpoint?.("closed-files")
+    const changed = await statusEntriesRead(dir, dir)
+    if (!changed || changed.some(({ rel, status }) => !paths.has(rel) && !(status === "??" && workdirEntry(rel)))) {
+      return block("Unexpected workspace changes appeared during task close-out.")
+    }
+    const prepare = changed.filter(({ rel, status }) => paths.has(rel) && status[1] !== " ").map(({ rel }) => `:(literal)${rel}`)
+    if (prepare.length) await gitRead(dir, "add", "-A", "--", ...prepare)
+    const tree = await gitRead(dir, "write-tree")
+    const diff = await git(dir, ["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", head, tree])
+    const staged = diff.out.split("\0").filter(Boolean)
+    if (diff.code !== 0 || staged.length !== paths.size || staged.some((path) => !paths.has(path)) ||
+        (intent.tree && intent.tree !== tree)) {
+      return block("The staged task close-out differs from the expected rename and tick.")
+    }
+    const [stagedDoc, stagedIndex, stagedGaps] = await Promise.all([
+      git(dir, ["show", `${tree}:${complete}`]),
+      git(dir, ["show", `${tree}:${index}`]),
+      git(dir, ["ls-tree", `${tree}`, "--", gaps]),
+    ])
+    if (stagedGaps.code !== 0 || stagedGaps.out || stagedDoc.code !== 0 || !sameDocument(stagedDoc.out, todo.out) || stagedIndex.code !== 0 || !sameDocument(stagedIndex.out, nextIndex)) {
+      return block("The staged task documents differ from the expected rename and tick.")
+    }
+    if (!intent.tree) {
+      booking = { ...booking, close: { ...intent, tree } }
+      entry = await book(entry, booking)
+    }
+    const commit = await git(dir, [...await identityArgs(dir), "commit", "-m", commitMessage, "--", ...staged.map((path) => `:(literal)${path}`)])
+    if (commit.code !== 0) return { kind: "blocked", reason: "commitFailed", detail: commit.err.trim() || commit.out.trim() }
+    checkpoint?.("closed-commit")
+    const landed = await gitRead(dir, "rev-parse", "HEAD")
+    const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", landed)
+    if (witness !== `${intent.share}\n${tree}\n${commitMessage}`) return block("The task close-out commit differs from its booked changes.")
+    return finish(landed)
+  }
+
+  function live(entry: Entry, at: number): boolean {
+    return !entry.booking && !entry.released && entry.grant.deadline > at
+  }
+
+  function leaseWait(entry: Entry): LeaseWait {
+    return { kind: "wait", reason: "lease-held", deadline: entry.grant.deadline, detail: `Lease held by channel ${entry.holder.channel || "default"} until ${new Date(entry.grant.deadline).toISOString()}.` }
+  }
+
+  function lookup(step: string, lease: string): Entry {
+    const entry = entries.find(({ grant }) => grant.id === step && grant.lease === lease)
+    if (!entry) throw new ExecutorRequestError("The step and lease pair was never issued.")
+    return entry
+  }
+
+  function attempts(id: string): number {
+    return entries.filter((entry) => entry.grant.id === id && !entry.released).length
+  }
+
+  function verifyID(unit: string): string {
+    const completed = entries.filter(({ grant, booking }) =>
+      grant.unit === unit && grant.kind === "verify" && booking?.receipt?.kind === "landed"
+    ).length
+    return `${unit} verify ${completed + 1}`
+  }
+
+  function stepID(step: Candidate): string {
+    if (step.kind === "verify") return verifyID(step.unit)
+    const prefix = step.kind === "fix" ? `${step.unit} fix ${step.round}.` : `${step.unit} exec `
+    const completed = entries.filter(({ grant, booking }) => grant.id.startsWith(prefix) && booking?.receipt?.kind === "landed").length
+    return `${prefix}${completed + 1}`
+  }
+
+  async function preview(at: number): Promise<Decision> {
+    const last = entries.at(-1)
+    if (last && live(last, at)) return leaseWait(last)
+    const previous = last?.booking?.receipt
+    const closedUnit = previous?.kind === "landed" && previous.closeCommit !== undefined
+    if (last?.booking && (!previous || (previous.kind === "landed" && !closedUnit && !previous.continuation && !previous.parked))) {
+      return { kind: "wait", reason: "in-flight", detail: "The previous share requires settlement or verification." }
+    }
+
+    // A failed, expired, or released lease can leave a continuation. Its
+    // captured base and scope still govern every retained edit.
+    if (last && last.grant.kind !== "execute" && !closedUnit) {
+      return { kind: "wait", reason: "in-flight", detail: "The execute share has advanced to verification." }
+    }
+    const continuation = last && last.booking?.receipt?.kind !== "landed" ? last : undefined
+    const handedOver = previous?.kind === "landed" && previous.continuation ? last : undefined
+    const priorLanded = last?.grant.kind === "execute"
+      ? entries.findLast(({ grant, booking }) =>
+          grant.kind === "execute" && grant.unit === last.grant.unit &&
+          booking?.receipt?.kind === "landed"
+        )
+      : undefined
+    const priorHandoff = priorLanded?.booking?.receipt?.kind === "landed" && priorLanded.booking.receipt.continuation ? priorLanded : undefined
+    const resumeUnit = (continuation ?? handedOver ?? priorHandoff)?.grant.unit
+    const step = await readExecutorPreview(dir, resumeUnit)
+    if (step.kind !== "execute") return step
+    if (attempts(stepID(step)) >= MAX_ATTEMPTS) {
+      return { kind: "blocked", reason: "attemptsExhausted", detail: `${step.unit} has reached the ${MAX_ATTEMPTS}-attempt limit.` }
+    }
+    const roots = await repoRoots(dir)
+    const top = await gitRead(dir, "rev-parse", "--show-toplevel")
+    if (top !== dir || roots.length !== 1 || roots[0] !== dir) {
+      return { kind: "blocked", reason: "isolation", detail: "The serial executor requires a standalone Git repository." }
+    }
+    const handoff = handedOver ?? priorHandoff
+    if (handoff?.grant.unit === step.unit) {
+      const status = await statusEntriesRead(dir, dir)
+      const head = await gitRead(dir, "rev-parse", "HEAD")
+      const receipt = handoff.booking?.receipt
+      if (!status || receipt?.kind !== "landed" || head !== receipt.commit ||
+          (!continuation && status.some(({ rel, status }) => !(status === "??" && workdirEntry(rel))))) {
+        return { kind: "blocked", reason: "isolation", detail: "The handed-over workspace must still match the landed share." }
+      }
+      if (entries.filter(({ grant, booking }) => grant.unit === step.unit &&
+          booking?.receipt?.kind === "landed" && booking.receipt.continuation).length >= STEER_CHAIN_BOUND) {
+        return { kind: "blocked", reason: "attemptsExhausted", detail: "The execution handover chain reached its bound." }
+      }
+    }
+    if (continuation?.grant.unit === step.unit) {
+      const status = await statusEntriesRead(dir, dir)
+      const head = await gitRead(dir, "rev-parse", "HEAD")
+      if (!status || head !== continuation.base || status.some(({ rel, status }) =>
+        !(status === "??" && workdirEntry(rel)) && !permitted(continuation, rel)
+      )) {
+        return { kind: "blocked", reason: "isolation", detail: "The previous attempt's workspace needs inspection before continuation." }
+      }
+    }
+    return step
+  }
+
+  async function menu(holder: Holder, at: number): Promise<Menu> {
+    const last = entries.at(-1)
+    if (last && live(last, at) && sameHolder(last.holder, holder)) {
+      const { id: step, lease, kind, deadline, attempt } = last.grant
+      return { claimable: [], leases: [{ step, lease, kind, deadline, attempt }] }
+    }
+    const step = await select(holder, at)
+    const claimable: Menu["claimable"] = []
+    if (step.kind === "execute" || step.kind === "verify" || step.kind === "fix") {
+      claimable.push({
+        unit: step.unit, title: step.title, kinds: [step.kind], ...(step.kind !== "verify" ? { touches: step.touches } : {}),
+      })
+    }
+    return { claimable, leases: [] }
+  }
+
+  function withoutGrant(step: Decision): DerivedStep {
+    return step.kind === "execute" || step.kind === "verify" || step.kind === "fix"
+      ? { kind: "wait", reason: "not-ready", detail: `${step.unit} is available for a new claim.` }
+      : step
+  }
+
+  async function nextWithoutGrant(at: number): Promise<DerivedStep> {
+    return withoutGrant(await preview(at))
+  }
+
+  function waitForSuccessor(entry: Entry, at: number): LeaseWait | undefined {
+    const last = entries.at(-1)
+    if (last && last !== entry && last.grant.id === entry.grant.id && live(last, at)) return leaseWait(last)
+  }
+
+  async function verification(holder: Holder, at: number): Promise<DerivedStep | VerificationPreview> {
+    const last = entries.at(-1)
+    if (!last) return nextWithoutGrant(at)
+    if (live(last, at)) return leaseWait(last)
+    if (last.booking && !last.booking.receipt) return nextWithoutGrant(at)
+    if (last.grant.kind === "verify" && last.booking?.receipt?.kind === "landed") {
+      return last.booking.receipt.closeCommit
+        ? nextWithoutGrant(at)
+        : { kind: "wait", reason: "in-flight", detail: "The verification verdict awaits fix routing." }
+    }
+    if (last.grant.kind !== "verify" && last.booking?.receipt?.kind !== "landed") return nextWithoutGrant(at)
+    const producer = entries.findLast((entry) => entry.grant.kind !== "verify" && entry.booking?.receipt?.kind === "landed")
+    const booking = producer?.booking
+    const receipt = booking?.receipt
+    if (!producer || receipt?.kind !== "landed" || (receipt.continuation || receipt.parked)) return nextWithoutGrant(at)
+    if (booking?.outcome !== "ended" || !booking.intent || !producer.holder.token) {
+      return { kind: "blocked", reason: "isolation", detail: "The landed share lacks durable producer provenance." }
+    }
+    const head = await gitRead(dir, "rev-parse", "HEAD")
+    const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", head)
+    if (head !== receipt.commit || witness !== `${producer.base}\n${booking.intent.tree}\n${shareMessage(producer.grant)}`) {
+      return { kind: "blocked", reason: "isolation", detail: "The recorded execute share no longer matches Git history." }
+    }
+    if (producer.holder.token === holder.token) {
+      return { kind: "wait", reason: "not-ready", detail: "Verification requires a different token from the execute share's producer." }
+    }
+    if (attempts(verifyID(producer.grant.unit)) >= MAX_ATTEMPTS) {
+      return { kind: "blocked", reason: "attemptsExhausted", detail: `${producer.grant.unit} has reached the ${MAX_ATTEMPTS}-attempt verification limit.` }
+    }
+    const original = entries.find(({ grant, booking }) => grant.unit === producer.grant.unit &&
+      grant.kind === "execute" && booking?.receipt?.kind === "landed"
+    )
+    return readExecutorFollowUp(dir, { kind: "verify", unit: producer.grant.unit, baseline: original?.base ?? producer.base, head })
+  }
+
+  async function fixing(at: number): Promise<DerivedStep | FixPreview> {
+    const last = entries.at(-1)
+    if (!last || live(last, at) || (last.booking && !last.booking.receipt)) return nextWithoutGrant(at)
+    const failures = entries.filter(({ grant, booking }) =>
+      grant.unit === last.grant.unit && booking?.receipt?.kind === "landed" && booking.receipt.verdict === "fail"
+    )
+    const failed = failures.at(-1)
+    const receipt = failed?.booking?.receipt
+    const latest = last.booking?.receipt
+    if (!failed || receipt?.kind !== "landed" ||
+        (last !== failed && !(last.grant.kind === "fix" && (latest?.kind !== "landed" || latest.continuation)))) {
+      return nextWithoutGrant(at)
+    }
+    let best = Infinity
+    let noProgress = 0
+    for (const entry of failures) {
+      const evidence = entry.booking?.receipt
+      if (evidence?.kind !== "landed" || !evidence.gapCount) {
+        return { kind: "blocked", reason: "isolation", detail: "A verification gap count is missing." }
+      }
+      if (evidence.gapCount < best) {
+        best = evidence.gapCount
+        noProgress = 0
+      } else {
+        noProgress++
+      }
+    }
+    if (noProgress >= 2) {
+      return { kind: "blocked", reason: "fixBudget", detail: "Two fix rounds made no progress against the best recorded gap count." }
+    }
+    const unit = last.grant.unit
+    const round = failures.length
+    const fixChain = entries.filter(({ grant, booking }) => grant.kind === "fix" && grant.unit === unit && grant.round === round &&
+      booking?.receipt?.kind === "landed" && booking.receipt.continuation)
+    if (fixChain.length >= STEER_CHAIN_BOUND ||
+        attempts(`${unit} fix ${round}.${fixChain.length + 1}`) >= MAX_ATTEMPTS) {
+      return { kind: "blocked", reason: "attemptsExhausted", detail: `${unit} has reached the fix attempt limit.` }
+    }
+    const head = await gitRead(dir, "rev-parse", "HEAD")
+    const handedOver = fixChain.at(-1)?.booking?.receipt
+    if (head !== (handedOver?.kind === "landed" ? handedOver.commit : receipt.commit)) {
+      return { kind: "blocked", reason: "isolation", detail: "HEAD no longer matches the landed gap list or fix handover." }
+    }
+    const roots = await repoRoots(dir)
+    const dirty = await statusEntriesRead(dir, dir)
+    const continuation = last.grant.kind === "fix"
+    const ownedDirt = latest?.kind !== "landed"
+    if (roots.length !== 1 || !dirty || (continuation && dirty.some(({ rel, status }) =>
+      !(status === "??" && workdirEntry(rel)) && (!ownedDirt || !permitted(last, rel))
+    ))) {
+      return { kind: "blocked", reason: "isolation", detail: "Inspect the fix workspace before continuing." }
+    }
+    return readExecutorFollowUp(dir, { kind: "fix", unit, round, head }, continuation)
+  }
+
+  async function select(holder: Holder, at: number, kind?: Grant["kind"]): Promise<Decision> {
+    const last = entries.at(-1)
+    if (last && live(last, at)) return leaseWait(last)
+    if (last?.booking && !last.booking.receipt) return preview(at)
+
+    const pending = questions.filter((item) => !item.answer)
+    if (pending.some((item) => sameHolder(item.asker, holder))) {
+      return { kind: "wait", reason: "question", detail: "Your question is awaiting an answer." }
+    }
+    if (pending.length) return { kind: "wait", reason: "gate", detail: "A pending question requires a person decision." }
+
+    if (pendingGate()) return { kind: "wait", reason: "gate", detail: "An approved gate release awaits settlement." }
+    const admission = await readExecutorAdmissionBlock(dir)
+    if (admission) return admission
+
+    const result = last?.booking?.receipt
+    const needsFix = (result?.kind === "landed" && result.verdict === "fail") ||
+      (last?.grant.kind === "fix" && (result?.kind !== "landed" || result.continuation))
+    const needsVerification = (result?.kind === "landed" && !result.closeCommit && !result.continuation && !result.parked) ||
+      (last?.grant.kind === "verify" && result?.kind !== "landed")
+    if (kind === "execute" || (kind === undefined && !needsFix && !needsVerification)) return preview(at)
+
+    return kind === "fix" || (kind === undefined && needsFix) ? fixing(at) : verification(holder, at)
+  }
+
+  return {
+    claim: (holder, task, kind) => serialize(async () => {
+      const at = now()
+      const last = entries.at(-1)
+      if (last && live(last, at)) {
+        return sameHolder(last.holder, holder) && (kind === undefined || kind === last.grant.kind) && (task === undefined || task === last.grant.unit)
+          ? withAnswers(holder, last.grant)
+          : leaseWait(last)
+      }
+      // The report already authorized settlement. A replacement's claim can
+      // finish it without impersonating the original holder or booking again.
+      if (last?.booking?.outcome === "ended" && !last.booking.receipt) {
+        const result = await settle(last, last.booking)
+        if (result.kind === "blocked") return result
+      }
+      const pending = pendingGate()
+      if (pending) {
+        const blocked = await settleGate(pending)
+        if (blocked) return blocked
+      }
+      const step = await select(holder, now(), kind)
+      if (step.kind !== "execute" && step.kind !== "verify" && step.kind !== "fix") return step
+      if (task !== undefined && task !== step.unit) {
+        return { kind: "wait", reason: "not-ready", detail: `${task} is not the next serial unit.` }
+      }
+      const base = await gitRead(dir, "rev-parse", "HEAD")
+      if (step.kind !== "execute" && base !== step.head) {
+        return { kind: "blocked", reason: "isolation", detail: "HEAD moved before the grant." }
+      }
+      const { touches, ...work } = step.kind === "verify" ? { ...step, touches: undefined } : step
+      const issued = now()
+      const id = stepID(step)
+      const grant: Grant = {
+        ...work, id, lease: randomUUID(), attempt: attempts(id) + 1, workspace: dir,
+        deadline: issued + LEASE_WINDOW_MS, budget: EXECUTE_BUDGET_MINUTES,
+      }
+      const brief = withAnswers(holder, grant)
+      if (brief.kind === "blocked") return brief
+      const predecessor = last?.grant.id === grant.id ? last.grant.lease : undefined
+      await persist([...entries, { grant, holder: { ...holder }, base, issued, touches, predecessor }])
+      return brief
+    }),
+    ready: (holder) => serialize(() => menu(holder, now())),
+    brief: (holder, task, kind) => serialize(async () => {
+      const last = entries.at(-1)
+      if (last && last.grant.unit === task && (kind === undefined || kind === last.grant.kind) && live(last, now())) {
+        return sameHolder(last.holder, holder) ? withAnswers(holder, last.grant) : leaseWait(last)
+      }
+      return { kind: "wait", reason: "not-ready", detail: `This channel has no live brief for ${task}.` }
+    }),
+    briefAnswers: (holder, task, after, kind) => serialize(async () => {
+      const last = entries.at(-1)
+      if (!last || last.grant.unit !== task || (kind !== undefined && last.grant.kind !== kind) || !sameHolder(last.holder, holder) || !live(last, now())) {
+        throw new ExecutorRequestError("This channel has no live brief for the requested task.")
+      }
+      const all = applicableAnswers(holder, task)
+      const cursor = after === undefined ? -1 : all.findIndex((answer) => answer.id === after)
+      if (after !== undefined && cursor === -1) throw new ExecutorRequestError("The answer cursor does not belong to this brief.")
+      const answers: BriefAnswer[] = []
+      for (const answer of all.slice(cursor + 1)) {
+        if (answers.length && Buffer.byteLength(JSON.stringify({ answers: [...answers, answer], next: answer.id })) > ANSWER_PAGE_BYTES) break
+        answers.push(answer)
+      }
+      const next = cursor + 1 + answers.length < all.length ? answers.at(-1)?.id : undefined
+      return { answers, ...(next && { next }) }
+    }),
+    verification: (holder) => serialize(() => verification(holder, now())),
+    heartbeat: (holder, leases) => serialize(async () => {
+      const requested = new Set(leases.map(({ step, lease }) => lookup(step, lease)))
+      const at = now()
+      const last = entries.at(-1)
+      if (last && requested.has(last) && sameHolder(last.holder, holder) && live(last, at)) {
+        const deadline = Math.min(at + LEASE_WINDOW_MS, last.issued + MAX_LEASE_AGE_MS)
+        if (deadline > last.grant.deadline) {
+          await persist([...entries.slice(0, -1), { ...last, grant: { ...last.grant, deadline } }])
+        }
+      }
+      return menu(holder, at)
+    }),
+    release: (holder, step, lease) => serialize(async () => {
+      const entry = lookup(step, lease)
+      const at = now()
+      if (!sameHolder(entry.holder, holder)) return live(entry, at) ? leaseWait(entry) : withoutGrant(await select(holder, at))
+      if (entry.released) return withoutGrant(await select(holder, at))
+      if (entry.booking || !live(entry, at)) return waitForSuccessor(entry, at) ?? withoutGrant(await select(holder, at))
+      await persist(entries.map((item) => item === entry ? { ...item, released: true } : item))
+      return withoutGrant(await select(holder, at))
+    }),
+    report: (holder, step, lease, outcome, note) => serialize(async () => {
+      let entry = lookup(step, lease)
+      const at = now()
+      if (outcome !== "ended" && outcome !== "failed") throw new Error("Invalid report outcome.")
+      if (!sameHolder(entry.holder, holder)) return live(entry, at) ? leaseWait(entry) : withoutGrant(await select(holder, at))
+      if (entry.booking) {
+        if (entry.booking.outcome !== outcome) throw new ExecutorRequestError("The report outcome conflicts with the booked outcome.")
+        if (entry.booking.receipt) return entry.booking.receipt
+      } else {
+        if (!live(entry, at)) return waitForSuccessor(entry, at) ?? withoutGrant(await select(holder, at))
+        entry = await book(entry, outcome === "failed"
+          ? { outcome, note, receipt: { kind: "without-landing", reason: "failed" } }
+          : { outcome, note })
+        checkpoint?.("booked")
+      }
+      const booking = entry.booking!
+      if (booking.receipt) return booking.receipt
+      if (booking.outcome !== "ended") throw new Error("Invalid executor booking.")
+      return settle(entry, booking)
+    }),
+    question: (holder, text, target) => serialize(async () => {
+      if (!text.trim() || Buffer.byteLength(text) > 8192) throw new ExecutorRequestError("A question must contain between 1 and 8192 bytes of text.")
+      if (target) {
+        const entry = lookup(target.step, target.lease)
+        if (!live(entry, now()) || !sameHolder(entry.holder, holder) || entry.grant.unit !== target.task) {
+          throw new ExecutorRequestError("A task question requires ownership of its live step and lease.")
+        }
+      }
+      const task = target?.task
+      const existing = questions.find((item) =>
+        !item.answer && sameHolder(item.asker, holder) && item.task === task && item.text === text
+      )
+      if (existing) return { id: existing.id, state: "raised" }
+      const id = randomUUID()
+      await persistQuestions([...questions, { id, asker: { ...holder }, text, task, position: questions.length + gates.length }])
+      return { id, state: "raised" }
+    }),
+    claimQuestion: (person) => serialize(async () => personStep(person)),
+    claimPerson: (person) => serialize(() => nextPerson(person)),
+    answerPerson: (person, id, decision, rationale) => serialize(async () => {
+      if (questionAuthority(person) && questions.some((item) => item.id === id)) {
+        await settleQuestion(person, id, decision, rationale)
+      } else if (releaseAuthority(person) && gates.some((item) => item.id === id)) {
+        const blocked = await approveGate(person, id, decision, rationale)
+        if (blocked) return blocked
+      } else {
+        throw new ExecutorRequestError("The person grant does not authorize that item or the item was never issued.")
+      }
+      return nextPerson(person)
+    }),
+    answerQuestion: (person, id, decision, rationale) => serialize(async () => {
+      await settleQuestion(person, id, decision, rationale)
+      return personStep(person)
+    }),
+    claimGate: (person) => serialize(() => offerGate(person)),
+    answerGate: (person, id, decision, rationale) => serialize(async () =>
+      (await approveGate(person, id, decision, rationale)) ?? offerGate(person)),
+    next: (holder) => serialize(async () => withoutGrant(await select(holder, now()))),
+    busy: () => serialize(async () => {
+      const last = entries.at(-1)
+      return last !== undefined && (live(last, now()) || !!(last.booking && !last.booking.receipt))
+    }),
+    async close() {
+      closed = true
+      await tail
+      lock.release()
+    },
+  }
+}

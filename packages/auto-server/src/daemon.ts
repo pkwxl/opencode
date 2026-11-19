@@ -79,7 +79,10 @@ import { CLIENT_APP_JS, CLIENT_INDEX_HTML } from "./web/client"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
 import { applyServerProfile } from "./profile"
 import { BRIDGE_TOKEN_ENV, CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parsePlan, REQUEST_BYTE_LIMIT, requestTooLarge, RequestError, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
-import { PROTOCOL_VERSION } from "./ws-protocol"
+import { executorRoutes, PROTOCOL_VERSION, type ExecutorRoute } from "./ws-protocol"
+import { ExecutorBridge } from "./executor-bridge"
+import { parseExecutorRequest, readExecutorBody } from "./executor-request"
+import { openProjectCreation } from "./project-creation"
 import { workerCommand } from "./worker-command"
 
 export const DEFAULT_PORT = 4770
@@ -212,6 +215,7 @@ const TAIL_LIMIT = 8192
 
 export type DaemonOptions = {
   dataDir: string
+  openRoots?: readonly string[]
   port?: number
   hostname?: string
   // The command that starts a worker (source runs: [bun, src/index.ts];
@@ -267,6 +271,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // closeUnit's undo lines) names this shell's bin either way.
   applyServerProfile()
   const store = new DaemonStore(options.dataDir)
+  const creation = options.openRoots?.length ? openProjectCreation(store, options.openRoots) : undefined
   const worker = options.worker ?? workerCommand()
   // The spawn cwd is arbitrary (the run target is the registry's absolute
   // path, the worker resolves it itself); it must only be a REAL directory
@@ -378,6 +383,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   //   - the live registry run: a starting/running worker of this daemon on
   //     the directory answers 409 (retryable) ahead of the lock, closing the
   //     spawn window where the lock is not yet observable.
+  const coordinators = new Map<string, { run: RunRecord; bridge: ExecutorBridge }>()
+  const coordinatorBridges = new Map<string, ExecutorBridge>()
   const opInFlight = new Set<string>()
   const liveRunOn = (directory: string): RunRecord | undefined =>
     [...runs.values()].find((run) => run.directory === directory && (run.state === "starting" || run.state === "running"))
@@ -464,6 +471,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // its settled/closed frames just above; its next frame is refused ("not
     // in this daemon's registry"), never silently routed.
     hubs.delete(run.id)
+    const coordinator = coordinators.get(run.directory)
+    if (coordinator?.run === run) {
+      coordinator.bridge.close()
+      coordinatorBridges.delete(run.id)
+      coordinators.delete(run.directory)
+    }
     // The registry's terminal bound (above): past MAX_TERMINAL_RUNS terminal
     // records the oldest evict with their hubs — the tail memory this
     // process holds for closed history stays bounded.
@@ -583,7 +596,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // BEFORE anything is registered (the carriage bound — a request past it
   // could only ever die at the spawn), and a spawn that throws settles the
   // record inside spawnWorker before the error reaches the route.
-  const startRun = (project: RegisteredProject, runOptions: RunOptions, switches: Record<string, string>, server: Bun.Server<SocketData>, plan?: PlanPayload, transfer?: TransferPayload): RunRecord => {
+  const startRun = (project: RegisteredProject, runOptions: RunOptions, switches: Record<string, string>, server: Bun.Server<SocketData>, plan?: PlanPayload, transfer?: TransferPayload, executor?: ExecutorBridge): RunRecord => {
     const id = `run-${String(++counter).padStart(6, "0")}`
     // The transport URL names this daemon's own bound address (the worker
     // connects back on the loopback or whatever host the operator bound;
@@ -605,7 +618,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // teaching; the caller's route answers it as a 400 (the plan and
     // transfer spawned routes the same way), and no wedge can form because
     // nothing was registered (plans/0223 D1, the 0165-055 finding).
-    const payload = JSON.stringify({ directory: project.directory, options: runOptions, switches, ...(transport ? { transport } : {}), ...(plan ? { plan } : {}), ...(transfer ? { transfer } : {}) })
+    const payload = JSON.stringify(executor
+      ? { directory: project.directory, executor: true, transport }
+      : { directory: project.directory, options: runOptions, switches, ...(transport ? { transport } : {}), ...(plan ? { plan } : {}), ...(transfer ? { transfer } : {}) })
     const tooLarge = requestTooLarge(payload)
     if (tooLarge !== undefined) throw new RequestError(tooLarge)
     const run: RunRecord = {
@@ -633,7 +648,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // again.
     const secret = freshRunSecret()
     hubs.set(id, createHub(secret))
-    appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run: id, event: "opened", project: project.name, directory: project.directory, secret, started: run.started, request: { options: runOptions as unknown as Record<string, unknown>, switches } })
+    if (executor) {
+      coordinators.set(project.directory, { run, bridge: executor })
+      coordinatorBridges.set(id, executor)
+    } else appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run: id, event: "opened", project: project.name, directory: project.directory, secret, started: run.started, request: { options: runOptions as unknown as Record<string, unknown>, switches } })
     spawnWorker(project, run, payload, transport, secret)
     return run
   }
@@ -645,7 +663,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
 
   // Bearer-token auth: 401 for the missing and the unknown, the scopes for
   // the known. Digest comparison happens in the store.
-  const scopesOf = (request: Request): { status: number; body: Record<string, unknown>; scopes?: Scope[] } => {
+  const scopesOf = (request: Request, identifyExecutor = false): { status: number; body: Record<string, unknown>; scopes?: Scope[]; identity?: string } => {
     const header = request.headers.get("authorization")
     if (!header) {
       return { status: 401, body: { error: "authentication required: send 'Authorization: Bearer <token>' (issue one with: opencode-auto-server token issue --scopes …)" } }
@@ -656,7 +674,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     }
     const scopes = store.verifyToken(presented.trim())
     if (!scopes) return { status: 401, body: { error: "unknown token" } }
-    return { status: 0, body: {}, scopes }
+    return {
+      status: 0, body: {}, scopes,
+      ...(identifyExecutor && { identity: createHash("sha256").update("auto-executor/v1\0").update(presented.trim()).digest("hex") }),
+    }
   }
 
   // The WebSocket clients' variant (P3b): a browser WebSocket cannot set
@@ -968,6 +989,21 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       if (denied) return denied
       return json(200, { projects: store.listProjects() })
     }
+    if (creation && segments[0] === "projects" && segments.length === 1 && method === "POST") {
+      const auth = scopesOf(request, true)
+      if (!auth.scopes || !auth.identity) return json(auth.status, auth.body)
+      if (!auth.scopes.includes("projects")) return json(403, { error: 'Project creation requires the "projects" scope.' })
+      let body: unknown
+      try {
+        body = await readExecutorBody(request)
+        if (!body || typeof body !== "object" || Array.isArray(body)) throw new RequestError("Project creation requires a JSON object.")
+      } catch (error) {
+        return json(400, { error: error instanceof Error ? error.message : "Invalid project creation request." })
+      }
+      server.timeout(request, 0)
+      const result = await creation.request(auth.identity, body as Record<string, unknown>)
+      return json(result.status, result.body)
+    }
     if (segments[0] === "runs") {
       if (segments.length === 1 && method === "GET") {
         const denied = needScope(request, "listing runs", "read")
@@ -994,6 +1030,53 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           return deleteRun(run)
         }
       }
+    }
+    const executorRoute = segments[3] as ExecutorRoute
+    if (method === "POST" && segments.length === 4 && segments[0] === "projects" &&
+        segments[2] === "executor" && executorRoutes.includes(executorRoute)) {
+      const auth = scopesOf(request, true)
+      if (!auth.scopes || !auth.identity) return json(auth.status, auth.body)
+      const worker = auth.scopes.includes("executor")
+      const grants = (["questions", "releases"] as const).filter((grant) => auth.scopes!.includes(`person-${grant}`))
+      const delegation = auth.scopes.includes("person") ? "unrestricted" : grants.length ? grants : undefined
+      if (executorRoute === "answer" ? !delegation : !worker && !(executorRoute === "claim" && delegation)) {
+        return json(403, { error: "The token lacks the required executor grant." })
+      }
+      const name = safeDecode(segments[1]!)
+      const project = name ? store.resolveProject(name) : undefined
+      if (!project) return json(404, { error: "No registered project matches the executor route." })
+
+      let body: unknown
+      try {
+        body = await readExecutorBody(request)
+        if (executorRoute === "claim" && !worker && body && typeof body === "object" && !Array.isArray(body) && !("role" in body)) {
+          body = { ...body, role: "person" }
+        }
+        const { action } = parseExecutorRequest(executorRoute, body, auth.identity, delegation)
+        if (action.route === "claim" && action.role === "worker" && !worker) {
+          return json(403, { error: 'A worker claim requires the "executor" scope.' })
+        }
+      } catch (error) {
+        return json(400, { error: error instanceof Error ? error.message : "Invalid executor request." })
+      }
+      let bridge = coordinators.get(project.directory)?.bridge
+      if (!bridge) {
+        if (opInFlight.has(project.directory) || liveRunOn(project.directory)) {
+          return json(409, { error: "A run or operation already occupies this project." })
+        }
+        const holder = liveRunLock(project.directory)
+        if (holder) return json(423, { error: lockStatusLine(holder) })
+        bridge = new ExecutorBridge()
+        try {
+          startRun(project, parseOptions(undefined), {}, server, undefined, undefined, bridge)
+        } catch (error) {
+          return json(500, { error: error instanceof Error ? error.message : "The coordinator could not start." })
+        }
+      }
+      // The bridge timeout owns ambiguous delivery, even when the HTTP peer disconnects.
+      server.timeout(request, 0)
+      const reply = await bridge.send(executorRoute, auth.identity, body, delegation)
+      return json(reply.status, reply.body)
     }
     // The P3b interactive surface (src/interactive-ws.ts): the worker
     // bridge and the client endpoint, both WebSocket upgrades over the same
@@ -1044,6 +1127,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return json(403, { error: `the interactive surface requires the "answer" or "control" scope ("answer" guards questions, "control" guards run control); this token carries: ${auth.scopes.join(", ")}` })
       }
       const run = findRun(segments[1]!)
+      if (run && coordinatorBridges.has(run.id)) return json(409, { error: "The executor coordinator uses the project executor routes." })
       if (!run) return json(404, { error: `no run ${segments[1]} (runs are identified by the id POST /runs returned)` })
       // A terminal run's channel closed with the run (plans/0224 D2, the
       // 0165-170 finding): settle dropped the hub — its open questions
@@ -1271,6 +1355,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations (GET models is the table; POST models is the probe — its own probe scope, the confirm field, rate-limited); P1e serves GET /projects/<project>/status|log|events — the status read model and the SSE tails; P2b serves GET /projects/<project>/status-events — the typed driver-events stream; P3b serves the WebSocket interactive transport GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge); P4a serves GET / — the Web client — with GET /app.js, GET /session (the token's scopes) and GET /projects (the whitelist))` })
   }
 
+  const interactive = interactiveHandlers({
+    hubOf: (run) => hubs.get(run),
+    stateOf: (run) => runs.get(run)?.state,
+    onRaise: journalRaise,
+    onSettle: journalSettle,
+  })
   const server = Bun.serve<SocketData>({
     port: options.port ?? DEFAULT_PORT,
     hostname: options.hostname ?? DEFAULT_HOSTNAME,
@@ -1282,12 +1372,24 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     // journal hooks (P3c) make the queue durable: every first-held ask and
     // every durable settlement is appended to the daemon's own journal, so
     // a restart replays the pending set.
-    websocket: interactiveHandlers({
-      hubOf: (run) => hubs.get(run),
-      stateOf: (run) => runs.get(run)?.state,
-      onRaise: journalRaise,
-      onSettle: journalSettle,
-    }),
+    websocket: {
+      ...interactive,
+      open(socket) {
+        const bridge = coordinatorBridges.get(socket.data.run)
+        if (bridge && socket.data.kind === "worker") bridge.open(socket)
+        else interactive.open?.(socket)
+      },
+      message(socket, message) {
+        const bridge = coordinatorBridges.get(socket.data.run)
+        if (bridge && socket.data.kind === "worker") bridge.message(socket, message)
+        else interactive.message(socket, message)
+      },
+      close(socket) {
+        const bridge = coordinatorBridges.get(socket.data.run)
+        if (bridge && socket.data.kind === "worker") bridge.disconnect(socket)
+        else interactive.close?.(socket)
+      },
+    },
   })
 
   const handle: DaemonHandle = {
@@ -1300,13 +1402,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     store,
     runs: () => [...runs.values()].map(view),
     stop: async () => {
-      // Stopping the daemon stops serving; live workers are NOT killed —
-      // they are self-sufficient processes whose runs complete and leave
-      // their state on disk, and the lock arbitrates any successor (a
-      // restarted daemon answers 423 while an orphan still holds a
-      // directory). Workers are cattle, not pets.
+      // Ordinary workers finish independently. Coordinator workers depend
+      // on this bridge, so wait for them to drain and release their locks.
       for (const run of runs.values()) if (run.watcher) clearInterval(run.watcher)
+      const children = [...coordinators.values()].map(({ run }) => run.proc?.exited)
+      for (const bridge of coordinatorBridges.values()) bridge.close()
       server.stop(true)
+      await Promise.all([...children, creation?.close()])
     },
   }
   return handle

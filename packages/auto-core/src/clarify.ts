@@ -95,7 +95,30 @@ const analysisBulletLine = (state: AnalysisBullet): string =>
       : `the project analysis ${ANALYSIS_DOC} is unreleased — its release moment (the project start) has passed, so it is not this command's target; ` +
         `a hand \`${CLARIFIED_MARK}\` edit is the channel, putting the roadmap and round-brief proposals in force for the rounds and phases not yet started`
 
-export async function clarifyGate(directory: string, opts: ClarifyOptions): Promise<ClarifyResult> {
+type ClarificationEffect = typeof release
+
+export type ClarificationProposal = {
+  document: string
+  before: string
+  after: string
+  review: string[]
+  subject: string
+}
+
+export async function readClarificationProposal(directory: string, opts: ClarifyOptions): Promise<ClarificationProposal | undefined> {
+  let proposal: ClarificationProposal | undefined
+  await evaluateClarification(directory, opts, async (_dir, document, before, review, subject) => {
+    proposal = { document, before, after: withMark(before), review, subject }
+    return { type: "released", lines: review }
+  })
+  return proposal
+}
+
+export function clarifyGate(directory: string, opts: ClarifyOptions): Promise<ClarifyResult> {
+  return evaluateClarification(directory, opts, release)
+}
+
+async function evaluateClarification(directory: string, opts: ClarifyOptions, apply: ClarificationEffect): Promise<ClarifyResult> {
   const { bin } = shellProfile()
   const manual = opts.phases === "m"
   const advance = `${bin} ${manual ? "plan" : "transfer"} ${directory}`
@@ -133,7 +156,7 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
     // extraction the problems gate and the install path share. The absent
     // posture teaches what a round without a proposal keeps: its gate.
     const briefs = roundBriefProposals(raw)
-    return await release(
+    return await apply(
       directory,
       ANALYSIS_DOC,
       raw,
@@ -172,7 +195,7 @@ export async function clarifyGate(directory: string, opts: ClarifyOptions): Prom
   // teaching as one appended ℹ line (plans/0204 D1 — one statement per
   // output).
   const analysis: AnalysisBullet = raw === undefined ? "absent" : unreleased ? "unreleased-past" : "released"
-  const survey = await surveyGate(directory, opts, bin, advance, analysis)
+  const survey = await surveyGate(directory, opts, bin, advance, analysis, apply)
   if (survey.refusal || survey.result.type === "error" || !unreleased) return survey.result
   return {
     ...survey.result,
@@ -194,6 +217,7 @@ async function surveyGate(
   bin: string,
   advance: string,
   analysis: AnalysisBullet,
+  apply: ClarificationEffect,
 ): Promise<{ result: ClarifyResult; refusal: boolean }> {
   let state: Awaited<ReturnType<typeof readPhases>>
   try {
@@ -277,7 +301,7 @@ async function surveyGate(
         }
       }
       return {
-        result: await release(
+        result: await apply(
           directory,
           doc,
           text,
@@ -300,7 +324,7 @@ async function surveyGate(
     // below names the state.
     if (surveyForks(text) === 0 && briefProposal(text) !== undefined) {
       return {
-        result: await release(
+        result: await apply(
           directory,
           doc,
           text,

@@ -349,7 +349,7 @@ export type ConfigKeys = {
   isolate?: string[]
 }
 
-function parseConfigKeys(dir: string, raw: unknown): ConfigKeys {
+export function parseConfigKeys(dir: string, raw: unknown): ConfigKeys {
   const fail = (message: string): never => {
     throw new RequestError(message)
   }

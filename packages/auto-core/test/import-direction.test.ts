@@ -548,6 +548,8 @@ const CLASSIFIED: Record<string, Domain> = {
   // guest-model halves behind plan's prelude rows 12–13 (the export's render
   // composition and the adopt's validation/test-handover/commit body).
   "work-order": "driver",
+  "executor-steps": "driver",
+  "executor-coordinator": "driver",
   // The blockage dossier and honest block line (plans/0082 §2 D1/D2), the
   // strict remediation-plan parser and the blockage document's shape (§4
   // D5 / §5 D6): the pure half every covered block site builds on.
@@ -800,6 +802,8 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // attended flag) and the adopt's validation / test-handover / commit body.
   // Pipeline beside plan, its only caller.
   "work-order": "pipeline",
+  "executor-steps": "pipeline",
+  "executor-coordinator": "pipeline",
   // The 0082 blockage family and the charter clamp (pipeline beside the
   // loops that call them and the plan prelude that executes the marks).
   blockage: "pipeline",

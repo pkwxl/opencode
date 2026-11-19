@@ -291,7 +291,7 @@ export async function handoverVerdict(
 // never a thrown exit 1 after a session already spent work.
 type ParkCheck = { type: "ok" } | { type: "invalid"; problems: string[] } | { type: "foreign" }
 
-async function parkCheck(planDir: string, plan: Plan, task: Task, blocker: string): Promise<ParkCheck> {
+export async function parkCheck(planDir: string, plan: Plan, task: Task, blocker: string): Promise<ParkCheck> {
   const target = plan.tasks.find((entry) => entry.id === blocker)
   if (target === undefined) {
     const paths = taskStatePaths(blocker)
@@ -337,7 +337,7 @@ function parkFeedback(task: Task, file: string, problems: string[]): string {
 // files the successor must re-read first, since they moved under a task
 // planned before the blocker existed. The successor judges whether the
 // consumable it waited for exists; it may park again or surface gaps.
-async function parkReleaseNote(facts: ReturnType<typeof promptFacts>, dir: string, plan: Plan, task: Task, docs: TaskDocs): Promise<string> {
+export async function parkReleaseNote(facts: ReturnType<typeof promptFacts>, dir: string, plan: Plan, task: Task, docs: TaskDocs): Promise<string> {
   const blocker = task.parked!
   const closed = plan.closed.get(blocker)
   const changed = await taskChangedPaths(dir, blocker)

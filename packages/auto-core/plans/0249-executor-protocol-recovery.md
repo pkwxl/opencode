@@ -1,0 +1,60 @@
+# 0249 — Executor report recovery, lease replay, and admission
+
+Derives: P2, P3, P4, P5, P6, P8, P12, P13, P17, P20.
+
+Amends [0246 D4 and D10](0246-executor-protocol.md) and [0248 D1–D6 and D8](0248-executor-protocol-amendments.md) where specified below. The rest of the route envelope and person delivery rules carry forward. This ruling addresses the follow-up design review. Implementation and implementation audit belong to the staged slices.
+
+## D1 — Report settlement and continuation (B1, C2)
+
+The progress extension in `.auto/` durably records the authenticated holder, issued step and lease, and report disposition under `(unit, step, lease)`. In the serialized coordinator, accepting a report atomically books one attempt and reserves settlement of that lease. An accepted `ended` report starts in **pending landing**. An accepted `failed` report atomically records **terminal without landing** at booking. Replays with a conflicting outcome get HTTP 400. The note is diagnostic only and the first accepted note stands.
+
+A pending landing survives expiry and restart. Before admitting a successor or advancing the affected workflow, the coordinator resumes settlement from its durable booking. An identical report can trigger the same recovery. The coordinator validates the tree and verdict artifacts from disk and git. It records the intended effect and its expected precondition before each recoverable write, including the share commit and any park or close-out effects. Each effect has a durable completion witness or an idempotent postcondition that recovery can check independently. In particular, recovery matches a commit to the booked operation by provenance and expected base and scope. A step-shaped subject alone is insufficient. A proven completed effect is skipped, a missing effect with an intact precondition is completed, and ambiguous or inconsistent evidence blocks advancement with a remedy. Recovery never re-enters the whole landing sequence blindly.
+
+Settle to **terminal landed** once all required effects are proven complete, or **terminal without landing** when an expected no-share result is fully processed, such as an isolation refusal or a zero-write disposition. Record the reason and any settled effect witnesses before responding and making the unit eligible again. A refusal before the share commit preserves the tree. A transient failure or uncertainty partway through landing leaves the booking pending. Terminal replay derives a fresh response without repeating effects or booking another attempt.
+
+A failed report consumes the lease and attempt budget, leaving existing edits and artifacts under the active progress record. They are not accepted as verdicts. Disk-based continuation judgment checks isolation, readability and resumability before the next claim. When eligible, the next worker gets the existing continuation or fresh-retry brief derived from those checks. At the attempt cap, return `blocked attemptsExhausted`. `release` relinquishes an unused turn without booking an attempt or cleaning the workspace. If work began, report its outcome. Any dirt found after release still goes through the continuation and isolation checks.
+
+## D2 — Issued leases, release replay, and heartbeat (B3, B4, C1)
+
+Persist each grant before returning it, including its project, step, lease ID, holder (token identity and channel), deadline and successor relation when retaken. Keep issued-lease history and terminal receipts in the progress extension even after the active progress record closes. V1 gives issued leases no replay cutoff. Expiry is evaluated lazily against the durable deadline. A pending report reserves its lease for settlement even after the deadline.
+
+After authenticating and validating the pair, handle `release` in this order:
+
+1. A receipt for a successful release by this holder returns HTTP 200 with the currently derived `step`, even after restart or takeover. The receipt acknowledges the original release and does not evict a successor.
+2. A live lease belonging to this holder is consumed in the same durable update that writes its release receipt. Return the derived `step`.
+3. An expired lease belonging to this holder with no successor returns HTTP 200 with the current derivation, without writing a release receipt or granting work. An expired and retaken lease returns `wait lease-held` while its successor is live, and the current derivation once that successor has settled or expired without a live replacement. Neither branch mutates the lease.
+4. An issued lease owned by another holder receives the workflow-plane fencing response under 0248 D1 without replaying that holder's receipt. A lease consumed by a report is already settled for release purposes and returns the current derivation without writing a release receipt. A never-issued or mismatched pair gets HTTP 400.
+
+Report replay is likewise specific to the authenticated holder's booking. A stale unbooked report cannot use its successor's commit as its own receipt. For expired and foreign leases it follows the same non-mutating fencing rules. A release against a report pending settlement leaves the reservation intact and returns a workflow wait.
+
+Replace the heartbeat body with `{ "channel"?, "leases": [{ "step", "lease" }] }`. Validate the entire list before renewal. Malformed or never-issued pairs get HTTP 400. Renew only the named, currently live leases owned by the authenticated holder, skipping stale, consumed, pending-settlement and foreign entries. Return the existing `menu` payload with the caller's current leases. An empty list renews nothing. The server computes each renewal from the current time and configured lease duration. Heartbeat is repeat-safe and bounded per renewal, and successive calls can extend a deadline. A stale heartbeat cannot renew a replacement lease even if the token and channel are reused. Shared-tree file writes by a stale process remain outside this fence.
+
+`claim` returns one `step`. `ready` and `heartbeat` return `menu.leases`. After an ambiguous untargeted claim, the client must call `ready` and reconcile outstanding leases before making another claim. It must account for a still-in-flight original request before concluding that an absent lease means no grant. A blind retry at concurrent tiers can grant additional work.
+
+## D3 — Landing write boundary and producer provenance (B2, B5)
+
+Before staging a share, require every observed changed path attributable to the lease to be inside its effective scope or an artifact path permitted for that step and verdict. Driver-exclusive paths always win over allowances. Scope comes from the authoritative declaration captured at admission. Any expansion requires a new authorized admission under the normal declaration rules. Sibling ownership is a separate constraint and can deny an otherwise allowed path. At concurrent tiers, enforce both checks on the lease's attributable delta and require an explicit confined commit set. If attribution is uncertain, block the landing. Inspect staged and unstaged changes, non-ignored untracked paths and both endpoints of any rename. Refuse observed violations as `blocked isolation` with paths and a remedy, retain the active progress and keep the gate in force while the violation persists.
+
+The changed-path guarantee covers Git-visible workspace changes. Porcelain alone cannot attest to ignored files, ignored driver state or Git metadata. Those surfaces remain forbidden by the write contract. Any claim to detect or prevent changes there requires separate integrity checks or workspace isolation. The commit set remains confined even when a filesystem write falls outside the observed surface.
+
+Each landed execute or fix share has a durable association between its commit, step, lease and the holder's stable non-secret token identifier, never the credential bytes. Keep it in the same progress extension as the report booking and commit witness. A recovered commit takes its producer identity from that booking. Before advertising or granting verify, resolve the immediately preceding execute or fix share and its producer identity, including after restart. Missing or ambiguous provenance blocks verify admission and names the evidence to repair. Refuse the producer's token across all its channel IDs. Distinct tokens can still be operated by one underlying agent session. Independent context is a cooperative-host obligation.
+
+## D4 — Request handling and state precedence (B6)
+
+Authenticate the route and validate the body and role before processing. In the serialized coordinator, evaluate lease expiry and reservations, then handle existing receipts and authorized reports, releases, renewals and person answers as their own request actions. Apply their operation-specific guards, including disk checks before writes. Pending person items block new worker admissions but do not prevent a holder from settling an authorized report or releasing its lease. A resulting response may show `wait question` or `wait gate` after settlement. Fetching a brief or reconciling an existing targeted grant uses the existing lease and grants no new work.
+
+For new work and post-action responses, apply this state precedence in order. Evaluation may expose a previously derived result without enacting another request action.
+
+1. Apply `blocked config`, then `blocked subtask`, then readability and unresolved isolation or settlement blocks. Unsupported configurations are refused even before project start.
+2. Derive pending project-start and survey-release items. Workers see their own `wait question` before project-wide `wait gate`. Person claims use 0248 D7's oldest eligible item and escalation rules.
+3. Apply remaining workflow blocks, including an unowned dirty tree, exhausted budgets for the affected work and mutual parks. Consider a live lease conflict for a targeted request before offering that work.
+4. Derive eligible execute, verify or fix work from settled evidence and normal readiness checks. Only a claim grants new work. If work remains without an eligible grant, return the applicable `wait not-ready` or `wait in-flight`.
+5. Derive `phase-boundary` when a phase still has a boundary for the person to cross, and `done` once the round is complete.
+
+Landed verdict effects such as park and PASS close-out belong to report settlement, before this evaluation. The mixed first-match table of 0246 D4 d and 0248 D8 no longer dispatches requests.
+
+## D5 — Slice order and open-mode recovery (C3)
+
+Slice 1 may proceed with pure reads and decision extraction. Before slices 2–4 freeze their respective mutations, pin these transitions with restart and lost-response tests. The first mutating slice must persist grants and distinguish pending from terminal reports for the operations it exposes. Slice 3 must prove recovery before, during and after each landing effect. Slice 4 must prove expiry, release replay and heartbeat fencing across restart and same-channel takeover. Also pin isolation on an unconflicting out-of-scope edit, verification refusal using the producer's token after restart, both precedence intersections, and untargeted claim reconciliation.
+
+Slice 5 retains the `projects` grant for the complete create-and-init operation. Before routes ship, define the durable creation identity, retry key, and recoverable steps for directory creation, initialization and registration. An identical retry resumes a proven partial creation or acknowledges a completed one. Conflicting input or ownership blocks with a remedy, preserving pre-existing contents. Do not expose a partial project as initialized or routable. Pin the containment mechanism at filesystem use, including during recovery. Use root-anchored, symlink-safe operations or an equivalent race-resistant mechanism that binds checked directory identity to use. A realpath check followed by ordinary path-based writes is insufficient. Test interruption at each creation step and symlink replacement between validation and use.

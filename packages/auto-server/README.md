@@ -12,7 +12,7 @@ gate and status; this README is the landed shape at a glance.
 ```
 opencode-auto-server register <dir>              # the whitelist (absolute)
 opencode-auto-server token issue --scopes read,control,answer,config
-opencode-auto-server serve [--port 4770] [--host 127.0.0.1] [--data-dir <dir>] [--launch <confinement script>]
+opencode-auto-server serve [--port 4770] [--host 127.0.0.1] [--data-dir <dir>] [--launch <confinement script>] [--open --root <dir> …]
 # then: open the daemon's URL in a browser, paste a token — or talk REST.
 ```
 
@@ -138,9 +138,86 @@ without the route's scope. Scopes: `read` (status/observability/models),
 and beside the scope it takes an explicit `confirm` field and the
 per-daemon 10-minute rate window).
 
+## Serial executor preview
+
+Issue a token with `token issue --scopes executor` to use the worker routes
+for a registered, standalone Git project configured with `subtask: off`.
+The first request starts a per-project coordinator through the same worker
+launcher as a normal run, including `serve --launch` when configured.
+
+Send JSON with POST to `/projects/<project>/executor/<operation>`. Every
+request can include a `channel` string. Omitting it selects that token's
+default channel.
+
+| Operation | Body fields | Response payload |
+| --- | --- | --- |
+| `ready` | none | `menu` |
+| `claim` | optional `role` (`worker` or `person`), worker-only optional `task` and `kind` (`execute`, `verify`, or `fix`) | `step` |
+| `brief` | `task`, `kind`, optional `cursor` | `step` |
+| `heartbeat` | `leases`, an array of `{ step, lease }` pairs | `menu` |
+| `report` | `step`, `lease`, `outcome` (`ended` or `failed`), optional `note` | `step` |
+| `release` | `step`, `lease` | `step` |
+| `question` | `text`, optional complete `task`, `step`, `lease` tuple | `question` with `id` and `state: "raised"` |
+| `answer` | `item`, `decision`, optional `rationale` | next eligible person `step` |
+
+Successful responses include `protocol: 1` and the listed payload. Lease
+deadlines use Unix milliseconds. After an ambiguous untargeted claim,
+reconcile `menu.leases` with `ready` before claiming again. Retry a report
+or release with its original step and lease. If a report was accepted
+before an interruption, a later claim resumes settlement before new work
+can be granted. A claim returns the specific block if settlement cannot
+proceed. Verification requires a different token from the execute or fix
+producer and a fresh agent context.
+
+Issue `person` for questions and release approvals or grant either separately
+with `person-questions` and `person-releases`. The daemon derives these grants
+from the bearer token. A person-only token defaults to a person claim. A
+token with `executor` defaults to a worker claim and can request
+`role: "person"` if it also has a person grant. Person claims return the oldest
+eligible `question` or `human` step. Use its ID as `item` when answering.
+Release decisions use `"approve"` and apply to the reviewed proposal. If the
+proposal changes, the response offers a new item. Replaying a settled answer
+preserves the original decision and returns fresh person work.
+
+The live brief owner can follow `answerCursor` by passing its value as
+`cursor` on the brief route. Send `null` to fetch from the beginning. A page
+has `kind: "answers"`, an `answers` array, and a `next` cursor when more
+answers are available.
+
+Each project admits one worker lease at a time. Different projects can hold
+worker leases concurrently.
+
+### Create a project under a declared root
+
+On Linux, start the daemon with `serve --open --root /srv/projects`. Repeat
+`--root` to allow additional roots. Each root must already exist, be owned by
+the daemon's user, and disallow group and public writes. Issue a bearer token
+with `token issue --scopes projects` to authorize creation and initial
+configuration under those roots. The route is disabled by default.
+
+Send a JSON object to `POST /projects`:
+
+```json
+{"root": "/srv/projects", "name": "example", "config": {"subtask": "off"}}
+```
+
+Use the root's canonical absolute path and a single directory name. The
+optional `config` object accepts the init configuration keys and defaults
+`subtask` to `off`. A successful response returns HTTP 200 with
+`{ "project": … }`. For an existing directory, use the operator's
+`register <dir>` command.
+
+After an interruption or an ambiguous response, retry with the same bearer
+token, root, name, and configuration. The daemon initializes in private
+staging under the declared root, publishes the directory without replacing
+an existing entry, and checks its identity before registration. A matching
+retry resumes the creation or returns the existing registration. If the
+root, staging directory, or destination has been replaced, ask the operator
+to inspect it.
+
 ## The whitelist
 
-A run or operation names a **registered project** — by its registered name
+A run or project-scoped operation names a **registered project** — by its registered name
 or registered absolute path — and the daemon resolves the target only
 against the registry in its own data directory (`--data-dir`, default
 `$XDG_CONFIG_HOME/opencode-auto/server/`). It never resolves an arbitrary
@@ -288,3 +365,25 @@ cross-stack close-out e2e (`test/service-e2e.test.ts`) drives one sample
 project through the whole surface in one unbroken run.
 
 <!-- auto: eof -->
+
+## Open project creation
+
+Start the daemon with `serve --open --root /absolute/project-root`. Repeat
+`--root` to allow other directories. Open creation requires Linux with glibc and a
+filesystem that supports no-replace rename. Each root must be owned by the
+daemon user and writable only by that user.
+
+Issue a token with `token issue --scopes projects` and send
+`POST /projects` with the canonical root path, a single directory name,
+and optional init config. The full create-and-init operation uses the
+`projects` grant. For example:
+
+```json
+{"root":"/absolute/project-root","name":"widget","config":{"subtask":"off"}}
+```
+
+The daemon initializes a private directory and publishes it before adding
+it to the registry. An interrupted request can be retried by the same
+token with the same project name, root and config. Existing directories
+require the operator's usual `register` command. Review and commit the
+generated init files before starting work.
