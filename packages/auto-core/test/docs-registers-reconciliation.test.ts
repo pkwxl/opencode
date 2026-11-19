@@ -55,6 +55,15 @@ const REGISTER_PINS: [name: string, doc: string, needle: string][] = [
   ["mid-cycle register row, consumed into v0.4.0", releases, "**0226 (reconciliation, 2026-11-09)** — the trade-off/risk registers refreshed to the corpus"],
 ]
 
+// The executor protocol's two terms (0246 §C's deferral, discharged once the
+// slices landed and the terms named shipping surfaces — prompts/executor.md,
+// executor-worker.ts): pinned like the S02-07 rows so the discharge cannot
+// silently revert.
+const GLOSSARY_PROTOCOL_PINS: [name: string, needle: string][] = [
+  ["executor", "the reverse-control posture, the loop turned inside out"],
+  ["coordinator", "the sole writer of shared git state and the admission authority behind every lease grant"],
+]
+
 // The retired wordings: the stale cells the finding measured. Their return is
 // the register drifting behind the corpus again, caught directly.
 const RETIRED: [name: string, doc: string, needle: string][] = [
@@ -68,6 +77,12 @@ const RETIRED: [name: string, doc: string, needle: string][] = [
 describe("the glossary/registers reconciliation (0226, 0166 step 066)", () => {
   test("every measured term has its glossary row", () => {
     for (const [name, needle] of GLOSSARY_PINS) {
+      expect(glossary.includes(needle), `${name}: ${needle}`).toBe(true)
+    }
+  })
+
+  test("the executor protocol's deferred terms stand (0246 §C)", () => {
+    for (const [name, needle] of GLOSSARY_PROTOCOL_PINS) {
       expect(glossary.includes(needle), `${name}: ${needle}`).toBe(true)
     }
   })
