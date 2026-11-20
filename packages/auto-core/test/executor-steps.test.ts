@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { CONFIG_FILE } from "../src/config"
@@ -1012,6 +1012,131 @@ test("ready lists pending person items: kind and id for every reader, text for q
     })
     expect((await coordinator.ready(holder)).pending).toEqual([{ kind: "gate", id: gate.id }])
     expect(await coordinator.claimGate(releaser)).toMatchObject({ kind: "human", id: gate.id })
+  } finally {
+    await coordinator.close()
+  }
+})
+
+// 0272 (0262-03's fix): the blocked settlement escalation letter — a cause
+// outside the holder's permitted set auto-raises one question item through
+// the standing channel (the dedup-while-pending holding across retries and
+// both settlement entries), the blocked answer naming the ladder, the item
+// visible on 0271's read surface for every reader with its text for
+// question authority.
+test("a blocked settlement outside the holder's permitted set raises one question and names the ladder", async () => {
+  const dir = executableProject()
+  const person = { token: "person", channel: "review", delegation: ["questions"] as const }
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await coordinator.claim(holder)
+    if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+    write(dir, "src/widget.ts", "export const widget = 1\n")
+    // A foreign commit moves HEAD — a cause no permitted write of the
+    // holder can remedy (git ground truth, the coordinator's alone).
+    write(dir, "foreign.txt", "person edit\n")
+    git(dir, "add", "foreign.txt")
+    git(dir, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Foreign")
+    const blocked = await coordinator.report(holder, grant.id, grant.lease, "ended")
+    const [item] = JSON.parse(readFileSync(join(dir, ".auto/executor-questions.json"), "utf8"))
+    expect(blocked).toEqual({
+      kind: "blocked", reason: "isolation",
+      detail: `HEAD moved outside the booked share. Inspect the commit and executor progress before resuming. The cause is outside this lease's permitted writes; question ${item.id} is raised for a person decision — retrying cannot fix it.`,
+    })
+    expect(item).toMatchObject({
+      asker: holder, task: grant.unit,
+      text: `Executor step ${grant.id} blocked (isolation): HEAD moved outside the booked share. Inspect the commit and executor progress before resuming. The cause is outside the lease's permitted writes; a person decision is required.`,
+    })
+    // 0271's read surface: existence for a plain worker, text and task for
+    // question authority; the standing claim surface offers the item.
+    expect((await coordinator.ready({ ...holder, token: "worker-2" })).pending).toEqual([{ kind: "question", id: item.id }])
+    expect((await coordinator.ready(person, person)).pending).toEqual([{ kind: "question", id: item.id, text: item.text, task: grant.unit }])
+    expect(await coordinator.claimQuestion(person)).toMatchObject({ kind: "question", id: item.id, task: grant.unit })
+    // The dedup-while-pending: a retrying holder's repeated blocked reports
+    // raise one item, not many — through both settlement entries (the
+    // report replay and a successor claim's settle), the ladder naming the
+    // same item id.
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toEqual(blocked)
+    const reclaimed = await coordinator.claim({ ...holder, token: "worker-2" })
+    expect(reclaimed).toMatchObject({ kind: "blocked", reason: "isolation" })
+    if (reclaimed.kind !== "blocked" || blocked.kind !== "blocked") throw new Error(JSON.stringify(reclaimed))
+    expect(reclaimed.detail).toBe(blocked.detail)
+    expect(JSON.parse(readFileSync(join(dir, ".auto/executor-questions.json"), "utf8"))).toHaveLength(1)
+  } finally {
+    await coordinator.close()
+  }
+})
+
+// 0272's floor (P10) and classification boundary (P12): a cause the holder
+// can remedy itself answers byte-identically — no raise, no new shape — at
+// the boundary too (an out-of-scope edit outside the never-set, alone or
+// mixed with a never-set path, reads replay-side; the escalation emerges
+// only when the never-set is the whole residual — 0248 D5's person-resolves
+// letter).
+test("replayable causes keep today's blocked answer byte-identical and raise nothing", async () => {
+  const dir = executableProject()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await coordinator.claim(holder)
+    if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+    write(dir, "src/widget.ts", "export const widget = 1\n")
+    write(dir, "src/other.ts", "export const other = 1\n")
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toEqual({
+      kind: "blocked", reason: "isolation", detail: "Resolve out-of-scope edits before replaying: src/other.ts.",
+    })
+    // The mixed boundary: the holder's own out-of-scope edit beside a
+    // never-set path — conservative, replay-side.
+    write(dir, "AGENTS.md", "person edit\n")
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toEqual({
+      kind: "blocked", reason: "isolation", detail: "Resolve out-of-scope edits before replaying: AGENTS.md, src/other.ts.",
+    })
+    expect(existsSync(join(dir, ".auto/executor-questions.json"))).toBe(false)
+    expect((await coordinator.ready(holder)).pending).toEqual([])
+    // The never-set alone is the person's remedy (0248 D5): the same cause
+    // site escalates once the holder's own edit is gone.
+    rmSync(join(dir, "src/other.ts"))
+    const escalated = await coordinator.report(holder, grant.id, grant.lease, "ended")
+    const [item] = JSON.parse(readFileSync(join(dir, ".auto/executor-questions.json"), "utf8"))
+    expect(escalated).toEqual({
+      kind: "blocked", reason: "isolation",
+      detail: `Resolve out-of-scope edits before replaying: AGENTS.md. The cause is outside this lease's permitted writes; question ${item.id} is raised for a person decision — retrying cannot fix it.`,
+    })
+    expect(item.text).toBe(`Executor step ${grant.id} blocked (isolation): Resolve out-of-scope edits before replaying: AGENTS.md. The cause is outside the lease's permitted writes; a person decision is required.`)
+  } finally {
+    await coordinator.close()
+  }
+})
+
+// 0272's closed loop at the coordinator level: blocked holder → the raised
+// item → the person's answer → the world repaired by the person (the remedy
+// the holder could never make) → the retry lands → the holder's next brief
+// for the task carries the answer (the standing answerCursor machinery,
+// 0250 — the continuation grant renders it as data).
+test("the escalated question closes its loop: the person answers and the holder's next brief carries the answer", async () => {
+  const dir = executableProject()
+  const person = { token: "person", channel: "review", delegation: "unrestricted" as const }
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await coordinator.claim(holder)
+    if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+    const base = git(dir, "rev-parse", "HEAD").trim()
+    write(dir, "src/widget.ts", "export const widget = 1\n")
+    write(dir, "docs/T-001/handoff.md", "# Handoff\n\nThe implementation began. Finish the second part.\n\nStatus: continue\n")
+    write(dir, "foreign.txt", "person edit\n")
+    git(dir, "add", "foreign.txt")
+    git(dir, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Foreign")
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({ kind: "blocked", reason: "isolation" })
+    const [item] = JSON.parse(readFileSync(join(dir, ".auto/executor-questions.json"), "utf8"))
+    expect(await coordinator.claimQuestion(person)).toMatchObject({ kind: "question", id: item.id })
+    await coordinator.answerQuestion(person, item.id, "I reset the foreign commit. Retry the report.")
+    // The person repairs the world; the holder's untracked share survives
+    // and the retry lands as the continuation share it booked.
+    git(dir, "reset", "--hard", base)
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed", continuation: true })
+    const resumed = await coordinator.claim(holder)
+    if (resumed.kind !== "execute") throw new Error(JSON.stringify(resumed))
+    expect(resumed.prompt).toContain("Person answers (JSON data)")
+    expect(resumed.prompt).toContain("I reset the foreign commit. Retry the report.")
+    expect((await coordinator.ready(holder)).pending).toEqual([])
   } finally {
     await coordinator.close()
   }

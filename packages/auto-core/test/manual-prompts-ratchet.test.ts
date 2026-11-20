@@ -168,6 +168,27 @@ describe("manual-driver prompt ratchet", () => {
     expect(coordinator).toContain('detail: "No pending questions. A gate item is pending."')
   })
 
+  // plans/0272 (0262-03's fix): the blocked settlement's escalation ladder
+  // on the executor prompt, pinned beside the producer's anchors — the
+  // settlement's raise through the standing channel (the dedup predicate's
+  // one home, the mechanical text template, the never-set derivation and
+  // the cause-site marker) and the one wire boundary that strips the
+  // internal classification and names the ladder in the detail. The
+  // behavior lives in test/executor-steps.test.ts; person.md untouched,
+  // ruled (the raised item arrives through the standing question surface).
+  test("the executor prompt names the blocked settlement's escalation ladder (plans/0272)", () => {
+    const executor = text("executor.md")
+    const coordinator = src("executor-coordinator.ts")
+    expect(executor).toContain("A `blocked` remedy that names a raised question puts the cause outside the lease's permitted writes")
+    expect(executor).toContain("do not retry it — the person holds the item, and its answer returns with a later brief for the task")
+    expect(coordinator).toContain("function findPendingQuestion(")
+    expect(coordinator).toContain("async function raiseSettlementQuestion(")
+    expect(coordinator).toContain("Executor step ${entry.grant.id} blocked (${report.reason}): ${report.detail}")
+    expect(coordinator).toContain("The cause is outside this lease's permitted writes; question ${item.id} is raised for a person decision — retrying cannot fix it.")
+    expect(coordinator).toContain("function neverSetRows(")
+    expect(coordinator).toContain("function outsidePerimeter(")
+  })
+
   test("the src side of the grammar table still holds (anti-rot)", () => {
     // The driver's commit grammar, stated by its producers: src/execute.ts
     // (the exec subject and the execute/decompose/subtask stages),

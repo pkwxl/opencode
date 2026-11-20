@@ -62,6 +62,16 @@ type Execute = Extract<ExecutorPreview, { kind: "execute" }>
 type Candidate = Execute | FixPreview | VerificationPreview
 type Grant = (Omit<Execute, "touches"> | Omit<FixPreview, "touches"> | VerificationPreview) & { id: string; lease: string; attempt: number; workspace: string; deadline: number; budget: number; answerCursor?: string | null }
 type BlockedReport = { kind: "blocked"; reason: "isolation" | "commitFailed"; detail: string }
+// The blocked-cause classification (0272, 0262-03's fix): `escalated` marks
+// the settlement causes whose remedy would require a write the holder's
+// grant kind cannot make — Git ground truth (history, HEAD, the index), the
+// never-set (driver state and driver-exclusive documents), the worktree's
+// own machinery — the person's bracket, not a replay. The marker is
+// coordinator-internal: settle()'s wrapper strips it and renders the
+// ladder-named wire answer, so the frozen response vocabulary and shape are
+// unchanged (P13; the ladder named inside `detail`, rendering) and the
+// replay arm stays byte-identical (P10).
+type SettlementBlocked = BlockedReport & { escalated?: true }
 type VerifyVerdict = "pass" | "fail"
 type Receipt = { kind: "landed"; commit: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; parked?: string; closeCommit?: string; landingCommit?: string } | { kind: "without-landing"; reason: "failed" | "zero-write" } | BlockedReport
 type CloseIntent = { share: string; sourceShare?: string; tree?: string }
@@ -210,6 +220,25 @@ export function permitted(entry: {
   // serial floor stands unchanged (P10).
   if (scope !== undefined) return withinScopes(path, scope)
   return roleOf(path) === "freeform"
+}
+
+// The path-shaped causes' arm, derived through the never-set (0272): when
+// every offending path is refused for every grant kind — standingRefusal's
+// own table, the one source the fence and the catalog already read (P5/P7)
+// — the remedy is necessarily a person or driver act (0248 D5's own letter:
+// the out-of-contract writes are the person's to inspect, keep or remove),
+// never a write the holder can make. A mixed set, or one merely outside
+// this grant's scope, stays replay-side: the holder's own uncommitted edit
+// remains its remedy and the boundary reads conservative (P12).
+function neverSetRows(rows: readonly { rel: string }[]): boolean {
+  return rows.length > 0 && rows.every(({ rel }) => standingRefusal(rel))
+}
+
+// Marking a settlement block person-necessary at its cause site (0272): the
+// classification lives with the site that knows the cause; settle()'s
+// wrapper is the one reader (one home, P5).
+function outsidePerimeter(report: BlockedReport): SettlementBlocked {
+  return { ...report, escalated: true }
 }
 
 // The executor restriction catalog (0261 D2, enacted by 0269): the
@@ -803,7 +832,12 @@ export async function openExecutorCoordinator(
       !(status === "??" && workdirEntry(rel)) && !(entry.scope && !entry.worktree && siblingDirt(entry.grant.unit, rel, status)))
   }
 
-  async function settle(entry: Entry, booking: EndedBooking): Promise<Receipt> {
+  // The report settlement's own body (0272 renames it settleShare): the
+  // blocked causes are classified at their sites — outsidePerimeter where
+  // the remedy is a write no grant kind can make, the plain blocked()
+  // where the holder's own remedy stands — and the settle() wrapper below
+  // is the one wire boundary that reads the classification.
+  async function settleShare(entry: Entry, booking: EndedBooking): Promise<Receipt | SettlementBlocked> {
     if (booking.close) return closeVerified(entry, booking, booking.close)
     const finishShare = async (commit: string, evidence: NonNullable<EndedBooking["intent"]>) => {
       let landingCommit: string | undefined
@@ -814,10 +848,10 @@ export async function openExecutorCoordinator(
           try {
             landing = await prepareExecutorLanding(dir, commit)
           } catch (error) {
-            return workspaceBlock(error)
+            return outsidePerimeter(workspaceBlock(error))
           }
           if (!await knownHead(worktree.start, landing.parent)) {
-            return blocked("Main HEAD moved outside the executor's settled shares. Inspect the retained lane before retrying.")
+            return outsidePerimeter(blocked("Main HEAD moved outside the executor's settled shares. Inspect the retained lane before retrying."))
           }
           booking = { ...booking, landing }
           entry = await book(entry, booking)
@@ -826,7 +860,7 @@ export async function openExecutorCoordinator(
         try {
           landingCommit = await landExecutorWorkspace(dir, worktree, { id: grant.unit, title: grant.title }, booking.landing!)
         } catch (error) {
-          return workspaceBlock(error)
+          return outsidePerimeter(workspaceBlock(error))
         }
         checkpoint?.("lane-landed")
       }
@@ -834,7 +868,7 @@ export async function openExecutorCoordinator(
         const { blocker, previous } = evidence.park
         const recorded = await runtimeParked(dir, entry.grant.unit)
         if (recorded !== blocker) {
-          if (recorded !== previous) return blocked("The dependency park record changed outside the booked share.")
+          if (recorded !== previous) return outsidePerimeter(blocked("The dependency park record changed outside the booked share."))
           await setParked(dir, entry.grant.unit, blocker)
           checkpoint?.("park-recorded")
         }
@@ -842,7 +876,7 @@ export async function openExecutorCoordinator(
           try {
             await removeExecutorWorkspace(dir, worktree, commit)
           } catch (error) {
-            return workspaceBlock(error)
+            return outsidePerimeter(workspaceBlock(error))
           }
         }
         return finish({ kind: "landed", commit, parked: blocker, ...(landingCommit && { landingCommit }) })
@@ -866,12 +900,12 @@ export async function openExecutorCoordinator(
       const { share } = booking.landing
       const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", share)
       if (witness !== `${booking.parent ?? entry.base}\n${booking.intent.tree}\n${shareMessage(entry.grant, !!booking.intent.park)}`) {
-        return blocked("The lane share no longer matches the booked landing.")
+        return outsidePerimeter(blocked("The lane share no longer matches the booked landing."))
       }
       return finishShare(share, booking.intent)
     }
     const checkout = await openCheckout(entry)
-    if (typeof checkout !== "string") return checkout
+    if (typeof checkout !== "string") return outsidePerimeter(checkout)
     const { grant } = entry
     const head = await gitRead(checkout, "rev-parse", "HEAD")
     const base = booking.parent ?? (entry.scope && !entry.worktree ? head : entry.base)
@@ -881,10 +915,10 @@ export async function openExecutorCoordinator(
           await nestedWitnesses(checkout, grant, booking.intent)) {
         return finishShare(head, booking.intent)
       }
-      return blocked("HEAD moved outside the booked share. Inspect the commit and executor progress before resuming.")
+      return outsidePerimeter(blocked("HEAD moved outside the booked share. Inspect the commit and executor progress before resuming."))
     }
     if (entry.scope && !entry.worktree && !await knownHead(entry.base, base)) {
-      return blocked("HEAD moved outside the executor's settled shares.")
+      return outsidePerimeter(blocked("HEAD moved outside the executor's settled shares."))
     }
 
     const roots = await repoRoots(checkout)
@@ -897,13 +931,16 @@ export async function openExecutorCoordinator(
       return blocked("The executor requires a single repository inside a lane checkout.")
     }
     let status = await workspaceStatus(checkout, roots)
-    if (!status) return { kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable. Inspect the index before replaying." }
+    if (!status) return outsidePerimeter({ kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable. Inspect the index before replaying." })
     const { gaps, handoff } = taskDocPaths(grant.unit)
     let changes = [...reportedChanges(entry, status), ...await ignoredArtifactRows(checkout, grant, status)]
     const rejected = changes.filter(({ rel, status }) =>
       !permitted(entry, rel) && !(booking.retireGaps && rel === gaps && /^[ D]{2}$/.test(status))
     )
-    if (rejected.length) return blocked(`Resolve out-of-scope edits before replaying: ${rejected.map(({ rel }) => rel).join(", ")}.`)
+    if (rejected.length) {
+      const detail = `Resolve out-of-scope edits before replaying: ${rejected.map(({ rel }) => rel).join(", ")}.`
+      return neverSetRows(rejected) ? outsidePerimeter(blocked(detail)) : blocked(detail)
+    }
     let continuation: true | undefined
     let park: NonNullable<EndedBooking["intent"]>["park"]
     let artifact: { path: string; text: string } | undefined
@@ -935,13 +972,13 @@ export async function openExecutorCoordinator(
       // turn can write identical FAIL evidence as a genuinely new artifact.
       if (!booking.retireGaps) {
         const original = await git(checkout, ["ls-tree", base, "--", gaps])
-        if (original.code !== 0 || !original.out) return blocked("The landed fix input is missing from Git.")
+        if (original.code !== 0 || !original.out) return outsidePerimeter(blocked("The landed fix input is missing from Git."))
         booking = { ...booking, retireGaps: true }
         entry = await book(entry, booking)
       }
       await rm(join(checkout, gaps), { force: true })
       status = await workspaceStatus(checkout, roots)
-      if (!status) return { kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable after retiring the gap list." }
+      if (!status) return outsidePerimeter({ kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable after retiring the gap list." })
       changes = [...reportedChanges(entry, status), ...await ignoredArtifactRows(checkout, grant, status)]
     }
     const paths = changes.map(({ rel }) => rel)
@@ -1000,7 +1037,7 @@ export async function openExecutorCoordinator(
       const observed = new Set(rows.map(({ rel }) => (prefix ? rel.slice(prefix.length + 1) : rel)))
       if (diff.code !== 0 || staged.some((path) => !observed.has(path) ||
           (!permitted(entry, prefix ? `${prefix}/${path}` : path) && !(booking.retireGaps && prefix === "" && path === gaps)))) {
-        return blocked("The staged tree contains an unverified path. Inspect the index before replaying.")
+        return outsidePerimeter(blocked("The staged tree contains an unverified path. Inspect the index before replaying."))
       }
       if (root !== checkout) {
         const record = bookedRoots.find((item) => item.root === prefix)
@@ -1073,17 +1110,17 @@ export async function openExecutorCoordinator(
       const witness = head ? await gitRead(share.root, "show", "-s", "--format=%P%n%T%n%B", head) : ""
       const expected = share.base ? `${share.base}\n${share.tree}\n${commitMessage}` : `${share.tree}\n${commitMessage}`
       if (!head || witness !== expected) {
-        return blocked("The new commit differs from the booked share. Inspect Git history before resuming.")
+        return outsidePerimeter(blocked("The new commit differs from the booked share. Inspect Git history before resuming."))
       }
       if (share.root === checkout) landed = head
     }
     return finishShare(landed, evidence)
   }
 
-  async function closeVerified(entry: Entry, booking: EndedBooking, intent: CloseIntent): Promise<Receipt> {
+  async function closeVerified(entry: Entry, booking: EndedBooking, intent: CloseIntent): Promise<Receipt | SettlementBlocked> {
     const grant = entry.grant
     const block = (detail: string): BlockedReport => ({ kind: "blocked", reason: "isolation", detail })
-    if (grant.kind !== "verify") return block("A close-out has no verification grant.")
+    if (grant.kind !== "verify") return outsidePerimeter(block("A close-out has no verification grant."))
     const { unit, index } = grant
     const { pending, complete } = taskStatePaths(unit)
     const { gaps } = taskDocPaths(unit)
@@ -1094,7 +1131,7 @@ export async function openExecutorCoordinator(
         try {
           await removeExecutorWorkspace(dir, entry.worktree, intent.sourceShare)
         } catch (error) {
-          return workspaceBlock(error)
+          return outsidePerimeter(workspaceBlock(error))
         }
       }
       const receipt = {
@@ -1108,7 +1145,7 @@ export async function openExecutorCoordinator(
     if (head !== intent.share) {
       const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", head)
       if (intent.tree && witness === `${intent.share}\n${intent.tree}\n${commitMessage}`) return finish(head)
-      return block("HEAD moved outside the booked task close-out.")
+      return outsidePerimeter(block("HEAD moved outside the booked task close-out."))
     }
     const [todo, oldIndex, oldGaps, status] = await Promise.all([
       git(dir, ["show", `${intent.share}:${pending}`]),
@@ -1117,9 +1154,11 @@ export async function openExecutorCoordinator(
       workspaceStatus(dir),
     ])
     if (oldGaps.code === 0) paths.add(gaps)
-    if (todo.code !== 0 || oldIndex.code !== 0 || !status || reportedChanges(entry, status).some(({ rel }) =>
-      !paths.has(rel)
-    )) return block("Inspect unexpected workspace changes before replaying task close-out.")
+    const unexpected = status ? reportedChanges(entry, status).filter(({ rel }) => !paths.has(rel)) : []
+    if (todo.code !== 0 || oldIndex.code !== 0 || !status || unexpected.length) {
+      const detail = "Inspect unexpected workspace changes before replaying task close-out."
+      return neverSetRows(unexpected) ? outsidePerimeter(block(detail)) : block(detail)
+    }
 
     const [pendingText, doneText, indexText, gapText] = await Promise.all(
       [pending, complete, index, gaps].map((path) => readFile(join(dir, path), "utf8").catch((error: NodeJS.ErrnoException) => {
@@ -1131,7 +1170,7 @@ export async function openExecutorCoordinator(
     const validUnit = (sameDocument(pendingText, todo.out) && doneText === undefined) ||
       (pendingText === undefined && sameDocument(doneText, todo.out))
     if ((gapText !== undefined && (oldGaps.code !== 0 || !sameDocument(gapText, oldGaps.out))) || !validUnit || nextIndex === oldIndex.out || (!sameDocument(indexText, oldIndex.out) && !sameDocument(indexText, nextIndex))) {
-      return block("The task documents no longer match the close-out's before or after state.")
+      return outsidePerimeter(block("The task documents no longer match the close-out's before or after state."))
     }
 
     // Post the tick atomically before markDone's idempotent rename and
@@ -1145,8 +1184,10 @@ export async function openExecutorCoordinator(
     if (oldGaps.code === 0) await rm(join(dir, gaps), { force: true })
     checkpoint?.("closed-files")
     const changed = await workspaceStatus(dir)
-    if (!changed || reportedChanges(entry, changed).some(({ rel }) => !paths.has(rel))) {
-      return block("Unexpected workspace changes appeared during task close-out.")
+    const appeared = changed ? reportedChanges(entry, changed).filter(({ rel }) => !paths.has(rel)) : []
+    if (!changed || appeared.length) {
+      const detail = "Unexpected workspace changes appeared during task close-out."
+      return neverSetRows(appeared) ? outsidePerimeter(block(detail)) : block(detail)
     }
     const prepare = changed.filter(({ rel, status }) => paths.has(rel) && status[1] !== " ").map(({ rel }) => `:(literal)${rel}`)
     if (prepare.length) await gitRead(dir, "add", "-A", "--", ...prepare)
@@ -1155,7 +1196,7 @@ export async function openExecutorCoordinator(
     const staged = diff.out.split("\0").filter(Boolean)
     if (diff.code !== 0 || staged.length !== paths.size || staged.some((path) => !paths.has(path)) ||
         (intent.tree && intent.tree !== tree)) {
-      return block("The staged task close-out differs from the expected rename and tick.")
+      return outsidePerimeter(block("The staged task close-out differs from the expected rename and tick."))
     }
     const [stagedDoc, stagedIndex, stagedGaps] = await Promise.all([
       git(dir, ["show", `${tree}:${complete}`]),
@@ -1163,7 +1204,7 @@ export async function openExecutorCoordinator(
       git(dir, ["ls-tree", `${tree}`, "--", gaps]),
     ])
     if (stagedGaps.code !== 0 || stagedGaps.out || stagedDoc.code !== 0 || !sameDocument(stagedDoc.out, todo.out) || stagedIndex.code !== 0 || !sameDocument(stagedIndex.out, nextIndex)) {
-      return block("The staged task documents differ from the expected rename and tick.")
+      return outsidePerimeter(block("The staged task documents differ from the expected rename and tick."))
     }
     if (!intent.tree) {
       booking = { ...booking, close: { ...intent, tree } }
@@ -1174,8 +1215,56 @@ export async function openExecutorCoordinator(
     checkpoint?.("closed-commit")
     const landed = await gitRead(dir, "rev-parse", "HEAD")
     const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", landed)
-    if (witness !== `${intent.share}\n${tree}\n${commitMessage}`) return block("The task close-out commit differs from its booked changes.")
+    if (witness !== `${intent.share}\n${tree}\n${commitMessage}`) return outsidePerimeter(block("The task close-out commit differs from its booked changes."))
     return finish(landed)
+  }
+
+  // The pending-question dedup key's one home (0250's letter; 0272 names
+  // it): an unanswered question of the same asker, task and exact text —
+  // the holder's own `question` route and the settlement's raise both read
+  // this predicate, so a retrying holder's repeated blocked reports and a
+  // re-raised settlement answer ride one item while it is pending.
+  function findPendingQuestion(asker: Holder, task: string | undefined, text: string): Question | undefined {
+    return questions.find((item) => !item.answer && sameHolder(item.asker, asker) && item.task === task && item.text === text)
+  }
+
+  // The settlement's raise through the standing question channel (0272,
+  // 0262-03's fix): the records, the dedup-while-pending and the answer
+  // delivery are 0250's own — no second channel. The asker is the reporting
+  // holder (the report authenticated the identity, and the answer returns to
+  // the same holder's briefs through applicableAnswers), the task the
+  // grant's own unit, the text a mechanical rendering of the blocked cause —
+  // the cause's own detail plus the step's identity, a fixed template, never
+  // authored content (P7). The raise is the coordinator's act at the blocked
+  // verdict: the holder's report was already honest; the person's bracket is
+  // the missing half (P2 — the automatic escalation bounded, terminating at
+  // the person). The route's live-pair guard is the holder-initiated
+  // channel's own; this entry point is the settlement's, on a report already
+  // accepted for settlement.
+  async function raiseSettlementQuestion(entry: Entry, report: BlockedReport): Promise<Question> {
+    const text = `Executor step ${entry.grant.id} blocked (${report.reason}): ${report.detail} The cause is outside the lease's permitted writes; a person decision is required.`
+    const existing = findPendingQuestion(entry.holder, entry.grant.unit, text)
+    if (existing) return existing
+    const item: Question = { id: randomUUID(), asker: { ...entry.holder }, text, task: entry.grant.unit, position: questions.length + gates.length }
+    await persistQuestions([...questions, item])
+    return item
+  }
+
+  // The settlement's one wire boundary (0272): both the report route and a
+  // successor claim's settlement replay pass through here, so every blocked
+  // answer the settlement produces is classified once, at its exit. The
+  // replay arm returns byte-identical (P10 — its detail already teaches the
+  // holder's own remedy, that arm's ladder); the person arm raises the
+  // question item above and names the ladder in the detail — which arm
+  // applies, the item raised, and that retrying cannot fix the cause. The
+  // frozen `reason` vocabulary is untouched: the ladder naming is rendering
+  // inside `detail`, no wire field added (P13's least).
+  async function settle(entry: Entry, booking: EndedBooking): Promise<Receipt> {
+    const receipt = await settleShare(entry, booking)
+    if (receipt.kind !== "blocked" || !("escalated" in receipt && receipt.escalated === true)) return receipt
+    const { escalated: _, ...report } = receipt
+    const item = await raiseSettlementQuestion(entry, report)
+    return { ...report, detail: `${report.detail} The cause is outside this lease's permitted writes; question ${item.id} is raised for a person decision — retrying cannot fix it.` }
   }
 
   function live(entry: Entry, at: number): boolean {
@@ -1679,9 +1768,7 @@ export async function openExecutorCoordinator(
         }
       }
       const task = target?.task
-      const existing = questions.find((item) =>
-        !item.answer && sameHolder(item.asker, holder) && item.task === task && item.text === text
-      )
+      const existing = findPendingQuestion(holder, task, text)
       if (existing) return { id: existing.id, state: "raised" }
       const id = randomUUID()
       await persistQuestions([...questions, { id, asker: { ...holder }, text, task, position: questions.length + gates.length }])
