@@ -1,19 +1,34 @@
 // Read-only executor previews (0246 D10 slice 1, 0249 D4). The coordinator
 // must re-evaluate under its run lock before admitting work.
 import { dirname, join } from "node:path"
+import { roundDeltaBlock } from "./assurance"
+import { projectBriefText } from "./brief"
 import { CONFIG_FILE, loadProjectConfig, type ProjectConfig } from "./config"
 import { closeAuditFindingsDoc } from "./close-audit"
-import { ANALYSIS_DOC, taskDocPaths } from "./docpaths"
+import { ANALYSIS_DOC, roundBriefPath, taskDocPaths } from "./docpaths"
+import { parseUnitDoc } from "./document/unit"
 import { handoffStatus, validHandover } from "./document/roles"
 import { parkReleaseNote } from "./execute"
-import { awaitingFormulation } from "./formulate"
+import { awaitingFormulation, formulationAcceptance, formulationNumber } from "./formulate"
+import { priorRoundBlock, readFormulationSources } from "./formulate-parts"
+import {
+  checkSynthesisReply, ledgerOf, protocolFrameText, renderLedger, seededLedgerRows,
+  synthesisSources, synthesizePromptText, type LedgerRow, type LedgerSource,
+} from "./formulate-synthesis"
 import { repoRoots, statusEntriesRead, workdirEntry, workTree } from "./git"
+import { resolvedVerifyPlan, verifyPlanCharterText, PromptGuaranteeError } from "./intent/guarantees"
 import { loadModes, type ModeSpec } from "./mode"
-import { currentPhase, phaseGateProblems, phaseGates, phaseHandoverDoc, phaseSurveyDoc, phaseTitle, readPhases, type PhaseUnit } from "./phases"
+import { DEFAULT_CONTEXT_LIMIT } from "./opts"
+import { taskNumber, taskNumberFloor } from "./numbering"
+import { currentPhase, phaseGateProblems, phaseGates, phaseHandoverDoc, phaseState, phaseSurveyDoc, phaseTitle, readPhases, type PhaseUnit } from "./phases"
+import type { PhaseTypeEntry } from "./phases/registry"
+import { planInputPath, readPlanInput } from "./plan-input"
+import { existingTaskList, planDutyText, renderFormulationTodo } from "./prompt-plan"
 import { renderFix, renderPhaseHandover, renderWhole, renderWrapup, type PromptFacts } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { peekProgress } from "./resume"
-import { loadPlan, next, promptViews, readyTasks, strandedParks, taskIndexPath, type Plan } from "./tasks"
+import { autoSwitches } from "./switches"
+import { loadPlan, next, promptViews, readyTasks, strandedParks, taskIndexPath, taskStatePaths, type Plan } from "./tasks"
 
 type BlockReason = "config" | "subtask" | "unreadable" | "cleanTree" | "mutualPark"
 type Blocked = { kind: "blocked"; reason: BlockReason; detail: string }
@@ -24,6 +39,7 @@ export type ExecutorPreview =
   | { kind: "wait"; reason: "not-ready" | "in-flight"; detail: string }
   | { kind: "execute"; unit: string; title: string; touches?: readonly string[]; prompt: string }
   | { kind: "formulate"; unit: string; title: string; phase: string; index: string; prompt: string }
+  | { kind: "synthesize"; unit: string; title: string; phase: string; index: string; prompt: string }
   | { kind: "distill"; unit: string; title: string; handover: string; prompt: string }
   | { kind: "audit"; unit: string; title: string; findings: string; round: number; prompt: string }
   | { kind: "phase-boundary"; phase: string; problems: readonly string[] }
@@ -57,6 +73,14 @@ export type ExecutorSnapshot = {
       handoverValid: boolean
     }
   }
+  // 0281 (0279's first convergence beyond the docket's stage-2 kinds): the
+  // construction's re-voicing — the synthesize grant's derivation inputs,
+  // read once when the current phase's awaiting formulation stands over a
+  // floor todo under a resolved charter with the switch not off (undefined
+  // otherwise: the formulate step derives unchanged, the byte-identical
+  // floor, P10). The settlement re-derives the same assembly from disk
+  // (composeSynthesizedTodo below — one derivation, two call sites, P6).
+  synthesis?: SynthesisAssembly
 }
 
 function configBlock(config: ExecutorSnapshot["config"]): Blocked | undefined {
@@ -132,6 +156,36 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
   // fix sessions claim it while its todo still stands pending.
   const awaiting = state.route?.followUp ? undefined : awaitingFormulation(plan.tasks, phase)
   if (awaiting) {
+    // 0281 (0279's construction-determinized letter): the formulation
+    // construction's re-voicing session rides the protocol as the
+    // synthesize grant, AHEAD of the formulate session — the identical
+    // formulate-synthesize prompt over the same evidential sources the
+    // push compose renders, claimed by the construction unit's own id with
+    // the phase identity riding the grant (0276's two-field discipline).
+    // The claimable keys on the push compose's own predicate family: a
+    // pending formulation unit standing over the FLOOR todo (its Scope
+    // carries no obligations ledger), a resolved charter, and the switch
+    // not off — with any of them absent the formulate step below derives
+    // unchanged (the byte-identical floor, P10; the enhancement declined,
+    // never forced). The landed share is terminal (no verify follows a
+    // synthesis — the push one-shot had no wrap-up session either); the
+    // unit continues as formulate work over the synthesized todo.
+    if (state.synthesis) {
+      return {
+        kind: "synthesize",
+        unit: awaiting.id,
+        title: awaiting.title,
+        phase: plan.phase,
+        index: plan.index,
+        prompt: synthesizePromptText(state.synthesis.facts, {
+          charters: state.synthesis.chartersText,
+          duties: state.synthesis.duties,
+          sources: state.synthesis.sources,
+          missing: state.synthesis.missing,
+          entry: state.synthesis.entry,
+        }),
+      }
+    }
     const views = promptViews(plan, awaiting)
     return {
       kind: "formulate",
@@ -298,13 +352,18 @@ async function readExecutorSnapshot(dir: string, continuationUnit?: string, chec
     const phases = round.phases
     const following = phases[phases.findIndex((unit) => unit.id === phase.id) + 1]
     const handoverValid = validHandover(await Bun.file(join(dir, phaseHandoverDoc(phase))).text().catch(() => ""))
+    const facts = promptFacts({ dir, intent: config.intent })
     state.round.current = {
       phase, plan, indexPresent, surveyPresent, gateProblems,
-      facts: promptFacts({ dir, intent: config.intent }),
+      facts,
       mode: loadModes(dir)[config.mode],
       ...(following ? { following } : {}),
       handoverValid,
     }
+    // 0281: the synthesize grant's derivation inputs, read once when the
+    // gate family holds (the assembly's own checks decline fast otherwise —
+    // undefined leaves the formulate floor byte-identical, P10).
+    state.synthesis = await readSynthesisAssembly(dir, { phase, plan, config, facts })
   }
   return state
 }
@@ -343,6 +402,208 @@ export async function readExecutorParkPlan(dir: string) {
 export function planPhaseOf(phase: string, index: string): { round: string; id: string; dir: string } {
   const [round, id] = phase.split(".")
   return { round: round!, id: id!, dir: dirname(index) }
+}
+
+// —— the synthesize grant's derivation and settlement composition (0281) ——
+//
+// The formulation construction's re-voicing session (0097's constructor
+// one-shot) converged onto the protocol: a `synthesize` grant carries the
+// IDENTICAL formulate-synthesize prompt over the same evidential sources
+// the push compose renders (one assembly, one render — formulate-synthesis
+// owns both halves), the holder writes its reply at the formulation unit's
+// todo path (the one write surface the fence admits — the reply channel),
+// and the settlement validates the reply through the same mechanical
+// checks the push loop ran (checkSynthesisReply: the strict delimiters,
+// the ledger grammar, the seeded sequence, the quote anchoring), composes
+// the synthesized todo through renderFormulationTodo's synthesis shape
+// (the guarantee gate's throw a blocked problem — the push's retry cause
+// is the holder's remedy here), and lands through the standing
+// constructFormulation path under the `phase-synthesize` stage word. The
+// fidelity classifier one-shot is not rebuilt (P21, 0279's ruling).
+
+export type SynthesisAssembly = {
+  phase: PhaseUnit
+  unit: string
+  facts: PromptFacts
+  entry: PhaseTypeEntry
+  // The Acceptance text (formulationAcceptance) and the prompt's charters
+  // body (verifyPlanCharterText) — two renderings of the resolved charter.
+  charter: string
+  chartersText: string
+  duties: string
+  sources: LedgerSource[]
+  missing: string[]
+  seeded: LedgerRow[]
+  // The standing floor todo's own committed records (plans/0205 D2/D3),
+  // carried through the landing unchanged: the floor-assembly digest the
+  // digest-keep compares and the prefix ids the todo was constructed
+  // beside. Never recomputed here — the floor assembly itself has not
+  // moved; only its Scope is being re-voiced.
+  floorFields: { digest?: string; prefix?: string[] }
+  baseInput: Omit<Parameters<typeof renderFormulationTodo>[1], "synthesis">
+}
+
+// One derivation, two call sites (the snapshot's read for the grant's
+// brief, the settlement's re-read for the composition — P6: derived from
+// disk, never persisted). The pre-derived inputs let the snapshot pass
+// what it already read; the settlement passes nothing and the function
+// re-reads. Returns undefined whenever the synthesize grant does not
+// derive — the byte-identical formulate floor (P10).
+export async function readSynthesisAssembly(
+  dir: string,
+  pre: { phase?: PhaseUnit; plan?: Plan; config?: ProjectConfig; facts?: PromptFacts } = {},
+): Promise<SynthesisAssembly | undefined> {
+  // The switch (the push compose's own gate): off forces the floor.
+  if (!autoSwitches().synthesis) return undefined
+  const phase = pre.phase ?? currentPhase(await phaseState(dir))
+  if (phase === undefined) return undefined
+  const plan = pre.plan ?? await loadPlan(dir, phase).catch(() => undefined)
+  if (plan === undefined) return undefined
+  const awaiting = awaitingFormulation(plan.tasks, phase)
+  if (awaiting === undefined) return undefined
+  let config: ProjectConfig
+  try {
+    config = pre.config ?? await loadProjectConfig(dir)
+  } catch {
+    return undefined
+  }
+  const facts = pre.facts ?? promptFacts({ dir, intent: config.intent })
+  const entry = phase.entry
+  const chartersText = verifyPlanCharterText(resolvedVerifyPlan(facts.pack, entry))
+  if (chartersText === undefined) return undefined
+  // The floor gate: the standing todo carries no obligations ledger — a
+  // synthesized todo's Scope carries one, so a completed synthesis (or a
+  // person's hand-written ledger) derives the formulate step instead. (The
+  // settlement restores the booked floor before composing — the working
+  // todo during a report is the reply channel, never the document.)
+  const todoText = await Bun.file(join(dir, taskStatePaths(awaiting.id).pending)).text().catch(() => undefined)
+  if (todoText === undefined) return undefined
+  if (ledgerOf(todoText) !== undefined) return undefined
+  // The sources: the same evidential assembly the push compose builds
+  // (formulationParts' gathering, read here without its booking half).
+  const state = await phaseState(dir)
+  const parts = await readFormulationSources(dir, phase, state)
+  const brief = (await projectBriefText(dir)) || undefined
+  const input = (await readPlanInput(dir, phase))?.trim() || undefined
+  const block = await priorRoundBlock(dir, state, DEFAULT_CONTEXT_LIMIT)
+  const assembled = synthesisSources({
+    ...(brief ? { brief } : {}),
+    roundPath: roundBriefPath(state.round),
+    ...(parts.round ? { round: parts.round } : {}),
+    ...(parts.analysis !== undefined ? { analysis: parts.analysis } : {}),
+    humanGated: entry.gates.includes("human"),
+    ...(input ? { planInput: { path: planInputPath(phase), text: input } } : {}),
+    handoverDocs: parts.handoverDocs,
+    missingHandovers: parts.missingHandovers,
+    ...(block.prevRound ? { prevRound: block.prevRound } : block.prevRoundExpected ? { prevRoundExpected: true } : {}),
+  })
+  // The fixed-prefix and numbering derivation (compose's own arms over the
+  // same disk state): a pending formulation renders the review prefix from
+  // the index's other rows; a blocked one reads the landed todo's own
+  // `Prefix:` field back.
+  const fields = parseUnitDoc(todoText).fields
+  const review = awaiting.status === "pending"
+  const prefixIds = review
+    ? plan.tasks.filter((task) => task.id !== awaiting.id).map((task) => task.id)
+    : (fields.prefix ?? "").split(/[\s,]+/).filter(Boolean)
+  const existingTasks = prefixIds.length
+    ? existingTaskList(plan.tasks
+        .filter((task) => prefixIds.includes(task.id))
+        .map((task) => ({ id: task.id, title: task.title, status: task.status })))
+    : undefined
+  const numberStart = review
+    ? await taskNumberFloor(dir)
+    : prefixIds.length
+      ? Math.max(taskNumber(awaiting.id) ?? 0, ...prefixIds.map((id) => taskNumber(id) ?? 0)) + 1
+      : (await formulationNumber(dir, phase)) + 1
+  const delta = await roundDeltaBlock(dir, state.round)
+  const charter = formulationAcceptance(facts, entry)
+  return {
+    phase,
+    unit: awaiting.id,
+    facts,
+    entry,
+    charter,
+    chartersText,
+    duties: planDutyText(facts, entry, { phaseName: entry.name }),
+    sources: assembled.sources,
+    missing: assembled.missing,
+    seeded: seededLedgerRows(entry),
+    floorFields: {
+      ...(fields["floor-digest"] !== undefined ? { digest: fields["floor-digest"] } : {}),
+      ...(prefixIds.length ? { prefix: prefixIds } : {}),
+    },
+    baseInput: {
+      phase: entry,
+      phaseId: plan.phase,
+      taskIndex: plan.index,
+      numberStart,
+      ...(existingTasks ? { existingTasks } : {}),
+      ...(brief ? { brief } : {}),
+      ...(parts.round ? { round: parts.round } : {}),
+      ...(parts.analysis !== undefined ? { analysis: parts.analysis } : {}),
+      ...(input ? { input, inputPath: planInputPath(phase) } : {}),
+      handovers: parts.handovers,
+      ...(block.prevRound ? { prevRound: block.prevRound } : {}),
+      mode: loadModes(dir)[config.mode],
+      trimmedPhases: !state.phases.some((unit) => (unit.type === "analysis" || unit.type === "design") && !state.closed.has(unit.id)),
+      ...(delta ? { delta } : {}),
+      charter,
+    },
+  }
+}
+
+// The settlement's composition: one holder reply validated and composed
+// into the construction's body — the same mechanical checks the push loop
+// ran (checkSynthesisReply) and the same synthesis-shape render (the
+// guarantee gate's throw a problem, the holder's remedy). The landing
+// itself stays the coordinator's (constructFormulation under the
+// phase-synthesize stage word); this function is pure over disk plus the
+// reply text, so a settlement replay re-derives it unchanged.
+export type SynthesizedConstruction = {
+  phase: PhaseUnit
+  unit: string
+  todo: { goal: string; scope: string; acceptance: string }
+  record: { digest?: string; prefix?: string[]; stage: "phase-synthesize" }
+}
+
+export async function composeSynthesizedTodo(
+  dir: string,
+  replyText: string,
+): Promise<{ kind: "ok"; construction: SynthesizedConstruction } | { kind: "problems"; problems: string[] }> {
+  const assembly = await readSynthesisAssembly(dir)
+  if (assembly === undefined) {
+    return { kind: "problems", problems: ["no synthesizable formulation stands for the current phase (the formulation unit, its floor todo, the resolved charter, or the OPENCODE_AUTO_SYNTHESIS switch)"] }
+  }
+  const checked = checkSynthesisReply(replyText, assembly.seeded, assembly.sources)
+  if ("problems" in checked) return { kind: "problems", problems: checked.problems }
+  try {
+    const todo = renderFormulationTodo(assembly.facts, {
+      ...assembly.baseInput,
+      synthesis: {
+        brief: checked.brief,
+        ledger: renderLedger([...assembly.seeded, ...checked.own]),
+        ...(assembly.missing.length ? { missing: assembly.missing } : {}),
+        protocol: protocolFrameText(assembly.entry),
+      },
+    })
+    return {
+      kind: "ok",
+      construction: {
+        phase: assembly.phase,
+        unit: assembly.unit,
+        todo,
+        record: {
+          ...(assembly.floorFields.digest !== undefined ? { digest: assembly.floorFields.digest } : {}),
+          ...(assembly.floorFields.prefix !== undefined && assembly.floorFields.prefix.length ? { prefix: assembly.floorFields.prefix } : {}),
+          stage: "phase-synthesize",
+        },
+      },
+    }
+  } catch (error) {
+    if (error instanceof PromptGuaranteeError) return { kind: "problems", problems: [error.message] }
+    throw error
+  }
 }
 
 export type VerificationPreview = {
@@ -386,8 +647,9 @@ type FollowUp = { kind: "verify"; unit: string; baseline: string; head: string }
 // distill step — a follow-up route always targets a task unit, so the
 // phase-addressed boundary step never answers one either; 0278 adds the
 // audit step — the followUp flag bypasses the marker-field branch the same
-// way, the wrap-up and fix renders owning the route).
-type FollowUpBlock = Exclude<ExecutorPreview, { kind: "execute" } | { kind: "formulate" } | { kind: "distill" } | { kind: "audit" }>
+// way, the wrap-up and fix renders owning the route; 0281 adds the
+// synthesize step — the awaiting branch is the fresh-claim route's alone).
+type FollowUpBlock = Exclude<ExecutorPreview, { kind: "execute" } | { kind: "formulate" } | { kind: "synthesize" } | { kind: "distill" } | { kind: "audit" }>
 
 export function readExecutorFollowUp(
   dir: string,
@@ -426,8 +688,10 @@ export async function readExecutorFollowUp(
   // never equals the current phase's — the boundary step is the fresh-claim
   // and continuation routes' alone. The audit step joins by the flag (0278):
   // the marker-field branch is the fresh-claim route's alone, the wrap-up
-  // and fix renders owning the follow-up.
-  if (step.kind === "formulate" || step.kind === "distill" || step.kind === "audit") {
+  // and fix renders owning the follow-up. The synthesize step joins by the
+  // flag's own bypass (0281): the awaiting branch is the fresh-claim route's
+  // alone.
+  if (step.kind === "formulate" || step.kind === "distill" || step.kind === "audit" || step.kind === "synthesize") {
     return { kind: "wait", reason: "not-ready", detail: `${share.unit} is outside the current phase route.` }
   }
   if (step.kind !== "execute") return step

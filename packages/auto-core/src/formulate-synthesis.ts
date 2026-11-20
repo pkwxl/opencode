@@ -33,6 +33,8 @@ import { resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import type { RoutingFacts } from "./routing"
 import { SWITCH_ENV, autoSwitches } from "./switches"
 import type { AgentPool } from "./agent-pool"
+import { BRIEF_FILE } from "./brief"
+import { ANALYSIS_DOC, roundBriefPath } from "./docpaths"
 
 // —— the ledger grammar (D2, strict, driver-parsed) ——
 //
@@ -237,6 +239,109 @@ export function seededLedgerRows(entry: PhaseTypeEntry): LedgerRow[] {
   return rows
 }
 
+// —— the shared source assembly and reply validation (0281's split) ——
+//
+// The compose loop's source list (D3's evidential sources) and the
+// constructor reply's mechanical validation, stated once so the push
+// pipeline (synthesizeFormulation below) and the executor's synthesize
+// settlement (auto-core src/executor-steps.ts, plans/0281) read the same
+// derivations — never a second home (P5). The assembly's inputs are the
+// composition state's texts; the validation's are the reply text, the
+// seeded rows and the actual sources.
+
+export type SynthesisSourceInputs = {
+  brief?: string
+  manual?: boolean
+  round?: string
+  roundPath: string
+  analysis?: string
+  humanGated: boolean
+  planInput?: { path: string; text: string }
+  handoverDocs?: { path: string; text: string }[]
+  missingHandovers?: string[]
+  prevRound?: string
+  prevRoundExpected?: boolean
+}
+
+// The evidential source list (loop-plan's D3 assembly, one home): the
+// project brief (named by its path), the round brief (this round's
+// round.md), the approved analysis (human-gated phases), the planning
+// input, each done prior phase's handover document, the prior-round
+// digest — with the expected-but-absent names collected as the source
+// health findings, never silence. m mode (`manual: true`) carries its
+// planning input as the one source beside the brief.
+export function synthesisSources(input: SynthesisSourceInputs): { sources: LedgerSource[]; missing: string[] } {
+  const sources: LedgerSource[] = []
+  const missing: string[] = []
+  if (input.brief) sources.push({ name: BRIEF_FILE, text: input.brief })
+  else missing.push(BRIEF_FILE)
+  if (input.manual) {
+    sources.push({ name: input.planInput!.path, text: input.planInput!.text })
+  } else {
+    if (input.round) sources.push({ name: input.roundPath, text: input.round })
+    else missing.push(input.roundPath)
+    if (input.analysis !== undefined) sources.push({ name: ANALYSIS_DOC, text: input.analysis })
+    else if (input.humanGated) missing.push(ANALYSIS_DOC)
+    if (input.planInput) sources.push({ name: input.planInput.path, text: input.planInput.text })
+    for (const handover of input.handoverDocs ?? []) sources.push({ name: handover.path, text: handover.text })
+    missing.push(...(input.missingHandovers ?? []))
+    if (input.prevRound) sources.push({ name: "prior-round digest", text: input.prevRound })
+    else if (input.prevRoundExpected) missing.push("prior-round digest")
+  }
+  return { sources, missing }
+}
+
+// The constructor's brief text: the identical formulate-synthesize prompt
+// over the resolved charter, the duties, the sources and the seeded rows —
+// one render home the push one-shot and the executor grant both read (the
+// grant's brief IS this text, plans/0281's "identical prompt" letter).
+export function synthesizePromptText(
+  facts: PromptFacts,
+  input: { charters: string; duties: string; sources: readonly LedgerSource[]; missing: readonly string[]; entry: PhaseTypeEntry },
+): string {
+  const seeded = seededLedgerRows(input.entry)
+  const nextO = seeded.filter((row) => row.kind === "O").length + 1
+  return renderPrompt(facts, "formulate-synthesize", {
+    charters: input.charters,
+    duties: input.duties,
+    sources: input.sources.map((source) => `### ${source.name}\n\n${source.text}`).join("\n\n"),
+    missing: input.missing.length ? input.missing.join(", ") : "(none)",
+    seeded: seeded.length ? seeded.map(renderLedgerRow).join("\n") : "(none)",
+    nextId: `O-${String(nextO).padStart(2, "0")}`,
+    phaseType: input.entry.name,
+  })
+}
+
+// One constructor reply's mechanical validation (D4, the retry loop's own
+// checks stated once): the strict delimiters, the ledger grammar, the
+// seeded echo accepted and dropped, the session's rows continuing the
+// seeded sequence, every quote locating in its named source, and a
+// non-empty brief. The caller's guarantee check rides separately (the push
+// validates the candidate render, the executor composes through it).
+export type SynthesisReplyCheck = { brief: string; own: LedgerRow[]; rationale: string } | { problems: string[] }
+
+export function checkSynthesisReply(replyText: string, seeded: readonly LedgerRow[], sources: readonly LedgerSource[]): SynthesisReplyCheck {
+  const parsed = parseSynthesisReply(replyText)
+  if ("problems" in parsed) return { problems: parsed.problems }
+  const seededText = new Set(seeded.map(renderLedgerRow))
+  const { rows, problems } = parseLedger(parsed.parsed.ledgerBody)
+  let echoed = 0
+  while (echoed < rows.length && seededText.has(renderLedgerRow(rows[echoed]!))) echoed++
+  const own = rows.slice(echoed)
+  const nextO = seeded.filter((row) => row.kind === "O").length + 1
+  const firstO = own.find((row) => row.kind === "O")
+  const firstC = own.find((row) => row.kind === "C")
+  const validation = [
+    ...problems,
+    ...(firstO !== undefined && firstO.n !== nextO ? [`the first O row is ${ledgerRowId(firstO)} — the session's rows continue the DRIVER's seeded sequence at O-${String(nextO).padStart(2, "0")}`] : []),
+    ...(firstC !== undefined && firstC.n !== 1 ? [`the first C row is ${ledgerRowId(firstC)} — the C sequence opens at C-01`] : []),
+    ...sessionRowProblems(own, sources),
+  ]
+  if (!own.length) validation.push("the ledger carries no row of the session's own — every obligation the sources name needs one")
+  if (!parsed.parsed.brief.trim()) validation.push("the sources brief is empty")
+  return validation.length ? { problems: validation } : { brief: parsed.parsed.brief, own, rationale: parsed.parsed.rationale }
+}
+
 // —— the constructor session (D3) ——
 //
 // Tool-less one-shot (the oneShot primitive, bare by construction —
@@ -358,16 +463,7 @@ export async function synthesizeFormulation(input: SynthesisInput): Promise<Synt
     return fallback("no usable planning-route entry (the registry names none, or none is up) — the charter still rides the Acceptance and the verifier")
   }
   const client = await input.pool.client(pick.entry.agent)
-  const nextO = seeded.filter((row) => row.kind === "O").length + 1
-  const text = renderPrompt(input.facts, "formulate-synthesize", {
-    charters: charter,
-    duties: input.duties,
-    sources: input.sources.map((source) => `### ${source.name}\n\n${source.text}`).join("\n\n"),
-    missing: input.missing.length ? input.missing.join(", ") : "(none)",
-    seeded: seeded.length ? seeded.map(renderLedgerRow).join("\n") : "(none)",
-    nextId: `O-${String(nextO).padStart(2, "0")}`,
-    phaseType: input.entry.name,
-  })
+  const text = synthesizePromptText(input.facts, { charters: charter, duties: input.duties, sources: input.sources, missing: input.missing, entry: input.entry })
   let feedback = ""
   // The wall is a wait the person watches: a start line before the first
   // attempt (the model and the bound — the same visibility every dispatched
@@ -398,31 +494,16 @@ export async function synthesizeFormulation(input: SynthesisInput): Promise<Synt
       if (attempt === 1) log(`⚠ formulation synthesis: ${feedback} — one retry`)
       continue
     }
-    const parsed = parseSynthesisReply(outcome.text)
-    if ("problems" in parsed) {
-      feedback = parsed.problems.join("; ")
+    const checked = checkSynthesisReply(outcome.text, seeded, input.sources)
+    if ("problems" in checked) {
+      feedback = checked.problems.join("; ")
       continue
     }
-    // A verbatim echo of the seeded head rows is accepted and dropped (the
-    // instruction says never repeat them; an echo costs nothing). The
-    // session's own rows must then continue past the seeds.
-    const seededText = new Set(seeded.map(renderLedgerRow))
-    const { rows, problems } = parseLedger(parsed.parsed.ledgerBody)
-    let echoed = 0
-    while (echoed < rows.length && seededText.has(renderLedgerRow(rows[echoed]!))) echoed++
-    const own = rows.slice(echoed)
-    const firstO = own.find((row) => row.kind === "O")
-    const firstC = own.find((row) => row.kind === "C")
-    const validation = [
-      ...problems,
-      ...(firstO !== undefined && firstO.n !== nextO ? [`the first O row is ${ledgerRowId(firstO)} — the session's rows continue the DRIVER's seeded sequence at O-${String(nextO).padStart(2, "0")}`] : []),
-      ...(firstC !== undefined && firstC.n !== 1 ? [`the first C row is ${ledgerRowId(firstC)} — the C sequence opens at C-01`] : []),
-      ...sessionRowProblems(own, input.sources),
-    ]
-    if (!own.length) validation.push("the ledger carries no row of the session's own — every obligation the sources name needs one")
-    if (!parsed.parsed.brief.trim()) validation.push("the sources brief is empty")
-    const composed = [...seeded, ...own]
-    validation.push(...(input.validate?.(parsed.parsed.brief, composed) ?? []))
+    // The composed rows (seeded first) feed the caller's guarantee check
+    // below; an assert miss over the candidate render is a retry cause,
+    // never exit 2 (D4.3).
+    const composed = [...seeded, ...checked.own]
+    const validation = input.validate?.(checked.brief, composed) ?? []
     if (validation.length) {
       feedback = validation.join("; ")
       continue
@@ -431,7 +512,7 @@ export async function synthesizeFormulation(input: SynthesisInput): Promise<Synt
     // valid reply — a fail's evidence is this loop's feedback (the constructor
     // retry re-voices under it), past the retry the D4 ladder. A skipped
     // check is loud (its audit line) and proceeds.
-    const fidelity = await fidelityPass(input.pool, input.routing, input.facts, { sources: input.sources, brief: parsed.parsed.brief, rows: composed })
+    const fidelity = await fidelityPass(input.pool, input.routing, input.facts, { sources: input.sources, brief: checked.brief, rows: composed })
     const fidelityAudit =
       fidelity.kind === "pass"
         ? `- ${stamp()} formulation ${input.phaseStep} fidelity: pass`
@@ -443,14 +524,14 @@ export async function synthesizeFormulation(input: SynthesisInput): Promise<Synt
       lastFidelityAudit = fidelityAudit
       continue
     }
-    log(`✓ formulation synthesis: the constructor ${pick.name} re-voiced ${input.sources.length} source(s) into the brief and ${own.length} ledger row(s) beside the ${seeded.length} seeded protocol row(s)${fidelity.kind === "pass" ? ", the fidelity pass judging nothing dropped or weakened" : ""}`)
+    log(`✓ formulation synthesis: the constructor ${pick.name} re-voiced ${input.sources.length} source(s) into the brief and ${checked.own.length} ledger row(s) beside the ${seeded.length} seeded protocol row(s)${fidelity.kind === "pass" ? ", the fidelity pass judging nothing dropped or weakened" : ""}`)
     return {
       kind: "ok",
-      brief: parsed.parsed.brief,
+      brief: checked.brief,
       rows: composed,
-      rationale: parsed.parsed.rationale,
+      rationale: checked.rationale,
       audit: [
-        `- ${stamp()} formulation ${input.phaseStep} synthesis: charters [${charterKeys.join(", ")}] on ${pick.name} — ${parsed.parsed.rationale}${input.missing.length ? ` — source health: ${input.missing.join(", ")} absent` : ""}`,
+        `- ${stamp()} formulation ${input.phaseStep} synthesis: charters [${charterKeys.join(", ")}] on ${pick.name} — ${checked.rationale}${input.missing.length ? ` — source health: ${input.missing.join(", ")} absent` : ""}`,
         fidelityAudit,
       ],
     }

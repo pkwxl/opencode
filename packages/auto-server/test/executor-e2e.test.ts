@@ -85,7 +85,13 @@ exec "$@"
     // 0271's additive half rides the same menu: the pending person items,
     // the empty floor here (nothing pending on a bare project).
     expect(Object.keys(ready.menu).sort()).toEqual(["claimable", "leases", "pending", "types"])
-    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "verify"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "synthesize", "verify"])
+    // 0281's wire pin: the synthesize kind joins the claim vocabulary — a
+    // targeted ask parses (never the pre-change 400 of an unknown word) and
+    // answers the honest wait over this fixture (no formulation unit
+    // stands, so no synthesize step derives); an unknown word still 400s.
+    expect(await call("claim", { kind: "synthesize" }, verifier)).toMatchObject({ protocol: 0.1, step: { kind: "wait" } })
+    expect((await call("claim", { kind: "telepath" }, verifier, 400)).error).toContain("synthesize")
     const { types, pending, ...menuBefore } = ready.menu
     expect(Object.keys(menuBefore).sort()).toEqual(["claimable", "leases"])
     expect(pending).toEqual([])
@@ -420,7 +426,7 @@ test("the formulate grant kind rides the wire beside the standing kinds", async 
     }
     const ready = await call("ready", { channel: "solo" })
     expect(ready.menu.claimable).toMatchObject([{ unit: TASK, title: "Formulate the Implement tasks", kinds: ["formulate"] }])
-    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "verify"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "synthesize", "verify"])
     expect(ready.menu.types.formulate).toMatchObject({ id: "formulate", writes: { scope: "none" } })
     const claimed = await call("claim", { channel: "solo", task: TASK, kind: "formulate" })
     expect(claimed.step).toMatchObject({
@@ -480,7 +486,7 @@ test("the distill grant kind rides the wire beside the standing kinds", async ()
     }
     const ready = await call("ready", { channel: "solo" })
     expect(ready.menu.claimable).toMatchObject([{ unit: "R-01.P01", title: "P01-implement Implementation", kinds: ["distill"] }])
-    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "verify"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "synthesize", "verify"])
     expect(ready.menu.types.distill).toMatchObject({ id: "distill", writes: { scope: "none" } })
     const claimed = await call("claim", { channel: "solo", task: "R-01.P01", kind: "distill" })
     // The pair captured ahead of the assertion: Bun's toMatchObject with
@@ -583,7 +589,7 @@ test("the audit grant kind rides the wire beside the standing kinds", async () =
     }
     const ready = await call("ready", { channel: "solo" })
     expect(ready.menu.claimable).toMatchObject([{ unit: TASK_2, title: "Adjudicate the due assurance rows (R-01)", kinds: ["audit"] }])
-    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "verify"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "synthesize", "verify"])
     expect(ready.menu.types.audit).toMatchObject({ id: "audit", writes: { scope: "none" } })
     const claimed = await call("claim", { channel: "solo", task: TASK_2, kind: "audit" })
     const pair = { step: claimed.step.id as string, lease: claimed.step.lease as string }

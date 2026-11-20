@@ -3,7 +3,7 @@
 import { setTimeout as delay } from "node:timers/promises"
 import { EXECUTOR_PROTOCOL } from "@opencode-ai/auto-core/executor-coordinator"
 
-type Kind = "execute" | "verify" | "fix" | "formulate" | "distill" | "audit"
+type Kind = "execute" | "verify" | "fix" | "formulate" | "synthesize" | "distill" | "audit"
 type Pair = { step: string; lease: string }
 type Held = Pair & { deadline: number; kind: Kind }
 type Menu = { leases: Held[]; claimable: { unit: string; kinds: Kind[] }[] }
@@ -81,7 +81,7 @@ export async function serveGrant(grant: Grant, command: string[], request: Reque
   return reply
 }
 
-const isKind = (value: string): value is Kind => ["execute", "verify", "fix", "formulate", "distill", "audit"].includes(value)
+const isKind = (value: string): value is Kind => ["execute", "verify", "fix", "formulate", "synthesize", "distill", "audit"].includes(value)
 
 async function main(args: string[], shutdown: AbortSignal) {
   const resume = args[0] === "--resume"

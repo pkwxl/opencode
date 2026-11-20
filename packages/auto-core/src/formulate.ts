@@ -104,7 +104,10 @@ export async function formulationNumber(dir: string, phase: PlanPhase): Promise<
 // was constructed beside (`Prefix:`) — both omitted when absent, so a
 // construction without them renders the pre-0205 document byte-identically.
 // numberStart of the result is the formulation number + 1 — the first number
-// the formulation session's own tasks may take.
+// the formulation session's own tasks may take. The record's optional
+// `stage` (plans/0281) names the commit's stage word — the floor default
+// `phase-formulate`, the synthesize settlement's `phase-synthesize` (the
+// landed synthesis stays distinguishable from a plain floor construction).
 type ConstructedFormulation =
   | { type: "constructed"; id: string; numberStart: number }
   | { type: "current"; id: string; numberStart: number }
@@ -116,7 +119,7 @@ export async function constructFormulation(
   dir: string,
   phase: PhaseUnit,
   body: { goal: string; scope: string; acceptance: string },
-  record?: { digest?: string; prefix?: string[] },
+  record?: { digest?: string; prefix?: string[]; stage?: string },
 ): Promise<ConstructedFormulation> {
   const state = await formulationState(dir, phase)
   if (state.type === "foreign") {
@@ -173,7 +176,7 @@ export async function constructFormulation(
   if (fresh) {
     await Bun.write(indexFile, renderTaskIndex(qualifiedPhase(phase), [{ id, title }]))
   }
-  const settled = await commitTree(dir, task, { stage: "phase-formulate", subject: `PLAN formulate ${phaseText(phase)}` })
+  const settled = await commitTree(dir, task, { stage: record?.stage ?? "phase-formulate", subject: `PLAN formulate ${phaseText(phase)}` })
   if (!settled.ok) {
     return {
       type: "failed",

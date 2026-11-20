@@ -120,7 +120,7 @@ describe("manual-driver prompt ratchet", () => {
     // tables — never a second hand-maintained list (P5/P7). The formulate id
     // joined with its own enactment (0276, 0261 D2's id-growth letter); the
     // distill id with 0277's, the audit id with 0278's.
-    expect(coordinator).toContain("const WORK_TYPE_IDS = [\"execute\", \"verify\", \"fix\", \"formulate\", \"distill\", \"audit\"] as const satisfies readonly Grant[\"kind\"][]")
+    expect(coordinator).toContain("const WORK_TYPE_IDS = [\"execute\", \"verify\", \"fix\", \"formulate\", \"synthesize\", \"distill\", \"audit\"] as const satisfies readonly Grant[\"kind\"][]")
     expect(coordinator).toContain("export function executorTypeCatalog(): ExecutorTypes {")
     expect(coordinator).toContain("UNIT_STATE_DOC.source")
     expect(coordinator).toContain("taskDocPaths(CATALOG_UNIT).handoff")
@@ -145,7 +145,7 @@ describe("manual-driver prompt ratchet", () => {
     // (0277 grew the enumeration with distill and 0278 with audit; the
     // sentence anchor moved with each — the standing moved-anchor
     // discipline.)
-    expect(executor).toContain("For `execute`, `verify`, `fix`, `formulate`, `distill`, or `audit`, work in the returned `workspace` and follow `prompt`.")
+    expect(executor).toContain("For `execute`, `verify`, `fix`, `formulate`, `synthesize`, `distill`, or `audit`, work in the returned `workspace` and follow `prompt`.")
     expect(executor).toContain("Formulation may write only the granted phase's planning documents — the `index` path the grant names, the planned tasks' `todo.md` files, and its coverage map and handoff")
     expect(executor).toContain("never its own input `todo.md`, and never a `done.md`, a tick, or a rename")
     // The producer's anchors: the family table and the exclusion, the
@@ -182,7 +182,7 @@ describe("manual-driver prompt ratchet", () => {
     // granted handover path alone, the completion shapes refused, the
     // person's transfer act named, the landed share terminal (no
     // verification share follows the distillation).
-    expect(executor).toContain("For `execute`, `verify`, `fix`, `formulate`, `distill`, or `audit`, work in the returned `workspace` and follow `prompt`.")
+    expect(executor).toContain("For `execute`, `verify`, `fix`, `formulate`, `synthesize`, `distill`, or `audit`, work in the returned `workspace` and follow `prompt`.")
     expect(executor).toContain("Distillation may write only the granted phase's `handover` document — the path the grant names, its four protocol sections")
     expect(executor).toContain("the boundary's completion shapes (the rename, the tick, the transition) stay the person's `transfer` act")
     expect(executor).toContain("a landed distillation ends the unit — no verification share follows it")
@@ -220,7 +220,7 @@ describe("manual-driver prompt ratchet", () => {
     // person with no fix ever spinning off the audit, the round's close the
     // person's act — and the independence sentence naming the audit
     // producer (a verification share follows it).
-    expect(executor).toContain("For `execute`, `verify`, `fix`, `formulate`, `distill`, or `audit`, work in the returned `workspace` and follow `prompt`.")
+    expect(executor).toContain("For `execute`, `verify`, `fix`, `formulate`, `synthesize`, `distill`, or `audit`, work in the returned `workspace` and follow `prompt`.")
     expect(executor).toContain("The close audit may write only the granted unit's `findings` document — the path the grant names, one section per due row with the row's id in its heading, the document ending with its `Result: PASS` or `Result: FAIL` line — and the unit's handoff")
     expect(executor).toContain("a FAIL is a finding for the person routed at the round's close — no fix ever spins off the audit itself")
     expect(executor).toContain("the round's close stays the person's `transfer` act")
@@ -237,6 +237,38 @@ describe("manual-driver prompt ratchet", () => {
     expect(coordinator).toContain("async function auditProblems(dir: string, grant: Extract<Grant, { kind: \"audit\" }>): Promise<string[]> {")
     expect(steps).toContain("kind: \"audit\"")
     expect(steps).toContain("closeAuditFindingsDoc(task.id)")
+  })
+
+  // plans/0281 (0279's construction-determinized letter): the synthesize
+  // grant kind's both-sides arm — the executor.md sentences (the reply
+  // channel's write letter, the AUTO-shape remedy, the landed share
+  // terminal) and the fence's per-kind arm / the derivation's assembly /
+  // the settlement's composition are one ruled relationship.
+  test("the synthesize kind: executor.md's sentences and the fence's reply channel are pinned together (plans/0281)", () => {
+    const executor = text("executor.md")
+    const coordinator = src("executor-coordinator.ts")
+    const steps = src("executor-steps.ts")
+    const synthesis = src("formulate-synthesis.ts")
+    // The enumeration and the write letter: the channel named in prose, the
+    // reply shape taught, the landing the driver's alone.
+    expect(executor).toContain("Synthesis may write only the granted unit's own `todo.md` path")
+    expect(executor).toContain("the driver parses the reply, validates it mechanically (every quote must locate in its named source), composes the real synthesized todo and lands the construction itself")
+    expect(executor).toContain("A landed synthesis ends the unit's claim — no verification share follows it")
+    // The producer's anchors: the fence's one-path arm, the catalog's
+    // placeholder anchor, the stage word (the construction family's own
+    // word with its own stage), the derivation's identical-prompt render
+    // and the settlement's composition through the shared validation.
+    expect(coordinator).toContain('if (entry.grant.kind === "synthesize") return path === taskStatePaths(entry.grant.unit).pending')
+    expect(coordinator).toContain('synthesize: "phase-synthesize",')
+    expect(coordinator).toContain("if (grant.kind === \"synthesize\") return settleSynthesis(entry, booking, checkout, head, base)")
+    expect(steps).toContain("synthesizePromptText(state.synthesis.facts, {")
+    expect(steps).toContain("checkSynthesisReply(replyText, assembly.seeded, assembly.sources)")
+    // The shared homes: the push pipeline and the executor settlement read
+    // the same assembly, the same prompt text, the same reply validation —
+    // never a second home (P5).
+    expect(synthesis).toContain("export function synthesisSources(")
+    expect(synthesis).toContain("export function synthesizePromptText(")
+    expect(synthesis).toContain("export function checkSynthesisReply(")
   })
 
   // plans/0270 (0264-04's fix): the fingerprint letter on the protocol
@@ -386,7 +418,7 @@ describe("manual-driver prompt ratchet", () => {
     expect(src("loop-phase.ts")).toContain("`PLAN transition ${phaseTitle(phase)} → ${target}`")
     expect(src("loop-phase.ts")).toContain('stage: "phase-transition"')
     expect(src("formulate.ts")).toContain("`PLAN formulate ${phaseText(phase)}`")
-    expect(src("formulate.ts")).toContain('stage: "phase-formulate"')
+    expect(src("formulate.ts")).toContain('stage: record?.stage ?? "phase-formulate"')
   })
 
   // plans/0203 (0165-165 / S25-11): the ratchet pins ruled relationships,

@@ -109,7 +109,7 @@ const PATHS = [
 ]
 
 test("the catalog's ids are exactly the ids the coordinator can grant", () => {
-  expect(Object.keys(catalog)).toEqual(["execute", "verify", "fix", "formulate", "distill", "audit", "human", "question"])
+  expect(Object.keys(catalog)).toEqual(["execute", "verify", "fix", "formulate", "synthesize", "distill", "audit", "human", "question"])
   // The work ids are the wire's grant kinds (compile-time satisfies beside
   // the rendering); the person ids are the step kinds the person channel
   // delivers — never an id the coordinator cannot grant (P13). The
@@ -225,6 +225,46 @@ test("the formulate letter equals the fence's family arm, both sides (plans/0276
   expect(permitted({ grant: { kind: "fix", unit: "T-004" } }, "docs/R-01/P01-implement/tasks.md")).toBe(false)
   expect(permitted({ grant: { kind: "execute", unit: "T-004", index } }, "docs/R-01/P01-implement/tasks.md")).toBe(false)
   expect(permitted({ grant: { kind: "formulate", unit: "T-004" } }, "docs/R-01/P01-implement/tasks.md")).toBe(false)
+})
+
+// plans/0281 (0279's construction-determinized letter): the synthesize
+// letter — the reply channel's write boundary stated from the same table
+// the fence reads. The writes letter carries the granted unit's pending
+// todo placeholder alone (the per-unit anchor names the real one); the
+// never letter is the formulate rendering (the standing set minus the
+// pending-todo grammar — the done half stays refused), the honest limit
+// stated beside the other per-unit anchors'.
+test("the synthesize letter equals the fence's per-kind arm, both sides (plans/0281)", () => {
+  const todo = taskStatePaths("T-004").pending
+  const grant = { grant: { kind: "synthesize" as const, unit: "T-004" } }
+  for (const path of PATHS) {
+    expect(permitted(grant, path), path).toBe(path === todo)
+  }
+  expect(catalog.synthesize.writes.scope).toBe("none")
+  expect(catalog.synthesize.writes.paths).toEqual([taskStatePaths("T-NNN").pending])
+  expect(catalog.synthesize.writes.undeclared).toBeUndefined()
+  // The never letter is sound both directions: everything it denies the
+  // fence denies, and everything outside the one admitted path the fence
+  // refuses for the synthesize kind — the done half, the index family and
+  // every other unit's todo included (the honest limit 0276 stated for the
+  // formulate anchor: a deny-list provisioner reading the letter alone
+  // under-dennies the rest, the coordinator's checks the authority per
+  // 0261 D3).
+  expect(catalog.synthesize.never.paths).toEqual(catalog.formulate.never.paths)
+  for (const path of PATHS) {
+    if (neverFormulateMatch(path)) expect(permitted(grant, path), path).toBe(false)
+    if (path !== todo) expect(permitted(grant, path), path).toBe(false)
+  }
+  expect(neverFormulateMatch("docs/T-001/todo.md")).toBe(false)
+  expect(neverFormulateMatch("docs/T-001/done.md")).toBe(true)
+  // No other kind ever carries the arm: the unit's own todo stays refused
+  // for every other kind (driver-exclusive grammar, the fence's standing
+  // refusal — the formulation family's exclusion is the formulate grant's
+  // own).
+  expect(permitted({ grant: { kind: "execute", unit: "T-004" } }, todo)).toBe(false)
+  expect(permitted({ grant: { kind: "fix", unit: "T-004" } }, todo)).toBe(false)
+  expect(permitted({ grant: { kind: "formulate", unit: "T-004", index: "docs/R-01/P01-implement/tasks.md" } }, todo)).toBe(false)
+  expect(permitted({ grant: { kind: "synthesize", unit: "T-004" } }, "docs/R-01/P01-implement/tasks.md")).toBe(false)
 })
 
 // plans/0277 (0256 stage 2's second convergence kind, the transfer advance's
@@ -351,7 +391,7 @@ test("the absent-block floor: a consumer that ignores the block reads the pre-ch
     // The menu's claimable kinds are always catalog members (never an id the
     // coordinator cannot grant).
     for (const kinds of menu.claimable.flatMap(({ kinds }) => [...kinds])) {
-      expect(["execute", "verify", "fix", "formulate", "distill", "audit"]).toContain(kinds)
+      expect(["execute", "verify", "fix", "formulate", "synthesize", "distill", "audit"]).toContain(kinds)
     }
     // The block rides both menu arms identically (the leases-held arm too).
     const grant = await coordinator.claim(holder)

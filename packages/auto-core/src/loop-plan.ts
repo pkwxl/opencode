@@ -14,7 +14,7 @@ import { roundDeltaBlock } from "./assurance"
 import { BRIEF_FILE, projectBriefText } from "./brief"
 import { awaitingFormulation, constructFormulation, formulationAcceptance, formulationNumber, standingFormulation } from "./formulate"
 import { floorBlocks, formulationParts, previewFormulationDocument, readFormulationSources } from "./formulate-parts"
-import { floorDigest, protocolFrameText, renderLedger, synthesizeFormulation, type LedgerSource } from "./formulate-synthesis"
+import { floorDigest, protocolFrameText, renderLedger, synthesisSources, synthesizeFormulation } from "./formulate-synthesis"
 import { PromptGuaranteeError, resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import { dirtyStopLines, log, unreadableStopLines } from "./log"
 import { runSerialUnit, type LoopCtx } from "./loop-task"
@@ -282,24 +282,22 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     // The synthesis source list (D3's evidential sources) and its health
     // findings (the crux: a missing must-exist source is named, never
     // silent). The frame blocks (planning input, mode, precedence, duties)
-    // are never sources — the brief re-voices evidence, not protocol.
-    const sources: LedgerSource[] = []
-    const missing: string[] = []
-    if (brief) sources.push({ name: BRIEF_FILE, text: brief })
-    else missing.push(BRIEF_FILE)
-    if (ctx.manual) {
-      sources.push({ name: planInputPath(phase), text: input! })
-    } else {
-      if (parts!.round) sources.push({ name: roundBriefPath(parts!.state.round), text: parts!.round })
-      else missing.push(roundBriefPath(parts!.state.round))
-      if (parts!.analysis !== undefined) sources.push({ name: ANALYSIS_DOC, text: parts!.analysis })
-      else if (phase.entry.gates.includes("human")) missing.push(ANALYSIS_DOC)
-      if (input) sources.push({ name: planInputPath(phase), text: input })
-      for (const handover of parts!.handoverDocs) sources.push({ name: handover.path, text: handover.text })
-      missing.push(...parts!.missingHandovers)
-      if (parts!.prevRound) sources.push({ name: "prior-round digest", text: parts!.prevRound })
-      else if (parts!.prevRoundExpected) missing.push("prior-round digest")
-    }
+    // are never sources — the brief re-voices evidence, not protocol. The
+    // assembly lives in formulate-synthesis (plans/0281's one-home split:
+    // the executor's synthesize derivation reads the same function).
+    const { sources, missing } = synthesisSources(ctx.manual
+      ? { brief, manual: true, roundPath: planInputPath(phase), humanGated: false, planInput: { path: planInputPath(phase), text: input! } }
+      : {
+          brief,
+          roundPath: roundBriefPath(parts!.state.round),
+          ...(parts!.round ? { round: parts!.round } : {}),
+          ...(parts!.analysis !== undefined ? { analysis: parts!.analysis } : {}),
+          humanGated: phase.entry.gates.includes("human"),
+          ...(input ? { planInput: { path: planInputPath(phase), text: input } } : {}),
+          handoverDocs: parts!.handoverDocs,
+          missingHandovers: parts!.missingHandovers,
+          ...(parts!.prevRound ? { prevRound: parts!.prevRound } : parts!.prevRoundExpected ? { prevRoundExpected: true } : {}),
+        })
     const entry = ctx.manual ? phaseType(REQUIRED_TYPE)! : phase.entry
     const outcome = await synthesizeFormulation({
       pool: ctx.server,

@@ -77,6 +77,9 @@ export const REPO_LANE: readonly string[] = [
   "test/executor-catalog.test.ts",
   "test/executor-distill.test.ts",
   "test/executor-formulate.test.ts",
+  // The synthesize grant kind's lifecycle (plans/0281): the same real-git
+  // fixture shape (the construction, the reply channel, the settlement).
+  "test/executor-synthesize.test.ts",
   "test/executor-steps.test.ts",
   "test/executor-worktree.test.ts",
   // The protocol-doc ratchet (plans/0280): pure doc-and-constant reads, but

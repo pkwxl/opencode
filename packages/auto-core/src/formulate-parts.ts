@@ -122,49 +122,75 @@ export async function formulationParts(ctx: LoopCtx, phase: PhaseUnit): Promise<
   // "First" = no completed phase of this round has tasks (plans/0049 G4): a
   // leading task-less knowledge phase has no planning session and must not
   // swallow the digest.
-  // The digest cap: above a quarter of the run's context limit (estimated by
-  // the same token estimate the usage source uses), the prompt gets the index
-  // form instead of the full texts — the path and size of each knowledge
-  // document and handover, the session opening what it needs. The sizes are
-  // booked per planning session either way, so the memory-service question
-  // has its data.
-  let prevRound: string | undefined
-  let prevRoundExpected = false
-  if (!state.phases.some((unit) => state.done.has(unit.id) && unit.entry.hasTasks)) {
-    const prior = (await priorKnowledgeDigest(directory))?.trim() || undefined
-    const prev = (await prevRoundDigest(directory))?.trim() || undefined
-    prevRoundExpected = state.round > 1 && prev === undefined
-    const segments = [prior, prev].filter((part): part is string => part !== undefined)
-    const joined = segments.length ? segments.join("\n\n") : undefined
-    const cap = (opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT) / 4
-    const total = joined === undefined ? 0 : estimateTokens(joined)
-    const capped = joined !== undefined && total > cap
-    prevRound = capped ? renderDigestIndex(await digestIndexEntries(directory), { total, cap }) : joined
-    if (prevRound) {
-      log(
-        capped
-          ? `ℹ prior migration conclusions exceed the digest cap (${formatTokens(total)} tokens > ${formatTokens(cap)}); injecting the index form instead — the session opens what it needs`
-          : "ℹ injecting prior migration conclusions (prior knowledge + previous round's archive excerpts)",
-      )
-    }
-    await statsDigest(directory, {
-      priorKnowledge: prior === undefined ? undefined : estimateTokens(prior),
-      prevRound: prev === undefined ? undefined : estimateTokens(prev),
-      capped,
-    })
+  const block = await priorRoundBlock(directory, state, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT)
+  if (block.prevRound) {
+    log(
+      block.capped
+        ? `ℹ prior migration conclusions exceed the digest cap (${formatTokens(block.total)} tokens > ${formatTokens(block.cap)}); injecting the index form instead — the session opens what it needs`
+        : "ℹ injecting prior migration conclusions (prior knowledge + previous round's archive excerpts)",
+    )
   }
+  await statsDigest(directory, block.stats)
   // The round brief and the analysis ride `sources` (readFormulationSources
   // above — the fresh half); the digest block stays here, the booking half.
   return {
     state,
     ...sources,
-    prevRound,
-    prevRoundExpected,
+    prevRound: block.prevRound,
+    prevRoundExpected: block.prevRoundExpected,
     // No analysis/design phase delivered in this round's index → the
     // implement phase's planning gets the pipeline-trimming note. A closed
     // analysis/design phase (plans/0053 D16: done for scheduling, not
     // delivered) counts as absent.
     trimmedPhases: !state.phases.some((unit) => (unit.type === "analysis" || unit.type === "design") && !state.closed.has(unit.id)),
+  }
+}
+
+// The prior-round digest block's pure computation (plans/0281's split of the
+// 0097 D3 gathering): the digest cap logic above a quarter of the context
+// limit (estimated by the same token estimate the usage source uses), the
+// index form above it — one derivation home shared by the push compose loop
+// (formulationParts, which logs and books the stats beside it) and the
+// executor's synthesize derivation (readSynthesisAssembly, which reads it
+// read-only — a preview writes nothing, P6).
+export type PriorRoundBlock = {
+  prevRound: string | undefined
+  prevRoundExpected: boolean
+  capped: boolean
+  total: number
+  cap: number
+  stats: { priorKnowledge?: number; prevRound?: number; capped: boolean }
+}
+
+export async function priorRoundBlock(directory: string, state: PhaseState, contextLimit: number): Promise<PriorRoundBlock> {
+  let prevRound: string | undefined
+  let prevRoundExpected = false
+  let capped = false
+  let total = 0
+  let prior: string | undefined
+  let prev: string | undefined
+  const cap = contextLimit / 4
+  if (!state.phases.some((unit) => state.done.has(unit.id) && unit.entry.hasTasks)) {
+    prior = (await priorKnowledgeDigest(directory))?.trim() || undefined
+    prev = (await prevRoundDigest(directory))?.trim() || undefined
+    prevRoundExpected = state.round > 1 && prev === undefined
+    const segments = [prior, prev].filter((part): part is string => part !== undefined)
+    const joined = segments.length ? segments.join("\n\n") : undefined
+    total = joined === undefined ? 0 : estimateTokens(joined)
+    capped = joined !== undefined && total > cap
+    prevRound = capped ? renderDigestIndex(await digestIndexEntries(directory), { total, cap }) : joined
+  }
+  return {
+    prevRound,
+    prevRoundExpected,
+    capped,
+    total,
+    cap,
+    stats: {
+      priorKnowledge: prior === undefined ? undefined : estimateTokens(prior),
+      prevRound: prev === undefined ? undefined : estimateTokens(prev),
+      capped,
+    },
   }
 }
 

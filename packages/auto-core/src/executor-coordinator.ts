@@ -12,13 +12,13 @@ import { namesRowId } from "./assurance"
 import { constraintPitfallResolves, handoffStatus, parkDirective, parseResult, roleOf, validHandover, HANDOVER_SECTIONS } from "./document/roles"
 import { parseIndex, tickedIndex } from "./document/unit"
 import { parkCheck, STEER_CHAIN_BOUND } from "./execute"
-import { readExecutorAdmissionBlock, readExecutorParkPlan, readExecutorPreview, readExecutorFollowUp, planPhaseOf, type ExecutorPreview, type FixPreview, type VerificationPreview } from "./executor-steps"
+import { composeSynthesizedTodo, readExecutorAdmissionBlock, readExecutorParkPlan, readExecutorPreview, readExecutorFollowUp, planPhaseOf, type ExecutorPreview, type FixPreview, type VerificationPreview } from "./executor-steps"
 import {
   ensureExecutorWorkspace, executorWorkspacePath, ExecutorWorktreeError, landExecutorWorkspace,
   prepareExecutorLanding, removeExecutorWorkspace, validExecutorLanding, validExecutorWorkspace,
   type ExecutorLanding, type ExecutorWorkspace,
 } from "./executor-worktree"
-import { awaitingFormulation } from "./formulate"
+import { awaitingFormulation, constructFormulation } from "./formulate"
 import { ledgerOf, coverageProblems } from "./formulate-synthesis"
 import { contentAtBase, EMPTY_TREE, git, identityArgs, message, repoRoots, statusEntriesRead, WORKDIR_ROOTS, withinScopes, workdirEntry, driverStage } from "./git"
 import { log } from "./log"
@@ -115,8 +115,24 @@ type Distill = Extract<ExecutorPreview, { kind: "distill" }>
 // it, and the terminal phase's every other task is done — the standing
 // emptiness the gate.
 type Audit = Extract<ExecutorPreview, { kind: "audit" }>
-type Candidate = Execute | Formulate | Distill | Audit | FixPreview | VerificationPreview
-type Grant = (Omit<Execute, "touches"> | Formulate | Distill | Audit | Omit<FixPreview, "touches"> | VerificationPreview) & { id: string; lease: string; attempt: number; workspace: string; deadline: number; budget: number; answerCursor?: string | null }
+// 0281 (0279's construction-determinized letter): the synthesize step — the
+// formulation construction's re-voicing session (0097's constructor
+// one-shot) as claimable work. The claim address is the construction
+// unit's own task-shaped id (0276's grounds); the phase's identity rides
+// the grant as data (`phase`, `index` — the same two fields the formulate
+// grant carries). The lease shape is serial on the main tree (the
+// formulation unit declares no Touches, the awaiting gate already stands
+// the tiers down). The holder's write surface is the unit's todo path —
+// the REPLY CHANNEL (the fence admits exactly it); the settlement parses,
+// validates through the push pipeline's own checks, composes the
+// synthesized todo and lands through constructFormulation under the
+// phase-synthesize stage — never a session share commit. A landed
+// synthesize receipt is terminal (no verify follows: the push one-shot had
+// no wrap-up session), the unit continuing as formulate work over the
+// synthesized todo.
+type Synthesize = Extract<ExecutorPreview, { kind: "synthesize" }>
+type Candidate = Execute | Formulate | Synthesize | Distill | Audit | FixPreview | VerificationPreview
+type Grant = (Omit<Execute, "touches"> | Formulate | Synthesize | Distill | Audit | Omit<FixPreview, "touches"> | VerificationPreview) & { id: string; lease: string; attempt: number; workspace: string; deadline: number; budget: number; answerCursor?: string | null }
 type BlockedReport = { kind: "blocked"; reason: "isolation" | "commitFailed"; detail: string }
 // The blocked-cause classification (0272, 0262-03's fix): `escalated` marks
 // the settlement causes whose remedy would require a write the holder's
@@ -163,7 +179,7 @@ type BudgetBlock = { kind: "blocked"; reason: "attemptsExhausted" | "fixBudget";
 // verification by a different token is still pending work); terminal for
 // the client, which reconciles against the commit and ends.
 type SettledStep = { kind: "settled"; unit: string; commit: string; detail: string }
-type DerivedStep = Exclude<ExecutorPreview, Execute | Formulate | Distill | Audit> | BlockedReport | LeaseWait | BudgetBlock | QuestionWait | SettledStep
+type DerivedStep = Exclude<ExecutorPreview, Execute | Formulate | Synthesize | Distill | Audit> | BlockedReport | LeaseWait | BudgetBlock | QuestionWait | SettledStep
 type Decision = DerivedStep | (Candidate & { scope?: readonly string[]; worktree?: true })
 type Claim = DerivedStep | Grant
 type LeaseKey = { step: string; lease: string }
@@ -256,6 +272,11 @@ export const SHARE_STAGE_OF_KIND: Record<Grant["kind"], string> = {
   verify: "wrapup",
   fix: "fix",
   formulate: "phase-formulate",
+  // 0281: the synthesize share's landing IS the construction commit — the
+  // push construction's own family word with its own stage so a landed
+  // synthesis stays distinguishable from a plain floor construction (the
+  // new-word ruling: plans/0279's docket names `phase-synthesize`).
+  synthesize: "phase-synthesize",
   distill: "phase-handover",
   audit: "close-audit",
 }
@@ -333,6 +354,16 @@ export function permitted(entry: {
   touches?: readonly string[]
 }, path: string): boolean {
   if ((entry.grant.kind === "formulate" || entry.grant.kind === "fix") && formulationFamily(entry, path)) return true
+  // The synthesize kind's per-kind arm (0281): exactly the granted unit's
+  // pending todo — the REPLY CHANNEL, the session's one write surface (the
+  // settlement parses the reply there, composes the real document and lands
+  // it through the construction — the channel is never the landed
+  // document). The arm precedes the standing refusal because the todo path
+  // is driver-exclusive grammar; everything else stays refused: every other
+  // unit's todo, the done half, the index family, the workdir, config,
+  // AGENTS.md. No freeform floor, no handoff arm — the constructor session
+  // is tool-less push-side, its protocol twin exactly as narrow.
+  if (entry.grant.kind === "synthesize") return path === taskStatePaths(entry.grant.unit).pending
   if (standingRefusal(path)) return false
   // The distill kind's per-kind arm (0277): exactly the granted handover
   // document, nothing else — the deliverable is a document, the task-doc
@@ -421,7 +452,7 @@ const CATALOG_UNIT = "T-NNN"
 // Exported for the protocol-doc ratchet (0280): the doc's grant-kind
 // enumeration pins against this table — the one home the catalog, the wire
 // and the spec share (P5).
-export const WORK_TYPE_IDS = ["execute", "verify", "fix", "formulate", "distill", "audit"] as const satisfies readonly Grant["kind"][]
+export const WORK_TYPE_IDS = ["execute", "verify", "fix", "formulate", "synthesize", "distill", "audit"] as const satisfies readonly Grant["kind"][]
 const PERSON_QUESTION_AUTHORITY = ["unrestricted", "questions"] as const
 const PERSON_RELEASE_AUTHORITY = ["unrestricted", "releases"] as const
 
@@ -491,6 +522,17 @@ function workTypeLetter(id: Grant["kind"]): ExecutorWorkTypeLetter {
       writes: { scope: "none", paths: [CATALOG_PHASE_INDEX, taskStatePaths(CATALOG_UNIT).pending, taskDoc(CATALOG_UNIT, "coverage")] },
     }
   }
+  // The synthesize entry (0281): the never letter renders the standing set
+  // minus the pending-todo grammar (the formulate entry's own rendering —
+  // DONE_STATE_DOC_SOURCE keeps the done half refused, the index arms
+  // unchanged), the writes letter carrying the granted todo's placeholder
+  // alone. The honest limit, stated once beside 0276/0277/0278's own:
+  // another unit's todo matches neither the never grammar nor the writes
+  // anchor — the per-unit anchor names the one admitted, the fence refuses
+  // the rest, the coordinator's boundary checks the authority per 0261 D3.
+  if (id === "synthesize") {
+    return { id, never: { git: GIT_LETTER, paths: formulateNeverPaths() }, writes: { scope: "none", paths: [taskStatePaths(CATALOG_UNIT).pending] } }
+  }
   // The distill entry (0277): the standing never paths whole — nothing the
   // never-set refuses is admitted for the distill kind (the handover
   // document is not in the never-set) — and the writes letter carrying the
@@ -537,6 +579,7 @@ export type ExecutorTypes = {
   readonly verify: ExecutorWorkTypeLetter
   readonly fix: ExecutorWorkTypeLetter
   readonly formulate: ExecutorWorkTypeLetter
+  readonly synthesize: ExecutorWorkTypeLetter
   readonly distill: ExecutorWorkTypeLetter
   readonly audit: ExecutorWorkTypeLetter
   readonly human: ExecutorPersonTypeLetter
@@ -551,6 +594,7 @@ const CATALOG: ExecutorTypes = {
   verify: workTypeLetter("verify"),
   fix: workTypeLetter("fix"),
   formulate: workTypeLetter("formulate"),
+  synthesize: workTypeLetter("synthesize"),
   distill: workTypeLetter("distill"),
   audit: workTypeLetter("audit"),
   human: { id: "human", authority: PERSON_RELEASE_AUTHORITY },
@@ -613,7 +657,7 @@ async function ignoredArtifactRows(checkout: string, grant: Grant, plain: readon
   // The distill kind's artifact is the granted handover document itself
   // (0277) — the phase-unit id never reaches taskDocPaths' arms. The audit
   // kind's artifact is the granted findings document (0278).
-  const artifacts = grant.kind === "verify" ? [docs.report, docs.gaps] : grant.kind === "distill" ? [grant.handover] : grant.kind === "audit" ? [grant.findings] : [docs.handoff]
+  const artifacts = grant.kind === "verify" ? [docs.report, docs.gaps] : grant.kind === "distill" ? [grant.handover] : grant.kind === "audit" ? [grant.findings] : grant.kind === "synthesize" ? [taskStatePaths(grant.unit).pending] : [docs.handoff]
   const seen = new Set(plain.map(({ rel }) => rel))
   const ask = artifacts.filter((path) => !seen.has(path))
   if (!ask.length) return []
@@ -1331,6 +1375,12 @@ export async function openExecutorCoordinator(
     const { grant } = entry
     const head = await gitRead(checkout, "rev-parse", "HEAD")
     const base = booking.parent ?? (entry.scope && !entry.worktree ? head : entry.base)
+    // The synthesize settlement (0281): the holder's deliverable is its
+    // REPLY at the unit's todo path (the one write surface the fence
+    // admits), never a session share — the landing is the construction
+    // commit itself. The branch precedes the generic head-mismatch check
+    // because the construction commit IS the legitimate head move.
+    if (grant.kind === "synthesize") return settleSynthesis(entry, booking, checkout, head, base)
     if (head !== base) {
       const witness = await gitRead(checkout, "show", "-s", "--format=%P%n%T%n%B", head)
       if (booking.intent && witness === `${base}\n${booking.intent.tree}\n${shareMessage(grant, !!booking.intent.park)}` &&
@@ -1581,6 +1631,88 @@ export async function openExecutorCoordinator(
     return finishShare(landed, evidence)
   }
 
+  // The synthesize share's settlement (0281): the push constructor
+  // one-shot's mechanical ladder, judged here over the reply channel —
+  // parse (the strict delimiters), validate (checkSynthesisReply: the
+  // ledger grammar, the seeded sequence, the quote anchoring — the same
+  // checks the push loop ran, one home), compose (renderFormulationTodo's
+  // synthesis shape, the guarantee gate's throw a blocked problem — the
+  // push's retry cause is the holder's remedy), land (the driver restores
+  // the channel to the booked floor, then constructFormulation writes and
+  // commits the composed todo under the phase-synthesize stage). Every
+  // problem is replayable (the holder rewrites its reply, a write inside
+  // its own one admitted path), so the plain blocked answer — 0272's
+  // ladder, the details teaching the remedy. The crash windows: a
+  // construction already landed books the same commit (the witness below);
+  // a crash between the restore and the commit voids the attempt honestly
+  // (the zero-write floor, the floor standing again for a fresh claim).
+  async function settleSynthesis(entry: Entry, booking: EndedBooking, checkout: string, head: string, base: string): Promise<Receipt | SettlementBlocked> {
+    const { grant } = entry
+    const finish = async (receipt: Receipt) => {
+      await book(entry, { ...booking, receipt })
+      return receipt
+    }
+    const blocked = (detail: string): BlockedReport => ({ kind: "blocked", reason: "commitFailed", detail })
+    const todo = taskStatePaths(grant.unit).pending
+    // A prior settlement's construction already landed: the witness is the
+    // commit's own shape — the booked parent beside the construction's
+    // subject and stage (nothing else commits between the report and the
+    // replay; the coordinator holds the lock).
+    if (head !== base) {
+      const witness = await gitRead(checkout, "show", "-s", "--format=%P%n%B", head)
+      // The witness shape: the parent line first (`%P`), the body (`%B`)
+      // opening with the construction's own subject.
+      const subject = witness.split("\n")[1] ?? ""
+      if (!witness.startsWith(`${base}\n`) || driverStage(witness) !== "phase-synthesize" || !subject.startsWith("PLAN formulate")) {
+        return outsidePerimeter(blocked("HEAD moved outside the booked synthesis construction."))
+      }
+      return finish({ kind: "landed", commit: head })
+    }
+    // Out-of-scope edits beside the reply channel refuse exactly as the
+    // standing settlement does (the fence admits only the todo path).
+    const status = await workspaceStatus(checkout)
+    if (!status) return outsidePerimeter({ kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable. Inspect the index before replaying." })
+    const dirt = status.filter(({ rel, status: row }) => !(row === "??" && workdirEntry(rel)))
+    const rejected = dirt.filter(({ rel }) => rel !== todo)
+    if (rejected.length) {
+      const detail = `Resolve out-of-scope edits before replaying: ${rejected.map(({ rel }) => rel).join(", ")}.`
+      const report: BlockedReport = { kind: "blocked", reason: "isolation", detail }
+      return neverSetRows(rejected) ? outsidePerimeter(report) : report
+    }
+    if (!dirt.some(({ rel }) => rel === todo)) return finish({ kind: "without-landing", reason: "zero-write" })
+    // The reply, read off the channel before anything touches it.
+    const replyText = await Bun.file(join(checkout, todo)).text().catch(() => undefined)
+    if (replyText === undefined) return blocked(`The reply is missing: rewrite ${todo} with the prescribed reply shape, then re-report.`)
+    // The landing's first act restores the channel to the booked floor —
+    // the session's write is the channel, never the document, and every
+    // derivation below (the assembly, the plan loads) reads the clean
+    // tree — then the reply is parsed, validated through the shared
+    // derivation and composed; the standing construction path commits the
+    // composed todo under the phase-synthesize stage. A crash between the
+    // restore and the commit voids the attempt honestly (the zero-write
+    // floor; the floor stands again for a fresh claim).
+    const restore = await git(checkout, ["restore", "--source", base, "--", `:(literal)${todo}`])
+    if (restore.code !== 0) return blocked(restore.err.trim() || "The reply channel could not be restored to the booked floor.")
+    const composed = await composeSynthesizedTodo(checkout, replyText)
+    if (composed.kind === "problems") {
+      return blocked(`the synthesis reply is invalid: ${composed.problems.join("; ")} — rewrite the reply at ${todo} in the exact prescribed shape, fixing exactly these findings`)
+    }
+    const construction = composed.construction
+    const landedDoc = await constructFormulation(checkout, construction.phase, construction.todo, construction.record)
+    if (landedDoc.type === "dirty" || landedDoc.type === "unreadable") {
+      return blocked(`the construction's entry gate refused: ${landedDoc.files.join(", ")}`)
+    }
+    if (landedDoc.type === "failed") {
+      // The construction left its write in the worktree; restore the floor
+      // so the next attempt starts clean (the reply is consumed either
+      // way — a fresh claim re-runs the session over the standing floor).
+      await git(checkout, ["restore", "--source", base, "--", `:(literal)${todo}`]).catch(() => undefined)
+      return blocked(landedDoc.question)
+    }
+    const commit = await gitRead(checkout, "rev-parse", "HEAD")
+    return finish({ kind: "landed", commit })
+  }
+
   async function closeVerified(entry: Entry, booking: EndedBooking, intent: CloseIntent): Promise<Receipt | SettlementBlocked> {
     const grant = entry.grant
     const block = (detail: string): BlockedReport => ({ kind: "blocked", reason: "isolation", detail })
@@ -1759,6 +1891,7 @@ export async function openExecutorCoordinator(
   function stepID(step: Candidate): string {
     if (step.kind === "verify") return verifyID(step.unit)
     if (step.kind === "formulate") return `${step.unit} formulate ${entries.filter(({ grant, booking }) => grant.kind === "formulate" && grant.unit === step.unit && booking?.receipt?.kind === "landed").length + 1}`
+    if (step.kind === "synthesize") return `${step.unit} synthesize ${entries.filter(({ grant, booking }) => grant.kind === "synthesize" && grant.unit === step.unit && booking?.receipt?.kind === "landed").length + 1}`
     if (step.kind === "distill") return `${step.unit} distill ${entries.filter(({ grant, booking }) => grant.kind === "distill" && grant.unit === step.unit && booking?.receipt?.kind === "landed").length + 1}`
     if (step.kind === "audit") return `${step.unit} audit ${entries.filter(({ grant, booking }) => grant.kind === "audit" && grant.unit === step.unit && booking?.receipt?.kind === "landed").length + 1}`
     const prefix = step.kind === "fix" ? `${step.unit} fix ${step.round}.` : `${step.unit} exec `
@@ -1774,7 +1907,7 @@ export async function openExecutorCoordinator(
     // person's — the advance's stop and the phase gates), and no close-out
     // rides the coordinator (the completion rename and tick are the apply,
     // the person's transfer). The unit's claim chain ends at the landing.
-    const closedUnit = previous?.kind === "landed" && (previous.closeCommit !== undefined || last?.grant.kind === "distill")
+    const closedUnit = previous?.kind === "landed" && (previous.closeCommit !== undefined || last?.grant.kind === "distill" || last?.grant.kind === "synthesize")
     if (last?.booking && (!previous || (previous.kind === "landed" && !closedUnit && !previous.continuation && !previous.parked))) {
       return { kind: "wait", reason: "in-flight", detail: "The previous share requires settlement or verification." }
     }
@@ -1788,7 +1921,7 @@ export async function openExecutorCoordinator(
     // attempt on the same phase unit. An audit entry joins them (0278): the
     // audit session is an ordinary whole-task session, its handed-over
     // continuation resuming as the next audit attempt on the same unit.
-    if (last && last.grant.kind !== "execute" && last.grant.kind !== "formulate" && last.grant.kind !== "distill" && last.grant.kind !== "audit" && !closedUnit) {
+    if (last && last.grant.kind !== "execute" && last.grant.kind !== "formulate" && last.grant.kind !== "synthesize" && last.grant.kind !== "distill" && last.grant.kind !== "audit" && !closedUnit) {
       return { kind: "wait", reason: "in-flight", detail: "The execute share has advanced to verification." }
     }
     const continuation = last && last.booking?.receipt?.kind !== "landed" ? last : undefined
@@ -1805,7 +1938,7 @@ export async function openExecutorCoordinator(
     const checkout = last && !terminal(last) ? await openCheckout(last) : dir
     if (typeof checkout !== "string") return checkout
     const step = await readExecutorPreview(dir, resumeUnit, route ? { task: route, scoped } : undefined, checkout)
-    if (step.kind !== "execute" && step.kind !== "formulate" && step.kind !== "distill" && step.kind !== "audit") return step
+    if (step.kind !== "execute" && step.kind !== "formulate" && step.kind !== "synthesize" && step.kind !== "distill" && step.kind !== "audit") return step
     if (attempts(stepID(step)) >= MAX_ATTEMPTS) {
       return { kind: "blocked", reason: "attemptsExhausted", detail: `${step.unit} has reached the ${MAX_ATTEMPTS}-attempt limit.` }
     }
@@ -1855,12 +1988,12 @@ export async function openExecutorCoordinator(
       ? await Promise.all(tasks.map(({ task }) => select(holder, at, undefined, task.id, tasks)))
       : [await select(holder, at)]
     for (const step of decisions) {
-      if (step.kind === "execute" || step.kind === "verify" || step.kind === "fix" || step.kind === "formulate" || step.kind === "distill" || step.kind === "audit") {
+      if (step.kind === "execute" || step.kind === "verify" || step.kind === "fix" || step.kind === "formulate" || step.kind === "synthesize" || step.kind === "distill" || step.kind === "audit") {
         claimable.push({
           unit: step.unit,
           title: step.title,
           kinds: [step.kind],
-          ...(step.kind !== "verify" && step.kind !== "formulate" && step.kind !== "distill" && step.kind !== "audit" ? { touches: step.touches } : {}),
+          ...(step.kind !== "verify" && step.kind !== "formulate" && step.kind !== "synthesize" && step.kind !== "distill" && step.kind !== "audit" ? { touches: step.touches } : {}),
         })
       }
     }
@@ -1868,7 +2001,7 @@ export async function openExecutorCoordinator(
   }
 
   function withoutGrant(step: Decision): DerivedStep {
-    return step.kind === "execute" || step.kind === "verify" || step.kind === "fix" || step.kind === "formulate" || step.kind === "distill" || step.kind === "audit"
+    return step.kind === "execute" || step.kind === "verify" || step.kind === "fix" || step.kind === "formulate" || step.kind === "synthesize" || step.kind === "distill" || step.kind === "audit"
       ? { kind: "wait", reason: "not-ready", detail: `${step.unit} is available for a new claim.` }
       : step
   }
@@ -1902,7 +2035,7 @@ export async function openExecutorCoordinator(
     // the verify kind renders is task-shaped and does not exist for the
     // phase unit. The honest answer is the fresh-claim step (the boundary
     // step naming the person's transfer).
-    if (producer.grant.kind === "distill") return nextWithoutGrant(at)
+    if (producer.grant.kind === "distill" || producer.grant.kind === "synthesize") return nextWithoutGrant(at)
     if (booking?.outcome !== "ended" || !booking.intent || !producer.holder.token) {
       return { kind: "blocked", reason: "isolation", detail: "The landed share lacks durable producer provenance." }
     }
@@ -2005,7 +2138,7 @@ export async function openExecutorCoordinator(
     // letter): no verification follows it, so it holds no serial
     // reservation — the boundary is the person's transfer until the next
     // round of work routes.
-    return receipt?.kind === "landed" && (receipt.closeCommit !== undefined || receipt.parked !== undefined || entry.grant.kind === "distill")
+    return receipt?.kind === "landed" && (receipt.closeCommit !== undefined || receipt.parked !== undefined || entry.grant.kind === "distill" || entry.grant.kind === "synthesize")
   }
 
   function pendingReport() {
@@ -2095,7 +2228,7 @@ export async function openExecutorCoordinator(
     // landing. An audit producer's landed receipt does need it (0278, D6's
     // ruling: the push closeout runs the wrap-up for the unit, the verify
     // kind is that session converged).
-    const needsVerification = (result?.kind === "landed" && !result.closeCommit && !result.continuation && !result.parked && last?.grant.kind !== "distill") ||
+    const needsVerification = (result?.kind === "landed" && !result.closeCommit && !result.continuation && !result.parked && last?.grant.kind !== "distill" && last?.grant.kind !== "synthesize") ||
       (last?.grant.kind === "verify" && result?.kind !== "landed")
     // A formulate ask routes through the fresh-claim preview (0276): the
     // formulate step derives where it stands, and claim's kind guard answers
@@ -2104,7 +2237,7 @@ export async function openExecutorCoordinator(
     // (0277): the boundary step derives where it stands the same way. An
     // audit ask joins both (0278): the audit step derives where the standing
     // unit routes it.
-    if (kind === "execute" || kind === "formulate" || kind === "distill" || kind === "audit" || (kind === undefined && !needsFix && !needsVerification)) return preview(at, last ?? null, task, scoped)
+    if (kind === "execute" || kind === "formulate" || kind === "synthesize" || kind === "distill" || kind === "audit" || (kind === undefined && !needsFix && !needsVerification)) return preview(at, last ?? null, task, scoped)
 
     return kind === "fix" || (kind === undefined && needsFix) ? fixing(at, last ?? null) : verification(holder, at, last ?? null)
   }
@@ -2137,7 +2270,7 @@ export async function openExecutorCoordinator(
       const plan = await readExecutorParkPlan(dir)
       const declaration = plan?.tasks.find(({ id }) => id === task)
       if (declaration && docEligible(declaration)) return scopedDecision(holder, at, kind, task)
-      if (kind === undefined || kind === "execute" || kind === "formulate" || kind === "distill" || kind === "audit") return preview(at, null, task)
+      if (kind === undefined || kind === "execute" || kind === "formulate" || kind === "synthesize" || kind === "distill" || kind === "audit") return preview(at, null, task)
       return { kind: "wait", reason: "not-ready", detail: `${task} has no ${kind} step to claim.` }
     }
     if (hasReservations || scopedTasks.length) {
@@ -2153,7 +2286,7 @@ export async function openExecutorCoordinator(
         // derives it. The audit step joins both (0278): the audit unit
         // declares no Touches and the terminal phase's every other task is
         // done — the standing emptiness the gate.
-        wait ??= step.kind === "formulate" || step.kind === "distill" || step.kind === "audit" ? withoutGrant(step) : step
+        wait ??= step.kind === "formulate" || step.kind === "synthesize" || step.kind === "distill" || step.kind === "audit" ? withoutGrant(step) : step
       }
       if (wait) return wait
       return { kind: "wait", reason: "in-flight", detail: "The current workspace tier must settle before other work starts." }
@@ -2181,7 +2314,7 @@ export async function openExecutorCoordinator(
         if (blocked) return blocked
       }
       const step = await select(holder, now(), kind, task)
-      if (step.kind !== "execute" && step.kind !== "verify" && step.kind !== "fix" && step.kind !== "formulate" && step.kind !== "distill" && step.kind !== "audit") return step
+      if (step.kind !== "execute" && step.kind !== "verify" && step.kind !== "fix" && step.kind !== "formulate" && step.kind !== "synthesize" && step.kind !== "distill" && step.kind !== "audit") return step
       // The asked-kind guard (0276): a targeted claim receives its own kind
       // or an honest wait naming the mismatch — dead code for the standing
       // kinds (their routing guarantees the match by construction), made
@@ -2208,10 +2341,10 @@ export async function openExecutorCoordinator(
       const checkout = workspace && last && retained ? await openCheckout(last) : dir
       if (typeof checkout !== "string") return checkout
       const base = workspace && !workspace.established ? workspace.start : await gitRead(checkout, "rev-parse", "HEAD")
-      if (step.kind !== "execute" && step.kind !== "formulate" && step.kind !== "distill" && step.kind !== "audit" && base !== step.head) {
+      if (step.kind !== "execute" && step.kind !== "formulate" && step.kind !== "synthesize" && step.kind !== "distill" && step.kind !== "audit" && base !== step.head) {
         return { kind: "blocked", reason: "isolation", detail: "HEAD moved before the grant." }
       }
-      const { touches, scope, worktree: _, ...work } = step.kind === "verify" || step.kind === "formulate" || step.kind === "distill" || step.kind === "audit" ? { ...step, touches: undefined } : step
+      const { touches, scope, worktree: _, ...work } = step.kind === "verify" || step.kind === "formulate" || step.kind === "synthesize" || step.kind === "distill" || step.kind === "audit" ? { ...step, touches: undefined } : step
       // The grant's budget is the project's declared executorLease (0260);
       // select's admission arm already proved the config loads, so a throw
       // here is a hand edit landing mid-claim and fails loud.

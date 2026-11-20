@@ -87,6 +87,7 @@ execute
 verify
 fix
 formulate
+synthesize
 distill
 audit
 ```
@@ -112,6 +113,22 @@ audit
   Writes the formulation family: the phase's task index, the planned tasks'
   pending documents (minus the unit's own input todo), the coverage map,
   the handoff.
+- **synthesize** — the formulation construction's re-voicing session (the
+  constructor one-shot converged). Address: the construction unit's own
+  task id; `phase` and `index` ride the grant; the brief is the identical
+  `formulate-synthesize` prompt over the same evidential sources the push
+  compose renders. The holder writes its reply (the prescribed
+  `<<<SOURCES-BRIEF …` / `<<<LEDGER …` blocks plus the `Rationale:` line)
+  at the unit's `todo.md` path — the one write surface, the reply channel.
+  The settlement validates mechanically (the ledger grammar, the seeded
+  sequence, the quote anchoring, the guarantee asserts), composes the
+  synthesized todo and lands it through the standing construction path —
+  one `PLAN formulate` commit under the `phase-synthesize` stage. Terminal:
+  no verify share follows a synthesis; the unit continues as formulate
+  work over the synthesized todo. Derives only while the standing todo is
+  the floor (its Scope carries no obligations ledger), a charter resolves,
+  and the synthesis switch is not off — otherwise the formulate floor is
+  byte-identical.
 - **distill** — the phase-boundary distillation (the handover document).
   Address: the phase's qualified id; `handover` (the one write path) rides
   the grant. Terminal: no verify share follows a distillation; the
@@ -182,6 +199,7 @@ exec
 wrapup
 fix
 phase-formulate
+phase-synthesize
 phase-handover
 close-audit
 park
@@ -189,7 +207,7 @@ done
 clarify
 ```
 
-The first six are the per-kind share words; `park` is the dependency-park
+The first seven are the per-kind share words; `park` is the dependency-park
 share; `done` is the verify close-out; `clarify` is the gate release
 commit. Nested-root landings add the lane family's `landing` /
 `landing-sync` / `merge-repair` words on the main tree.
