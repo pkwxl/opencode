@@ -15,17 +15,20 @@ ratchet (`test/protocol-doc.test.ts` in both packages).
 ```
 opencode-auto-server register <dir>              # the whitelist (absolute)
 opencode-auto-server token issue --scopes read,control,answer,config [--out <file>]
-opencode-auto-server serve [--port 4770] [--host 127.0.0.1] [--data-dir <dir>] [--launch <confinement script>] [--env-file <declaration file>] [--open --root <dir> …]
-# then: open the daemon's URL in a browser, paste a token — or talk REST.
+opencode-auto-server serve [--port 4770] [--host 127.0.0.1] [--data-dir <dir>] [--env-file <declaration file>] [--open --root <dir> …]
+# then: talk REST — the daemon serves coding agents only, no web client.
 ```
 
 ## Topology: one daemon, one worker child per run — and many projects at once
 
-The daemon is a single `Bun.serve` process. Every run is a **separate child
-process** (`opencode-auto-server worker '<run request JSON>'`) that performs
-exactly one `runAll` in one target directory and exits with the run's own
-code — the daemon never imports the worker, never calls `runAll` itself. Two
-facts of the underlying stack force this shape:
+The daemon is a single `Bun.serve` process. Every project's executor
+coordinator is a **separate child process** (`opencode-auto-server worker
+'{"executor": true, "directory": …, "transport": …}'`) that serves exactly
+one coordinator and exits with its own code — the daemon never imports the
+worker, never drives the core's loop itself (plans/0282: the protocol does
+nothing via push, ever again; the deterministic operations run in the
+daemon as library calls). Two facts of the underlying stack force this
+shape:
 
 - **Environment memoization.** The core parses the `OPENCODE_AUTO_*` switch
   layer once per process and a `Bun.spawn` without an explicit env inherits
@@ -147,19 +150,20 @@ line.
 
 | kind  | routes |
 | ----- | ------ |
-| REST  | `GET /health`; `GET /runs`, `POST /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`, `GET /session`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan` (the dispatch surface: the standing plan task's session spawned as a run), `transfer` (the advance command: one person-bracketed boundary per invocation, spawned as a run) (control), `models` (GET the table; POST the probe — its own `probe` scope) |
-| SSE   | `GET /projects/<p>/status` (the polled read model: the core's rendered status tree, commit-verdict completions, per-worktree git cleanliness, the lock), `/log` and `/events` (whole-line tails of the run log and the engine journal), `/status-events` (the typed driver-events stream with event-id cursoring) |
-| WS    | `GET /runs/<id>/interactive` — the question channel and the control channel (`/exit`, `/failback`) multiplexed on one typed versioned protocol; the run's own bridge connects back to `GET /runs/<id>/worker` with a per-run secret |
-| Web   | `GET /` — the client (plain TypeScript, no framework, no dependency), served from the package's embedded bundle; scope-aware over `GET /session` |
+| REST  | `GET /health`; `GET /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan`, `transfer`, `clarify` (the deterministic boundary operations — the protocol does nothing via push, plans/0282), `models` (GET the table; POST the probe — its own `probe` scope) |
+| WS    | the executor coordinator's bridge socket (the per-run secret the spawn carried) — the daemon serves coding agents only, never a web client (plans/0282) |
 
-Every route but `/health`, the page and its script requires
-`Authorization: Bearer <token>`: **401** unknown, **403** a known token
-without the route's scope. Scopes: `read` (status/observability/models),
-`control` (run control, kill, `/exit`/`/failback`, close/task-add/plan),
-`config` (init/amend/fix/reset), `answer` (the question channel),
+Every route but `/health` requires `Authorization: Bearer <token>`:
+**401** unknown, **403** a known token without the route's scope. Scopes:
+`read` (status/observability/models), `control` (kill, close/task-add and
+the plan/transfer/clarify operations), `config` (init/amend/fix/reset),
 `probe` (the model probe alone — opt-in, carried by no default token set,
 and beside the scope it takes an explicit `confirm` field and the
-per-daemon 10-minute rate window). The plaintext token is printed once at
+per-daemon 10-minute rate window), `executor` (the executor protocol),
+`projects` (project creation). The ask channel is gone (plans/0282): the
+`answer`/`person` scopes are tombstoned, and a blocked coding agent
+resolves its block itself — the person's gates are document-derived, their
+acts document writes and the deterministic operations. The plaintext token is printed once at
 issue; `token issue --out <file>` instead writes it direct to a fresh 0600
 file — never overwriting, never creating directories, nothing of the
 credential on stdout.
@@ -178,13 +182,11 @@ default channel.
 | Operation | Body fields | Response payload |
 | --- | --- | --- |
 | `ready` | none | `menu` |
-| `claim` | optional `role` (`worker` or `person`), worker-only optional `task` and `kind` (`execute`, `verify`, `fix`, `formulate`, `synthesize`, `distill`, or `audit`) | `step` |
+| `claim` | optional `task` and `kind` (`execute`, `verify`, `fix`, `formulate`, `synthesize`, `distill`, or `audit`) | `step` |
 | `brief` | `task`, `kind`, optional `cursor` | `step` |
 | `heartbeat` | `leases`, an array of `{ step, lease }` pairs | `menu` |
 | `report` | `step`, `lease`, `outcome` (`ended` or `failed`), optional `note` | `step` |
 | `release` | `step`, `lease` | `step` |
-| `question` | `text`, optional complete `task`, `step`, `lease` tuple | `question` with `id` and `state: "raised"` |
-| `answer` | `item`, `decision`, optional `rationale` | next eligible person `step` |
 
 Successful responses include `protocol: 0.1` and the listed payload —
 `0.1` is preview: vocabulary may be added or removed while it carries (the
@@ -221,71 +223,12 @@ After an unplanned exit, stop any orphaned writers before restarting,
 including when a lease has already expired. Pass `--resume` before the
 connection file to recover a still-live grant after that check.
 
-Issue `person` for questions and release approvals or grant either separately
-with `person-questions` and `person-releases`. The daemon derives these grants
-from the bearer token. A person-only token defaults to a person claim. A
-token with `executor` defaults to a worker claim and can request
-`role: "person"` if it also has a person grant. Person claims return the oldest
-eligible `question` or `human` step. Use its ID as `item` when answering.
-The `ready` and `heartbeat` menus also carry `pending`, naming every pending
-person item by `kind` (`question` or `gate`) and `id`, with question text only
-when the requesting token's grant answers questions; gate proposals stay
-behind the person claim.
-Release decisions use `"approve"` and apply to the reviewed proposal. If the
-proposal changes, the response offers a new item. Replaying a settled answer
-preserves the original decision and returns fresh person work.
-
-The live brief owner can follow `answerCursor` by passing its value as
-`cursor` on the brief route. Send `null` to fetch from the beginning. A page
-has `kind: "answers"`, an `answers` array, and a `next` cursor when more
-answers are available.
-
-Different projects can hold worker leases concurrently. Within a project,
-use `ready` to see which task and step pairs the coordinator can offer. Use
-a distinct channel for each concurrent worker. A worker may start only
-after `claim` grants its lease and must stay inside the returned `workspace`
-and task scope. The menu also carries a `types` block stating each work
-type's restrictions — the standing prohibitions and permitted write surfaces
-as machine-readable grammar, the person steps' authority vocabulary.
-Provisioning against it is the operator's affair; the coordinator's
-boundary checks are the authority either way.
-
-Ready whole-task units with disjoint documentation-only `Touches` scopes
-can share the project checkout. With `treeLanes: on`, ready code units with
-disjoint declared scopes can lease separate Git worktrees. Use the returned
-`workspace` again on takeover. The coordinator retains the workspace across
-attempts and lands verified work or a dependency park in the main checkout.
-Same-tree work and worktree work run in separate groups. Tasks without a
-declared scope run alone. Worktree landing requires Git with
-`merge-tree --write-tree` support.
-
-### Create a project under a declared root
-
-On Linux, start the daemon with `serve --open --root /srv/projects`. Repeat
-`--root` to allow additional roots. Each root must already exist, be owned by
-the daemon's user, and disallow group and public writes. Issue a bearer token
-with `token issue --scopes projects` to authorize creation and initial
-configuration under those roots. The route is disabled by default.
-
-Send a JSON object to `POST /projects`:
-
-```json
-{"root": "/srv/projects", "name": "example", "config": {"subtask": "off"}}
-```
-
-Use the root's canonical absolute path and a single directory name. The
-optional `config` object accepts the init configuration keys and defaults
-`subtask` to `off`. A successful response returns HTTP 200 with
-`{ "project": … }`. For an existing directory, use the operator's
-`register <dir>` command.
-
-After an interruption or an ambiguous response, retry with the same bearer
-token, root, name, and configuration. The daemon initializes in private
-staging under the declared root, publishes the directory without replacing
-an existing entry, and checks its identity before registration. A matching
-retry resumes the creation or returns the existing registration. If the
-root, staging directory, or destination has been replaced, ask the operator
-to inspect it.
+The ask channel is gone (plans/0282): no `question`/`answer` routes, no
+person grants. A coding agent blocked mid-grant resolves the block itself
+and records its decision in its artifact; the person's gates are
+document-derived (the menu's `pending` names the awaiting gate and its
+document) and their acts are the document writes plus the deterministic
+operations (`clarify`, `transfer`).
 
 ## The whitelist
 
@@ -297,77 +240,32 @@ request path and refuses a `directory` field outright: this tool spends real
 tokens and writes git, and `.opencode/auto/` overlays are injected verbatim
 into prompts — one-click runs on arbitrary directories would amplify both.
 
-## Per-run options
-
-`POST /runs` takes `{ "project", "options"?, "switches"? }`. `options` are
-the per-run `RunAllOpts` fields of the CLI's `run` (`verbose`, `waitAnswer`,
-`waitBetween`, `permission`, `newSession`, `dryrun`, `maxSessions`,
-`server`, `repair`, `stopAfter`, `boundary`); `switches` are per-run
-`OPENCODE_AUTO_*` overrides applied to the worker's fresh process. **Never
-config keys**: the constitutional keys — `intent`, `treeLanes`, `isolate`
-and the hand-edited `lanes` table included — are frozen by `init`
-(`.opencode/auto/config.json`) and a request carrying one is refused with
-the frozen-flag message — revise them with the `amend` operation, never on
-a run. `repair`/`stopAfter`/`boundary` ride plain runs only (the stop
-conditions of the plan and transfer payloads carry no budget), and the
-serial-path pair is refused up front: `stopAfter` cannot ride
-`maxSessions ≥ 2`, nor can `waitAnswer > 0` — the width pairs the core
-itself refuses at run start.
-
-**Width (`maxSessions ≥ 2`) is served**: it activates the core's lane
-scheduler exactly as the CLI's `--max-sessions` does — documentation-scoped
-tasks run side by side at tier 0 (doc lanes, in-process), and under a
-project config of `treeLanes: on|auto` code tasks run as worktree lanes
-(each lane child a worker of this binary, landing serialized). One thing a
-wide run does **not** carry: the interactive transport. One channel cannot
-serve concurrent sessions (the core's own rule, the CLI's own width-run
-shape), so the daemon attaches no bridge to a wide run — its questions take
-the stdin-closed degradation path (a permission question blocks the run
-with exit 2), and `/runs/<id>/interactive` answers 409 naming the rule.
-
-The rounds' opening and advance commands: a phased project starts through
-the **transfer operation** (the assisted analysis — the person and their
-agent fill `docs/analysis.md`, its release opens R-01 — then the
-formulation construction, the phase boundaries and the round close/open);
-`plan` dispatches the standing plan task. In m mode the shapes are `plan`
-and `run` (transfer refuses). Init points at the right one and writes no
-brief — the analysis flow owns the start.
-
-## The operator loop — one phase after another, from anywhere
+## The pull-only operator loop — one boundary after another, from anywhere
 
 The whole driving loop of a phased project maps onto short HTTP calls; each
-call returns in seconds and the runs live in the daemon's workers:
+call returns in seconds, and no agent session is ever spawned by the daemon
+(the protocol does nothing via push, plans/0282):
 
-1. **Start** — `POST /projects/<p>/transfer` opens the assisted analysis
-   (its questions ride the interactive transport). The person (or their
-   authoring agent) fills `docs/analysis.md`; `clarify` is CLI-side (below)
-   or the manual `Clarified: yes` line releases it.
+1. **Start** — `POST /projects/<p>/transfer` opens the assisted analysis.
+   The person (or their authoring agent) fills `docs/analysis.md`; the
+   deterministic `POST /projects/<p>/clarify` (or the manual `Clarified:
+   yes` line) releases it.
 2. **Round open** — `POST /projects/<p>/transfer` again: installs the brief,
-   opens the round, constructs the formulation plan task. `POST
-   /projects/<p>/plan` dispatches the formulation session (its questions are
-   the human's, over the transport).
-3. **Execute** — `POST /runs { "project": …, "options": { … } }` with the
-   shape you want:
-   - the **whole phase** at once: no `stopAfter` — the run works through the
-     phase's units and parks at the phase's close gate (exit 0) or holds at
-     a human gate (exit 2);
-   - a **concurrent wave** (two enumeration tasks, disjoint work):
-     `"maxSessions": 2`;
-   - a **single-task segment**: `"stopAfter": "T-005"`.
-4. **Watch** — `GET /runs/<id>` (state, exit code, output tail);
-   `GET /projects/<p>/status` (the status read model: units, git verdicts,
-   the lock); `GET /projects/<p>/status-events?after=<id>` (the typed event
-   stream, cursor-based — poll with the last id you saw); `GET
-   /projects/<p>/log` (the newest run log). A terminal state plus its exit
-   code is the completion notification.
-5. **Boundaries** — gates and advances are the person's: answer questions
-   over the transport or run `clarify` CLI-side; then `transfer` for the
-   next boundary. Repeat.
-
-Mixing the daemon and the CLI on the same project is safe — the run lock is
-the arbiter whichever process takes it (a daemon run refuses while the CLI
-holds the directory, and the other way around); short CLI commands beside
-daemon runs are the intended shape, not a workaround.
+   opens the round, constructs the formulation floor todo and stops at the
+   review seam.
+3. **Pull the work** — an executor worker claims over the protocol: `POST
+   /projects/<p>/executor/claim` with an `executor`-scoped token — the
+   synthesize grant first when a charter declares one, then formulate,
+   then the planned tasks' execute/verify/fix shares (a different token
+   performing the verification).
+4. **Advance** — at the phase boundary the distill grant produces the
+   handover, then `POST /projects/<p>/transfer` applies: the completion,
+   the wall, the transition, the next phase's floor. The round closes
+   through the same op; the person reviews the close listing.
+5. **Watch** — `GET /projects/<p>/status` (the status read model: units,
+   git verdicts, the lock); `GET /projects/<p>/status-events?after=<id>`
+   (the typed event stream, cursor-based); `GET /projects/<p>/log` (the
+   newest run log).
 
 ## The exit-code vocabulary
 
@@ -386,20 +284,6 @@ its handler — is `killed` too, with the signal recorded):
 Exit 3 is reachable over the daemon's control channel (`/exit` over the
 interactive transport); the kill (`DELETE /runs/<id>`) stays the
 force-terminate half beside it.
-
-## The pending-question queue
-
-A question raised inside a run is answerable from outside the process: it
-rides the interactive transport to connected clients, and it is **journaled**
-— `<dataDir>/questions.jsonl`, an append-only JSON-lines journal (compacted
-at each daemon start down to the runs that still hold open questions) in the
-daemon's own data directory, never under a target's `.auto/` (whose writes
-are driver-exclusive). A client that connects later is replayed the pending
-set; a daemon restart restores every run that still holds an open question
-(the `restored` state), so the orphan worker reconnects and the answer still
-lands. The durable question lifecycle itself is the run's own event stream
-(`question-raised`/`question-answered` in `.auto/run-status.jsonl`, served by
-`/status-events`); the journal holds the daemon's half.
 
 ## v1 boundary
 

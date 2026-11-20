@@ -470,7 +470,10 @@ async function boundaryStop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
 // recovered by the re-run). A survey released without a proposal installs
 // nothing (an earlier install or the default path's `a`-phase proposal
 // remain the brief's sources).
-async function installApprovedBrief(ctx: LoopCtx, phase: PhaseUnit): Promise<void> {
+// Exported since plans/0282: the deterministic transfer's apply calls it
+// beside the loop (the survey release's install half — mark-gated, its own
+// pathspec commit); the ctx use is structural (directory + the git seam).
+export async function installApprovedBrief(ctx: { directory: string; git: Pick<LoopCtx["git"], "commitTree"> }, phase: PhaseUnit): Promise<void> {
   const survey = phaseSurveyDoc(phase)
   const text = await Bun.file(join(ctx.directory, survey)).text().catch(() => "")
   // Mark-gated (plans/0169 D2): the install — and its "approved" log line —

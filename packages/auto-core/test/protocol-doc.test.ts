@@ -39,7 +39,7 @@ describe("protocol-doc ratchet (core, plans/0280)", () => {
     // The catalog renders exactly the same ids beside its two person
     // entries — one vocabulary, two renderings (P5).
     const catalog = executorTypeCatalog()
-    expect(Object.keys(catalog)).toEqual([...WORK_TYPE_IDS, "human", "question"])
+    expect(Object.keys(catalog)).toEqual([...WORK_TYPE_IDS])
   })
 
   test("the doc's stage words equal the coordinator's table", () => {

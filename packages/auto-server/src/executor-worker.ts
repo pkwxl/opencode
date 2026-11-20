@@ -69,9 +69,9 @@ function wireStep(step: Step): Record<string, unknown> {
     case "wait":
       return { kind: "wait", reason: step.reason, detail: step.detail, retryAfter: 2 }
     case "human":
-      return { kind: "wait", reason: "gate", detail: `A person must attend ${step.gate} in ${step.document}.`, retryAfter: 2 }
+      return { kind: "wait", reason: "gate", detail: `A person must attend ${step.gate} in ${step.document} — release it with the deterministic clarify op (POST /projects/<project>/clarify) or the document edit itself, then claim again.`, retryAfter: 2 }
     case "phase-boundary":
-      return { kind: "phase-boundary", phase: step.phase, remedy: step.problems.join("\n") || "Run transfer to advance the phase." }
+      return { kind: "phase-boundary", phase: step.phase, remedy: step.problems.join("\n") || "Advance it with POST /projects/<project>/transfer." }
     // 0273's additive terminal (0264-05's fix): a same-token claim over a
     // booked report — distinct from done, which renders the round's own
     // completion; the remedy names the booked commit, no retryAfter.
@@ -82,20 +82,10 @@ function wireStep(step: Step): Record<string, unknown> {
   }
 }
 
-function wirePersonStep(step: Awaited<ReturnType<Coordinator["claimPerson"]>>): Record<string, unknown> {
-  return step.kind === "blocked" || step.kind === "wait" ? wireStep(step) : step
-}
-
 async function perform(coordinator: Coordinator, request: StepRequest): Promise<StepDone> {
   const base = { v: PROTOCOL_VERSION, type: "step-done", id: request.id } as const
   try {
-    const { action, holder } = parseExecutorRequest(request.route, request.body, request.token, request.delegation)
-    // 0271: the delegation rides the read surface too — the menu's pending
-    // listing splits existence (kind and id, every reader) from question
-    // content (question-authority channels alone), the coordinator's own
-    // authority check deciding; undefined for a token carrying no person
-    // grant, the plain-worker floor.
-    const person = request.delegation ? { ...holder, delegation: request.delegation } : undefined
+    const { action, holder } = parseExecutorRequest(request.route, request.body, request.token)
     let payload: Record<string, unknown>
     switch (action.route) {
       case "ready":
@@ -104,26 +94,16 @@ async function perform(coordinator: Coordinator, request: StepRequest): Promise<
         // with, the one place identity needs carrying (per-response
         // repetition declined). A client that ignores the field reads the
         // pre-change envelope.
-        payload = { build: buildFingerprint(), menu: await coordinator.ready(holder, person) }
+        payload = { build: buildFingerprint(), menu: await coordinator.ready(holder) }
         break
       case "heartbeat":
-        payload = { menu: await coordinator.heartbeat(holder, action.leases, person) }
+        payload = { menu: await coordinator.heartbeat(holder, action.leases) }
         break
       case "claim":
-        payload = { step: action.role === "person"
-          ? wirePersonStep(await coordinator.claimPerson({ ...holder, delegation: request.delegation! }))
-          : wireStep(await coordinator.claim(holder, action.task, action.kind)) }
+        payload = { step: wireStep(await coordinator.claim(holder, action.task, action.kind)) }
         break
       case "brief":
-        payload = { step: action.cursor === undefined
-          ? wireStep(await coordinator.brief(holder, action.task, action.kind))
-          : { kind: "answers", ...await coordinator.briefAnswers(holder, action.task, action.cursor ?? undefined, action.kind) } }
-        break
-      case "question":
-        payload = { question: await coordinator.question(holder, action.text, action.target) }
-        break
-      case "answer":
-        payload = { step: wirePersonStep(await coordinator.answerPerson({ ...holder, delegation: request.delegation! }, action.item, action.decision, action.rationale)) }
+        payload = { step: wireStep(await coordinator.brief(holder, action.task, action.kind)) }
         break
       case "release":
         payload = { step: wireStep(await coordinator.release(holder, action.key.step, action.key.lease)) }

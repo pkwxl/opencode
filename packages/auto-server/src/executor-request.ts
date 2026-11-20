@@ -1,15 +1,13 @@
 import type { ExecutorHolder } from "@opencode-ai/auto-core/executor-coordinator"
 import { REQUEST_BYTE_LIMIT, RequestError } from "./request"
-import type { ExecutorRoute, PersonDelegation } from "./ws-protocol"
+import type { ExecutorRoute } from "./ws-protocol"
 
 type WorkKind = "execute" | "verify" | "fix" | "formulate" | "synthesize" | "distill" | "audit"
 type Lease = { step: string; lease: string }
 type Action =
   | { route: "ready" }
-  | { route: "claim"; role: "worker" | "person"; task?: string; kind?: WorkKind }
-  | { route: "brief"; task: string; kind: WorkKind; cursor?: string | null }
-  | { route: "question"; text: string; target?: Lease & { task: string } }
-  | { route: "answer"; item: string; decision: string; rationale?: string }
+  | { route: "claim"; task?: string; kind?: WorkKind }
+  | { route: "brief"; task: string; kind: WorkKind }
   | { route: "report"; key: Lease; outcome: "ended" | "failed"; note?: string }
   | { route: "heartbeat"; leases: Lease[] }
   | { route: "release"; key: Lease }
@@ -19,13 +17,6 @@ const record = (value: unknown): value is Record<string, unknown> =>
 
 function word(value: unknown, field: string, limit = 256): string {
   if (typeof value !== "string" || !value.trim() || value.length > limit || /[\x00-\x1f\x7f]/.test(value)) {
-    throw new RequestError(`Invalid executor field "${field}".`)
-  }
-  return value
-}
-
-function answerText(value: unknown, field: string, allowEmpty = false): string {
-  if (typeof value !== "string" || (!allowEmpty && !value.trim()) || Buffer.byteLength(value) > 8192) {
     throw new RequestError(`Invalid executor field "${field}".`)
   }
   return value
@@ -66,7 +57,7 @@ export async function readExecutorBody(request: Request): Promise<unknown> {
   }
 }
 
-export function parseExecutorRequest(route: ExecutorRoute, body: unknown, token: string, delegation?: PersonDelegation): { holder: ExecutorHolder; action: Action } {
+export function parseExecutorRequest(route: ExecutorRoute, body: unknown, token: string): { holder: ExecutorHolder; action: Action } {
   if (!record(body)) throw new RequestError("The executor request must be a JSON object.")
   const holder = { token, channel: body.channel === undefined ? "" : word(body.channel, "channel") }
   const note = route === "report" || route === "release" ? body.note : undefined
@@ -76,24 +67,11 @@ export function parseExecutorRequest(route: ExecutorRoute, body: unknown, token:
   switch (route) {
     case "ready":
       return { holder, action: { route } }
-    case "claim": {
-      const role = body.role === undefined ? "worker" : body.role
-      if (role !== "worker" && role !== "person") throw new RequestError("Invalid claim role.")
-      if (role === "person" && !delegation) throw new RequestError("A person grant is required.")
-      if (role === "person" && (body.task !== undefined || body.kind !== undefined)) throw new RequestError("Person claims are untargeted.")
-      return { holder, action: { route, role, task: body.task === undefined ? undefined : word(body.task, "task"), kind: body.kind === undefined ? undefined : workKind(body.kind) } }
-    }
-    case "question": {
-      const target = body.task !== undefined || body.step !== undefined || body.lease !== undefined
-        ? { task: word(body.task, "task"), ...key(body) } : undefined
-      return { holder, action: { route, target, text: answerText(body.text, "text") } }
-    }
-    case "answer":
-      if (!delegation) throw new RequestError("A person grant is required.")
-      return { holder, action: { route, item: word(body.item, "item"), decision: answerText(body.decision, "decision"),
-        rationale: body.rationale === undefined ? undefined : answerText(body.rationale, "rationale", true) } }
+    case "claim":
+      if (body.role !== undefined) throw new RequestError("The person claim role is retired: the ask channel is gone (plans/0282) — the gates are document-derived, the person acts by document writes and deterministic operations.")
+      return { holder, action: { route, task: body.task === undefined ? undefined : word(body.task, "task"), kind: body.kind === undefined ? undefined : workKind(body.kind) } }
     case "brief":
-      return { holder, action: { route, task: word(body.task, "task"), kind: workKind(body.kind), cursor: body.cursor == null ? body.cursor : word(body.cursor, "cursor") } }
+      return { holder, action: { route, task: word(body.task, "task"), kind: workKind(body.kind) } }
     case "release":
       return { holder, action: { route, key: key(body) } }
     case "report":

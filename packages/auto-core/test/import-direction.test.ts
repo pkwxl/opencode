@@ -1594,7 +1594,10 @@ function checkSeamPolicyReach(): string[] {
 // here first, naming the ruling.
 function checkExportsShape(): string[] {
   const pkg = JSON.parse(readFileSync(join(SRC, "..", "package.json"), "utf8")) as { exports?: Record<string, string> }
-  const expected: Record<string, string> = { "./templates/*": "./templates/*", "./*": "./src/*.ts" }
+  // 0282's amendment: the spec's published doc joins the map — the
+  // protocol-doc ratchet's server arm resolves it by this specifier (the
+  // specifier the only route from a shell, 0196 D1's own letter).
+  const expected: Record<string, string> = { "./templates/*": "./templates/*", "./docs/protocol.md": "./docs/protocol.md", "./*": "./src/*.ts" }
   const got = pkg.exports ?? {}
   const keys = Object.keys(got).sort()
   const want = Object.keys(expected).sort()

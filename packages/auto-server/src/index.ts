@@ -20,6 +20,8 @@ import { accessSync, constants, lstatSync, rmSync, statSync, writeFileSync } fro
 import { readFile } from "node:fs/promises"
 import { applyServerProfile } from "./profile"
 import { parseEnvFile } from "./env-boot"
+import { transferDeterministic } from "@opencode-ai/auto-core/transfer"
+import { loadProjectConfig } from "@opencode-ai/auto-core/config"
 import { DEFAULT_HOSTNAME, DEFAULT_PORT, deriveWorkerCommand, startDaemon } from "./daemon"
 import { defaultDataDir, DaemonStore, SCOPES, StoreError } from "./store"
 import { BUILD_COMMIT, VERSION } from "./version"
@@ -29,7 +31,7 @@ import { runWorker } from "./worker"
 const USAGE = `usage:
   opencode-auto-server --help
   opencode-auto-server --version
-  opencode-auto-server serve [--port <n>] [--host <addr>] [--data-dir <dir>] [--launch <script>] [--env-file <path>] [--open --root <dir> …]
+  opencode-auto-server serve [--port <n>] [--host <addr>] [--data-dir <dir>] [--env-file <path>] [--open --root <dir> …]
   opencode-auto-server register <directory> [--data-dir <dir>]
   opencode-auto-server unregister <name-or-directory> [--data-dir <dir>]
   opencode-auto-server projects [--data-dir <dir>]
@@ -47,73 +49,30 @@ and exits with the run's own code (0 all complete; 1 usage/environment error;
 2 blocked awaiting a human; 3 graceful exit pause; 130 force-terminated).
 v1 boundary: single machine, multiple directories (see docs/daemon.md).
 
-serve — the daemon (P1c/P1d/P1e/P3/P4). Binds ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by
-  default (v1 is single-machine; widen with --host at your own trust
-  boundary). The Web client is served at the root: open the daemon's URL in
-  a browser, paste a token, and the read surface (the project whitelist, the
-  run list in the exit-code vocabulary, the status tree with its commit
-  verdicts, the SSE log/event streams, the pending questions) and the write
-  surface (P4b: answering the pending questions — the answer scope; the
-  units close / task-add and the plan surface that spawns planning sessions
-  whose questions land in the run's card — the control scope; init / amend /
-  fix / reset with confirm and clean-tree as two explicit separate steps,
-  never one bundled force — the config scope; the models table and, behind
-  its own opt-in probe scope plus an explicit two-step in-UI confirmation
-  plus a per-daemon rate limit, the model probe) render scope-aware from the
-  API — every write surface hidden without its scope; the page itself
-  carries no data and needs no token. The run-control REST surface: GET
-  /health, GET /runs,
-  POST /runs, GET /runs/<id>, DELETE /runs/<id> (kill — the double-SIGINT
-  force-terminate, mapped to killed/130); GET /projects (the whitelist) and
-  GET /session (the token's scopes) are the client's two read endpoints; the
-  lifecycle operations under /projects/<project>/<op>: init, amend, fix,
-  reset (the config scope), close, tasks (task-add), plan (P3c-unlocked: the
-  no-agent routes served in-process, the agent-planning routes spawned as
-  runs under stopBefore: execute with their questions over the interactive
-  transport — the request takes "input" and "append"; plan --force-close
-  composes as the close operation followed by the plan operation) and models
-  (GET: the read-only table; POST: the probe — its own probe scope, the
-  confirm field, rate-limited to one fire per 10-minute window per daemon); the observability surface (P1e, the
-  read scope): GET /projects/<project>/status (the polled read model over
-  .auto/*.json, git dirty/clean per worktree, the core's rendered status tree
-  and its commit-verdict completion — commit-is-completion, agent self-report
-  never trusted), GET /projects/<project>/log and /events (SSE tails of the
-  newest .auto/logs/run-*.log and the .auto/run-events.jsonl journal —
-  whole-line delivery, re-seek on run rotation) and
-  GET /projects/<project>/status-events (P2b: the typed driver-events stream
-  with event-id cursoring); the interactive transport (P3b/P3c): the WebSocket
-  endpoint GET /runs/<id>/interactive, multiplexing the question channel
-  (the "answer" scope — a question raised inside the run reaches connected
-  clients, an answer returns, the run proceeds; the still-open questions
-  are journaled in the daemon's data dir, so a reconnecting client is
-  replayed them and a daemon restart restores the pending set and
-  redelivers it) and the control channel (the
-  "control" scope — /exit produces the graceful pause/exit 3 with progress
-  persisted and a re-run resumes precisely; /failback reaches the router).
-  Destructive operations take two separate fields — "confirm" (the answer
-  routed through the core's confirmation gate) and "cleanTree" (the worktree
-  check's opt-out) — never one bundled force. Stopping the daemon leaves live
-  workers running to completion; the run lock arbitrates any successor, and
-  a restart restores every run that still holds an open question. The
-  client's own sources live under web/ (plain TypeScript, no framework, no
-  dependency); bun run build:web bundles them into the assets the daemon
-  serves.
-  --launch <script> — the confinement launcher (plans/0162): every spawned
-  run (a plain run, a planning run, a transfer advance) starts as
-  bash <script> <project-dir> -- <worker command...> instead of bare. The
-  launcher owns the run's environment overlay and writable surface (a
-  sandbox script, a per-project container launcher — whatever derives its
-  confinement from the project argument), execs the command, and its exit
-  code is the run's; the daemon itself knows nothing of the launcher's
-  mechanics, and the daemon's environment is what the launcher reads
-  (environment-referenced values resolve by name from it). One daemon hosts
-  runs for many registered projects concurrently — one run per project at a
-  time (the registry and the run lock both arbitrate per directory), and a
-  per-project launcher gives each its own confined environment. A kill
-  (DELETE /runs/<id>) signals the wrapper process; what a kill means under
-  the launcher is the launcher's own (a container launcher's run may outlive
-  its wrapper), and the core's interruption recovery heals the directory on
-  the next run. Without --launch, workers spawn bare exactly as before.
+serve — the daemon (P1c/P1d/P1e; pull-only since plans/0282). Binds
+  ${DEFAULT_HOSTNAME}:${DEFAULT_PORT} by default (v1 is single-machine;
+  widen with --host at your own trust boundary) and serves coding agents
+  only — no web client, no ask channel, the protocol doing nothing via
+  push. The executor protocol rides POST /projects/<project>/executor/<op>
+  (ready/claim/brief/report/heartbeat/release — the executor scope, the
+  standing spec auto-core's docs/protocol.md); each project's coordinator
+  is one spawned worker, its bridge socket the daemon's one WebSocket
+  surface. The deterministic operations (the control scope, in-process —
+  git and document writes only): init, amend, fix, reset (the config
+  scope), close, tasks (task-add), plan (the no-agent prelude routes; the
+  planning session itself is pull-only formulate work over the protocol),
+  transfer (the person-bracketed advance: the apply halves alone, the
+  distillation and synthesis the distill/synthesize grants'), clarify (the
+  person's release act) and models (GET: the read-only table; POST: the
+  probe — its own probe scope, the confirm field, rate-limited). The
+  observability surface (P1e, the read scope): GET
+  /projects/<project>/status, /log, /events (SSE tails) and
+  /status-events (the typed driver-events stream with event-id cursoring);
+  GET /runs, GET /runs/<id>, DELETE /runs/<id> (kill) observe the spawned
+  coordinators. Destructive operations take two separate fields —
+  "confirm" and "cleanTree" — never one bundled force. Stopping the daemon
+  leaves live coordinators running to completion; the run lock arbitrates
+  any successor.
   --env-file <path> — the daemon's environment declaration (plans/0265):
   NAME=VALUE lines ('#' comments, blank lines, a later duplicate wins; values
   literal bytes — no quoting, no interpolation) loaded at boot into the
@@ -134,15 +93,12 @@ register — add a target directory to the daemon's whitelist. The whitelist
   ~/.config/opencode-auto/server on a plain machine) — never inside a
   project, never under .auto/.
 
-token — manage bearer tokens and their scopes: read (status/logs/events),
-  control (run control, close, task-add, /exit and /failback over the
-  interactive transport), config (init/amend/fix/reset), answer (answering
-  questions over the interactive transport), probe (the model probe, POST
-  /projects/<project>/models — opt-in and disabled by default: carried by no
-  default token set, and beside the scope the probe takes an explicit
-  confirm field and the daemon's own rate window, one fire per 10 minutes).
-  The projects scope creates and initializes projects when serve is started
-  with --open and at least one --root.
+token — manage bearer tokens and their scopes (plans/0282's six): read
+  (status/logs/events), control (kill, close, task-add and the plan/
+  transfer/clarify operations), config (init/amend/fix/reset), probe (the
+  model probe, POST /projects/<project>/models — opt-in and disabled by
+  default), executor (the executor protocol), projects (project creation).
+  The ask channel's answer/person scopes are tombstoned.
   Unauthenticated requests
   get 401, a token without the route's scope 403. The plaintext token is
   printed once at issue, or with --out <file> written direct to that file
@@ -382,18 +338,19 @@ if (command === "worker") {
 if (command === "transfer") {
   const rest = args.slice(1)
   if (rest.length > 1 || rest.some((arg) => arg.startsWith("--"))) {
-    refuse("transfer takes the target directory alone (an optional positional, the cwd when omitted): the advance is state-resolved, it has no flags — per-run switches ride a daemon run request, and questions ride a daemon's interactive transport (the transfer operation)")
+    refuse("transfer takes the target directory alone (and no flags): one person-bracketed advance per invocation, resolved by state — the advance's surface is the daemon's transfer operation")
   }
   const directory = resolve(rest[0] ?? process.cwd())
-  const self = await deriveWorkerCommand()
-  const proc = Bun.spawn([self.command, ...self.prefix, "worker", JSON.stringify({ directory, transfer: {} })], {
-    cwd: import.meta.dir.includes("$bunfs") ? process.cwd() : import.meta.dir,
-    env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key))),
-    stdin: "ignore",
-    stdout: "inherit",
-    stderr: "inherit",
-  })
-  process.exit(await proc.exited)
+  const config = await loadProjectConfig(directory)
+  process.exit(await transferDeterministic(directory, {
+    phases: config.phases,
+    build: config.build,
+    scanExempt: config.scanExempt,
+    isolate: config.isolate,
+    autoNumber: config.autoNumber,
+    testByDriver: config.testByDriver,
+    acceptanceGate: config.acceptanceGate,
+  }))
 }
 
 if (command === "register" || command === "unregister" || command === "projects") {
@@ -495,7 +452,6 @@ if (command === "serve") {
   const { dataDir, rest } = takeDataDir(args.slice(1))
   let port = DEFAULT_PORT
   let host = DEFAULT_HOSTNAME
-  let launch: string | undefined
   let envFile: string | undefined
   let open = false
   const openRoots: string[] = []
@@ -521,47 +477,16 @@ if (command === "serve") {
       host = value
       at++
     } else if (flag === "--launch") {
-      if (value === undefined || value.startsWith("--")) refuse("--launch takes the confinement launcher script (invoked per spawned run as: bash <script> <project-dir> -- <worker command...>; it execs the command and its exit code is the run's)")
-      launch = value
-      at++
+      refuse("--launch is retired (plans/0282): the daemon spawns executor coordinators only, and their confinement is the operator's own process arrangement — nothing is left to wrap")
     } else if (flag === "--env-file") {
       if (value === undefined || value.startsWith("--")) refuse("--env-file takes the daemon's environment declaration file (NAME=VALUE lines; its names win over the inherited shell's)")
       envFile = value
       at++
     } else {
-      refuse(`unknown serve argument "${flag}" (serve takes --port, --host, --data-dir, --launch, --env-file, --open and --root)`)
+      refuse(`unknown serve argument "${flag}" (serve takes --port, --host, --data-dir, --env-file, --open and --root)`)
     }
   }
   if (open !== (openRoots.length > 0)) refuse("--open and at least one --root are required together.")
-  // The launcher resolves and is checked HERE, at the operator's own act
-  // (plans/0223 D3, the 0165-172 finding): verbatim, a relative --launch
-  // reached the spawn, where it resolved against the spawn cwd — the
-  // package's src/ in the source layout (every run died bash's 127), the
-  // operator's cwd compiled; nothing checked the script exists. One truth:
-  // the path resolves against the serve command's working directory, and a
-  // launcher that is not a readable file is refused now, at the banner that
-  // would otherwise announce it active (exit 1, the usage convention) —
-  // never discovered missing at the first spawned run.
-  if (launch !== undefined) {
-    launch = resolve(launch)
-    let isFile = false
-    let readable = false
-    try {
-      isFile = statSync(launch).isFile()
-      if (isFile) {
-        accessSync(launch, constants.R_OK)
-        readable = true
-      }
-    } catch {
-      // stat/access spoke: not a file / not readable — refused below.
-    }
-    if (!isFile || !readable) {
-      refuse(`--launch takes the confinement launcher script — a readable file: ${launch} (resolved against the serve command's working directory) is ${isFile ? "not readable" : "not a file"}`)
-    }
-  }
-  // The environment declaration (plans/0265): resolved and checked at the
-  // operator's own act like --launch above, parsed and applied BEFORE the
-  // daemon starts so the boot manifest records the effective carrier. A
   // malformed line refuses at its line number, never echoing the line's
   // bytes — a value may be a secret.
   if (envFile !== undefined) {
@@ -587,7 +512,7 @@ if (command === "serve") {
   const store = new DaemonStore(dataDir)
   const projects = store.listProjects()
   const tokens = store.listTokens()
-  const daemon = await startDaemon({ dataDir, port, hostname: host, ...(open && { openRoots }), ...(launch !== undefined ? { launch } : {}) })
+  const daemon = await startDaemon({ dataDir, port, hostname: host, ...(open && { openRoots }) })
   // AUTO-DECISION (default bind 127.0.0.1): v1 is single-machine (the
   // assessment's §8 Q4 boundary) and the run lock's stale detection cannot
   // cross hosts; a loopback default keeps the token-guarded control plane
@@ -597,14 +522,10 @@ if (command === "serve") {
   // daemon names itself at its own startup line ("dev" = running from
   // source, nothing stamped).
   console.log(`opencode-auto-server ${VERSION} (build ${BUILD_COMMIT}) serving on ${daemon.url} (data dir: ${dataDir})`)
-  console.log(`web client: open ${daemon.url}/ in a browser — paste a token, and the read surface and run controls render scope-aware from the API`)
   console.log(`whitelist: ${projects.length} project${projects.length === 1 ? "" : "s"} registered${projects.length ? ` (${projects.map((project) => project.name).join(", ")})` : ""} — runs target registered projects only`)
   console.log(`auth: ${tokens.length} token${tokens.length === 1 ? "" : "s"} (scopes: ${SCOPES.join(", ")}); requests carry 'Authorization: Bearer <token>'`)
   console.log(`v1 boundary: single machine, multiple directories; the daemon binds ${daemon.hostname} — a lock held on another host cannot be probed from here (recovery: delete that .auto/run.lock by hand)`)
   console.log(`stopping the daemon (Ctrl+C) leaves live workers running to completion; their runs stay observable on disk and the run lock arbitrates any successor`)
-  if (launch !== undefined) {
-    console.log(`confinement launcher: every spawned run (plain, planning, transfer) starts as bash ${launch} <project-dir> -- <worker command...> — the launcher owns the run's environment and writable surface, execs the command, and its exit code is the run's; the daemon's environment is the carrier the launcher reads`)
-  }
   // The environment boot report (plans/0265): the carrier's losses and the
   // unresolvable references, at the boot line instead of one blocked run at
   // a time — names only, every value never printed.

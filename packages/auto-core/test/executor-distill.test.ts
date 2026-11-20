@@ -244,10 +244,11 @@ test("the fence: a never-set write escalates to the person (0272 composed); anot
     expect(blocked).toMatchObject({ kind: "blocked", reason: "isolation" })
     if (blocked.kind !== "blocked") throw new Error(JSON.stringify(blocked))
     expect(blocked.detail).toContain("Resolve out-of-scope edits before replaying: docs/R-01/P01-implement/todo.md.")
-    expect(blocked.detail).toContain("The cause is outside this lease's permitted writes; question ")
+    expect(blocked.detail).toContain("The cause is outside this lease's permitted writes — a person must inspect the state")
     expect(blocked.detail).toContain("retrying cannot fix it")
-    const person = { token: "person", channel: "review", delegation: "unrestricted" as const }
-    expect((await coordinator.ready(person, person)).pending).toHaveLength(1)
+    // No question item is raised (plans/0282): the plain blocked answer is
+    // the whole surface, the pending list empty.
+    expect((await coordinator.ready({ token: "reader", channel: "menu" })).pending).toEqual([])
 
     // Another phase's handover document: refused, but not never-set (no arm
     // of the standing table names it) — the plain blocked answer, the

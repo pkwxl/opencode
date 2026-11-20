@@ -174,8 +174,6 @@ export function openProjectCreation(store: DaemonStore, declared: readonly strin
             project: { name, directory: workspace, registered: "" },
             body: { config: JSON.parse(intent.config) },
             query: new URLSearchParams(),
-            spawnPlanningRun: () => { throw new Error("Init cannot spawn a planning run.") },
-            spawnTransferRun: () => { throw new Error("Init cannot spawn a transfer run.") },
             probeWindow: { claim: () => { throw new Error("Init cannot probe models.") } },
           })
           if (outcome.status !== 200) return outcome

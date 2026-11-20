@@ -8,13 +8,18 @@
 // that lands in code without the doc, or in the doc without code, is red
 // either way.
 import { describe, expect, test } from "bun:test"
+import { createRequire } from "node:module"
 import { readFileSync } from "node:fs"
-import { join } from "node:path"
 import { EXECUTOR_PROTOCOL } from "@opencode-ai/auto-core/executor-coordinator"
 import { SCOPES } from "../src/store"
 import { executorRoutes, PROTOCOL_VERSION } from "../src/ws-protocol"
 
-const doc = readFileSync(join(import.meta.dir, "..", "..", "auto-core", "docs", "protocol.md"), "utf8")
+// The spec's published doc, resolved by its package specifier (0196 D1: the
+// specifier the only route from a shell — never a relative path) and read
+// raw: Bun's markdown import attribute transforms cross-package, so the
+// ratchet reads the file the specifier resolves to.
+const require = createRequire(import.meta.url)
+const doc = readFileSync(require.resolve("@opencode-ai/auto-core/docs/protocol.md"), "utf8")
 
 function block(heading: string): string[] {
   const section = doc.split(/^## /m).find((part) => part.startsWith(`${heading}\n`))

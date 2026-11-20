@@ -109,7 +109,7 @@ const PATHS = [
 ]
 
 test("the catalog's ids are exactly the ids the coordinator can grant", () => {
-  expect(Object.keys(catalog)).toEqual(["execute", "verify", "fix", "formulate", "synthesize", "distill", "audit", "human", "question"])
+  expect(Object.keys(catalog)).toEqual(["execute", "verify", "fix", "formulate", "synthesize", "distill", "audit"])
   // The work ids are the wire's grant kinds (compile-time satisfies beside
   // the rendering); the person ids are the step kinds the person channel
   // delivers — never an id the coordinator cannot grant (P13). The
@@ -124,8 +124,6 @@ test("the catalog's ids are exactly the ids the coordinator can grant", () => {
   expect(catalog.formulate.id).toBe("formulate")
   expect(catalog.distill.id).toBe("distill")
   expect(catalog.audit.id).toBe("audit")
-  expect(catalog.human.id).toBe("human")
-  expect(catalog.question.id).toBe("question")
 })
 
 test("the never grammar equals the fence's standing refusal, both sides", () => {
@@ -342,31 +340,11 @@ test("the audit letter equals the fence's per-kind arm, both sides (plans/0278)"
   expect(permitted({ grant: { kind: "fix", unit: "T-002" } }, findings)).toBe(false)
 })
 
-test("the person entries' authority vocabulary equals the authority checks", async () => {  const coordinator = await openExecutorCoordinator(project())
-  try {
-    const raised = await coordinator.question({ token: "worker", channel: "" }, "Which flavor?")
-    const questions = { token: "person", channel: "a", delegation: ["questions"] as const }
-    const releases = { token: "person", channel: "a", delegation: ["releases"] as const }
-    const unrestricted = { token: "person", channel: "a", delegation: "unrestricted" as const }
-    // Each listed word admits its own step kind; each unlisted word is refused.
-    expect(await coordinator.claimQuestion(questions)).toMatchObject({ kind: "question", id: raised.id })
-    expect(await coordinator.claimQuestion(releases)).toMatchObject({
-      kind: "wait", reason: "gate", detail: "A pending question requires a person with question authority.",
-    })
-    expect(await coordinator.claimGate(questions)).toMatchObject({
-      kind: "wait", reason: "gate", detail: "Gate releases require a person with release authority.",
-    })
-    // The releases word passes its own check (no gate stands on a bare project).
-    expect(await coordinator.claimGate(releases)).toMatchObject({ kind: "wait", reason: "not-ready" })
-    expect(await coordinator.claimGate(unrestricted)).toMatchObject({ kind: "wait", reason: "not-ready" })
-    await expect(coordinator.answerQuestion(releases, raised.id, "No.")).rejects.toThrow("does not authorize answering questions")
-    await coordinator.answerQuestion(questions, raised.id, "Tabs.")
-    expect(await coordinator.claimQuestion(questions)).toMatchObject({ kind: "wait", reason: "not-ready" })
-  } finally {
-    await coordinator.close()
-  }
-  expect(catalog.question.authority).toEqual(["unrestricted", "questions"])
-  expect(catalog.human.authority).toEqual(["unrestricted", "releases"])
+// 0282: the ask channel is gone — the catalog carries the work kinds alone
+// (the person entries died with the wire's person arms; the spec's
+// tombstone section is the record).
+test("the catalog carries the work kinds alone (plans/0282)", () => {
+  for (const key of Object.keys(catalog)) expect(["execute", "verify", "fix", "formulate", "synthesize", "distill", "audit"]).toContain(key)
 })
 
 test("the absent-block floor: a consumer that ignores the block reads the pre-change menu", async () => {

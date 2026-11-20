@@ -6,6 +6,7 @@
   "license": "MIT",
   "exports": {
     "./templates/*": "./templates/*",
+    "./docs/protocol.md": "./docs/protocol.md",
     "./*": "./src/*.ts"
   },
   "scripts": {
@@ -15,7 +16,9 @@
     "test:repo": "bun ./script/test-lane.ts repo",
     "test:gate": "bun ./script/test-lane.ts gate"
   },
-  "dependencies": { "@opencode-ai/sdk": "workspace:*" },
+  "dependencies": {
+    "@opencode-ai/sdk": "workspace:*"
+  },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",

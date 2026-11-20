@@ -9,12 +9,13 @@ import { ANALYSIS_DOC, roundBriefPath, taskDocPaths } from "./docpaths"
 import { parseUnitDoc } from "./document/unit"
 import { handoffStatus, validHandover } from "./document/roles"
 import { parkReleaseNote } from "./execute"
-import { awaitingFormulation, formulationAcceptance, formulationNumber } from "./formulate"
+import { awaitingFormulation, constructFormulation, formulationAcceptance, formulationNumber } from "./formulate"
 import { priorRoundBlock, readFormulationSources } from "./formulate-parts"
 import {
-  checkSynthesisReply, ledgerOf, protocolFrameText, renderLedger, seededLedgerRows,
+  checkSynthesisReply, floorDigest, ledgerOf, protocolFrameText, renderLedger, seededLedgerRows,
   synthesisSources, synthesizePromptText, type LedgerRow, type LedgerSource,
 } from "./formulate-synthesis"
+import { previewFormulationDocument } from "./formulate-parts"
 import { repoRoots, statusEntriesRead, workdirEntry, workTree } from "./git"
 import { resolvedVerifyPlan, verifyPlanCharterText, PromptGuaranteeError } from "./intent/guarantees"
 import { loadModes, type ModeSpec } from "./mode"
@@ -516,8 +517,8 @@ export async function readSynthesisAssembly(
     : prefixIds.length
       ? Math.max(taskNumber(awaiting.id) ?? 0, ...prefixIds.map((id) => taskNumber(id) ?? 0)) + 1
       : (await formulationNumber(dir, phase)) + 1
-  const delta = await roundDeltaBlock(dir, state.round)
   const charter = formulationAcceptance(facts, entry)
+  const base = await readFormulationBaseInput(dir, { phase, plan, config, facts })
   return {
     phase,
     unit: awaiting.id,
@@ -533,24 +534,103 @@ export async function readSynthesisAssembly(
       ...(fields["floor-digest"] !== undefined ? { digest: fields["floor-digest"] } : {}),
       ...(prefixIds.length ? { prefix: prefixIds } : {}),
     },
-    baseInput: {
-      phase: entry,
-      phaseId: plan.phase,
-      taskIndex: plan.index,
-      numberStart,
-      ...(existingTasks ? { existingTasks } : {}),
-      ...(brief ? { brief } : {}),
-      ...(parts.round ? { round: parts.round } : {}),
-      ...(parts.analysis !== undefined ? { analysis: parts.analysis } : {}),
-      ...(input ? { input, inputPath: planInputPath(phase) } : {}),
-      handovers: parts.handovers,
-      ...(block.prevRound ? { prevRound: block.prevRound } : {}),
-      mode: loadModes(dir)[config.mode],
-      trimmedPhases: !state.phases.some((unit) => (unit.type === "analysis" || unit.type === "design") && !state.closed.has(unit.id)),
-      ...(delta ? { delta } : {}),
-      charter,
-    },
+    baseInput: base.input,
   }
+}
+
+// The floor composition's shared derivation (0282's split of the 0281
+// assembly): the renderFormulationTodo base input plus the standing prefix
+// and digest records, derived from disk alone — one derivation the synthesize
+// assembly, the deterministic transfer's floor construction and the
+// settlement's composition all read (P5/P6; loop-plan's compose builds the
+// same input inline for the push pipeline, the demolition track retiring
+// that twin when its callers empty).
+export type FormulationBase = {
+  input: Omit<Parameters<typeof renderFormulationTodo>[1], "synthesis">
+  prefixIds: string[]
+  digest: string
+  // The floor render itself (undefined only when the render facts cannot
+  // load — the caller's own refusal) and the facts it rendered under.
+  todo: { goal: string; scope: string; acceptance: string } | undefined
+  facts: PromptFacts | undefined
+}
+
+export async function readFormulationBaseInput(
+  dir: string,
+  pre: { phase: PhaseUnit; plan?: Plan; config?: ProjectConfig; facts?: PromptFacts; standing?: Plan["tasks"][number] },
+): Promise<FormulationBase> {
+  const phase = pre.phase
+  const plan = pre.plan ?? await loadPlan(dir, phase).catch(() => undefined)
+  const config = pre.config ?? await loadProjectConfig(dir).catch(() => undefined)
+  const facts = pre.facts ?? (config === undefined ? undefined : promptFacts({ dir, intent: config.intent }))
+  const entry = phase.entry
+  const state = await phaseState(dir)
+  const parts = await readFormulationSources(dir, phase, state)
+  const brief = (await projectBriefText(dir)) || undefined
+  const input = (await readPlanInput(dir, phase))?.trim() || undefined
+  const block = await priorRoundBlock(dir, state, DEFAULT_CONTEXT_LIMIT)
+  const standing = pre.standing ?? (plan === undefined ? undefined : awaitingFormulation(plan.tasks, phase))
+  const todoText = standing === undefined ? undefined : await Bun.file(join(dir, taskStatePaths(standing.id).pending)).text().catch(() => undefined)
+  const fields = todoText === undefined ? {} : parseUnitDoc(todoText).fields
+  const review = standing?.status === "pending"
+  const prefixIds = review
+    ? (plan?.tasks.filter((task) => task.id !== standing?.id).map((task) => task.id) ?? [])
+    : (fields.prefix ?? "").split(/[\s,]+/).filter(Boolean)
+  const existingTasks = prefixIds.length && plan !== undefined
+    ? existingTaskList(plan.tasks
+        .filter((task) => prefixIds.includes(task.id))
+        .map((task) => ({ id: task.id, title: task.title, status: task.status })))
+    : undefined
+  const numberStart = review
+    ? await taskNumberFloor(dir)
+    : prefixIds.length
+      ? Math.max(taskNumber(standing?.id ?? "") ?? 0, ...prefixIds.map((id) => taskNumber(id) ?? 0)) + 1
+      : (await formulationNumber(dir, phase)) + 1
+  const delta = await roundDeltaBlock(dir, state.round)
+  const charter = facts === undefined ? "" : formulationAcceptance(facts, entry)
+  const input1 = {
+    phase: entry,
+    phaseId: plan?.phase ?? "",
+    taskIndex: plan?.index ?? taskIndexPath(phase),
+    numberStart,
+    ...(existingTasks ? { existingTasks } : {}),
+    ...(brief ? { brief } : {}),
+    ...(parts.round ? { round: parts.round } : {}),
+    ...(parts.analysis !== undefined ? { analysis: parts.analysis } : {}),
+    ...(input ? { input, inputPath: planInputPath(phase) } : {}),
+    handovers: parts.handovers,
+    ...(block.prevRound ? { prevRound: block.prevRound } : {}),
+    ...(config === undefined ? {} : { mode: loadModes(dir)[config.mode] }),
+    trimmedPhases: !state.phases.some((unit) => (unit.type === "analysis" || unit.type === "design") && !state.closed.has(unit.id)),
+    ...(delta ? { delta } : {}),
+    charter,
+  }
+  const floor = facts === undefined ? undefined : renderFormulationTodo(facts, { ...input1, delta: undefined })
+  return {
+    input: input1,
+    prefixIds,
+    digest: floor === undefined ? "" : floorDigest(previewFormulationDocument(floor, plan?.phase ?? "", prefixIds.length ? prefixIds : undefined)),
+    todo: floor,
+    facts,
+  }
+}
+
+// The deterministic floor construction (plans/0282, the pull-only transfer's
+// apply): compose the phase's formulation todo through the shared derivation
+// and land it through the standing construction path — git and document
+// writes only, the synthesis enhancement riding the executor protocol as the
+// synthesize grant (0281), the charter verifier's session refused (the
+// person's review at the stop, the executor's verify share over the
+// formulation unit). Returns constructFormulation's own shapes.
+export async function constructPhaseFloor(dir: string, phase: PhaseUnit) {
+  const base = await readFormulationBaseInput(dir, { phase })
+  if (base.todo === undefined) {
+    return { type: "failed" as const, question: "the formulation render facts could not load — inspect the project configuration" }
+  }
+  return constructFormulation(dir, phase, base.todo, {
+    ...(base.digest ? { digest: base.digest } : {}),
+    ...(base.prefixIds.length ? { prefix: base.prefixIds } : {}),
+  })
 }
 
 // The settlement's composition: one holder reply validated and composed

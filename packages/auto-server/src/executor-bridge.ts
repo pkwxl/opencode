@@ -1,5 +1,18 @@
-import type { SocketData } from "./interactive-ws"
-import { encodeFrame, parseFrame, type PersonDelegation, type ExecutorRoute, type StepDone } from "./ws-protocol"
+import { encodeFrame, parseFrame, type ExecutorRoute, type StepDone } from "./ws-protocol"
+
+// The daemon's WebSocket socket data (0282: the interactive endpoints are
+// gone — the executor coordinator's bridge is the one socket surface).
+export type SocketData = { kind: "worker"; run: string }
+
+// A fresh per-run secret (moved from the retired interactive module): the
+// coordinator worker's bridge authenticates with it — never an operator
+// token, so a bridge socket does exactly one coordinator's work and nothing
+// else. `oar_` + 32 random bytes, base64url.
+export function freshRunSecret(): string {
+  const bytes = new Uint8Array(32)
+  crypto.getRandomValues(bytes)
+  return `oar_${Buffer.from(bytes).toString("base64url")}`
+}
 
 type Socket = Bun.ServerWebSocket<SocketData>
 type Reply = Pick<StepDone, "body"> & { status: number }
@@ -10,13 +23,13 @@ export class ExecutorBridge {
   private pending = new Map<string, { frame: string; finish: (reply: Reply) => void }>()
   private closed = false
 
-  send(route: ExecutorRoute, token: string, body: unknown, delegation?: PersonDelegation): Promise<Reply> {
+  send(route: ExecutorRoute, token: string, body: unknown): Promise<Reply> {
     if (this.closed) return Promise.resolve(this.disconnected())
     if (this.pending.size >= 64) {
       return Promise.resolve({ status: 503, body: { error: "The coordinator request queue is full." } })
     }
     const id = crypto.randomUUID()
-    const frame = encodeFrame({ type: "step-request", id, route, token, body, delegation })
+    const frame = encodeFrame({ type: "step-request", id, route, token, body })
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         // Keep the slot occupied until the worker replies or disconnects.

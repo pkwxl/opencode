@@ -71,17 +71,14 @@ import { readFileSync } from "node:fs"
 import { createHash, timingSafeEqual } from "node:crypto"
 import { join, resolve } from "node:path"
 import { liveRunLock, lockStatusLine } from "@opencode-ai/auto-core/lock"
-import { createHub, freshRunSecret, interactiveHandlers, settleOpenQuestions, type InteractiveHub, type SocketData } from "./interactive-ws"
-import { appendJournal, compactJournal, foldJournal, journalRunFloor, readJournal } from "./question-journal"
 import { readStatusModel, statusEventsResponse, tailResponse, type TailChannel } from "./observe"
 import { environmentBootReport } from "./env-boot"
 import { OP_DEFINITIONS, type OpOutcome } from "./ops"
-import { CLIENT_APP_JS, CLIENT_INDEX_HTML } from "./web/client"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
 import { applyServerProfile } from "./profile"
 import { BRIDGE_TOKEN_ENV, CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parsePlan, REQUEST_BYTE_LIMIT, requestTooLarge, RequestError, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
 import { executorRoutes, PROTOCOL_VERSION, type ExecutorRoute } from "./ws-protocol"
-import { ExecutorBridge } from "./executor-bridge"
+import { ExecutorBridge, freshRunSecret, type SocketData } from "./executor-bridge"
 import { parseExecutorRequest, readExecutorBody } from "./executor-request"
 import { openProjectCreation } from "./project-creation"
 import { workerCommand } from "./worker-command"
@@ -112,8 +109,8 @@ export function connectHost(hostname: string): string {
 // its behalf — the on-disk lock arbitrates the directory, exactly as for
 // any other driver process) and never terminal (nothing here observes its
 // end; the run's own state lives on the disk it writes).
-export type RunState = "starting" | "running" | "completed" | "failed" | "blocked" | "paused" | "killed" | "restored"
-export type TerminalState = Exclude<RunState, "starting" | "running" | "restored">
+export type RunState = "starting" | "running" | "completed" | "failed" | "blocked" | "paused" | "killed"
+export type TerminalState = Exclude<RunState, "starting" | "running">
 export const TERMINAL_STATES: readonly TerminalState[] = ["completed", "failed", "blocked", "paused", "killed"]
 
 // The exit-code vocabulary → run state (the draft's table corrected by the
@@ -168,14 +165,13 @@ export function terminalOf(exitCode: number | null, signalCode: string | null): 
 export const MAX_TERMINAL_RUNS = 50
 
 // Pure over the two maps (exported for its pin); called at every settle.
-export function evictTerminalRuns(runs: Map<string, { state: string }>, hubs: Map<string, unknown>, bound: number = MAX_TERMINAL_RUNS): void {
+export function evictTerminalRuns(runs: Map<string, { state: string }>, bound: number = MAX_TERMINAL_RUNS): void {
   let terminals = 0
   for (const run of runs.values()) if (TERMINAL_STATES.includes(run.state as TerminalState)) terminals++
   for (const [id, run] of runs) {
     if (terminals <= bound) break
     if (!TERMINAL_STATES.includes(run.state as TerminalState)) continue
     runs.delete(id)
-    hubs.delete(id)
     terminals--
   }
 }
@@ -223,24 +219,6 @@ export type DaemonOptions = {
   // compiled runs: the binary itself). Derived when absent; tests may pass
   // their own.
   worker?: { command: string; prefix: string[] }
-  // The confinement launcher (`serve --launch <script>`, plans/0162): when
-  // set, every spawned worker is started as
-  //   bash <launch> <project-dir> -- <worker command...>
-  // — the operator's own wrapper around the worker command. The launcher
-  // owns the run's environment and writable surface (a sandbox script, a
-  // per-project container launcher — whatever derives its confinement from
-  // the project argument), must exec the command, and its exit code is the
-  // run's. The daemon knows nothing of the launcher's mechanics: the seam is
-  // the generic three-part invocation, absent by default (today's bare
-  // spawn). Applies at the one spawn seam, so plain runs, planning runs and
-  // transfer advances all ride it; lane children inherit the confinement
-  // (a child of a confined process is inside it). Under a launcher the
-  // recorded pid is the wrapper's and the lock's holder pid names a process
-  // in the launcher's own namespace, so the starting→running watcher flips
-  // on the lock's freshness alone (the holder's started at or past the
-  // run's spawn instant — plans/0197 D6; a stale lock left by a crashed
-  // run does not flip it).
-  launch?: string
 }
 
 export type DaemonHandle = {
@@ -296,91 +274,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // process's cwd: the serve entry has already resolved and checked its own
   // copy before starting the daemon; an embedding host passing a relative
   // path gets its own cwd's truth, stated. The spawn never re-resolves.
-  const launch = options.launch === undefined ? undefined : resolve(options.launch)
   const runs = new Map<string, RunRecord>()
-  // One interactive hub per run (P3b, src/interactive-ws.ts): the run
-  // secret the spawn payload carries, the worker bridge socket, the client
-  // sockets and the still-open questions. Beside the registry (not on the
-  // record) so the run view stays the wire shape it always was; it lives
-  // exactly as long as the registry entry does — this process, or (P3c) a
-  // restart that restores it from the question journal below.
-  const hubs = new Map<string, InteractiveHub>()
   let counter = 0
-
-  // —— the persistent pending-question queue (P3c, src/question-journal.ts) ——
-  //
-  // Replay the daemon's own journal at start: every run it left with an
-  // open question AND whose directory still holds evidence a worker can
-  // reconnect comes back as a `restored` registry stub beside its hub (the
-  // journaled secret re-authenticates the orphan worker's bridge reconnect,
-  // the journaled questions redeliver to the first client that connects),
-  // and the journal is compacted down to that pending set — history does
-  // not survive a restart (P1's own decision, unchanged); the pending state
-  // does. This is daemon-owned state in the daemon's own data directory,
-  // never under a target directory's `.auto/` (the driver-exclusive-writes
-  // constitution).
-  //
-  // The journal's append side, as the interactive handlers and the run
-  // supervision call it (best-effort inside: a journal that cannot be
-  // written degrades durability, never serving). Defined ahead of the
-  // replay below because the replay's retire arm writes the same durable
-  // `closed` settles every other retire does (plans/0224 D1).
-  const journalRaise = (run: string, question: { id: string; text: string; minutes?: number }): void => {
-    appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run, event: "raised", id: question.id, text: question.text, ...(question.minutes !== undefined ? { minutes: question.minutes } : {}) })
-  }
-  const journalSettle = (run: string, id: string, how: "answered" | "timeout" | "transport" | "closed"): void => {
-    appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run, event: "settled", id, how })
-  }
-  const { events: journalEvents, skipped: journalSkipped } = readJournal(options.dataDir)
-  if (journalSkipped > 0) {
-    console.error(`the question journal under ${options.dataDir} holds ${journalSkipped} record(s) this version does not read (a torn crash tail or a newer format); they were skipped at replay`)
-  }
-  counter = journalRunFloor(journalEvents)
-  const restoredRuns = foldJournal(journalEvents)
-  for (const restored of restoredRuns.values()) {
-    if (runs.has(restored.run)) continue
-    // The retire gate (plans/0224 D1, the 0165-168 finding): the journal
-    // says a question is open, but the disk arbitrates whether any process
-    // can still answer it. A worker holds .auto/run.lock for its whole
-    // run, so liveRunLock answering undefined (no lock, or a holder whose
-    // process is gone) means the orphan worker is dead — no bridge will
-    // ever reconnect, and restoring the stub would only immortalize it
-    // (the finding's shape: the stub returning at EVERY restart, its
-    // questions pending forever). The retire is durable and idempotent:
-    // one journaled `closed` settle per still-open question (the same
-    // event the run-terminal retire writes — even a compaction that
-    // cannot write leaves the next restart's fold dropping the run on its
-    // own), and the run leaves the restored set compaction keeps. An
-    // UNREADABLE lock keeps the stub (liveRunLock's conservative reading —
-    // the daemon cannot prove no live run); a live holder keeps it too,
-    // whether it is the orphan (the P3c reconnect path, byte-identical)
-    // or a successor that took the directory (the stub then retires at
-    // the next restart whose replay finds the lock gone).
-    if (liveRunLock(restored.directory) === undefined) {
-      for (const question of restored.questions) journalSettle(restored.run, question.id, "closed")
-      restoredRuns.delete(restored.run)
-      continue
-    }
-    runs.set(restored.run, {
-      id: restored.run,
-      project: restored.project,
-      directory: restored.directory,
-      state: "restored",
-      code: null,
-      signal: null,
-      pid: null,
-      started: restored.started,
-      ended: null,
-      request: { options: restored.request.options as unknown as RunOptions, switches: restored.request.switches },
-      proc: undefined,
-      tail: "",
-      watcher: undefined,
-    })
-    const hub = createHub(restored.secret)
-    for (const question of restored.questions) hub.questions.set(question.id, question)
-    hubs.set(restored.run, hub)
-  }
-  compactJournal(options.dataDir, journalEvents, restoredRuns)
 
   // The P1d operation surface runs in this process (library calls into the
   // core, never a worker child: an operation is a synchronous
@@ -394,6 +289,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   //     the directory answers 409 (retryable) ahead of the lock, closing the
   //     spawn window where the lock is not yet observable.
   const coordinators = new Map<string, { run: RunRecord; bridge: ExecutorBridge }>()
+  const runSecrets = new Map<string, string>()
+  // The bridge secret lookup for the socket's timing-safe compare.
+  const bridgeSecretOf = (id: string): string => runSecrets.get(id) ?? ""
   const coordinatorBridges = new Map<string, ExecutorBridge>()
   const opInFlight = new Set<string>()
   const liveRunOn = (directory: string): RunRecord | undefined =>
@@ -430,7 +328,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     return { ...rest, live: run.state === "starting" || run.state === "running" }
   }
 
-  // —— worker supervision ——
+  // —— worker supervision (plans/0282: the executor coordinator is the only
+  // run a daemon spawns — POST /runs is gone, the plain/plan/transfer run
+  // payloads with it) ——
 
   const appendTail = (run: RunRecord, chunk: string): void => {
     run.tail = (run.tail + chunk).slice(-TAIL_LIMIT)
@@ -462,48 +362,24 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     if (run.watcher) clearInterval(run.watcher)
     run.watcher = undefined
     run.proc = undefined
-    // The run is over: any question still open in its hub retires as
-    // `closed` — a durable settlement (journaled, unlike a bridge blip),
-    // because the process that held the ask has ended. Usually the bridge
-    // socket's own close already settled them for the clients; this covers
-    // the ordering race and journals the ids either way. The broadcast above
-    // is the clients' notice: what follows takes the hub away.
-    const hub = hubs.get(run.id)
-    if (hub !== undefined) {
-      for (const id of settleOpenQuestions(hub, "closed")) journalSettle(run.id, id, "closed")
-    }
-    // The hub dies with its run (plans/0224 D2, the 0165-170 finding): the
-    // per-run secret's lifetime is the run's non-terminal life exactly, so a
-    // terminal run's worker bridge can no longer upgrade — the worker route's
-    // hub-undefined arm below answers the same 401 the unknown secret always
-    // did (auth stays indistinguishable), and a forged raise on a dead run's
-    // bridge is refused instead of journaled. A still-connected client got
-    // its settled/closed frames just above; its next frame is refused ("not
-    // in this daemon's registry"), never silently routed.
-    hubs.delete(run.id)
     const coordinator = coordinators.get(run.directory)
     if (coordinator?.run === run) {
       coordinator.bridge.close()
       coordinatorBridges.delete(run.id)
       coordinators.delete(run.directory)
     }
+    runSecrets.delete(run.id)
     // The registry's terminal bound (above): past MAX_TERMINAL_RUNS terminal
-    // records the oldest evict with their hubs — the tail memory this
-    // process holds for closed history stays bounded.
-    evictTerminalRuns(runs, hubs)
+    // records the oldest evict — the tail memory this process holds for
+    // closed history stays bounded.
+    evictTerminalRuns(runs)
   }
 
   const watch = (run: RunRecord, spawnAt: string): void => {
     const proc = run.proc!
     // starting → running when the worker takes .auto/run.lock (the holder
     // names its pid; the lock file is atomic, so a partial read never
-    // happens — a read that fails simply hasn't happened yet). Under a
-    // confinement launcher the holder's pid names a process inside the
-    // launcher's own namespace, never the wrapper pid recorded here, so the
-    // flip is the lock's freshness (plans/0197 D6): the holder's `started`
-    // at or past this spawn's instant — a stale lock a crashed run left
-    // behind does not flip it, and the run stays `starting`, observable
-    // either way through its exit.
+    // happens — a read that fails simply hasn't happened yet).
     run.watcher = setInterval(() => {
       if (run.state !== "starting") {
         clearInterval(run.watcher!)
@@ -512,7 +388,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       }
       try {
         const holder = JSON.parse(readFileSync(join(run.directory, ".auto", "run.lock"), "utf8"))
-        if (launch ? typeof holder?.started === "string" && holder.started >= spawnAt : holder?.pid === proc.pid) run.state = "running"
+        if (holder?.pid === proc.pid) run.state = "running"
       } catch {
         // No lock yet (or the run refused before taking it).
       }
@@ -525,46 +401,30 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     pump(run, proc.stderr as ReadableStream<Uint8Array>)
   }
 
-  // One worker child per run. The spawn environment drops the daemon's
-  // ambient OPENCODE_AUTO_* layer (a driver environment must not reach a
-  // run — the per-run switches ride the request payload, applied by the
-  // worker to its own fresh process) and keeps everything else, PATH and
-  // XDG_CONFIG_HOME included (one operator, one agent tooling, one model
-  // registry). The directory is the registry's absolute path, so the cwd is
-  // only the spawn's working directory, never the run's target. The payload
-  // (serialized by startRun, measured against the carriage bound there —
-  // plans/0223 D1) carries the P3b interactive transport (the worker bridge
-  // URL) whenever the daemon is serving it, while the per-run secret rides
-  // the spawn environment as OPENCODE_AUTO_BRIDGE_TOKEN — never argv, which
-  // any local user reads from /proc/<pid>/cmdline (plans/0222 D1); the
-  // OPENCODE_AUTO_ prefix keeps the credential out of every agent child
-  // through the agent domain's X1 scrub. The worker entry builds its
-  // Interactive implementation from the pair and injects it through
-  // RunAllOpts.interactive (the P3a seam), so a question raised inside the
-  // run is answerable from outside the process. The plan payload (P3c) and
-  // the transfer payload (the plans/0101 absorb) name the command the worker
-  // performs: runAll under stopBefore "execute", or runTransfer.
-  const spawnWorker = (project: RegisteredProject, run: RunRecord, payload: string, transport?: TransportPayload, bridgeSecret?: string): void => {
+  // One coordinator worker child per project. The spawn environment drops
+  // the daemon's ambient OPENCODE_AUTO_* layer and keeps everything else,
+  // PATH and XDG_CONFIG_HOME included (one operator, one agent tooling, one
+  // model registry). The directory is the registry's absolute path, so the
+  // cwd is only the spawn's working directory, never the run's target. The
+  // payload is exactly `{ executor, directory, transport }` (plans/0282's
+  // narrowed carriage — the executor worker's bridge URL), while the per-run
+  // secret rides the spawn environment as OPENCODE_AUTO_BRIDGE_TOKEN —
+  // never argv, which any local user reads from /proc/<pid>/cmdline
+  // (plans/0222 D1); the OPENCODE_AUTO_ prefix keeps the credential out of
+  // every agent child through the agent domain's X1 scrub.
+  const spawnWorker = (project: RegisteredProject, run: RunRecord, payload: string, transport: TransportPayload, bridgeSecret: string): void => {
     const env: Record<string, string | undefined> = Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key)),
     )
-    if (transport !== undefined && bridgeSecret !== undefined) env[BRIDGE_TOKEN_ENV] = bridgeSecret
+    env[BRIDGE_TOKEN_ENV] = bridgeSecret
     const argv = [worker.command, ...worker.prefix, "worker", payload]
-    // The confinement launcher (plans/0162): the one seam every spawned run
-    // rides — plain runs, planning runs, transfer advances — wrapped as
-    // `bash <launch> <project-dir> -- <command...>`. The launcher owns the
-    // environment overlay and the writable surface (the daemon's env passes
-    // through to it, so environment-referenced values — key references by
-    // name — resolve from the daemon's own environment), execs the command,
-    // and its exit code is the run's.
     // The spawn instant, captured immediately before the spawn: a strict
-    // lower bound on everything the child (or its launcher chain) does, so
-    // the watcher's freshness floor (above) accepts this run's lock and no
-    // earlier one.
+    // lower bound on everything the child does, so the watcher accepts this
+    // run's lock and no earlier one.
     const spawnAt = new Date().toISOString()
     let proc: Bun.Subprocess
     try {
-      proc = Bun.spawn(launch ? ["bash", launch, project.directory, "--", ...argv] : argv, {
+      proc = Bun.spawn(argv, {
         cwd: spawnCwd,
         env,
         stdin: "ignore",
@@ -573,18 +433,14 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       })
     } catch (error) {
       // A synchronous spawn throw means NO process exists (plans/0223 D1):
-      // E2BIG past the kernel's per-string cap, ENOENT for a missing bash
-      // or worker binary. The record settles first — failed, code null,
-      // the cause in the tail — so the registry never holds a live run
-      // with nothing behind it (the finding's wedge: every later request
-      // on the project answered a 409 whose remedy could not come, DELETE
-      // a 202 over nothing). No bridge ever connected and no question was
-      // ever raised, so settle's open-question retirement is a no-op; the
-      // journal's `opened` record is inert at replay without one. The
-      // rethrow carries the named cause to the route's 500.
+      // E2BIG past the kernel's per-string cap, ENOENT for a removed worker
+      // binary. The record settles first — failed, code null, the cause in
+      // the tail — so the registry never holds a live run with nothing
+      // behind it; no bridge ever connected, and the rethrow carries the
+      // named cause to the route's 500.
       const cause = error instanceof Error ? error.message : String(error)
       const named = /E2BIG/i.test(cause)
-        ? `${cause} — the request document is bounded at ${REQUEST_BYTE_LIMIT} bytes at validation, so an E2BIG here points at the daemon's own inherited environment (the spawn's environment rides the same kernel per-string limit)`
+        ? `${cause} — the spawn's environment rides the same kernel per-string limit; the daemon's own inherited environment is the suspect`
         : cause
       appendTail(run, `the worker process could not be spawned: ${named}\n`)
       settle(run, null, null)
@@ -595,42 +451,20 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     watch(run, spawnAt)
   }
 
-  // Register and spawn one run — the tail POST /runs and the plan and
-  // transfer operations' spawned routes share (P3c; the plans/0101 absorb):
-  // the registry entry, the interactive hub with its per-run secret
-  // (journal `opened` written before the worker can raise anything, so a
-  // restart mid-question reconstructs the run), the transport payload, the
-  // spawn. The caller owns the guards (the whitelist, the conflicts) and
-  // the response. Two failures are this function's own to prevent
-  // (plans/0223 D1): an oversized payload is refused as a RequestError
-  // BEFORE anything is registered (the carriage bound — a request past it
-  // could only ever die at the spawn), and a spawn that throws settles the
-  // record inside spawnWorker before the error reaches the route.
-  const startRun = (project: RegisteredProject, runOptions: RunOptions, switches: Record<string, string>, server: Bun.Server<SocketData>, plan?: PlanPayload, transfer?: TransferPayload, executor?: ExecutorBridge): RunRecord => {
+  // Register and spawn one executor coordinator for the project: the
+  // registry entry, the per-run secret (the bridge's credential — generated
+  // before the spawn, compared on the socket upgrade), the transport
+  // payload, the spawn. The caller owns the guards (the whitelist, the
+  // conflicts) and the response; a spawn that throws settles the record
+  // inside spawnWorker before the error reaches the route (plans/0223 D1).
+  const startRun = (project: RegisteredProject, server: Bun.Server<SocketData>, executor: ExecutorBridge): RunRecord => {
     const id = `run-${String(++counter).padStart(6, "0")}`
     // The transport URL names this daemon's own bound address (the worker
-    // connects back on the loopback or whatever host the operator bound;
-    // the spawn and the bridge are the same machine in v1), the host
-    // formatted for a URL — an IPv6 literal bracketed, a wildcard bind
-    // named by the loopback it covers (plans/0223 D2). The secret never
-    // rides the payload: the spawn environment carries it
-    // (OPENCODE_AUTO_BRIDGE_TOKEN, plans/0222 D1). Under width (plans/0162)
-    // no transport is attached at all: the core refuses a channel under
-    // maxSessions ≥ 2 (one channel cannot serve concurrent sessions — the
-    // CLI's own rule), so the daemon never offers one and a wide run's
-    // questions take the stdin-closed degradation path. The hub and the
-    // journal entry exist for every run regardless — uniform lifecycle, and
-    // nothing connects to a wide run's.
-    const transport: TransportPayload | undefined = runOptions.maxSessions >= 2 ? undefined : { run: id, url: `ws://${connectHost(server.hostname ?? DEFAULT_HOSTNAME)}:${server.port}/runs/${id}/worker` }
-    // The serialized payload — the exact token the spawn will carry,
-    // measured against the carriage bound before ANY of the run's state
-    // exists (registry, hub, journal): over it, a RequestError with the
-    // teaching; the caller's route answers it as a 400 (the plan and
-    // transfer spawned routes the same way), and no wedge can form because
-    // nothing was registered (plans/0223 D1, the 0165-055 finding).
-    const payload = JSON.stringify(executor
-      ? { directory: project.directory, executor: true, transport }
-      : { directory: project.directory, options: runOptions, switches, ...(transport ? { transport } : {}), ...(plan ? { plan } : {}), ...(transfer ? { transfer } : {}) })
+    // connects back on the loopback or whatever host the operator bound),
+    // the host formatted for a URL — an IPv6 literal bracketed, a wildcard
+    // bind named by the loopback it covers (plans/0223 D2).
+    const transport: TransportPayload = { run: id, url: `ws://${connectHost(server.hostname ?? DEFAULT_HOSTNAME)}:${server.port}/runs/${id}/worker` }
+    const payload = JSON.stringify({ directory: project.directory, executor: true, transport })
     const tooLarge = requestTooLarge(payload)
     if (tooLarge !== undefined) throw new RequestError(tooLarge)
     const run: RunRecord = {
@@ -643,30 +477,21 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       pid: null,
       started: new Date().toISOString(),
       ended: null,
-      request: { options: runOptions, switches },
+      request: { options: parseOptions(undefined), switches: {} },
       proc: undefined,
       tail: "",
       watcher: undefined,
     }
     runs.set(id, run)
-    // The interactive hub (P3b): the per-run secret exists before the spawn
-    // — the worker's bridge URL names this daemon's address, and its token
-    // is the secret the upgrade compares. The registry entry and the hub
-    // are created together; the worker connects back within seconds of its
-    // start. The journal's `opened` lands in the same window: the run
-    // identity a restart needs to serve this run's pending questions
-    // again.
     const secret = freshRunSecret()
-    hubs.set(id, createHub(secret))
-    if (executor) {
-      coordinators.set(project.directory, { run, bridge: executor })
-      coordinatorBridges.set(id, executor)
-    } else appendJournal(options.dataDir, { v: 1, at: new Date().toISOString(), run: id, event: "opened", project: project.name, directory: project.directory, secret, started: run.started, request: { options: runOptions as unknown as Record<string, unknown>, switches } })
+    runSecrets.set(id, secret)
+    coordinators.set(project.directory, { run, bridge: executor })
+    coordinatorBridges.set(id, executor)
     spawnWorker(project, run, payload, transport, secret)
     return run
   }
 
-  // —— HTTP plumbing ——
+
 
   const json = (status: number, body: Record<string, unknown>, headers?: Record<string, string>): Response =>
     new Response(JSON.stringify(body, null, 2) + "\n", { status, headers: { "content-type": "application/json", ...headers } })
@@ -728,148 +553,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     }
   }
 
-  // POST /runs: validate (registered project; options shaped as RunAllOpts
-  // fields plus per-run env-switch overrides only — never config keys,
-  // the same shared validator the worker enforces), refuse on conflicts,
-  // spawn one worker, answer 202 with the run id.
-  const postRuns = async (request: Request, server: Bun.Server<SocketData>): Promise<Response> => {
-    let body: unknown
-    try {
-      body = await request.json()
-    } catch (error) {
-      return json(400, { error: `the request body is not valid JSON: ${error instanceof Error ? error.message : String(error)}` })
-    }
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
-      return json(400, { error: 'the run request is a JSON object: { "project": "<registered name or path>", "options"?: { … }, "switches"?: { … } }' })
-    }
-    const given = body as Record<string, unknown>
-    for (const key of Object.keys(given)) {
-      if (key === "project" || key === "options" || key === "switches") continue
-      // The whitelist is absolute: a directory in the request body is
-      // refused with the rule itself, not silently matched.
-      if (key === "directory") {
-        return json(400, {
-          error:
-            'a run request carries "project" (a registered project name or its registered absolute path), never "directory": the whitelist resolves run targets only against the registry (register with: opencode-auto-server register <dir>)',
-        })
-      }
-      if (key === "config") {
-        return json(400, { error: "a run request carries no config: the constitutional keys are frozen by init (.opencode/auto/config.json); revise them with opencode-auto amend <dir>, or edit that file directly" })
-      }
-      // The plan surface is the plan operation (P3c): it serves planPrelude's
-      // no-agent routes first and spawns the planning session with its input
-      // semantics — a run request cannot smuggle planning mode past that.
-      if (key === "plan") {
-        return json(400, { error: 'a run request carries no "plan": the planning surface is the plan operation (POST /projects/<project>/plan, taking "input" and "append"), which serves the no-agent routes first and spawns the planning session' })
-      }
-      // The advance surface is the transfer operation (the plans/0101
-      // absorb): one person-bracketed boundary per invocation, resolved by
-      // state — never a field a plain run carries.
-      if (key === "transfer") {
-        return json(400, { error: 'a run request carries no "transfer": the advance surface is the transfer operation (POST /projects/<project>/transfer, taking "resynthesize"), which spawns the advance as a run (one boundary per invocation)' })
-      }
-      // The lane surface is the profile laneLauncher's own channel
-      // (plans/0162): a lane child is a worker this shell self-spawns per
-      // lane dispatch of a wide parent run — the machine shape of the CLI's
-      // hidden `_lane` subcommand, never a client field.
-      if (key === "lane") {
-        return json(400, { error: 'a run request carries no "lane": the lane surface is this shell\'s own lane launcher (a worker self-spawned per lane dispatch of a wide parent run — the machine shape of the CLI\'s hidden _lane entry); start a wide run with options.maxSessions instead' })
-      }
-      if (key in CONFIG_KEYS) return json(400, { error: frozenRefusal("", `"${key}" `) })
-      if (HAND_EDITED_KEYS.has(key)) {
-        return json(400, { error: `"${key}" is a config key (hand-edited in .opencode/auto/config.json); a run request carries no config — config keys are frozen by init` })
-      }
-      return json(400, { error: `unknown request field "${key}" (the run request takes project, options and switches)` })
-    }
-    if (typeof given.project !== "string" || !given.project.trim()) {
-      return json(400, { error: 'the run request requires "project": the registered project (name or registered absolute path) to run in' })
-    }
-    let options: RunOptions
-    let switches: Record<string, string>
-    try {
-      options = parseOptions(given.options)
-      switches = parseSwitches(given.switches)
-    } catch (error) {
-      if (error instanceof RequestError) return json(400, { error: error.message })
-      throw error
-    }
-    // The whitelist: the target resolves only against the registry.
-    const project = store.resolveProject(given.project.trim())
-    if (!project) {
-      return json(404, { error: `"${given.project.trim()}" is not a registered project: the whitelist resolves run targets only against the registry (register with: opencode-auto-server register <dir>)` })
-    }
-    // One run per directory, the registry first: a live run of this daemon
-    // on the directory refuses the second spawn whether or not the lock is
-    // observable yet (the starting window, or a crash whose exit observation
-    // has not landed) — retryable, because the entry reaches a terminal
-    // state on its own. A write operation in flight on the directory is the
-    // same refusal from the other side (the operations hold the directory
-    // while they write through the core).
-    // AUTO-DECISION (the "stale-but-locked → 409" mapping): 409 is the
-    // registry-vs-lock disagreement — the daemon's one-run-per-directory
-    // reservation answering while the on-disk lock is stale or not yet
-    // visible. A present-but-stale lock with no live registry run is NOT a
-    // conflict: the spawn proceeds and the worker's runAll performs the
-    // core's sanctioned next-acquirer cleanup (auto-core src/lock.ts:47-56),
-    // which keeps this API as self-healing as the CLI; the daemon never
-    // writes the lock itself (refusing a stale lock with no cleanup would
-    // wedge the directory behind a 409 no blind retry could clear).
-    if (opInFlight.has(project.directory)) {
-      return json(409, {
-        error: `an operation is in flight on ${project.name}; retry once it finishes (config operations and unit operations hold the directory while they write)`,
-        retry: "retry once the operation completes — it is synchronous, so the very next request sees the directory free",
-      })
-    }
-    const live = liveRunOn(project.directory)
-    if (live) {
-      return json(409, {
-        error: `a run is already active on ${project.name}: run ${live.id} is ${live.state}`,
-        run: { id: live.id, state: live.state },
-        retry: "retry once the active run reaches a terminal state (GET the run to observe it)",
-      })
-    }
-    // The lock, the arbiter between the daemon and every other process (the
-    // CLI included — whichever process takes it first wins, assessment §8
-    // Q8): a live holder answers 423 with the holder line. A present-but-
-    // stale lock (its process gone) is NOT refused — the spawn proceeds and
-    // the worker's own runAll performs the core's sanctioned next-acquirer
-    // cleanup (auto-core src/lock.ts:47-56), so the API surface stays as
-    // self-healing as the CLI and the daemon never touches the lock itself.
-    const holder = liveRunLock(project.directory)
-    if (holder !== undefined) {
-      return json(423, {
-        error: lockStatusLine(holder),
-        holder: holder === "unreadable" ? undefined : holder,
-        hint: "another driver process holds the directory's run lock; wait for it to finish or stop it (the CLI's exit-1 refusal is the same rule; if no such process exists, delete .auto/run.lock by hand — cross-host locks cannot be probed from here)",
-      })
-    }
-    // startRun's two refusals (plans/0223 D1): the carriage bound answers a
-    // 400 with its teaching (nothing was registered — the request itself is
-    // the problem), and a spawn that threw arrives as a SpawnError with the
-    // record already settled — a 500 naming the cause and carrying the
-    // failed run view, so the client learns both the failure and that the
-    // project's surface is free again (the finding's wedge answered a bare
-    // generic 500 and left the project 409-locked forever).
-    let id: string
-    try {
-      id = startRun(project, options, switches, server).id
-    } catch (error) {
-      if (error instanceof RequestError) return json(400, { error: error.message })
-      if (error instanceof SpawnError) {
-        const failed = runs.get(error.runId)
-        return json(500, { error: error.message, ...(failed ? { run: view(failed) } : {}) })
-      }
-      throw error
-    }
-    // A wide run carries no interactive channel (the transport skip above),
-    // so its 202 points at the observation surfaces alone — the interactive
-    // pointer is the width-1 run's.
-    if (options.maxSessions >= 2) {
-      return json(202, { ...view(runs.get(id)!), note: `the run was accepted at width ${options.maxSessions} (concurrent lanes — no interactive channel under width, the CLI's own rule; a permission question blocks the run with exit 2); observe its lifecycle with GET /runs/<id> (state, mapped exit code, output tail) and the project's observability surface` }, { location: `/runs/${id}` })
-    }
-    return json(202, { ...view(runs.get(id)!), note: "the run was accepted; observe its lifecycle with GET /runs/<id> (state, mapped exit code, output tail), and drive it interactively over the WebSocket endpoint /runs/<id>/interactive (questions and /exit, /failback control)", interactive: `/runs/${id}/interactive` }, { location: `/runs/${id}` })
-  }
-
   // DELETE /runs/<id>: mid-run control in P1 is kill-only. The core's
   // process owns SIGINT (a single press is captured and logged; the second
   // within the window force-terminates with exit 130 — auto-core
@@ -888,38 +571,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const deleteRun = (run: RunRecord): Response => {
     if (TERMINAL_STATES.includes(run.state as TerminalState)) {
       return json(409, { error: `run ${run.id} is already terminal (state ${run.state}${run.code !== null ? `, code ${run.code}` : ""})`, run: view(run) })
-    }
-    if (run.state === "restored") {
-      // A restored run is not this daemon's child: there is no process here
-      // to signal, and pretending a kill was requested would be a 202 that
-      // does nothing. Whether the DELETE can act is the lock's own evidence
-      // (plans/0224 D1, the 0165-168 finding): a worker holds .auto/run.lock
-      // for its whole run, so with no live holder the orphan worker is dead
-      // — no bridge will ever reconnect — and this DELETE IS the retire
-      // (the person's in-band remedy; the hand-edited-journal cure the
-      // finding found taught nowhere is never needed). A live holder (or an
-      // unreadable lock — liveRunLock's conservative reading, the daemon
-      // cannot prove no live run) keeps the 409, its hint teaching the real
-      // path: stop the holder, then this same DELETE retires the view.
-      const holder = liveRunLock(run.directory)
-      if (holder === undefined) {
-        const hub = hubs.get(run.id)
-        if (hub !== undefined) {
-          for (const id of settleOpenQuestions(hub, "closed")) journalSettle(run.id, id, "closed")
-        }
-        hubs.delete(run.id)
-        runs.delete(run.id)
-        return json(200, {
-          ...view(run),
-          note: `the restored view was retired by this delete: no live holder holds ${run.directory}/.auto/run.lock, so the orphan worker can never reconnect — its open questions settled closed (journaled), and the run left the registry (GET /runs no longer lists it)`,
-        })
-      }
-      return json(409, {
-        error: `run ${run.id} was restored from the question journal after a daemon restart: its worker is not this daemon's child, so there is nothing here to kill`,
-        run: view(run),
-        ...(holder === "unreadable" ? {} : { holder }),
-        hint: `stop the process that holds ${run.directory}/.auto/run.lock (the lock names it; a lock that cannot be read counts as held); once no live holder remains, this same DELETE retires the restored view — its open questions settle closed (journaled) and the run leaves the registry`,
-      })
     }
     const proc = run.proc
     if (run.state === "starting" && proc === undefined) {
@@ -948,9 +599,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     }
     return json(202, {
       ...view(run),
-      note: launch
-        ? "kill requested — the SIGINTs go to the confinement launcher's wrapper process, and what a kill means under the launcher is the launcher's own (a container launcher's run may outlive its wrapper; the run lock arbitrates any successor, and the core's interruption recovery heals the directory on the next run); observe GET /runs/<id> for the terminal state"
-        : "kill requested (double SIGINT, the force-terminate path); observe GET /runs/<id> for the terminal state (the vocabulary maps it to killed/130)",
+      note: "kill requested (double SIGINT, the force-terminate path); observe GET /runs/<id> for the terminal state (the vocabulary maps it to killed/130)",
     })
   }
 
@@ -964,30 +613,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // probe endpoint that needs the credential it is probing for could
       // not tell a wrong token apart from a daemon that is down.
       return json(200, { ok: true, service: "opencode-auto-server" })
-    }
-    // The Web client (P4a): the static shell, served from the package's own
-    // embedded assets (script/build-web.ts bundles web/ into src/web/client.ts
-    // — string constants, so source layout, test harness and compiled binary
-    // all serve the same bytes). The shell is unauthenticated by the same
-    // reasoning as /health above: it carries NO data (no project names, no
-    // run state — the page is the login form itself, and it cannot prompt for
-    // a token before it has loaded). Every route the shell calls after that
-    // requires the token; the client's scope-aware UI reads GET /session.
-    if (segments.length === 0 && method === "GET") {
-      return new Response(CLIENT_INDEX_HTML, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } })
-    }
-    if (segments[0] === "app.js" && segments.length === 1 && method === "GET") {
-      return new Response(CLIENT_APP_JS, { status: 200, headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } })
-    }
-    // The client's scope source (P4a): any known token, no specific scope —
-    // the typed answer to "what can this token do". The client's UI gating
-    // (controls without `control`, the question UI without `answer`) reads
-    // this and nothing else: deriving scopes by parsing 403 refusal prose
-    // would be scraping, the exact discipline the client exists to keep.
-    if (segments[0] === "session" && segments.length === 1 && method === "GET") {
-      const auth = scopesOf(request)
-      if (auth.scopes === undefined) return json(auth.status, auth.body)
-      return json(200, { service: "opencode-auto-server", scopes: auth.scopes })
     }
     // The whitelist as a read surface (P4a): the project list the client
     // renders — the same registry `opencode-auto-server projects` prints and
@@ -1020,11 +645,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         if (denied) return denied
         return json(200, { runs: [...runs.values()].map(view) })
       }
-      if (segments.length === 1 && method === "POST") {
-        const denied = needScope(request, "starting a run", "control")
-        if (denied) return denied
-        return await postRuns(request, server)
-      }
       if (segments.length === 2) {
         const run = findRun(segments[1]!)
         if (method === "GET") {
@@ -1046,11 +666,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         segments[2] === "executor" && executorRoutes.includes(executorRoute)) {
       const auth = scopesOf(request, true)
       if (!auth.scopes || !auth.identity) return json(auth.status, auth.body)
-      const worker = auth.scopes.includes("executor")
-      const grants = (["questions", "releases"] as const).filter((grant) => auth.scopes!.includes(`person-${grant}`))
-      const delegation = auth.scopes.includes("person") ? "unrestricted" : grants.length ? grants : undefined
-      if (executorRoute === "answer" ? !delegation : !worker && !(executorRoute === "claim" && delegation)) {
-        return json(403, { error: "The token lacks the required executor grant." })
+      if (!auth.scopes.includes("executor")) {
+        return json(403, { error: 'The executor routes require the "executor" scope.' })
       }
       const name = safeDecode(segments[1]!)
       const project = name ? store.resolveProject(name) : undefined
@@ -1059,13 +676,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       let body: unknown
       try {
         body = await readExecutorBody(request)
-        if (executorRoute === "claim" && !worker && body && typeof body === "object" && !Array.isArray(body) && !("role" in body)) {
-          body = { ...body, role: "person" }
-        }
-        const { action } = parseExecutorRequest(executorRoute, body, auth.identity, delegation)
-        if (action.route === "claim" && action.role === "worker" && !worker) {
-          return json(403, { error: 'A worker claim requires the "executor" scope.' })
-        }
+        parseExecutorRequest(executorRoute, body, auth.identity)
       } catch (error) {
         return json(400, { error: error instanceof Error ? error.message : "Invalid executor request." })
       }
@@ -1078,95 +689,38 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         if (holder) return json(423, { error: lockStatusLine(holder) })
         bridge = new ExecutorBridge()
         try {
-          startRun(project, parseOptions(undefined), {}, server, undefined, undefined, bridge)
+          startRun(project, server, bridge)
         } catch (error) {
           return json(500, { error: error instanceof Error ? error.message : "The coordinator could not start." })
         }
       }
       // The bridge timeout owns ambiguous delivery, even when the HTTP peer disconnects.
       server.timeout(request, 0)
-      const reply = await bridge.send(executorRoute, auth.identity, body, delegation)
+      const reply = await bridge.send(executorRoute, auth.identity, body)
       return json(reply.status, reply.body)
     }
-    // The P3b interactive surface (src/interactive-ws.ts): the worker
-    // bridge and the client endpoint, both WebSocket upgrades over the same
-    // typed versioned protocol (src/ws-protocol.ts). The client endpoint
-    // multiplexes the question channel (`answer` scope) and the control
-    // channel (`control` scope); the worker bridge authenticates with the
-    // per-run secret the spawn payload carried — never an operator token,
-    // so a bridge socket can do exactly one run's interactive work and
-    // nothing else. Auth precedes the upgrade (a refusal is the plain JSON
-    // status, the same family as every route above).
-    if (segments[0] === "runs" && segments.length === 3 && method === "GET" && (segments[2] === "worker" || segments[2] === "interactive")) {
-      // Auth precedes the run lookup on both WebSocket routes (the order
-      // every route above keeps — the credential is the gate, never a hint;
-      // plans/0197 D4): an unauthenticated probe learns nothing about which
-      // run ids exist. The interactive side checks the operator token first
-      // (a known token still learns 404 — existence is not secret to the
-      // authenticated); the worker side's credential IS the run's per-run
-      // secret, so an unknown run id answers the same 401 as a wrong secret
-      // — nothing named exists to compare against, and the two cases are
-      // not told apart.
-      if (segments[2] === "worker") {
-        const run = findRun(segments[1]!)
-        const hub = run === undefined ? undefined : hubs.get(run.id)
-        // The worker bridge's per-run secret, compared timing-safely over
-        // digests (the token store's own pattern, src/store.ts): the
-        // comparison stays off the raw secret and off byte-length
-        // short-circuits. The secret rides the query string — a WebSocket
-        // upgrade cannot carry headers — which is the documented v1
-        // loopback posture (single machine, 127.0.0.1 bind by default),
-        // noted here, not redesigned.
-        const presented = url.searchParams.get("token") ?? ""
-        if (
-          run === undefined ||
-          hub === undefined ||
-          !timingSafeEqual(createHash("sha256").update(presented).digest(), createHash("sha256").update(hub.secret).digest())
-        ) {
-          return json(401, { error: "unknown run secret: the worker bridge authenticates with the per-run secret the run's spawn payload carried" })
-        }
-        if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-          return json(400, { error: `this route is a WebSocket endpoint: upgrade to websocket and speak the interactive transport protocol v${PROTOCOL_VERSION} (see docs/daemon.md)` })
-        }
-        if (server.upgrade(request, { data: { kind: "worker", run: run.id } satisfies SocketData })) return new Response(null)
-        return json(400, { error: "the websocket upgrade failed" })
-      }
-      const auth = scopesForSocket(request, url)
-      if (auth.scopes === undefined) return json(auth.status, auth.body)
-      if (!auth.scopes.includes("answer") && !auth.scopes.includes("control")) {
-        return json(403, { error: `the interactive surface requires the "answer" or "control" scope ("answer" guards questions, "control" guards run control); this token carries: ${auth.scopes.join(", ")}` })
-      }
+    // The executor coordinator's bridge socket (plans/0282: the daemon's one
+    // WebSocket surface): the per-run secret the spawn payload's transport
+    // named, compared timing-safely over digests — never an operator token,
+    // so a bridge socket does exactly one coordinator's work. The secret
+    // rides the query string (an upgrade cannot carry headers), the v1
+    // loopback posture. A coordinator run's socket alone exists; every
+    // other run id answers the same 401 the unknown secret does.
+    if (method === "GET" && segments[0] === "runs" && segments.length === 3 && segments[2] === "worker") {
       const run = findRun(segments[1]!)
-      if (run && coordinatorBridges.has(run.id)) return json(409, { error: "The executor coordinator uses the project executor routes." })
-      if (!run) return json(404, { error: `no run ${segments[1]} (runs are identified by the id POST /runs returned)` })
-      // A terminal run's channel closed with the run (plans/0224 D2, the
-      // 0165-170 finding): settle dropped the hub — its open questions
-      // settled `closed` — so no socket serves this run anymore, neither a
-      // bridge nor a client. The plain 409 states the close (a state check
-      // beside the credential, as the record asks — the hub's lifetime is
-      // the one mechanism) instead of upgrading into a socket that would
-      // only be refused on its first frame.
-      if (TERMINAL_STATES.includes(run.state as TerminalState)) {
-        return json(409, {
-          error: `run ${run.id} is ${run.state} (terminal): the interactive channel closed with the run — its open questions settled closed when it ended, and no bridge or client socket serves it anymore`,
-          run: view(run),
-        })
-      }
-      // A wide run carries no channel (plans/0162): the transport skip at
-      // spawn time is the rule, and this endpoint answers it plainly
-      // instead of upgrading into a socket nothing will ever speak on —
-      // the question semantics such a run takes are the run's own, not a
-      // channel's.
-      if (run.request.options.maxSessions >= 2) {
-        return json(409, {
-          error: `run ${run.id} carries no interactive channel: it runs at width ${run.request.options.maxSessions} (concurrent lanes), and one channel cannot serve concurrent sessions — the CLI's own rule. Its questions take the run's own degradation path (a permission question blocks the run with exit 2)`,
-          run: view(run),
-        })
+      const bridge = run === undefined ? undefined : coordinatorBridges.get(run.id)
+      const presented = url.searchParams.get("token") ?? ""
+      if (
+        run === undefined ||
+        bridge === undefined ||
+        !timingSafeEqual(createHash("sha256").update(presented).digest(), createHash("sha256").update(presented === "" ? "" : bridgeSecretOf(run.id)).digest())
+      ) {
+        return json(401, { error: "unknown run secret: the coordinator bridge authenticates with the per-run secret the spawn payload carried" })
       }
       if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-        return json(400, { error: `this route is a WebSocket endpoint: upgrade to websocket and speak the interactive transport protocol v${PROTOCOL_VERSION} (see docs/daemon.md)` })
+        return json(400, { error: `this route is a WebSocket endpoint: upgrade to websocket and speak the executor protocol v${PROTOCOL_VERSION} (see docs/protocol.md)` })
       }
-      if (server.upgrade(request, { data: { kind: "client", run: run.id, scopes: auth.scopes } satisfies SocketData })) return new Response(null)
+      if (server.upgrade(request, { data: { kind: "worker", run: run.id } satisfies SocketData })) return new Response(null)
       return json(400, { error: "the websocket upgrade failed" })
     }
     // The P1e observability surface plus the P2b structured events channel:
@@ -1254,83 +808,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         // op has released the run lock by the time it calls this (the
         // worker's own runAll takes the lock, and the daemon's in-process
         // hold would refuse its own child).
-        const spawnPlanningRun = (plan: PlanPayload): OpOutcome => {
-          const live = liveRunOn(project.directory)
-          if (live) {
-            return {
-              status: 409,
-              body: {
-                error: `a run is already active on ${project.name}: run ${live.id} is ${live.state}`,
-                run: { id: live.id, state: live.state },
-                retry: "retry once the active run reaches a terminal state (GET the run to observe it)",
-              },
-            }
-          }
-          // The carriage bound answers as the op's own 400 (plans/0223 D1);
-          // a spawn that threw rides the dispatch catch as a SpawnError —
-          // its message names the run, and the record is settled inside the
-          // spawn either way (never a `starting` wedge behind a 500).
-          let run: RunRecord
-          try {
-            run = startRun(project, parseOptions(undefined), {}, server, plan)
-          } catch (error) {
-            if (error instanceof RequestError) return { status: 400, body: { error: error.message } }
-            throw error
-          }
-          return {
-            status: 202,
-            body: {
-              ...view(run),
-              lines: [
-                `✓ planning session started as run ${run.id} (stopBefore: execute — humanQuestions armed, the questions ride the interactive transport)`,
-                `next: review the plan over GET /runs/${run.id} and the project's observability surface; answer its questions over the WebSocket endpoint /runs/${run.id}/interactive`,
-              ],
-              note: "the planning run was accepted; observe its lifecycle with GET /runs/<id> (state, mapped exit code, output tail), and answer its questions over the WebSocket endpoint /runs/<id>/interactive",
-              interactive: `/runs/${run.id}/interactive`,
-            },
-          }
-        }
-        // The transfer operation's spawned route (the plans/0101 absorb):
-        // the same startRun, carrying the transfer payload — the advance
-        // (runTransfer) runs in the worker, one boundary per invocation,
-        // its exit code the advance's own.
-        const spawnTransferRun = (transfer: TransferPayload): OpOutcome => {
-          const live = liveRunOn(project.directory)
-          if (live) {
-            return {
-              status: 409,
-              body: {
-                error: `a run is already active on ${project.name}: run ${live.id} is ${live.state}`,
-                run: { id: live.id, state: live.state },
-                retry: "retry once the active run reaches a terminal state (GET the run to observe it)",
-              },
-            }
-          }
-          // The carriage bound answers as the op's own 400 (plans/0223 D1);
-          // a spawn that threw rides the dispatch catch as a SpawnError —
-          // its message names the run, and the record is settled inside the
-          // spawn either way (never a `starting` wedge behind a 500).
-          let run: RunRecord
-          try {
-            run = startRun(project, parseOptions(undefined), {}, server, undefined, transfer)
-          } catch (error) {
-            if (error instanceof RequestError) return { status: 400, body: { error: error.message } }
-            throw error
-          }
-          return {
-            status: 202,
-            body: {
-              ...view(run),
-              lines: [
-                `✓ transfer started as run ${run.id} (one person-bracketed advance, stopBefore: formulate — its questions ride the interactive transport${transfer.resynthesize ? "; resynthesize bypasses the standing plan task's digest-keep" : ""})`,
-                `next: observe the advance over GET /runs/${run.id} and the project's observability surface; its exit code is the advance's own (0 a review, round-open or roadmap-exhausted stop; 2 a gate held or nothing to advance; 1 a state error, m mode's refusal among them)`,
-              ],
-              note: "the transfer run was accepted; observe its lifecycle with GET /runs/<id> (state, mapped exit code, output tail), and answer its questions over the WebSocket endpoint /runs/<id>/interactive",
-              interactive: `/runs/${run.id}/interactive`,
-            },
-          }
-        }
-        if (!op.write(body)) return envelope(await op.run({ project, body, query: url.searchParams, spawnPlanningRun, spawnTransferRun, probeWindow }))
+        if (!op.write(body)) return envelope(await op.run({ project, body, query: url.searchParams, probeWindow }))
         if (opInFlight.has(project.directory)) {
           return json(409, {
             error: `an operation is already in flight on ${project.name}; retry once it finishes (one write operation holds a directory at a time — the run lock arbitrates processes, not requests of this one)`,
@@ -1347,7 +825,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         }
         opInFlight.add(project.directory)
         try {
-          return envelope(await op.run({ project, body, query: url.searchParams, spawnPlanningRun, spawnTransferRun, probeWindow }))
+          return envelope(await op.run({ project, body, query: url.searchParams, probeWindow }))
         } finally {
           opInFlight.delete(project.directory)
         }
@@ -1362,42 +840,26 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return json(500, { error: `the ${op.segment} operation failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
       }
     }
-    return json(404, { error: `no route ${method} ${url.pathname} (P1c serves: GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; P1d serves the /projects/<project>/<op> operations (GET models is the table; POST models is the probe — its own probe scope, the confirm field, rate-limited); P1e serves GET /projects/<project>/status|log|events — the status read model and the SSE tails; P2b serves GET /projects/<project>/status-events — the typed driver-events stream; P3b serves the WebSocket interactive transport GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge); P4a serves GET / — the Web client — with GET /app.js, GET /session (the token's scopes) and GET /projects (the whitelist))` })
+    return json(404, { error: `no route ${method} ${url.pathname} (the daemon serves: GET /health; GET /runs, GET /runs/<id>, DELETE /runs/<id> (kill); the executor protocol POST /projects/<project>/executor/<ready|claim|brief|report|heartbeat|release>; the operations POST /projects/<project>/<init|amend|fix|reset|close|tasks|plan|transfer|clarify> and GET/POST models; the observability GET /projects/<project>/status|log|events|status-events; GET /projects (the whitelist))` })
   }
 
-  const interactive = interactiveHandlers({
-    hubOf: (run) => hubs.get(run),
-    stateOf: (run) => runs.get(run)?.state,
-    onRaise: journalRaise,
-    onSettle: journalSettle,
-  })
   const server = Bun.serve<SocketData>({
     port: options.port ?? DEFAULT_PORT,
     hostname: options.hostname ?? DEFAULT_HOSTNAME,
     fetch: fetchHandler,
-    // The P3b interactive transport's sockets (src/interactive-ws.ts): the
-    // run's worker bridge and the interactive clients, dispatched by the
-    // SocketData each upgrade stamped. Bun.serve's own WebSocket support —
-    // the isolation line holds (zero added runtime dependencies). The
-    // journal hooks (P3c) make the queue durable: every first-held ask and
-    // every durable settlement is appended to the daemon's own journal, so
-    // a restart replays the pending set.
+    // The executor coordinator's bridge socket (plans/0282: the interactive
+    // endpoints are gone — this is the daemon's one WebSocket surface). The
+    // bridge authenticated with the per-run secret at the upgrade; the
+    // SocketData dispatch is one kind.
     websocket: {
-      ...interactive,
       open(socket) {
-        const bridge = coordinatorBridges.get(socket.data.run)
-        if (bridge && socket.data.kind === "worker") bridge.open(socket)
-        else interactive.open?.(socket)
+        coordinatorBridges.get(socket.data.run)?.open(socket)
       },
       message(socket, message) {
-        const bridge = coordinatorBridges.get(socket.data.run)
-        if (bridge && socket.data.kind === "worker") bridge.message(socket, message)
-        else interactive.message(socket, message)
+        coordinatorBridges.get(socket.data.run)?.message(socket, message)
       },
       close(socket) {
-        const bridge = coordinatorBridges.get(socket.data.run)
-        if (bridge && socket.data.kind === "worker") bridge.disconnect(socket)
-        else interactive.close?.(socket)
+        coordinatorBridges.get(socket.data.run)?.disconnect(socket)
       },
     },
   })

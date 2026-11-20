@@ -1,5 +1,16 @@
 # The opencode-auto-server daemon (P1c/P1d/P1e/P3/P4)
 
+> **The pull-only demolition (plans/0282) has landed.** The daemon serves
+> coding agents only: `POST /runs`, the interactive transport (both
+> WebSocket endpoints), the pending-question queue and the Web client are
+> **retired** — the sections describing them below are the historical
+> record of what was removed, kept until the demolition track's doc pass
+> rewrites them. The standing surfaces are the executor protocol
+> (auto-core's `docs/protocol.md`, the single source), the deterministic
+> operations (transfer/plan/clarify in-process), and the observability
+> reads. The scopes are the six: read, control, config, probe, executor,
+> projects.
+
 The resident daemon of the headless service shell: it owns the target-directory
 whitelist and the auth tokens, spawns one worker child process per run (the P1b
 entry, `opencode-auto-server worker '<json>'`), serves the run-control REST

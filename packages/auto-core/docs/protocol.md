@@ -48,8 +48,6 @@ brief
 report
 heartbeat
 release
-question
-answer
 ```
 
 - **ready** — the dispatch menu: `claimable` units with their claimable
@@ -67,15 +65,13 @@ answer
 - **heartbeat** — renew the listed leases (the window derived from the
   grant's own budget, capped at twice it) and read the menu.
 - **release** — surrender a live lease without a report.
-- **question** — raise a pending person item (deduplicated while pending
-  per asker/task/text). A holder blocked on a cause outside its permitted
-  writes is answered `blocked` with the ladder named in the detail; there is
-  no escalation channel — the plain `blocked` answer with its remedy is the
-  whole surface.
-- **answer** — a person-delegation channel's decision on a pending item.
-  (The person claim/answer arms ride the `claim`/`answer` routes under a
-  `person`-scoped token; the delegation grammar is
-  `unrestricted | ("questions"|"releases")[]`.)
+- **report** carries `note`; a holder blocked on a cause outside its
+  permitted writes is answered `blocked` naming the person-necessary cause
+  in the detail — no escalation channel exists anywhere (plans/0282): the
+  plain `blocked` answer with its remedy is the whole surface, the round
+  waiting until a person looks at the state. A coding agent blocked
+  mid-grant resolves the block itself and records its decision in its
+  artifact (the prompts' standing AUTO-DECISION rule).
 
 ## Grant kinds
 
@@ -153,8 +149,8 @@ qualified phase id for the boundary (distill).
   alone stages and commits) and `writes` (the per-kind artifact paths, with
   the scope letter: `unit-effective` + the `undeclared: "freeform"` floor,
   or `none`).
-- **`pending`** — the pending person items: `question` (text only for a
-  question-authority channel) and `gate` rows.
+- **`pending`** — the pending person items: `gate` rows (the gate and its
+  document), derived from the documents.
 
 The landing fence admits per grant exactly: the standing refusal set
 refused for every kind (the driver workdir `.auto/`/`tmp/`, the config
@@ -177,8 +173,10 @@ person's boundaries, never the coordinator's judgment.
 The person's gates derive from document state (the admission derivation):
 `project-start` (no round established) and `survey-release` (the survey's
 human gate, `Fork:`/`Clarified:` regions in the survey document). The
-person's acts are document writes and deterministic operations; `question`
-items and gate releases ride the person claim/answer arms.
+person's acts are document writes and the daemon's deterministic
+operations — the release act is the `clarify` operation (or the document
+edit itself), the boundary advance the `transfer` operation; the menu's
+`pending` list names the awaiting gate and its document.
 
 The step vocabulary a claim can answer beside the grants: `wait` (with
 `reason`: `lease-held`, `in-flight`, `question`, `gate`, `not-ready` and a
@@ -220,17 +218,12 @@ The daemon's authorization tiers (`SCOPES` in the server's store):
 read
 control
 config
-answer
 probe
 executor
 projects
-person
-person-questions
-person-releases
 ```
 
-The executor routes require `executor`; the person arms require the person
-grants (`person`, or the scoped `person-questions`/`person-releases`).
+The executor routes require `executor`.
 
 ## Tombstones
 
@@ -240,4 +233,9 @@ silently reused (ids are never reused).
 
 ```protocol
 protocol: 1 — premature: the pre-0280 literal, retired by 0279's version ruling (preview-open at 0.1; old clients fail loudly at the handshake)
+routes: question, answer — the ask channel (plans/0282): the holder's question route and the person claim/answer arms; a blocked coding agent resolves its block itself, the person acts on documents and the deterministic ops
+scopes: answer, person, person-questions, person-releases — the person grants (plans/0282); six scopes remain
+worker payloads: options, switches, plan, transfer, lane — the push run carriage (plans/0282); the executor coordinator is the only spawn, its payload {executor, directory, transport}
+POST /runs — the plain push run starter (plans/0282); the executor route is the only run starter
+GET /, /app.js, /session — the web client (plans/0282); the daemon serves coding agents only
 ```

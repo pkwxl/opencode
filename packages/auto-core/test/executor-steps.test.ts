@@ -193,7 +193,6 @@ for (const point of ["booked", "committed"] as const) {
     const base = git(dir, "rev-parse", "HEAD").trim()
     const coordinator = await openExecutorCoordinator(dir)
     const grant = await coordinator.claim(holder)
-    const question = point === "booked" ? await coordinator.question(holder, "Can the next share start?") : undefined
     await coordinator.close()
     if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
     write(dir, "src/widget.ts", "export const widget = 1\n")
@@ -206,18 +205,12 @@ for (const point of ["booked", "committed"] as const) {
     const recovered = await openExecutorCoordinator(dir)
     try {
       const replacement = { token: "worker-2", channel: "solo" }
-      // The recovered menu (a plain worker reader — 0271's existence split:
-      // the booked arm's unanswered question rides as kind and id alone).
+      // The recovered menu (a plain worker reader; the ask channel is gone,
+      // the pending list carries document-derived gates alone — none here).
       expect(await recovered.ready(replacement)).toEqual({
-        claimable: [], leases: [], types: executorTypeCatalog(),
-        ...(question ? { pending: [{ kind: "question", id: question.id }] } : { pending: [] }),
+        claimable: [], leases: [], types: executorTypeCatalog(), pending: [],
       })
       expect(git(dir, "rev-parse", "HEAD").trim()).toBe(crashHead)
-      if (question) {
-        expect(await recovered.claim(replacement)).toMatchObject({ kind: "wait", reason: "gate" })
-        expect(git(dir, "rev-list", "--count", `${base}..HEAD`).trim()).toBe("1")
-        await recovered.answerQuestion({ token: "person", channel: "review", delegation: "unrestricted" }, question.id, "Yes.")
-      }
       expect(await recovered.claim(replacement)).toMatchObject({ kind: "verify", unit: grant.unit })
       expect(git(dir, "rev-list", "--count", `${base}..HEAD`).trim()).toBe("1")
       const receipt = await recovered.report(holder, grant.id, grant.lease, "ended")
@@ -420,10 +413,6 @@ test("a same-channel zombie cannot renew or settle its successor's lease", async
     at += 100
     const one = { step: old.id, lease: old.lease }
     const two = { step: successor.id, lease: successor.lease }
-    await expect(recovered.question(holder, "Stale task question", { ...one, task: successor.unit })).rejects.toThrow("ownership")
-    expect(await recovered.claimQuestion({ token: "person", channel: "review", delegation: "unrestricted" })).toMatchObject({
-      kind: "wait", reason: "not-ready",
-    })
     expect(await recovered.heartbeat(holder, [one])).toMatchObject({ leases: [{ ...two, deadline: successor.deadline }] })
     expect(await recovered.release(holder, one.step, one.lease)).toMatchObject({ kind: "wait", reason: "lease-held" })
     expect(await recovered.report(holder, one.step, one.lease, "ended")).toMatchObject({ kind: "wait", reason: "lease-held" })
@@ -890,11 +879,6 @@ test("two re-verifications with identical FAIL evidence exhaust the progress bud
       write(dir, "docs/T-001/gaps.md", evidence)
       expect(await coordinator.report(verifier, verify.id, verify.lease, "ended")).toMatchObject({ kind: "landed", verdict: "fail", gapCount: 1 })
       if (round === 3) break
-      if (round === 1) {
-        const raised = await coordinator.question(verifier, "Confirm the expected value?")
-        expect(await coordinator.claim(holder)).toMatchObject({ kind: "wait", reason: "gate" })
-        await coordinator.answerQuestion({ token: "person", channel: "review", delegation: "unrestricted" }, raised.id, "Confirmed.")
-      }
       const fix = await coordinator.claim(holder)
       if (fix.kind !== "fix") throw new Error(JSON.stringify(fix))
       write(dir, "src/widget.ts", `export const widget = ${round + 2}\n`)
@@ -941,71 +925,6 @@ test("a landed handoff advances the execute share ordinal and carries a continua
   }
 })
 
-test("questions settle once across restart and refresh the asker's live brief", async () => {
-  const dir = executableProject()
-  const person = { token: "person", channel: "review", delegation: ["questions"] as const }
-  const releaseOnly = { ...person, delegation: ["releases"] as const }
-  const peer = { ...holder, channel: "another" }
-  let coordinator = await openExecutorCoordinator(dir)
-  try {
-    const grant = await coordinator.claim(holder)
-    if (!("lease" in grant)) throw new Error(JSON.stringify(grant))
-    const target = { task: grant.unit, step: grant.id, lease: grant.lease }
-    const raised = await coordinator.question(holder, "Use the existing API?", target)
-    expect(await coordinator.question(holder, "Use the existing API?", target)).toEqual(raised)
-    const other = await coordinator.question(peer, "Use the existing API?")
-    expect(other.id).not.toBe(raised.id)
-    await expect(coordinator.question(peer, "Can I ask?", target)).rejects.toThrow("ownership")
-    expect(await coordinator.claimQuestion(releaseOnly)).toMatchObject({ kind: "wait", reason: "gate" })
-    await expect(coordinator.answerQuestion(releaseOnly, raised.id, "No")).rejects.toThrow("authorize")
-    expect(await coordinator.claimQuestion(person)).toMatchObject({ kind: "question", id: raised.id, task: grant.unit })
-    await Promise.all([
-      coordinator.answerQuestion(person, raised.id, "Use the existing API.", "Keep the interface stable."),
-      coordinator.answerQuestion({ ...person, token: "other-person" }, raised.id, "Replace it."),
-    ])
-    expect(await coordinator.brief(holder, grant.unit)).toMatchObject({ lease: grant.lease, prompt: expect.stringContaining("Keep the interface stable.") })
-    expect(await coordinator.release(holder, grant.id, grant.lease)).toMatchObject({ kind: "wait", reason: "gate" })
-    await expect(coordinator.question(holder, "Can I ask?", target)).rejects.toThrow("ownership")
-    await coordinator.close()
-
-    coordinator = await openExecutorCoordinator(dir)
-    await expect(coordinator.answerQuestion(releaseOnly, raised.id, "No")).rejects.toThrow("authorize")
-    expect(await coordinator.claim(peer)).toMatchObject({ kind: "wait", reason: "question" })
-    expect(await coordinator.claim(holder)).toMatchObject({ kind: "wait", reason: "gate" })
-    expect(await coordinator.answerQuestion(person, raised.id, "Replace it.")).toMatchObject({ kind: "question", id: other.id })
-    await coordinator.answerQuestion(person, other.id, "Peer-only answer.")
-    const resumed = await coordinator.claim(holder)
-    if (!("lease" in resumed)) throw new Error(JSON.stringify(resumed))
-    expect(resumed.lease).not.toBe(grant.lease)
-    expect(resumed.prompt).toContain("Use the existing API.")
-    expect(resumed.prompt).not.toContain("Replace it.")
-    expect(resumed.prompt).not.toContain("Peer-only answer.")
-    const recorded = JSON.parse(readFileSync(join(dir, ".auto/executor-questions.json"), "utf8"))
-    expect(recorded[0].answer).toMatchObject({ person, decision: "Use the existing API.", rationale: "Keep the interface stable." })
-  } finally {
-    await coordinator.close()
-  }
-})
-
-test("a pending question blocks new verification while allowing an active worker to report", async () => {
-  const dir = executableProject()
-  const person = { token: "person", channel: "review", delegation: "unrestricted" as const }
-  const coordinator = await openExecutorCoordinator(dir)
-  try {
-    const grant = await coordinator.claim(holder)
-    if (!("lease" in grant)) throw new Error(JSON.stringify(grant))
-    const raised = await coordinator.question(holder, "Ready for review?")
-    write(dir, "src/widget.ts", "export const widget = 1\n")
-    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
-    const verifier = { ...holder, token: "verifier" }
-    expect(await coordinator.claim(verifier)).toMatchObject({ kind: "wait", reason: "gate" })
-    await coordinator.answerQuestion(person, raised.id, "Yes.")
-    expect(await coordinator.claim(verifier)).toMatchObject({ kind: "verify" })
-  } finally {
-    await coordinator.close()
-  }
-})
-
 function surveyReleaseProject() {
   const dir = project()
   write(dir, ".opencode/auto/phases/survey.md", "# Survey\n\nGate: human\n\n## plan duties\n\nRead the sources.\n\n<!-- auto: eof -->\n")
@@ -1022,76 +941,24 @@ function surveyReleaseProject() {
 
 const releaser = { token: "person", channel: "review", delegation: ["releases"] as const }
 
-test("person claims return the oldest eligible question or gate across restart", async () => {
-  const { dir } = surveyReleaseProject()
-  const person = { ...releaser, delegation: "unrestricted" as const }
-  const questionOnly = { ...releaser, delegation: ["questions"] as const }
-  let coordinator = await openExecutorCoordinator(dir)
-  try {
-    const first = await coordinator.question(holder, "First question")
-    expect(await coordinator.claimPerson(person)).toMatchObject({ kind: "question", id: first.id })
-    const gate = await coordinator.claimPerson(releaser)
-    if (gate.kind !== "human") throw new Error(JSON.stringify(gate))
-    const last = await coordinator.question(holder, "Second question")
-    await expect(coordinator.answerPerson(releaser, first.id, "No")).rejects.toThrow("authorize")
-    await expect(coordinator.answerPerson(questionOnly, gate.id, "approve")).rejects.toThrow("authorize")
-    expect(await coordinator.answerPerson(person, first.id, "Yes")).toMatchObject({ kind: "human", id: gate.id })
-    await coordinator.close()
-    coordinator = await openExecutorCoordinator(dir)
-    expect(await coordinator.claimPerson(questionOnly)).toMatchObject({ kind: "question", id: last.id })
-    expect(await coordinator.claimPerson(person)).toMatchObject({ kind: "human", id: gate.id })
-    expect(await coordinator.answerPerson(person, gate.id, "approve")).toMatchObject({ kind: "question", id: last.id })
-  } finally {
-    await coordinator.close()
-  }
-})
-
 // 0271 (0262-04's fix): the pending person items on the read surface —
 // existence for every reader, question content only for question authority,
 // the no-questions wait arm naming pending gate existence, answering
 // unchanged.
-test("ready lists pending person items: kind and id for every reader, text for question authority", async () => {
+test("ready lists the document-derived gate items alone (plans/0282)", async () => {
   const { dir } = surveyReleaseProject()
   const coordinator = await openExecutorCoordinator(dir)
   try {
-    const raised = await coordinator.question(holder, "Which flavor?")
-    // Before an eligible person claim records the occurrence, no gate item
-    // id exists to list (0250: ids persist at the first eligible
-    // derivation) — the plain worker reader sees the question's existence
-    // alone, no text.
-    expect((await coordinator.ready(holder)).pending).toEqual([{ kind: "question", id: raised.id }])
-    const gate = await coordinator.claimGate(releaser)
-    if (gate.kind !== "human") throw new Error(JSON.stringify(gate))
-    // A plain worker channel: kind and id for both kinds, no text — ordered
-    // by the shared issuance order (the question raised before the gate
-    // was recorded).
+    // The ask channel is gone: the pending list carries the awaiting gate
+    // (kind, gate, document) derived from the documents — nothing else.
     expect((await coordinator.ready(holder)).pending).toEqual([
-      { kind: "question", id: raised.id },
-      { kind: "gate", id: gate.id },
+      { kind: "gate", gate: "survey-release", document: "docs/R-01/P01-survey/survey.md" },
     ])
-    // A question-authority channel: the question's text beside the id (the
-    // question step's own shape); the gate item stays kind and id — its
-    // proposal is the offer route's own disclosure.
-    const questionOnly = { ...releaser, delegation: ["questions"] as const }
-    expect((await coordinator.ready(questionOnly, questionOnly)).pending).toEqual([
-      { kind: "question", id: raised.id, text: "Which flavor?" },
-      { kind: "gate", id: gate.id },
+    // The derivation is authority-blind (the documents are the source):
+    // every reader sees the same row.
+    expect((await coordinator.ready({ token: "other", channel: "other" })).pending).toEqual([
+      { kind: "gate", gate: "survey-release", document: "docs/R-01/P01-survey/survey.md" },
     ])
-    // A release-authority channel reads no question text: the split is the
-    // same admitted set the claim path checks, authority widening nothing.
-    expect((await coordinator.ready(releaser, releaser)).pending).toEqual([
-      { kind: "question", id: raised.id },
-      { kind: "gate", id: gate.id },
-    ])
-    // The no-questions wait arm names pending gate existence (0262-04's
-    // blind spot), the answering routes themselves unchanged.
-    expect(await coordinator.claimQuestion(questionOnly)).toMatchObject({ kind: "question", id: raised.id })
-    await coordinator.answerQuestion(questionOnly, raised.id, "Vanilla.")
-    expect(await coordinator.claimQuestion(questionOnly)).toEqual({
-      kind: "wait", reason: "not-ready", detail: "No pending questions. A gate item is pending.",
-    })
-    expect((await coordinator.ready(holder)).pending).toEqual([{ kind: "gate", id: gate.id }])
-    expect(await coordinator.claimGate(releaser)).toMatchObject({ kind: "human", id: gate.id })
   } finally {
     await coordinator.close()
   }
@@ -1103,9 +970,8 @@ test("ready lists pending person items: kind and id for every reader, text for q
 // both settlement entries), the blocked answer naming the ladder, the item
 // visible on 0271's read surface for every reader with its text for
 // question authority.
-test("a blocked settlement outside the holder's permitted set raises one question and names the ladder", async () => {
+test("a blocked settlement outside the holder's permitted set names the person-necessary cause plainly (plans/0282)", async () => {
   const dir = executableProject()
-  const person = { token: "person", channel: "review", delegation: ["questions"] as const }
   const coordinator = await openExecutorCoordinator(dir)
   try {
     const grant = await coordinator.claim(holder)
@@ -1117,30 +983,21 @@ test("a blocked settlement outside the holder's permitted set raises one questio
     git(dir, "add", "foreign.txt")
     git(dir, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Foreign")
     const blocked = await coordinator.report(holder, grant.id, grant.lease, "ended")
-    const [item] = JSON.parse(readFileSync(join(dir, ".auto/executor-questions.json"), "utf8"))
+    // The ask channel is gone: no question item is raised, no store is
+    // written — the plain blocked answer naming the person-necessary cause
+    // is the whole surface, the round waiting until a person looks.
     expect(blocked).toEqual({
       kind: "blocked", reason: "isolation",
-      detail: `HEAD moved outside the booked share. Inspect the commit and executor progress before resuming. The cause is outside this lease's permitted writes; question ${item.id} is raised for a person decision — retrying cannot fix it.`,
+      detail: "HEAD moved outside the booked share. Inspect the commit and executor progress before resuming. The cause is outside this lease's permitted writes — a person must inspect the state; retrying cannot fix it.",
     })
-    expect(item).toMatchObject({
-      asker: holder, task: grant.unit,
-      text: `Executor step ${grant.id} blocked (isolation): HEAD moved outside the booked share. Inspect the commit and executor progress before resuming. The cause is outside the lease's permitted writes; a person decision is required.`,
-    })
-    // 0271's read surface: existence for a plain worker, text and task for
-    // question authority; the standing claim surface offers the item.
-    expect((await coordinator.ready({ ...holder, token: "worker-2" })).pending).toEqual([{ kind: "question", id: item.id }])
-    expect((await coordinator.ready(person, person)).pending).toEqual([{ kind: "question", id: item.id, text: item.text, task: grant.unit }])
-    expect(await coordinator.claimQuestion(person)).toMatchObject({ kind: "question", id: item.id, task: grant.unit })
-    // The dedup-while-pending: a retrying holder's repeated blocked reports
-    // raise one item, not many — through both settlement entries (the
-    // report replay and a successor claim's settle), the ladder naming the
-    // same item id.
+    expect(await Bun.file(join(dir, ".auto/executor-questions.json")).exists()).toBe(false)
+    expect((await coordinator.ready({ ...holder, token: "worker-2" })).pending).toEqual([])
+    // The retry's replay is byte-identical (P10), through both settlement
+    // entries — the report replay and a successor claim's settle.
     expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toEqual(blocked)
     const reclaimed = await coordinator.claim({ ...holder, token: "worker-2" })
-    expect(reclaimed).toMatchObject({ kind: "blocked", reason: "isolation" })
     if (reclaimed.kind !== "blocked" || blocked.kind !== "blocked") throw new Error(JSON.stringify(reclaimed))
-    expect(reclaimed.detail).toBe(blocked.detail)
-    expect(JSON.parse(readFileSync(join(dir, ".auto/executor-questions.json"), "utf8"))).toHaveLength(1)
+    expect(reclaimed).toEqual(blocked)
   } finally {
     await coordinator.close()
   }
@@ -1174,13 +1031,14 @@ test("replayable causes keep today's blocked answer byte-identical and raise not
     // The never-set alone is the person's remedy (0248 D5): the same cause
     // site escalates once the holder's own edit is gone.
     rmSync(join(dir, "src/other.ts"))
+    // The never-set alone names the person-necessary cause — the plain
+    // blocked answer (plans/0282: no raise, no store, the round waiting).
     const escalated = await coordinator.report(holder, grant.id, grant.lease, "ended")
-    const [item] = JSON.parse(readFileSync(join(dir, ".auto/executor-questions.json"), "utf8"))
     expect(escalated).toEqual({
       kind: "blocked", reason: "isolation",
-      detail: `Resolve out-of-scope edits before replaying: AGENTS.md. The cause is outside this lease's permitted writes; question ${item.id} is raised for a person decision — retrying cannot fix it.`,
+      detail: "Resolve out-of-scope edits before replaying: AGENTS.md. The cause is outside this lease's permitted writes — a person must inspect the state; retrying cannot fix it.",
     })
-    expect(item.text).toBe(`Executor step ${grant.id} blocked (isolation): Resolve out-of-scope edits before replaying: AGENTS.md. The cause is outside the lease's permitted writes; a person decision is required.`)
+    expect(existsSync(join(dir, ".auto/executor-questions.json"))).toBe(false)
   } finally {
     await coordinator.close()
   }
@@ -1191,171 +1049,7 @@ test("replayable causes keep today's blocked answer byte-identical and raise not
 // the holder could never make) → the retry lands → the holder's next brief
 // for the task carries the answer (the standing answerCursor machinery,
 // 0250 — the continuation grant renders it as data).
-test("the escalated question closes its loop: the person answers and the holder's next brief carries the answer", async () => {
-  const dir = executableProject()
-  const person = { token: "person", channel: "review", delegation: "unrestricted" as const }
-  const coordinator = await openExecutorCoordinator(dir)
-  try {
-    const grant = await coordinator.claim(holder)
-    if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
-    const base = git(dir, "rev-parse", "HEAD").trim()
-    write(dir, "src/widget.ts", "export const widget = 1\n")
-    write(dir, "docs/T-001/handoff.md", "# Handoff\n\nThe implementation began. Finish the second part.\n\nStatus: continue\n")
-    write(dir, "foreign.txt", "person edit\n")
-    git(dir, "add", "foreign.txt")
-    git(dir, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Foreign")
-    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({ kind: "blocked", reason: "isolation" })
-    const [item] = JSON.parse(readFileSync(join(dir, ".auto/executor-questions.json"), "utf8"))
-    expect(await coordinator.claimQuestion(person)).toMatchObject({ kind: "question", id: item.id })
-    await coordinator.answerQuestion(person, item.id, "I reset the foreign commit. Retry the report.")
-    // The person repairs the world; the holder's untracked share survives
-    // and the retry lands as the continuation share it booked.
-    git(dir, "reset", "--hard", base)
-    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed", continuation: true })
-    const resumed = await coordinator.claim(holder)
-    if (resumed.kind !== "execute") throw new Error(JSON.stringify(resumed))
-    expect(resumed.prompt).toContain("Person answers (JSON data)")
-    expect(resumed.prompt).toContain("I reset the foreign commit. Retry the report.")
-    expect((await coordinator.ready(holder)).pending).toEqual([])
-  } finally {
-    await coordinator.close()
-  }
-})
 
-for (const point of ["gate-booked", "gate-marked", "gate-committed"] as const) {
-  test(`recovers an approved untracked survey release after death at ${point}`, async () => {
-    const { dir, document } = surveyReleaseProject()
-    const base = git(dir, "rev-parse", "HEAD").trim()
-    const coordinator = await openExecutorCoordinator(dir)
-    const offer = await coordinator.claimGate(releaser)
-    await coordinator.close()
-    if (offer.kind !== "human") throw new Error(JSON.stringify(offer))
-    const child = Bun.spawn(["bun", "-e", `
-      import { openExecutorCoordinator } from "./src/executor-coordinator.ts"
-      const [dir, id] = process.argv.slice(1)
-      const coordinator = await openExecutorCoordinator(dir, {
-        checkpoint: (current) => { if (current === ${JSON.stringify(point)}) process.kill(process.pid, "SIGKILL") },
-      })
-      await coordinator.answerGate(${JSON.stringify(releaser)}, id, "approve", "Keep scope narrow.")
-      await coordinator.close()
-    `, dir, offer.id], { stderr: "pipe", stdout: "ignore" })
-    await child.exited
-    expect({ signal: child.signalCode, stderr: await new Response(child.stderr).text() }).toEqual({
-      signal: "SIGKILL", stderr: "",
-    })
-    const crashHead = git(dir, "rev-parse", "HEAD")
-    const recovered = await openExecutorCoordinator(dir)
-    try {
-      expect(await recovered.ready(holder)).toEqual({ claimable: [], leases: [], pending: [], types: executorTypeCatalog() })
-      expect(git(dir, "rev-parse", "HEAD")).toBe(crashHead)
-      expect(await recovered.claim(holder)).toMatchObject({ kind: "phase-boundary" })
-      expect(git(dir, "rev-list", "--count", `${base}..HEAD`).trim()).toBe("1")
-      expect(git(dir, "diff", "--name-only", base, "HEAD").trim()).toBe(document)
-      expect(git(dir, "show", `HEAD:${document}`)).toContain("## Release\n\nClarified: yes")
-      expect(await recovered.answerGate(releaser, offer.id, "approve", "Replacement answer")).toMatchObject({ kind: "wait" })
-      const [item] = JSON.parse(readFileSync(join(dir, ".auto/executor-gates.json"), "utf8"))
-      expect(item.intent).toMatchObject({
-        commit: git(dir, "rev-parse", "HEAD").trim(),
-        answer: { person: releaser, rationale: "Keep scope narrow." },
-      })
-    } finally {
-      await recovered.close()
-    }
-  })
-}
-
-test("gate claims supersede changed proposals and refuse unrelated changes before approval", async () => {
-  const { dir, document, proposal } = surveyReleaseProject()
-  const coordinator = await openExecutorCoordinator(dir)
-  try {
-    const first = await coordinator.claimGate(releaser)
-    if (first.kind !== "human") throw new Error(JSON.stringify(first))
-    expect(await coordinator.claimGate(releaser)).toEqual(first)
-    const questionOnly = { ...releaser, delegation: ["questions"] as const }
-    expect(await coordinator.claimGate(questionOnly)).toMatchObject({ kind: "wait", reason: "gate" })
-    await expect(coordinator.answerGate(questionOnly, first.id, "approve")).rejects.toThrow("authorize")
-    write(dir, document, proposal.replace("keep it narrow", "widen the scope"))
-    const second = await coordinator.answerGate(releaser, first.id, "approve")
-    if (second.kind !== "human") throw new Error(JSON.stringify(second))
-    expect(second.id).not.toBe(first.id)
-    expect(second.proposal).toContain("widen the scope")
-    write(dir, "unrelated.txt", "person's work\n")
-    expect(await coordinator.answerGate(releaser, second.id, "approve")).toMatchObject({ kind: "blocked", reason: "isolation" })
-    expect(readFileSync(join(dir, document), "utf8")).not.toContain("Clarified: yes")
-    expect(git(dir, "diff", "--cached", "--name-only")).toBe("")
-    rmSync(join(dir, "unrelated.txt"))
-    expect(await coordinator.answerGate(releaser, second.id, "approve")).toMatchObject({ kind: "wait" })
-    await expect(coordinator.answerGate(questionOnly, second.id, "approve")).rejects.toThrow("authorize")
-  } finally {
-    await coordinator.close()
-  }
-})
-
-test("large answer histories keep live briefs fetchable and page in settlement order", async () => {
-  const dir = executableProject()
-  const person = { token: "person", channel: "review", delegation: "unrestricted" as const }
-  let coordinator = await openExecutorCoordinator(dir)
-  try {
-    const grant = await coordinator.claim(holder)
-    if (!("lease" in grant)) throw new Error(JSON.stringify(grant))
-    const older = await coordinator.question(holder, "Raised first, answered last.")
-    const peer = { ...holder, channel: "other" }
-    const privateItem = await coordinator.question(peer, "Only the other channel should see this.")
-    await coordinator.answerQuestion(person, privateItem.id, "Private answer.")
-    const issued: string[] = []
-    for (let n = 0; n < 25; n++) {
-      const item = await coordinator.question(holder, `${n} ${"q".repeat(8000)}`)
-      await coordinator.answerQuestion(person, item.id, "a".repeat(8000), "r".repeat(8000))
-      issued.push(item.id)
-    }
-    const refreshed = await coordinator.brief(holder, grant.unit)
-    if (!("lease" in refreshed) || typeof refreshed.answerCursor !== "string") throw new Error("Expected a live paged brief.")
-    expect(refreshed.lease).toBe(grant.lease)
-    expect(Buffer.byteLength(JSON.stringify({ protocol: 0.1, step: refreshed }))).toBeLessThanOrEqual(256 * 1024)
-    const first = await coordinator.briefAnswers(holder, grant.unit, refreshed.answerCursor)
-    expect(first.next).toBeDefined()
-    await coordinator.answerQuestion(person, older.id, "Latest answer.")
-    await coordinator.close()
-    coordinator = await openExecutorCoordinator(dir)
-    const seen = [...first.answers]
-    let next = first.next
-    while (next) {
-      const page = await coordinator.briefAnswers(holder, grant.unit, next)
-      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(192 * 1024)
-      seen.push(...page.answers)
-      next = page.next
-    }
-    expect(seen.map(({ id }) => id)).toEqual([...issued.slice(issued.indexOf(refreshed.answerCursor) + 1), older.id])
-    await expect(coordinator.briefAnswers(peer, grant.unit)).rejects.toThrow("no live brief")
-    await expect(coordinator.briefAnswers({ ...holder, token: "other-worker" }, grant.unit)).rejects.toThrow("no live brief")
-    await expect(coordinator.briefAnswers(holder, grant.unit, privateItem.id)).rejects.toThrow("does not belong to this brief")
-  } finally {
-    await coordinator.close()
-  }
-})
-
-test("project-start approval commits the analysis and leaves round establishment to the standing path", async () => {
-  const dir = project()
-  write(dir, CONFIG_FILE, JSON.stringify({ subtask: "off", phases: "mt" }))
-  commitFixture(dir)
-  const document = "docs/analysis.md"
-  write(dir, document, [
-    "# Project analysis", "", "## Analysis", "", "Two modules, one risk area.", "",
-    "## Goals", "", "Port the core.", "", "## Project brief", "", "A faithful port.", "", "## Roadmap", "", "- R-01 mt — port the core", "",
-  ].join("\n"))
-  const coordinator = await openExecutorCoordinator(dir)
-  try {
-    const offer = await coordinator.claimGate(releaser)
-    if (offer.kind !== "human") throw new Error(JSON.stringify(offer))
-    expect(offer).toMatchObject({ gate: "project-start", document })
-    expect(await coordinator.answerGate(releaser, offer.id, "approve")).toMatchObject({ kind: "wait" })
-    expect(git(dir, "show", "--format=", "--name-only", "HEAD").trim()).toBe(document)
-    expect(git(dir, "show", `HEAD:${document}`)).toContain("Clarified: yes")
-    expect(git(dir, "ls-tree", "HEAD", "docs/R-01")).toBe("")
-  } finally {
-    await coordinator.close()
-  }
-})
 
 function parkProject() {
   const dir = project()

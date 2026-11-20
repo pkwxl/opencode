@@ -1,7 +1,9 @@
-export const executorRoutes = ["ready", "claim", "brief", "report", "heartbeat", "release", "question", "answer"] as const
+// The executor routes (0282: the ask channel is gone — `question` and
+// `answer` are tombstoned in docs/protocol.md; the person's gates are
+// document-derived, their acts document writes and deterministic ops).
+export const executorRoutes = ["ready", "claim", "brief", "report", "heartbeat", "release"] as const
 export type ExecutorRoute = (typeof executorRoutes)[number]
-export type PersonDelegation = "unrestricted" | readonly ("questions" | "releases")[]
-export type StepRequest = { v: number; type: "step-request"; id: string; route: ExecutorRoute; token: string; delegation?: PersonDelegation; body: unknown }
+export type StepRequest = { v: number; type: "step-request"; id: string; route: ExecutorRoute; token: string; body: unknown }
 export type StepDone = { v: number; type: "step-done"; id: string; status: 200 | 400 | 500; body: Record<string, unknown> }
 
 
@@ -166,11 +168,7 @@ export function parseFrame(raw: string): ParsedFrame {
       const token = str("token")
       const route = parsed.route as ExecutorRoute
       if (!id || !token || !executorRoutes.includes(route) || !isRecord(parsed.body)) return bad("invalid step-request frame")
-      const delegation = parsed.delegation
-      if (delegation !== undefined && delegation !== "unrestricted" &&
-          (!Array.isArray(delegation) || !delegation.length || delegation.length > 2 ||
-           !delegation.every((grant) => grant === "questions" || grant === "releases"))) return bad("invalid person delegation")
-      return { ok: true, frame: { v: PROTOCOL_VERSION, type, id, token, route, body: parsed.body, ...(delegation !== undefined && { delegation }) } }
+      return { ok: true, frame: { v: PROTOCOL_VERSION, type, id, token, route, body: parsed.body } }
     }
     case "step-done": {
       const id = str("id")

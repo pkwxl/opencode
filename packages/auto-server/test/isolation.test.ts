@@ -10,7 +10,6 @@
 // test/import-direction.test.ts is the pattern, untouched); this suite makes
 // the line an assertion — a planted forbidden dependency or import fails it.
 //
-// Since P4a the line covers the Web client's sources too (web/): the browser
 // bundle is part of this package's shipped surface, and the task's own scope
 // holds the isolation line "for every file" — the client is plain TypeScript
 // over web standards (DOM, fetch, WebSocket) whose only imports are its
@@ -57,7 +56,7 @@ function scanImports(): ImportFinding[] {
       else if (/\.tsx?$/.test(name)) files.push(p)
     }
   }
-  for (const dir of ["src", "script", "web"]) walk(join(PACKAGE_ROOT, dir))
+  for (const dir of ["src", "script"]) walk(join(PACKAGE_ROOT, dir))
   const specs: ImportFinding[] = []
   for (const file of files) {
     const text = readFileSync(file, "utf8")

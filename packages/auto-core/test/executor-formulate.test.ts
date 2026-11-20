@@ -260,13 +260,12 @@ test("the fence: the unit's own input todo and every never-set path are refused,
     // The out-of-scope detail escalates (0272 composed): the never-set
     // cause raises the question, the ladder named in the detail.
     expect(blocked.detail).toContain("Resolve out-of-scope edits before replaying: docs/T-004/todo.md.")
-    expect(blocked.detail).toContain("The cause is outside this lease's permitted writes; question ")
+    expect(blocked.detail).toContain("The cause is outside this lease's permitted writes — a person must inspect the state")
     expect(blocked.detail).toContain("retrying cannot fix it")
-    // The pending listing carries the raised item (0271's read surface).
-    const person = { token: "person", channel: "review", delegation: "unrestricted" as const }
-    const menu = await coordinator.ready(person, person)
-    expect(menu.pending).toHaveLength(1)
-    expect(menu.pending[0]).toMatchObject({ kind: "question" })
+    // The ask channel is gone (0282): no question item is raised — the
+    // plain blocked answer is the whole surface, the menu's pending list
+    // empty (the gates are document-derived and none awaits here).
+    expect((await coordinator.ready({ token: "reader", channel: "menu" })).pending).toEqual([])
   } finally {
     await coordinator.close()
   }

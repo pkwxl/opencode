@@ -25,18 +25,20 @@ import { homedir } from "node:os"
 import { basename, isAbsolute, join, resolve } from "node:path"
 import { acquireRunLock } from "@opencode-ai/auto-core/lock"
 
-// The token scopes, the authorization tiers of the assessment's §8 Q6:
+// The token scopes, the authorization tiers of the assessment's §8 Q6 as
+// reduced by plans/0282 (the ask channel's demolition: `answer`, `person`,
+// `person-questions`, `person-releases` tombstoned — the spec's tombstone
+// section is the compatibility record):
 //   read    status, logs, events (and the SSE feeds of P1e)
-//   control run control (spawn, kill), close, task-add, plan — the surfaces
-//           that spend tokens and write git through a run
+//   control run control (kill), close, task-add, plan, transfer, clarify —
+//           the deterministic operations that write git
 //   config  init/amend/fix/reset (P1d's routes)
-//   answer  the pending-question queue (P3c)
 //   probe   the model probe (POST /projects/<project>/models, P4b) — its
 //           own opt-in scope, DISABLED BY DEFAULT: carried by no default
 //           token set (it burns tokens by starting agents; beside the scope
 //           the route takes an explicit confirm field and the daemon's
 //           per-daemon rate window)
-export const SCOPES = ["read", "control", "config", "answer", "probe", "executor", "projects", "person", "person-questions", "person-releases"] as const
+export const SCOPES = ["read", "control", "config", "probe", "executor", "projects"] as const
 export type Scope = (typeof SCOPES)[number]
 
 export type RegisteredProject = { name: string; directory: string; registered: string; creation?: { dev: string; ino: string } }
@@ -211,7 +213,7 @@ export class DaemonStore {
   // an operator names it.
   issueToken(rawScopes: string, name?: string): { token: string; stored: StoredToken } {
     const wanted = [...new Set(rawScopes.split(",").map((part) => part.trim()).filter(Boolean))]
-    if (!wanted.length) throw new StoreError("a token needs at least one scope (read, control, config, answer, probe)")
+    if (!wanted.length) throw new StoreError(`a token needs at least one scope (${SCOPES.join(", ")})`)
     for (const scope of wanted) {
       if (!(SCOPES as readonly string[]).includes(scope)) {
         throw new StoreError(`unknown scope "${scope}" (the schema: ${SCOPES.join(", ")})`)

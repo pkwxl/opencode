@@ -71,6 +71,8 @@ import { acquireRunLock, liveRunLock, lockLines, type LockState } from "@opencod
 import { loadModes } from "@opencode-ai/auto-core/mode"
 import { describeModels, formatModels } from "@opencode-ai/auto-core/models-describe"
 import { planPrelude } from "@opencode-ai/auto-core/plan"
+import { transferDeterministic } from "@opencode-ai/auto-core/transfer"
+import { clarifyGate } from "@opencode-ai/auto-core/clarify"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
 import {
   currentRound,
@@ -99,19 +101,6 @@ export type OpRequest = {
   // the query.
   body: Record<string, unknown> | undefined
   query: URLSearchParams
-  // The daemon's planning-run spawner (P3c, the plan unlock): the plan
-  // operation's loop route calls it to start the agent planning session as
-  // a run — the same startRun POST /runs uses, carrying the plan payload
-  // (stopBefore === "execute" through the worker entry, humanQuestions
-  // armed, questions over the interactive transport). Only the daemon
-  // provides it; an operation that never spawns ignores it.
-  spawnPlanningRun: (plan: PlanPayload) => OpOutcome
-  // The daemon's transfer-run spawner (the plans/0101 absorb): the transfer
-  // operation calls it to start the advance as a run — the same startRun,
-  // carrying the transfer payload (runTransfer through the worker entry,
-  // the loop under stopBefore "formulate" inside it). Only the daemon
-  // provides it; an operation that never spawns ignores it.
-  spawnTransferRun: (transfer: TransferPayload) => OpOutcome
   // The daemon-wide model-probe rate window (P4b, assessment §8 Q7): claim
   // is called by the probe operation once a request passed its scope and
   // confirmation checks and a registry exists to probe — it records the
@@ -961,33 +950,34 @@ async function runPlan(request: OpRequest): Promise<OpOutcome> {
     lock.release()
   }
   if (prelude.type === "stop") return preludeOutcome(prelude.lines, prelude.code)
-  // { type: "loop" } is the agent-planning route: the planning session runs
-  // as a spawned run — humanQuestions armed, its questions over the
-  // interactive transport and the persistent queue, the run's own exit
-  // vocabulary mapping its outcome (0 planned, 1 usage/environment, 2
-  // blocked for a human, 3 the graceful /exit pause).
-  return request.spawnPlanningRun({ ...(typeof input === "string" && input.trim() ? { input } : {}), append: append === true })
+  // { type: "loop" } is the planning route — the planning SESSION is no
+  // longer this daemon's to spawn (plans/0282: the protocol does nothing
+  // via push, ever again). The session rides the executor protocol as the
+  // formulate grant (the synthesis enhancement as the synthesize grant,
+  // plans/0281); the honest answer names the claim surface, the input
+  // having been persisted by the prelude exactly as the CLI's was.
+  return refused(2, [
+    "⏸ the planning session is pull-only work: claim it over the executor protocol",
+    `  POST /projects/${encodeURIComponent(project.name)}/executor/claim with a worker token (kind "synthesize" first when a charter declares one, then kind "formulate")`,
+    "the planning input the request carried is persisted to the phase's plan-input.md (or refused by the prelude above); the formulation session claims the unit and reads it",
+  ])
 }
 
-// transfer (auto-core plans/0101 D2): the single advance command — the
-// person-bracketed boundaries, one advance per invocation, resolved by
-// state (the project start, the phase boundary, the round close/open). The
-// API's shape follows the plan unlock's precedent with one difference the
-// core's own design forces: planPrelude is a prelude seam (the no-agent
-// routes return as stops; only the loop routes need the session), while
-// runTransfer has no such split — the whole state resolution, m mode's
-// refusal included, lives inside the core's one entry. Re-implementing the
-// split here would be the constitution-erosion risk this file's header
-// names, so the WHOLE advance runs as a spawned worker run carrying the
-// transfer payload (src/worker.ts: the worker calls runTransfer — one
-// process per advance, the topology's own unit), and the run's own exit
-// vocabulary maps the outcome (0 a review, round-open or roadmap-exhausted
-// stop; 2 a gate held or nothing to advance; 1 usage/state, m mode's own
-// refusal among them). The op itself validates the request shape only; it
-// takes no lock (runTransfer takes its own inside the worker, "transfer").
-// `resynthesize` is the CLI's transfer-only flag (plans/0101 D3): bypass
-// the digest-keep of a standing plan task so the reconstruct lands the new
-// todo for review.
+// transfer (auto-core plans/0101 D2; deterministic since plans/0282): the
+// single advance command — the person-bracketed boundaries, one advance per
+// invocation, resolved by state (the project start, the phase boundary, the
+// round close/open), now as an in-process deterministic apply: the session
+// halves the push advance ran inside runAll (the handover distillation, the
+// construction's synthesis, the charter verifier) are the executor
+// protocol's grants (distill, synthesize — 0281 — and the verify share),
+// and transferDeterministic performs the apply halves alone — git and
+// document writes, zero agent processes (the pull-only posture 0279
+// rules). The exit vocabulary is the advance's own (0 a review, round-open
+// or roadmap-exhausted stop; 2 a gate held, pending work, a missing
+// distillation, or nothing to advance; 1 usage/state, m mode's refusal
+// among them). `resynthesize` is the CLI's transfer-only flag (plans/0101
+// D3): bypass the digest-keep of a standing plan task so the reconstruct
+// lands the new todo for review.
 async function runTransferOp(request: OpRequest): Promise<OpOutcome> {
   const { project, body } = request
   for (const key of Object.keys(body ?? {})) {
@@ -995,7 +985,7 @@ async function runTransferOp(request: OpRequest): Promise<OpOutcome> {
     return bad(`unknown transfer field "${key}" (the transfer request takes "resynthesize" — true|false, bypassing the digest-keep of a standing plan task so the reconstruct lands the new todo for review; every other surface is state-resolved, never requested)`)
   }
   if ("resynthesize" in (body ?? {}) && typeof body!.resynthesize !== "boolean") {
-    return bad("resynthesize takes true|false (bypass the digest-keep of a standing plan task: the synthesis pipeline re-voices the sources and the reconstruct lands the new todo for review)")
+    return bad("resynthesize takes true|false (bypass the digest-keep of a standing plan task: the reconstruct lands the new todo for review)")
   }
   const dir = project.directory
   const legacy = await legacyLayoutProblem(dir)
@@ -1004,9 +994,55 @@ async function runTransferOp(request: OpRequest): Promise<OpOutcome> {
   if (unconfigured) return unconfigured
   const loaded = await strictConfig(project)
   if (!("config" in loaded)) return loaded
-  return request.spawnTransferRun({ ...(body?.resynthesize === true ? { resynthesize: true } : {}) })
+  const { config } = loaded
+  const lock = acquireRunLock(dir, "transfer")
+  if (!lock.ok) {
+    return refused(1, lockLines(dir, lock.holder))
+  }
+  let code: number
+  try {
+    code = await transferDeterministic(dir, {
+      phases: config.phases,
+      build: config.build,
+      scanExempt: config.scanExempt,
+      isolate: config.isolate,
+      autoNumber: config.autoNumber,
+      testByDriver: config.testByDriver,
+      acceptanceGate: config.acceptanceGate,
+      ...(body?.resynthesize === true ? { resynthesize: true } : {}),
+    })
+  } finally {
+    lock.release()
+  }
+  // The advance's own lines stream to the daemon's console (the core's log
+  // seam); the op answers the exit vocabulary's meaning — the code is the
+  // advance's own (0 a review/round-open/exhausted stop; 2 a gate, pending
+  // work, a missing distillation or a round-close check held; 1 a state
+  // error, m mode's refusal among them).
+  return code === 0
+    ? ok([`✓ the advance completed its apply and stopped (exit 0): the review, round-open or roadmap-exhausted stop`])
+    : refused(code === 2 ? 2 : 1, [`⏸ the advance held (exit ${code}): a gate, pending work, a missing distillation, a round-close check, or a state error — the daemon's console carries the advance's own lines`])
 }
 
+// clarify (the person's release act, deterministic since plans/0282): the
+// 0116 command's own core — one command writing the whole-line
+// "Clarified: yes" into the one document a gate is awaiting and committing
+// it. The ask channel is gone; this op and the document edit itself are the
+// person's release surfaces. No request fields (the state resolves the
+// target); the outcome is the command's own (0 released, 1 error, 2 held).
+async function runClarify(request: OpRequest): Promise<OpOutcome> {
+  const { project } = request
+  const dir = project.directory
+  const legacy = await legacyLayoutProblem(dir)
+  if (legacy) return refused(1, [legacy])
+  const unconfigured = await requireConfig(project, "clarify")
+  if (unconfigured) return unconfigured
+  const loaded = await strictConfig(project)
+  if (!("config" in loaded)) return loaded
+  const result = await clarifyGate(dir, { phases: loaded.config.phases })
+  const code = result.type === "released" ? 0 : result.type === "held" ? 2 : 1
+  return code === 0 ? ok(result.lines) : refused(code, result.lines)
+}
 // models (shell-contract §9): the registry's effective table, read-only —
 // describeModels writes nothing and takes no lock, so it runs beside a live
 // run. The probe (POST, the CLI's --probe) is its own operation below.
@@ -1144,6 +1180,7 @@ export const OP_DEFINITIONS: readonly OpDefinition[] = [
   { method: "POST", segment: "tasks", what: "the task-add operation", scope: "control", write: () => true, run: runTaskAdd },
   { method: "POST", segment: "plan", what: "the plan operation", scope: "control", write: () => true, run: runPlan },
   { method: "POST", segment: "transfer", what: "the transfer operation", scope: "control", write: () => true, run: runTransferOp },
+  { method: "POST", segment: "clarify", what: "the clarify operation", scope: "control", write: () => true, run: runClarify },
   { method: "GET", segment: "models", what: "the models operation", scope: "read", write: () => false, run: runModels },
   { method: "POST", segment: "models", what: "the model probe", scope: "probe", write: () => false, run: runProbe },
 ]

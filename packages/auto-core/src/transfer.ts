@@ -53,9 +53,10 @@ import { closeAuditStopLines, ensureCloseAudit, updateAssuranceBaselines } from 
 import { releasedRoundBriefProposal, roundBriefNearMissNote } from "./analysis"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
+import { constructPhaseFloor } from "./executor-steps"
 import { changedFiles, commitTree } from "./git"
 import { runAll } from "./loop"
-import { logGateStop } from "./loop-phase"
+import { installApprovedBrief, logGateStop } from "./loop-phase"
 import type { RunAllOpts } from "./loop-preflight"
 import { log } from "./log"
 import { acquireRunLock, lockLines } from "./lock"
@@ -70,6 +71,7 @@ import {
   phaseFlowBlockedLine,
   phaseGates,
   phaseGateProblems,
+  phaseHandoverDoc,
   phaseIndexPath,
   phaseKey,
   phaseLabel,
@@ -96,10 +98,12 @@ import {
   truncateGoal,
 } from "./plan"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
+import { closeStep } from "./resume"
 import { shellProfile } from "./shell"
 import { autoSwitches } from "./switches"
 import { loadPlan, type Plan } from "./tasks"
-import { wallPrecheckFindings } from "./wall"
+import { validHandover } from "./document/roles"
+import { wallBoundary, wallPrecheckFindings, type WallCtx } from "./wall"
 
 // The shell's entry: the run lock ("transfer", re-entered by the runAll the
 // advance delegates to), then the state-resolved advance.
@@ -116,7 +120,29 @@ export async function runTransfer(directory: string, opts: RunAllOpts): Promise<
   }
 }
 
-async function transferAdvance(directory: string, opts: RunAllOpts): Promise<number> {
+// The deterministic advance (plans/0282, the pull-only world's transfer op):
+// the same state resolution under the same lock, the advance's one session
+// dispatch replaced by the apply — git and document writes only. The session
+// work it declines rides the executor protocol as grants (the distillation
+// as distill, the construction's re-voicing as synthesize, the planning
+// session as formulate, the phase's tasks as execute/verify/fix); the person
+// brackets every boundary exactly as before, their acts the document writes
+// and this operation. Zero agent processes are spawned — the daemon-side
+// posture 0279 rules.
+export async function transferDeterministic(directory: string, opts: RunAllOpts): Promise<number> {
+  const lock = acquireRunLock(directory, "transfer")
+  if (!lock.ok) {
+    for (const line of lockLines(directory, lock.holder)) log(line)
+    return 1
+  }
+  try {
+    return await transferAdvance(directory, opts, true)
+  } finally {
+    lock.release()
+  }
+}
+
+async function transferAdvance(directory: string, opts: RunAllOpts, deterministic = false): Promise<number> {
   const { bin } = shellProfile()
   // m mode keeps today's shape entirely (plans/0101 D8): the single implicit
   // phase, the formulation riding run, the planning input the person's lever
@@ -175,9 +201,9 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
   // unchanged floor) and stops at the review seam. The predicate is the
   // shared awaiting one (plans/0101 D4): the todo wherever it sits in the
   // index, beside hand-added tasks too.
-  if (route.type === "plan") return await advanceToReview(directory, round, opts)
+  if (route.type === "plan") return await (deterministic ? advanceDeterministic : advanceToReview)(directory, round, opts)
   if (route.type === "execute") {
-    if (awaitingFormulation(route.plan.tasks, route.phase)) return await advanceToReview(directory, round, opts)
+    if (awaitingFormulation(route.plan.tasks, route.phase)) return await (deterministic ? advanceDeterministic : advanceToReview)(directory, round, opts)
     // The mid-phase arm re-derives first (plans/0206 D3, amending 0101 D6's
     // deferral): the tail reshape's one apply is the advance's own committed
     // rewrite wherever the state stops it, so the refusal plan and run name
@@ -203,7 +229,7 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
       return 2
     }
   }
-  return await advanceToReview(directory, round, opts)
+  return await (deterministic ? advanceDeterministic : advanceToReview)(directory, round, opts)
 }
 
 // The advance proper (shapes 2/3's sessions and every construction): the
@@ -220,6 +246,177 @@ async function advanceToReview(directory: string, round: number, opts: RunAllOpt
   if (stop !== undefined) return stop
   await applyReleasedBrief(directory, round)
   return await runAll(directory, { ...opts, stopBefore: "formulate" })
+}
+
+// The deterministic advance's boundary walk (plans/0282): the same prefix
+// as advanceToReview — the tail re-derivation, the released brief's install
+// — then the boundary resolved from the documents alone, every session the
+// push advance ran replaced by its protocol grant or its stop:
+//   - pending tasks: the phase's work is the executor protocol's (execute
+//     grants) — the honest stop naming the claim surface;
+//   - an invalid or missing handover: the distillation is the distill
+//     grant's — the stop names it (the landed share composing with this
+//     walk's apply on the next invocation, 0277's own shape C.2);
+//   - a valid handover: the apply — the resume point closed, the gates and
+//     the wall read-only first, the survey's approved brief installed, the
+//     completion rename, the transition commit — then the walk continues to
+//     the next boundary (the next phase's floor constructed and stopped for
+//     review, or the round close at the complete route).
+// The construction's synthesis enhancement and the charter verifier are
+// deliberately not run (the synthesize grant and the executor's verify
+// share own them, 0281's rulings); the floor lands through the standing
+// construction path and the stop is the person's review exactly as the
+// push advance's was.
+async function advanceDeterministic(directory: string, round: number, opts: RunAllOpts): Promise<number> {
+  const { bin } = shellProfile()
+  const stop = await rederiveTail(directory, round, opts)
+  if (stop !== undefined) return stop
+  await applyReleasedBrief(directory, round)
+  for (;;) {
+    const route = await routePhase(directory, { loadPlan, bin, phases: opts.phases ?? "m" })
+    if (route.type === "blocked") {
+      log(phaseFlowBlockedLine(route.reason))
+      return 1
+    }
+    if (route.type === "complete") return await roundCloseDeterministic(directory, round, opts)
+    if (route.type === "plan") {
+      // An empty index (or the open-round shape's fresh index): the floor
+      // construction is this invocation's product — construct and stop for
+      // review, the protocol's synthesize/formulate grants the follow-ups.
+      return await constructAndStopDeterministic(directory, route.phase)
+    }
+    if (awaitingFormulation(route.plan.tasks, route.phase)) {
+      // The standing formulation unit: its todo is the review object (a
+      // re-construct composes the current floor, idempotent rewrite-on-diff
+      // under the digest-keep), the dispatch the protocol's formulate
+      // grant's.
+      return await constructAndStopDeterministic(directory, route.phase)
+    }
+    if (route.plan.tasks.some((task) => task.status !== "done")) {
+      log(
+        `⏸ the phase still holds pending work — its tasks are claimable over the executor protocol (POST /projects/<project>/executor/claim); ` +
+          `the boundary advances on the next ${bin}-server transfer once the phase completes`,
+      )
+      return 2
+    }
+    // The completion boundary: the human gate first (no tokens, the person's
+    // document act), then the handover, then the apply.
+    const gates = phaseGates(route.phase, opts.acceptanceGate)
+    if (gates.includes("human")) {
+      const problems = await phaseGateProblems(directory, route.phase, ["human"])
+      if (problems.length) {
+        await logGateStop(directory, route.phase, problems, undefined)
+        return 2
+      }
+    }
+    const handover = phaseHandoverDoc(route.phase)
+    const handoverText = await Bun.file(join(directory, handover)).text().catch(() => "")
+    if (!validHandover(handoverText)) {
+      log(
+        `⏸ the handover distillation ${handover} is missing or incomplete — claimable distill work over the executor protocol ` +
+          `(claim with kind \"distill\"); the advance completes on the next transfer once it lands`,
+      )
+      return 2
+    }
+    const applied = await applyBoundaryDeterministic(directory, opts, route.phase, gates)
+    if (typeof applied === "number") return applied
+    // "continue": the phase completed and committed — the walk re-routes.
+  }
+}
+
+// The boundary's apply (plans/0282): the loop's own deterministic tail —
+// the resume point closed, the gates and the wall read-only, the approved
+// brief installed, the completion rename, the transition commit. The loop's
+// session arms (the regression repair append, the verdict repair round) are
+// the stops the pull-only world rules: a held gate names the receipts and
+// the person's ways, never an appended session. Returns "continue" when the
+// phase completed and the walk should re-route.
+async function applyBoundaryDeterministic(
+  directory: string,
+  opts: RunAllOpts,
+  phase: PhaseUnit,
+  gates: ReturnType<typeof phaseGates>,
+): Promise<number | "continue"> {
+  const state = await readPhases(directory)
+  const phases = state?.phases ?? []
+  const next = phases[phases.findIndex((unit) => unit.id === phase.id) + 1]
+  const target = next ? phaseTitle(next) : "flow complete"
+  await closeStep(directory, "phase-handover", phaseKey(phase).id)
+  const gateProblems = await phaseGateProblems(directory, phase, gates)
+  if (gateProblems.length === 0) {
+    const wallCtx: WallCtx = { directory, git: { commitTree }, opts: { stopBefore: "formulate" } }
+    const wallLines = await wallBoundary(wallCtx, phase)
+    if (wallLines.length) {
+      for (const line of wallLines) log(line)
+      return 2
+    }
+  }
+  if (gates.includes("human")) await installApprovedBrief({ directory, git: { commitTree } }, phase)
+  const gated = await completePhase(directory, phase, gates)
+  if (gated.length) {
+    await logGateStop(directory, phase, gated, undefined)
+    return 2
+  }
+  const settled = await commitTree(directory, { id: "PLAN", title: `phase handover (${phaseTitle(phase)})` }, {
+    stage: "phase-transition",
+    subject: `PLAN transition ${phaseTitle(phase)} → ${target}`,
+  })
+  if (!settled.ok) {
+    log(
+      `⏸ phase handover commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
+        `The completion changes are kept in the worktree (the phase is already marked done); commit manually and re-run`,
+    )
+    return 2
+  }
+  return "continue"
+}
+
+// The construction-and-review stop (plans/0282): the floor todo constructed
+// through the standing path, the stop the person's review — the push
+// advance's own review-stop shape, the synthesis and the planning session
+// named as the protocol grants they now are.
+async function constructAndStopDeterministic(directory: string, phase: PhaseUnit): Promise<number> {
+  const landed = await constructPhaseFloor(directory, phase)
+  if (landed.type === "dirty" || landed.type === "unreadable") {
+    log(`⏸ the repository state cannot host the formulation construction: ${landed.files.join(", ")}`)
+    return 2
+  }
+  if (landed.type === "failed") {
+    log(`⏸ ${landed.question}`)
+    return 2
+  }
+  log(`✓ formulation task ${landed.id} ${landed.type === "constructed" ? "constructed" : "current"}: its todo is the review object (docs/${landed.id}/todo.md — driver-owned, fix its inputs, never the todo)`)
+  log(
+    "next: the construction's re-voicing is claimable synthesize work over the executor protocol (claim with kind \"synthesize\") when a charter " +
+      "declares one, the planning session claimable formulate work (kind \"formulate\") — or fix the inputs and re-run the transfer to reconstruct",
+  )
+  return 0
+}
+
+// The round close (plans/0282): the loop's complete-route stopBefore-formulate
+// arm — the close-audit construction, the round-close checks gating the stop,
+// the baselines committed — the deterministic whole of it.
+async function roundCloseDeterministic(directory: string, round: number, opts: RunAllOpts): Promise<number> {
+  const { bin } = shellProfile()
+  const audit = await ensureCloseAudit(directory, round)
+  for (const line of closeAuditStopLines(audit)) log(line)
+  const close = await roundCloseProblems(directory, round, { build: opts.build, scanExempt: opts.scanExempt })
+  if (audit.type === "constructed") {
+    const gated = await roundCloseProblems(directory, round, { build: opts.build, scanExempt: opts.scanExempt })
+    if (gated.problems.length) {
+      log(`⏸ round ${roundDirName(round)} does not pass its round-close checks, so it cannot close yet — fix them, commit, then re-run the transfer`)
+      for (const line of roundCloseLines(gated, "transfer")) log(line)
+      return 2
+    }
+  } else if (close.problems.length) {
+    log(`⏸ round ${roundDirName(round)} does not pass its round-close checks — fix them, commit, then re-run the transfer`)
+    for (const line of roundCloseLines(close, "transfer")) log(line)
+    return 2
+  }
+  for (const line of await updateAssuranceBaselines(directory, round)) log(line)
+  for (const line of roundCloseLines(close)) log(line)
+  log(`next: review round ${roundDirName(round)}'s close (its round.md \`## Close\` listing), then open the next round with the transfer op`)
+  return 0
 }
 
 // The released round brief, installed ahead of the construction (plans/0115

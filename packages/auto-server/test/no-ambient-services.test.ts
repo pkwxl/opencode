@@ -121,7 +121,7 @@ describe("the specifier-only boundary (auto-core plans/0196 D3)", () => {
     const files = pkgFiles().filter((f) => f !== SELF)
     // The scan reads real sources: both planes are present, never a vacuous
     // pass (measured at 0196: no escape exists — this guard holds it so).
-    expect(files).toContain("src/worker-interactive.ts")
+    expect(files).toContain("src/worker.ts")
     expect(files.some((f) => f.startsWith("test/"))).toBe(true)
     const hits = escapeImports(files.map((file) => ({ file, text: readFileSync(join(pkgRoot, file), "utf8") })), pkgRoot)
     expect(hits.join("\n")).toBe("")
@@ -130,7 +130,7 @@ describe("the specifier-only boundary (auto-core plans/0196 D3)", () => {
   test("the scan bites: every relative-escape shape flagged, in-package and bare paths not", () => {
     const pkgRoot = "/pkg"
     // The reach-around into the core — static, from the transport module…
-    expect(escapeImports([{ file: "src/worker-interactive.ts", text: `import { unitViolations } from "../../auto-core/src/git"` }], pkgRoot)).toEqual(["src/worker-interactive.ts: ../../auto-core/src/git"])
+    expect(escapeImports([{ file: "src/worker.ts", text: `import { unitViolations } from "../../auto-core/src/git"` }], pkgRoot)).toEqual(["src/worker.ts: ../../auto-core/src/git"])
     // …and dynamic, from a test (the two shapes a map cannot see)…
     expect(escapeImports([{ file: "test/ws-protocol.test.ts", text: `const core = await import("../../auto-core/src/services")` }], pkgRoot)).toEqual(["test/ws-protocol.test.ts: ../../auto-core/src/services"])
     // …while relative paths staying inside the package are legitimate…

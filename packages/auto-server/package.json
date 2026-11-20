@@ -5,15 +5,18 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "bin": { "opencode-auto-server": "./src/index.ts" },
+  "bin": {
+    "opencode-auto-server": "./src/index.ts"
+  },
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "bun ./script/build.ts",
-    "build:web": "bun ./script/build-web.ts",
     "typecheck": "tsgo --noEmit",
     "test": "bun test"
   },
-  "dependencies": { "@opencode-ai/auto-core": "workspace:*" },
+  "dependencies": {
+    "@opencode-ai/auto-core": "workspace:*"
+  },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",

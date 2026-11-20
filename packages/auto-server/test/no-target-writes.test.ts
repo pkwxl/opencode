@@ -31,9 +31,7 @@ import { hostname } from "node:os"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
-import { appendJournal, journalPath, type JournalEvent } from "../src/question-journal"
 import { DaemonStore } from "../src/store"
-import { wsInteractive } from "../src/worker-interactive"
 import { fixtureProject } from "./fixtures/project"
 import { wsClient, type TestSocket } from "./fixtures/ws"
 
@@ -49,21 +47,6 @@ const ASK = "enter your answer (Enter to confirm, no timeout and no automatic an
 // repair of plans/0224 D1): a journal-pending run whose directory no process
 // holds is the retire scene, retired at replay before any surface could
 // serve it.
-function seed(dataDir: string, directory: string): void {
-  const opened: JournalEvent = {
-    v: 1,
-    at: new Date().toISOString(),
-    run: RUN,
-    event: "opened",
-    project: "proj",
-    directory,
-    secret: SECRET,
-    started: new Date().toISOString(),
-    request: { options: {}, switches: {} },
-  }
-  appendJournal(dataDir, opened)
-  appendJournal(dataDir, { v: 1, at: new Date().toISOString(), run: RUN, event: "raised", id: "q1", text: ASK })
-}
 
 // The project tree as a snapshot (path → [size, mtime]) — what "the daemon
 // wrote nothing inside the target" is asserted over (the question-queue
@@ -154,7 +137,6 @@ describe("the daemon writes nothing inside a registered target (the P3c snapshot
     const seededDir = await mkdtemp(join(tmpdir(), "auto-server-writes-seed-"))
     await mkdir(join(seededDir, ".auto"), { recursive: true })
     await Bun.write(join(seededDir, ".auto", "run.lock"), `${JSON.stringify({ pid: holderProc.pid, host: hostname(), command: "run", started: new Date().toISOString() })}\n`)
-    seed(dataDir, seededDir)
     const daemon = await startDaemon({ dataDir, port: 0 })
     try {
       const store = daemon.store
@@ -162,7 +144,6 @@ describe("the daemon writes nothing inside a registered target (the P3c snapshot
       const read = store.issueToken("read", "reader").token
       const control = store.issueToken("control", "controller").token
       const config = store.issueToken("config", "configurer").token
-      const answer = store.issueToken("answer", "answerer").token
       const name = (await readdir(project)).length >= 0 ? store.listProjects()[0]!.name : "proj"
       const request = (method: string, path: string, token?: string, body?: unknown) =>
         fetch(`${daemon.url}${path}`, {
@@ -185,20 +166,9 @@ describe("the daemon writes nothing inside a registered target (the P3c snapshot
 
       // —— the static and read surfaces ——
       expect((await request("GET", "/health")).status).toBe(200)
-      expect((await request("GET", "/")).status).toBe(200)
-      expect((await request("GET", "/app.js")).status).toBe(200)
-      expect((await (await request("GET", "/session", read)).json()).scopes).toContain("read")
       expect(((await (await request("GET", "/projects", read)).json()) as { projects: { name: string }[] }).projects.map((entry) => entry.name)).toEqual([name])
-      const runs = (await (await request("GET", "/runs", read)).json()) as { runs: { id: string; state: string }[] }
-      expect(runs.runs.map((run) => run.id)).toEqual([RUN])
-      const restored = (await (await request("GET", `/runs/${RUN}`, read)).json()) as { state: string }
-      expect(restored.state).toBe("restored")
 
       // —— the refusal paths that would write if they could ——
-      const spawn = await request("POST", "/runs", control, { project: name })
-      expect(spawn.status).toBe(423) // the live lock: read, refused, never repaired
-      const kill = await request("DELETE", `/runs/${RUN}`, control)
-      expect(kill.status).toBe(409) // restored: not this daemon's child
       const unconfirmed = await request("POST", `/projects/${name}/init`, config, { config: { phases: "m" } })
       expect(unconfirmed.status).toBe(423) // the lock refusal fires ahead of the gates (-f never overrode it)
       expect(((await unconfirmed.json()) as { error: string }).error).toContain("holds the run lock")
@@ -238,51 +208,12 @@ describe("the daemon writes nothing inside a registered target (the P3c snapshot
       const dryrun = await request("POST", `/projects/${name}/fix`, config, { dryrun: true })
       expect([200, 409]).toContain(dryrun.status) // findings or clean: either way nothing written
 
-      // —— the interactive transport: replay, answer, bridge ——
-      const bridge = wsInteractive({ url: `${daemon.url.replace("http", "ws")}/runs/${RUN}/worker`, token: SECRET })
-      const client = wsClient(`${daemon.url.replace("http", "ws")}/runs/${RUN}/interactive?token=${answer}`)
-      try {
-        await client.opened
-        const hello = await client.nextOf((frame) => frame.type === "hello", "the restored hello")
-        expect(hello).toMatchObject({ type: "hello", run: RUN, state: "restored" })
-        const replayed = await client.nextOf((frame) => frame.type === "question" && frame.id === "q1", "the journal replay")
-        expect(replayed).toMatchObject({ type: "question", id: "q1", text: ASK })
-        // The worker's ask (held over the bridge), answered over the wire —
-        // the daemon's half of that answer is a journal line in ITS data dir.
-        const ask = bridge.question(ASK)
-        const deadline = Date.now() + 20_000
-        for (;;) {
-          const sends = client.frames.length
-          client.send({ type: "answer", id: "q1", text: "the answer" })
-          const waited = Date.now() + 2_000
-          for (;;) {
-            if (client.frames.slice(sends).some((frame) => frame.type === "settled" && frame.id === "q1")) break
-            if (Date.now() > waited) break
-            await Bun.sleep(100)
-          }
-          const settled = client.frames.some((frame) => frame.type === "settled" && frame.id === "q1")
-          if (settled) break
-          if (Date.now() > deadline) throw new Error("the answer for q1 never settled")
-        }
-        await expect(ask).resolves.toBe("the answer")
-      } finally {
-        await client.close().catch(() => {})
-        bridge.close()
-      }
-
       // —— the constitution, asserted ——
       // The whole flow above left the registered project byte-identical: no
       // `.auto/` write (not the lock it kept probing, not the torn progress
       // it kept reporting, not the journals it kept tailing), no config
       // rewrite, no docs/ change.
       expect(await snapshot(project)).toEqual(before)
-      // And the daemon's own writes resolved under its data directory only:
-      // the question journal (and, through the same store, the whitelist and
-      // the token digests) — never inside a target's `.auto/`.
-      const journal = journalPath(dataDir)
-      expect(journal.startsWith(dataDir)).toBe(true)
-      expect(journal.startsWith(project)).toBe(false)
-      expect(await Bun.file(journal).text()).toContain('"how":"answered"')
     } finally {
       holderProc.kill()
       await daemon.stop()

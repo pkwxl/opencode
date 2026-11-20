@@ -1,10 +1,9 @@
 // The executor share coordinator. The shell supplies the authenticated stable
 // token identity and channel. This surface is internal until the routes land.
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { auditDueRows } from "./close-audit"
-import { readClarificationProposal } from "./clarify"
 import { loadProjectConfig } from "./config"
 import { docShapeProblems } from "./doccheck"
 import { taskDoc, taskDocPaths } from "./docpaths"
@@ -42,39 +41,6 @@ export const EXECUTOR_PROTOCOL = 0.1
 
 export type ExecutorHolder = { token: string; channel: string }
 type Holder = ExecutorHolder
-export type ExecutorPerson = ExecutorHolder & { delegation: "unrestricted" | readonly ("questions" | "releases")[] }
-type Question = {
-  id: string
-  position?: number
-  asker: Holder
-  text: string
-  task?: string
-  answer?: { person: ExecutorPerson; decision: string; rationale?: string; order?: number }
-}
-type BriefAnswer = { id: string; question: string; decision: string; rationale?: string }
-type AnswerPage = { answers: BriefAnswer[]; next?: string }
-type Gate = {
-  id: string
-  position?: number
-  gate: "project-start" | "survey-release"
-  document: string
-  digest: string
-  superseded?: true
-  intent?: {
-    answer: NonNullable<Question["answer"]>
-    base: string
-    before: string
-    after: string
-    subject: string
-    tree?: string
-    commit?: string
-  }
-}
-type GateOffer = Pick<Gate, "id" | "gate" | "document"> & { kind: "human"; proposal: string; review: string[] }
-type GateStep = GateOffer | QuestionWait | BlockedReport
-type QuestionOffer = { kind: "question"; id: string; text: string; task?: string }
-type QuestionWait = { kind: "wait"; reason: "question" | "gate" | "not-ready"; detail: string }
-type PersonStep = QuestionOffer | QuestionWait
 type Execute = Extract<ExecutorPreview, { kind: "execute" }>
 // 0276 (0256 stage 2's first convergence kind): the formulate step — the
 // phase's planning session as claimable work. The claim address is the
@@ -179,19 +145,18 @@ type BudgetBlock = { kind: "blocked"; reason: "attemptsExhausted" | "fixBudget";
 // verification by a different token is still pending work); terminal for
 // the client, which reconciles against the commit and ends.
 type SettledStep = { kind: "settled"; unit: string; commit: string; detail: string }
-type DerivedStep = Exclude<ExecutorPreview, Execute | Formulate | Synthesize | Distill | Audit> | BlockedReport | LeaseWait | BudgetBlock | QuestionWait | SettledStep
+type DerivedStep = Exclude<ExecutorPreview, Execute | Formulate | Synthesize | Distill | Audit> | BlockedReport | LeaseWait | BudgetBlock | SettledStep
 type Decision = DerivedStep | (Candidate & { scope?: readonly string[]; worktree?: true })
 type Claim = DerivedStep | Grant
 type LeaseKey = { step: string; lease: string }
-// The pending person items on the read surface (0271, 0262-04's fix): kind
-// and id for every reader; the question's text (and task context) only for a
-  // channel questionAuthority admits; the gate item never text — its proposal
-  // is the offer route's own disclosure, release authority its gate. The `kind`
-  // vocabulary is frozen additive under the wire's `protocol` version (P13):
-  // `question` | `gate`, the ids exactly the ones the answer and gate routes use.
-type MenuPending =
-  | { kind: "question"; id: string; text?: string; task?: string }
-  | { kind: "gate"; id: string }
+// The pending person items on the read surface (0271, re-keyed by 0282 onto
+// the document-derived gates alone): the ask channel is gone — no question
+// rows, no answer or release arms — and the gate rows derive from the
+// admission block's own reading of the documents (P6: no store, no replay),
+// naming the gate and the document the person attends. The person's acts are
+// the document writes and the deterministic operations (the clarify op, the
+// transfer op), never a wire channel.
+type MenuPending = { kind: "gate"; gate: "project-start" | "survey-release"; document: string }
 type Menu = {
   claimable: { unit: string; title: string; kinds: [Grant["kind"]]; touches?: readonly string[] }[]
   leases: (LeaseKey & Pick<Grant, "kind" | "deadline" | "attempt">)[]
@@ -208,7 +173,7 @@ type Menu = {
   pending: MenuPending[]
 }
 type ScopedTask = { task: Task; worktree: boolean }
-type Checkpoint = "booked" | "committed" | "park-recorded" | "close-index-written" | "closed-files" | "closed-commit" | "gate-booked" | "gate-marked" | "gate-committed" |
+type Checkpoint = "booked" | "committed" | "park-recorded" | "close-index-written" | "closed-files" | "closed-commit" |
   "workspace-booked" | "workspace-created" | "landing-booked" | "lane-landed" | "nested-committed"
 // The lease clock (0260, discharging 0246 §C's deferral): the budget is
 // configured per project (config key executorLease, P16 — never hardcoded),
@@ -226,23 +191,7 @@ function leaseWindowMs(budget: number): number {
 }
 const MAX_ATTEMPTS = 3
 const MAX_RESPONSE_BYTES = 256 * 1024
-const ANSWER_PAGE_BYTES = 192 * 1024
 const STATE = join(".auto", "executor-progress.json")
-const GATE_STATE = join(".auto", "executor-gates.json")
-const PERSON_STATE = join(".auto", "executor-questions.json")
-
-function questionAuthority(person: ExecutorPerson): boolean {
-  return person.delegation === "unrestricted" || (Array.isArray(person.delegation) && person.delegation.includes("questions"))
-}
-
-// The offerable gate predicate (0271 naming it one home): the record an
-// eligible person claim would offer — not superseded, not yet booked into a
-// release intent. offerGate's derived item, the pending listing and the
-// question-scope wait arm all read this one predicate (P5/P6); a booked or
-// committed gate is the coordinator's settlement, no longer a person item.
-function offerable(gate: Gate): boolean {
-  return !gate.intent && !gate.superseded
-}
 
 function sameHolder(a: Holder, b: Holder): boolean {
   return a.token === b.token && a.channel === b.channel
@@ -453,8 +402,6 @@ const CATALOG_UNIT = "T-NNN"
 // enumeration pins against this table — the one home the catalog, the wire
 // and the spec share (P5).
 export const WORK_TYPE_IDS = ["execute", "verify", "fix", "formulate", "synthesize", "distill", "audit"] as const satisfies readonly Grant["kind"][]
-const PERSON_QUESTION_AUTHORITY = ["unrestricted", "questions"] as const
-const PERSON_RELEASE_AUTHORITY = ["unrestricted", "releases"] as const
 
 function escapeRe(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -570,10 +517,6 @@ export type ExecutorWorkTypeLetter = {
   readonly never: ExecutorNeverLetter
   readonly writes: ExecutorWriteLetter
 }
-export type ExecutorPersonTypeLetter = {
-  readonly id: "human" | "question"
-  readonly authority: readonly ("unrestricted" | "questions" | "releases")[]
-}
 export type ExecutorTypes = {
   readonly execute: ExecutorWorkTypeLetter
   readonly verify: ExecutorWorkTypeLetter
@@ -582,8 +525,6 @@ export type ExecutorTypes = {
   readonly synthesize: ExecutorWorkTypeLetter
   readonly distill: ExecutorWorkTypeLetter
   readonly audit: ExecutorWorkTypeLetter
-  readonly human: ExecutorPersonTypeLetter
-  readonly question: ExecutorPersonTypeLetter
 }
 
 // The rendering beside menu(): one object computed from the tables at module
@@ -597,8 +538,6 @@ const CATALOG: ExecutorTypes = {
   synthesize: workTypeLetter("synthesize"),
   distill: workTypeLetter("distill"),
   audit: workTypeLetter("audit"),
-  human: { id: "human", authority: PERSON_RELEASE_AUTHORITY },
-  question: { id: "question", authority: PERSON_QUESTION_AUTHORITY },
 }
 export function executorTypeCatalog(): ExecutorTypes {
   return CATALOG
@@ -835,26 +774,13 @@ export async function openExecutorCoordinator(
   options: { checkpoint?: (point: Checkpoint) => void; now?: () => number } = {},
 ): Promise<{
   claim(holder: Holder, task?: string, kind?: Grant["kind"]): Promise<Claim>
-  // The optional person on ready/heartbeat (0271): the reader's delegation
-  // when the requesting token carries one, the pending listing's authority
-  // split reading questionAuthority from the same admitted set the claim
-  // path checks — kind and id for every reader, question text only for a
-  // question-authority channel.
-  ready(holder: Holder, person?: ExecutorPerson): Promise<Menu>
+  ready(holder: Holder): Promise<Menu>
   brief(holder: Holder, task: string, kind?: Grant["kind"]): Promise<Claim>
-  briefAnswers(holder: Holder, task: string, after?: string, kind?: Candidate["kind"]): Promise<AnswerPage>
   verification(holder: Holder): Promise<DerivedStep | VerificationPreview>
-  heartbeat(holder: Holder, leases: readonly LeaseKey[], person?: ExecutorPerson): Promise<Menu>
+  heartbeat(holder: Holder, leases: readonly LeaseKey[]): Promise<Menu>
   release(holder: Holder, step: string, lease: string): Promise<DerivedStep>
   report(holder: Holder, step: string, lease: string, outcome: "ended" | "failed", note?: string): Promise<Receipt | DerivedStep>
   next(holder: Holder): Promise<DerivedStep>
-  question(holder: Holder, text: string, target?: LeaseKey & { task: string }): Promise<{ id: string; state: "raised" }>
-  claimPerson(person: ExecutorPerson): Promise<PersonStep | GateStep>
-  answerPerson(person: ExecutorPerson, id: string, decision: string, rationale?: string): Promise<PersonStep | GateStep>
-  claimQuestion(person: ExecutorPerson): Promise<PersonStep>
-  answerQuestion(person: ExecutorPerson, id: string, decision: string, rationale?: string): Promise<PersonStep>
-  claimGate(person: ExecutorPerson): Promise<GateStep>
-  answerGate(person: ExecutorPerson, id: string, decision: "approve", rationale?: string): Promise<GateStep>
   busy(): Promise<boolean>
   close(): Promise<void>
 }> {
@@ -867,11 +793,7 @@ export async function openExecutorCoordinator(
   const lock = acquireRunLock(dir, "executor")
   if (!lock.ok) throw new Error("The project already has an active driver.")
   const file = join(dir, STATE)
-  const questionFile = join(dir, PERSON_STATE)
-  const gateFile = join(dir, GATE_STATE)
-  let gates: Gate[]
   let entries: Entry[]
-  let questions: Question[]
   try {
     const readState = (path: string) => readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") throw error
@@ -886,21 +808,6 @@ export async function openExecutorCoordinator(
       (entry.booking?.outcome === "ended" && entry.booking.landing !== undefined &&
         (!entry.worktree || !entry.booking.intent || !validExecutorLanding(entry.booking.landing)))
     )) throw new Error("Invalid executor progress record.")
-    questions = JSON.parse(await readState(questionFile)) as Question[]
-    if (!Array.isArray(questions) || questions.some((item) =>
-      typeof item?.id !== "string" || typeof item.text !== "string" ||
-      typeof item.asker?.token !== "string" || typeof item.asker?.channel !== "string" ||
-      (item.task !== undefined && typeof item.task !== "string") ||
-      (item.answer !== undefined && typeof item.answer?.decision !== "string")
-    )) throw new Error("Invalid executor question record.")
-    gates = JSON.parse(await readState(gateFile)) as Gate[]
-    if (!Array.isArray(gates) || gates.some((item) => typeof item?.id !== "string" ||
-      (item.gate !== "project-start" && item.gate !== "survey-release") ||
-      typeof item.document !== "string" || typeof item.digest !== "string" ||
-      (item.intent !== undefined && (typeof item.intent?.base !== "string" ||
-        typeof item.intent.before !== "string" || typeof item.intent.after !== "string" ||
-        typeof item.intent.subject !== "string" || item.intent.answer?.decision !== "approve"))
-    )) throw new Error("Invalid executor gate record.")
   } catch (error) {
     lock.release()
     throw error
@@ -932,245 +839,16 @@ export async function openExecutorCoordinator(
     entries = next
   }
 
-  async function persistQuestions(next: Question[]): Promise<void> {
-    await replaceFile(questionFile, JSON.stringify(next), 0o600)
-    questions = next
-  }
-
-  async function persistGates(next: Gate[]): Promise<void> {
-    await replaceFile(gateFile, JSON.stringify(next), 0o600)
-    gates = next
-  }
-
-  async function updateGate(item: Gate, next: Gate): Promise<Gate> {
-    await persistGates(gates.map((gate) => gate === item ? next : gate))
-    return next
-  }
-
-  function pendingGate(): Gate | undefined {
-    return gates.find((item) => item.intent && !item.intent.commit)
-  }
-
-  function releaseAuthority(person: ExecutorPerson): boolean {
-    return person.delegation === "unrestricted" || (Array.isArray(person.delegation) && person.delegation.includes("releases"))
-  }
-
-  async function gateProposal() {
-    const admission = await readExecutorAdmissionBlock(dir)
-    if (admission?.kind !== "human") return undefined
-    const proposal = await readClarificationProposal(dir, await loadProjectConfig(dir))
-    if (!proposal || proposal.document !== admission.document) return undefined
-    if (!(await readFile(join(dir, proposal.document))).equals(Buffer.from(proposal.before))) return undefined
-    const base = await gitRead(dir, "rev-parse", "HEAD")
-    const digest = createHash("sha256").update(JSON.stringify({ base, gate: admission.gate, proposal })).digest("hex")
-    return { ...proposal, base, digest, gate: admission.gate }
-  }
-
-  async function gateWorkspace(document: string): Promise<boolean> {
-    const path = join(dir, document)
-    if (await realpath(path).catch(() => undefined) !== path ||
-        !(await stat(path).catch(() => undefined))?.isFile()) return false
-    // Every repository root judged, not one (0258): nested dirt outside the
-    // gate document holds the release exactly as top-repository dirt does.
-    const status = await workspaceStatus(dir)
-    return status !== undefined && status.every(({ rel, status }) =>
-      rel === document || (status === "??" && workdirEntry(rel))
-    )
-  }
-
-  async function settleGate(item: Gate): Promise<BlockedReport | undefined> {
-    const intent = item.intent!
-    const doc = item.document
-    const path = join(dir, doc)
-    const block = (detail: string): BlockedReport => ({ kind: "blocked", reason: "isolation", detail })
-    const messageText = message(intent.subject, { id: "PLAN" }, "clarify", [], `Executor gate ${item.id}`)
-    const head = await gitRead(dir, "rev-parse", "HEAD")
-    if (head !== intent.base) {
-      const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", head)
-      if (!intent.tree || witness !== `${intent.base}\n${intent.tree}\n${messageText}`) {
-        return block("HEAD does not match the booked gate release. Inspect the release before resuming.")
-      }
-      await updateGate(item, { ...item, intent: { ...intent, commit: head } })
-      return
-    }
-    if (!await gateWorkspace(doc)) {
-      return block(`Resolve workspace changes outside ${doc} before settling the gate release.`)
-    }
-    const current = await readFile(path)
-    if (current.equals(Buffer.from(intent.before))) {
-      const proposal = await gateProposal()
-      if (proposal?.digest !== item.digest) return block("The booked proposal no longer matches the project gate.")
-      // An interrupted temporary write stays in driver state and cannot
-      // appear as an unrelated change when the next coordinator retries.
-      await replaceFile(path, intent.after, (await stat(path)).mode & 0o777, gateFile)
-      checkpoint?.("gate-marked")
-    } else if (!current.equals(Buffer.from(intent.after))) {
-      return block(`The release document ${doc} differs from its booked before and after state.`)
-    }
-    const pathspec = `:(literal)${doc}`
-    const stage = await git(dir, ["add", "--", pathspec])
-    if (stage.code !== 0) return { kind: "blocked", reason: "commitFailed", detail: stage.err.trim() }
-    const tree = await gitRead(dir, "write-tree")
-    const [diff, content] = await Promise.all([
-      git(dir, ["diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", head, tree]),
-      git(dir, ["show", `${tree}:${doc}`]),
-    ])
-    if (diff.code !== 0 || diff.out !== `${doc}\0` || content.code !== 0 || content.out !== intent.after ||
-        (intent.tree && intent.tree !== tree)) return block("The staged gate release differs from the booked document.")
-    if (!intent.tree) item = await updateGate(item, { ...item, intent: { ...intent, tree } })
-    const commit = await git(dir, [...await identityArgs(dir), "commit", "-m", messageText, "--", pathspec])
-    if (commit.code !== 0) return { kind: "blocked", reason: "commitFailed", detail: commit.err.trim() || commit.out.trim() }
-    checkpoint?.("gate-committed")
-    const landed = await gitRead(dir, "rev-parse", "HEAD")
-    const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", landed)
-    if (witness !== `${head}\n${tree}\n${messageText}`) return block("The gate commit differs from its booked release.")
-    await updateGate(item, { ...item, intent: { ...intent, tree, commit: landed } })
-  }
-
-  async function offerGate(person: ExecutorPerson): Promise<GateStep> {
-    if (!releaseAuthority(person)) return { kind: "wait", reason: "gate", detail: "Gate releases require a person with release authority." }
-    const pending = pendingGate()
-    if (pending) {
-      const blocked = await settleGate(pending)
-      if (blocked) return blocked
-    }
-    const proposal = await gateProposal()
-    const prior = gates.findLast(offerable)
-    if (prior && prior.digest !== proposal?.digest) await updateGate(prior, { ...prior, superseded: true })
-    if (!proposal) return { kind: "wait", reason: "not-ready", detail: "No validated gate awaits release." }
-    const { gate, document, digest, review, before } = proposal
-    const item = prior?.digest === digest ? prior : { id: randomUUID(), gate, document, digest, position: questions.length + gates.length }
-    const offer: GateOffer = { kind: "human", id: item.id, gate, document, proposal: before, review }
-    if (Buffer.byteLength(JSON.stringify({ protocol: EXECUTOR_PROTOCOL, step: offer })) > MAX_RESPONSE_BYTES) {
-      return { kind: "blocked", reason: "isolation", detail: "The gate proposal exceeds the executor response limit." }
-    }
-    if (item !== prior) await persistGates([...gates, item])
-    return offer
-  }
-
-  function personStep(person: ExecutorPerson): PersonStep {
-    const pending = questions.find((item) => !item.answer)
-    if (!pending) {
-      // 0262-04's blind spot named: a person attending with no question to
-      // answer still learns a gate item is pending — the existence the read
-      // surface lists, surfaced here so the claim arm never reads as "nothing
-      // to attend to" while a gate waits (the menu carries the id).
-      if (gates.some(offerable)) {
-        return { kind: "wait", reason: "not-ready", detail: "No pending questions. A gate item is pending." }
-      }
-      return { kind: "wait", reason: "not-ready", detail: "No pending questions." }
-    }
-    if (!questionAuthority(person)) return { kind: "wait", reason: "gate", detail: "A pending question requires a person with question authority." }
-    const { id, text, task } = pending
-    return { kind: "question", id, text, task }
-  }
-
-  // The read surface's pending listing (0271, 0262-04's fix): derived from
-  // the same durable records the claim path reads — the unanswered questions
-  // (personStep's own filter) and the offerable gates (offerGate's derived
-  // items) — ordered by the one shared issuance order (0250: legacy questions
-  // before legacy gates, then position). Existence for every reader; the
-  // question's text and task context only for a channel questionAuthority
-  // admits — the privileged item is exactly the question step's own shape,
-  // the same content the claim route already discloses to the same authority
-  // (P2: routing precision, never authority widening; P6: no new state).
-  function pendingItems(person: ExecutorPerson | undefined): MenuPending[] {
-    const rows: { order: number; item: MenuPending }[] = []
-    for (const { id, text, task, answer, position } of questions) {
-      if (answer) continue
-      rows.push({
-        order: position ?? -2,
-        item: person !== undefined && questionAuthority(person)
-          ? { kind: "question", id, text, ...(task !== undefined && { task }) }
-          : { kind: "question", id },
-      })
-    }
-    for (const gate of gates) {
-      if (!offerable(gate)) continue
-      rows.push({ order: gate.position ?? -1, item: { kind: "gate", id: gate.id } })
-    }
-    return rows.sort((a, b) => a.order - b.order).map(({ item }) => item)
-  }
-
-  async function settleQuestion(person: ExecutorPerson, id: string, decision: string, rationale?: string) {
-    if (!questionAuthority(person)) throw new ExecutorRequestError("The person grant does not authorize answering questions.")
-    const item = questions.find((question) => question.id === id)
-    if (!item) throw new ExecutorRequestError("The question was never issued.")
-    if (item.answer) return
-    if (!decision.trim() || Buffer.byteLength(decision) > 8192 ||
-        (rationale !== undefined && Buffer.byteLength(rationale) > 8192)) {
-      throw new ExecutorRequestError("An answer requires a decision. The decision and rationale are limited to 8192 bytes each.")
-    }
-    const delegation = person.delegation === "unrestricted" ? person.delegation : [...person.delegation]
-    const order = questions.reduce((max, question) => Math.max(max, question.answer?.order ?? 0), 0) + 1
-    const answer = { person: { token: person.token, channel: person.channel, delegation }, decision, rationale, order }
-    await persistQuestions(questions.map((question) => question === item ? { ...question, answer } : question))
-  }
-
-  async function approveGate(person: ExecutorPerson, id: string, decision: string, rationale?: string): Promise<QuestionWait | BlockedReport | undefined> {
-    if (!releaseAuthority(person)) throw new ExecutorRequestError("The person grant does not authorize gate releases.")
-    const item = gates.find((gate) => gate.id === id)
-    if (!item) throw new ExecutorRequestError("The gate was never issued.")
-    if (item.intent || item.superseded) return
-    if (decision !== "approve" || (rationale !== undefined && Buffer.byteLength(rationale) > 8192)) {
-      throw new ExecutorRequestError("A gate decision must approve the proposal. Rationale is limited to 8192 bytes.")
-    }
-    const proposal = await gateProposal()
-    if (!proposal || proposal.digest !== item.digest) return
-    if (entries.some((entry) => live(entry, now()) || (entry.booking && !entry.booking.receipt))) {
-      return { kind: "wait", reason: "gate", detail: "The workspace must settle its current lease or report before releasing the gate." }
-    }
-    if (!await gateWorkspace(item.document)) {
-      return { kind: "blocked", reason: "isolation", detail: `Resolve workspace changes outside ${item.document} before approving the gate release.` }
-    }
-    const delegation = person.delegation === "unrestricted" ? person.delegation : [...person.delegation]
-    const answer = { person: { token: person.token, channel: person.channel, delegation }, decision, rationale }
-    const { base, before, after, subject } = proposal
-    const booked = await updateGate(item, { ...item, intent: { answer, base, before, after, subject } })
-    checkpoint?.("gate-booked")
-    return settleGate(booked)
-  }
-
-  async function nextPerson(person: ExecutorPerson): Promise<PersonStep | GateStep> {
-    const question = questionAuthority(person) ? personStep(person) : undefined
-    const gate = releaseAuthority(person) ? await offerGate(person) : undefined
-    if (question?.kind === "question") {
-      if (gate?.kind === "human") {
-        // Legacy records lack a shared position. Keep them ahead of newly issued items.
-        const questionPosition = questions.find((item) => item.id === question.id)?.position ?? -2
-        const gatePosition = gates.find((item) => item.id === gate.id)?.position ?? -1
-        if (gatePosition < questionPosition) return gate
-      }
-      return question
-    }
-    return gate ?? question ?? { kind: "wait", reason: "gate", detail: "A person grant is required." }
-  }
-
-  function applicableAnswers(holder: Holder, task: string): BriefAnswer[] {
-    return questions
-      .filter((item) => item.answer && sameHolder(item.asker, holder) && (item.task === undefined || item.task === task))
-      .sort((a, b) => (a.answer?.order ?? 0) - (b.answer?.order ?? 0))
-      .map(({ id, text, answer }) => ({ id, question: text, decision: answer!.decision, rationale: answer!.rationale }))
-  }
-
+  // The brief's response-size bound (0282: the ask channel's answers are
+  // gone, the size measure stays — the wire envelope's shape governs).
   function withAnswers(holder: Holder, grant: Grant): Grant | Extract<ExecutorPreview, { kind: "blocked" }> {
-    const size = (brief: Grant) => Buffer.byteLength(JSON.stringify({ protocol: EXECUTOR_PROTOCOL, step: brief }))
-    if (size({ ...grant, answerCursor: null }) > MAX_RESPONSE_BYTES) {
+    void holder
+    if (Buffer.byteLength(JSON.stringify({ protocol: EXECUTOR_PROTOCOL, step: grant })) > MAX_RESPONSE_BYTES) {
       return { kind: "blocked", reason: "config", detail: "The rendered brief exceeds the 256 KiB executor response limit. Shorten the project or task inputs." }
     }
-    const answers = applicableAnswers(holder, grant.unit)
-    if (!answers.length) return grant
-    let brief: Grant = { ...grant, answerCursor: null }
-    const included: BriefAnswer[] = []
-    for (const answer of answers) {
-      included.push(answer)
-      const prompt = `${grant.prompt}\n\nPerson answers (JSON data):\n${JSON.stringify(included)}`
-      const next: Grant = { ...grant, prompt, ...(included.length < answers.length && { answerCursor: answer.id }) }
-      if (size(next) > MAX_RESPONSE_BYTES) break
-      brief = next
-    }
-    return brief
+    return grant
   }
+
 
   async function book(entry: Entry, booking: Booking): Promise<Entry> {
     const next = { ...entry, booking }
@@ -1820,48 +1498,22 @@ export async function openExecutorCoordinator(
   // the holder's own `question` route and the settlement's raise both read
   // this predicate, so a retrying holder's repeated blocked reports and a
   // re-raised settlement answer ride one item while it is pending.
-  function findPendingQuestion(asker: Holder, task: string | undefined, text: string): Question | undefined {
-    return questions.find((item) => !item.answer && sameHolder(item.asker, asker) && item.task === task && item.text === text)
-  }
-
-  // The settlement's raise through the standing question channel (0272,
-  // 0262-03's fix): the records, the dedup-while-pending and the answer
-  // delivery are 0250's own — no second channel. The asker is the reporting
-  // holder (the report authenticated the identity, and the answer returns to
-  // the same holder's briefs through applicableAnswers), the task the
-  // grant's own unit, the text a mechanical rendering of the blocked cause —
-  // the cause's own detail plus the step's identity, a fixed template, never
-  // authored content (P7). The raise is the coordinator's act at the blocked
-  // verdict: the holder's report was already honest; the person's bracket is
-  // the missing half (P2 — the automatic escalation bounded, terminating at
-  // the person). The route's live-pair guard is the holder-initiated
-  // channel's own; this entry point is the settlement's, on a report already
-  // accepted for settlement.
-  async function raiseSettlementQuestion(entry: Entry, report: BlockedReport): Promise<Question> {
-    const text = `Executor step ${entry.grant.id} blocked (${report.reason}): ${report.detail} The cause is outside the lease's permitted writes; a person decision is required.`
-    const existing = findPendingQuestion(entry.holder, entry.grant.unit, text)
-    if (existing) return existing
-    const item: Question = { id: randomUUID(), asker: { ...entry.holder }, text, task: entry.grant.unit, position: questions.length + gates.length }
-    await persistQuestions([...questions, item])
-    return item
-  }
-
-  // The settlement's one wire boundary (0272): both the report route and a
-  // successor claim's settlement replay pass through here, so every blocked
-  // answer the settlement produces is classified once, at its exit. The
-  // replay arm returns byte-identical (P10 — its detail already teaches the
-  // holder's own remedy, that arm's ladder); the person arm raises the
-  // question item above and names the ladder in the detail — which arm
-  // applies, the item raised, and that retrying cannot fix the cause. The
-  // frozen `reason` vocabulary is untouched: the ladder naming is rendering
-  // inside `detail`, no wire field added (P13's least).
+  // The settlement's one wire boundary (0272, amended by 0282's no-ask-channel
+  // ruling): both the report route and a successor claim's settlement replay
+  // pass through here. The escalation question is gone — the plain `blocked`
+  // answer with its remedy is the whole surface, the round waiting until a
+  // person looks at the state (the honest cost the order accepts, P2 keeping
+  // the person's bracket on documents and ops). The classification's marker
+  // still names the person-necessary causes in the detail — the teaching
+  // stays, the channel does not.
   async function settle(entry: Entry, booking: EndedBooking): Promise<Receipt> {
+    void entry
     const receipt = await settleShare(entry, booking)
     if (receipt.kind !== "blocked" || !("escalated" in receipt && receipt.escalated === true)) return receipt
     const { escalated: _, ...report } = receipt
-    const item = await raiseSettlementQuestion(entry, report)
-    return { ...report, detail: `${report.detail} The cause is outside this lease's permitted writes; question ${item.id} is raised for a person decision — retrying cannot fix it.` }
+    return { ...report, detail: `${report.detail} The cause is outside this lease's permitted writes — a person must inspect the state; retrying cannot fix it.` }
   }
+
 
   function live(entry: Entry, at: number): boolean {
     return !entry.booking && !entry.released && entry.grant.deadline > at
@@ -1976,9 +1628,15 @@ export async function openExecutorCoordinator(
     return step
   }
 
-  async function menu(holder: Holder, at: number, person?: ExecutorPerson): Promise<Menu> {
+  async function menu(holder: Holder, at: number): Promise<Menu> {
     const types = executorTypeCatalog()
-    const pending = pendingItems(person)
+    // The pending person items (0282's document-derived re-keying): the
+    // admission block's own reading of the documents — a human gate names
+    // its gate and document; no store, no replay (P6).
+    const admission = await readExecutorAdmissionBlock(dir)
+    const pending: MenuPending[] = admission?.kind === "human"
+      ? [{ kind: "gate", gate: admission.gate, document: admission.document }]
+      : []
     const leases = entries.filter((entry) => live(entry, at) && sameHolder(entry.holder, holder))
       .map(({ grant: { id: step, lease, kind, deadline, attempt } }) => ({ step, lease, kind, deadline, attempt }))
     if (leases.length) return { claimable: [], leases, types, pending }
@@ -2248,13 +1906,6 @@ export async function openExecutorCoordinator(
     if (serial && live(serial, at)) return leaseWait(serial)
     if (pendingReport()) return { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." }
 
-    const pending = questions.filter((item) => !item.answer)
-    if (pending.some((item) => sameHolder(item.asker, holder))) {
-      return { kind: "wait", reason: "question", detail: "Your question is awaiting an answer." }
-    }
-    if (pending.length) return { kind: "wait", reason: "gate", detail: "A pending question requires a person decision." }
-
-    if (pendingGate()) return { kind: "wait", reason: "gate", detail: "An approved gate release awaits settlement." }
     const admission = await readExecutorAdmissionBlock(dir)
     if (admission) return admission
 
@@ -2308,11 +1959,6 @@ export async function openExecutorCoordinator(
         const result = await settle(booked, booked.booking)
         if (result.kind === "blocked") return result
       }
-      const pending = pendingGate()
-      if (pending) {
-        const blocked = await settleGate(pending)
-        if (blocked) return blocked
-      }
       const step = await select(holder, now(), kind, task)
       if (step.kind !== "execute" && step.kind !== "verify" && step.kind !== "fix" && step.kind !== "formulate" && step.kind !== "synthesize" && step.kind !== "distill" && step.kind !== "audit") return step
       // The asked-kind guard (0276): a targeted claim receives its own kind
@@ -2364,7 +2010,7 @@ export async function openExecutorCoordinator(
       if (workspace && !retained) checkpoint?.("workspace-booked")
       return workspace ? grantCheckout(holder, entry) : brief
     }),
-    ready: (holder, person) => serialize(() => menu(holder, now(), person)),
+    ready: (holder) => serialize(() => menu(holder, now())),
     brief: (holder, task, kind) => serialize(async () => {
       const last = latest(task)
       if (last && (kind === undefined || kind === last.grant.kind) && live(last, now())) {
@@ -2377,27 +2023,11 @@ export async function openExecutorCoordinator(
       }
       return { kind: "wait", reason: "not-ready", detail: `This channel has no live brief for ${task}.` }
     }),
-    briefAnswers: (holder, task, after, kind) => serialize(async () => {
-      const last = latest(task)
-      if (!last || (kind !== undefined && last.grant.kind !== kind) || !sameHolder(last.holder, holder) || !live(last, now())) {
-        throw new ExecutorRequestError("This channel has no live brief for the requested task.")
-      }
-      const all = applicableAnswers(holder, task)
-      const cursor = after === undefined ? -1 : all.findIndex((answer) => answer.id === after)
-      if (after !== undefined && cursor === -1) throw new ExecutorRequestError("The answer cursor does not belong to this brief.")
-      const answers: BriefAnswer[] = []
-      for (const answer of all.slice(cursor + 1)) {
-        if (answers.length && Buffer.byteLength(JSON.stringify({ answers: [...answers, answer], next: answer.id })) > ANSWER_PAGE_BYTES) break
-        answers.push(answer)
-      }
-      const next = cursor + 1 + answers.length < all.length ? answers.at(-1)?.id : undefined
-      return { answers, ...(next && { next }) }
-    }),
     verification: (holder) => serialize(async () => {
       const step = await select(holder, now(), "verify")
       return step.kind === "verify" ? step : withoutGrant(step)
     }),
-    heartbeat: (holder, leases, person) => serialize(async () => {
+    heartbeat: (holder, leases) => serialize(async () => {
       const requested = new Set(leases.map(({ step, lease }) => lookup(step, lease)))
       const at = now()
       const renewed = entries.map((entry) => {
@@ -2410,7 +2040,7 @@ export async function openExecutorCoordinator(
         return deadline > entry.grant.deadline ? { ...entry, grant: { ...entry.grant, deadline } } : entry
       })
       if (renewed.some((entry, i) => entry !== entries[i])) await persist(renewed)
-      return menu(holder, at, person)
+      return menu(holder, at)
     }),
     release: (holder, step, lease) => serialize(async () => {
       const entry = lookup(step, lease)
@@ -2445,41 +2075,6 @@ export async function openExecutorCoordinator(
       if (booking.outcome !== "ended") throw new Error("Invalid executor booking.")
       return settle(entry, booking)
     }),
-    question: (holder, text, target) => serialize(async () => {
-      if (!text.trim() || Buffer.byteLength(text) > 8192) throw new ExecutorRequestError("A question must contain between 1 and 8192 bytes of text.")
-      if (target) {
-        const entry = lookup(target.step, target.lease)
-        if (!live(entry, now()) || !sameHolder(entry.holder, holder) || entry.grant.unit !== target.task) {
-          throw new ExecutorRequestError("A task question requires ownership of its live step and lease.")
-        }
-      }
-      const task = target?.task
-      const existing = findPendingQuestion(holder, task, text)
-      if (existing) return { id: existing.id, state: "raised" }
-      const id = randomUUID()
-      await persistQuestions([...questions, { id, asker: { ...holder }, text, task, position: questions.length + gates.length }])
-      return { id, state: "raised" }
-    }),
-    claimQuestion: (person) => serialize(async () => personStep(person)),
-    claimPerson: (person) => serialize(() => nextPerson(person)),
-    answerPerson: (person, id, decision, rationale) => serialize(async () => {
-      if (questionAuthority(person) && questions.some((item) => item.id === id)) {
-        await settleQuestion(person, id, decision, rationale)
-      } else if (releaseAuthority(person) && gates.some((item) => item.id === id)) {
-        const blocked = await approveGate(person, id, decision, rationale)
-        if (blocked) return blocked
-      } else {
-        throw new ExecutorRequestError("The person grant does not authorize that item or the item was never issued.")
-      }
-      return nextPerson(person)
-    }),
-    answerQuestion: (person, id, decision, rationale) => serialize(async () => {
-      await settleQuestion(person, id, decision, rationale)
-      return personStep(person)
-    }),
-    claimGate: (person) => serialize(() => offerGate(person)),
-    answerGate: (person, id, decision, rationale) => serialize(async () =>
-      (await approveGate(person, id, decision, rationale)) ?? offerGate(person)),
     next: (holder) => serialize(async () => withoutGrant(await select(holder, now()))),
     busy: () => serialize(async () => entries.some((entry) => live(entry, now())) || pendingReport() !== undefined),
     async close() {

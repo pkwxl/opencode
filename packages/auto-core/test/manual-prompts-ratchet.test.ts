@@ -40,7 +40,7 @@ const SRC = resolve(import.meta.dir, "..", "src")
 
 // The suite's pinned file set: a file added to prompts/ joins the ratchet
 // consciously (this test fails until it is either listed or removed).
-const FILES = ["run.md", "run-task.md", "run-verify.md", "run-fix.md", "run-handover.md", "run-plan.md", "run-as-subtasks.md", "resume-subtasks.md", "plan-append.md", "charter.md", "executor.md", "person.md"]
+const FILES = ["run.md", "run-task.md", "run-verify.md", "run-fix.md", "run-handover.md", "run-plan.md", "run-as-subtasks.md", "resume-subtasks.md", "plan-append.md", "charter.md", "executor.md"]
 
 const text = (name: string) => readFileSync(join(PROMPTS, name), "utf8")
 const src = (name: string) => readFileSync(join(SRC, name), "utf8")
@@ -306,47 +306,13 @@ describe("manual-driver prompt ratchet", () => {
     expect(coordinator).toContain("the isolation walk passed")
   })
 
-  test("the person prompt preserves delegated authority and proposal-bound settlement", () => {
-    const executor = text("executor.md")
-    const person = text("person.md")
-    const coordinator = src("executor-coordinator.ts")
-    expect(person).toContain('Always claim with `role: "person"` and omit task and kind filters.')
-    expect(person).toContain("The coordinator returns the oldest item your grant covers.")
-    expect(coordinator).toContain("const question = questionAuthority(person) ? personStep(person) : undefined")
-    expect(coordinator).toContain("const gate = releaseAuthority(person) ? await offerGate(person) : undefined")
-    expect(coordinator).toContain("if (gatePosition < questionPosition) return gate")
-    expect(person).toContain("If the proposal changes and a new ID is offered, review it again.")
-    expect(coordinator).toContain("if (prior && prior.digest !== proposal?.digest)")
-    expect(coordinator).toContain("if (!proposal || proposal.digest !== item.digest) return")
-    expect(person).toContain("The first accepted decision and its provenance stand.")
-    expect(coordinator).toContain("if (item.answer) return")
-    expect(coordinator).toContain("if (item.intent || item.superseded) return")
-    expect(executor).toContain("the complete `task`, `step`, `lease` tuple")
-    expect(coordinator).toContain("!live(entry, now()) || !sameHolder(entry.holder, holder) || entry.grant.unit !== target.task")
-    expect(executor).toContain("send that value as `cursor` on the same brief request")
-    expect(coordinator).toContain("!sameHolder(last.holder, holder) || !live(last, now())")
-    expect(person).not.toMatch(/\bgit\s+(add|commit|reset|stash)\b|Clarified:\s*yes/)
-  })
-
-  // plans/0271 (0262-04's fix): the pending-items letter on the person
+    // plans/0271 (0262-04's fix): the pending-items letter on the person
   // prompt, pinned beside the read surface's producer anchors — the menu's
   // pending list (kind and id for every reader, question text gated to the
   // same authority check the claim path reads) and the wait arm that names
   // pending gate existence. The wire side lives in the executor e2e and the
   // coordinator-side behavior in test/executor-steps.test.ts.
-  test("the person prompt names the pending listing on ready (plans/0271)", () => {
-    const person = text("person.md")
-    const coordinator = src("executor-coordinator.ts")
-    expect(person).toContain("the menu's `pending` list names each pending person item by `kind` (`question` or `gate`) and `id`")
-    expect(person).toContain("with question text only for a grant that answers questions")
-    expect(person).toContain("Answer items through the standing routes.")
-    expect(coordinator).toContain("function pendingItems(person: ExecutorPerson | undefined): MenuPending[] {")
-    expect(coordinator).toContain("person !== undefined && questionAuthority(person)")
-    expect(coordinator).toContain("const pending = pendingItems(person)")
-    expect(coordinator).toContain('detail: "No pending questions. A gate item is pending."')
-  })
-
-  // plans/0272 (0262-03's fix): the blocked settlement's escalation ladder
+    // plans/0272 (0262-03's fix): the blocked settlement's escalation ladder
   // on the executor prompt, pinned beside the producer's anchors — the
   // settlement's raise through the standing channel (the dedup predicate's
   // one home, the mechanical text template, the never-set derivation and
@@ -354,17 +320,18 @@ describe("manual-driver prompt ratchet", () => {
   // internal classification and names the ladder in the detail. The
   // behavior lives in test/executor-steps.test.ts; person.md untouched,
   // ruled (the raised item arrives through the standing question surface).
-  test("the executor prompt names the blocked settlement's escalation ladder (plans/0272)", () => {
+  // plans/0272's ladder, amended by 0282's no-ask-channel ruling: the
+  // classification stays (neverSetRows/outsidePerimeter), the raise is gone
+  // — the plain blocked answer naming the person-necessary cause is the
+  // whole surface, the round waiting until a person looks at the state.
+  test("the executor prompt names the blocked settlement's person-necessary cause plainly (plans/0272, amended by 0282)", () => {
     const executor = text("executor.md")
     const coordinator = src("executor-coordinator.ts")
-    expect(executor).toContain("A `blocked` remedy that names a raised question puts the cause outside the lease's permitted writes")
-    expect(executor).toContain("do not retry it — the person holds the item, and its answer returns with a later brief for the task")
-    expect(coordinator).toContain("function findPendingQuestion(")
-    expect(coordinator).toContain("async function raiseSettlementQuestion(")
-    expect(coordinator).toContain("Executor step ${entry.grant.id} blocked (${report.reason}): ${report.detail}")
-    expect(coordinator).toContain("The cause is outside this lease's permitted writes; question ${item.id} is raised for a person decision — retrying cannot fix it.")
+    expect(executor).toContain("A `blocked` remedy that names a person-necessary cause puts it outside the lease's permitted writes")
+    expect(executor).toContain("there is no ask channel (plans/0282)")
     expect(coordinator).toContain("function neverSetRows(")
     expect(coordinator).toContain("function outsidePerimeter(")
+    expect(coordinator).toContain("The cause is outside this lease's permitted writes — a person must inspect the state; retrying cannot fix it.")
   })
 
   // plans/0273 (0264-05's fix): the settled-holder terminal on the executor

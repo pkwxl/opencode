@@ -265,10 +265,10 @@ test("the fence: an edit beside the reply channel is refused, the never-set caus
     expect(blocked).toMatchObject({ kind: "blocked", reason: "isolation" })
     if (blocked.kind !== "blocked") throw new Error(JSON.stringify(blocked))
     expect(blocked.detail).toContain("Resolve out-of-scope edits before replaying")
-    expect(blocked.detail).toContain("The cause is outside this lease's permitted writes; question ")
-    // The pending listing carries the raised item (0271's read surface).
-    const person = { token: "person", channel: "review", delegation: "unrestricted" as const }
-    expect((await coordinator.ready(person, person)).pending).toMatchObject([{ kind: "question" }])
+    expect(blocked.detail).toContain("The cause is outside this lease's permitted writes — a person must inspect the state")
+    // No question item is raised (plans/0282): the plain blocked answer is
+    // the whole surface, the pending list empty.
+    expect((await coordinator.ready(WORKER)).pending).toEqual([])
   } finally {
     await coordinator.close()
   }

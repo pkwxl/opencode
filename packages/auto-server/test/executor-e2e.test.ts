@@ -17,16 +17,6 @@ test("the daemon routes authenticated executor requests to one launcher-confined
   const worker = store.issueToken("executor", "worker").token
   const verifier = store.issueToken("executor", "verifier").token
   const control = store.issueToken("control", "control").token
-  const person = store.issueToken("person-questions", "reviewer").token
-  const dual = store.issueToken("executor,person-questions", "dual").token
-  const releaseOnly = store.issueToken("person-releases", "release-only").token
-  const launcher = join(dataDir, "launch.sh")
-  const launches = join(dataDir, "launches")
-  await Bun.write(launcher, `#!/bin/bash
-printf '%s\n' "$1" >> "${launches}"
-shift 2
-exec "$@"
-`)
   const git = gitOf(directory)
   let daemon: DaemonHandle | undefined
   async function call(operation: string, body: unknown, token?: string, expected = 200) {
@@ -39,7 +29,7 @@ exec "$@"
     expect(response.status, JSON.stringify(result)).toBe(expected)
     return result
   }
-  const start = () => startDaemon({ dataDir, port: 0, launch: launcher })
+  const start = () => startDaemon({ dataDir, port: 0 })
   try {
     await Bun.write(join(directory, "docs", TASK, "todo.md"), `# ${TASK}: the widget\n\nTouches: src/widget.ts\n\n## Scope\n\nBuild the widget.\n`)
     // 0277: a valid phase handover committed ahead — the fixture models the
@@ -59,7 +49,6 @@ exec "$@"
     await call("ready", {}, control, 403)
     await call("heartbeat", {}, worker, 400)
     await call("claim", { role: "person" }, worker, 400)
-    expect(await Bun.file(launches).exists()).toBe(false)
 
     await call("ready", { extraField: true }, worker)
     const [ready, claimed] = await Promise.all([
@@ -85,7 +74,7 @@ exec "$@"
     // 0271's additive half rides the same menu: the pending person items,
     // the empty floor here (nothing pending on a bare project).
     expect(Object.keys(ready.menu).sort()).toEqual(["claimable", "leases", "pending", "types"])
-    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "synthesize", "verify"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "synthesize", "verify"])
     // 0281's wire pin: the synthesize kind joins the claim vocabulary — a
     // targeted ask parses (never the pre-change 400 of an unknown word) and
     // answers the honest wait over this fixture (no formulation unit
@@ -96,7 +85,6 @@ exec "$@"
     expect(Object.keys(menuBefore).sort()).toEqual(["claimable", "leases"])
     expect(pending).toEqual([])
     expect(claimed).toMatchObject({ protocol: 0.1, step: { kind: "execute", unit: TASK, workspace: directory } })
-    expect(await Bun.file(launches).text()).toBe(`${directory}\n`)
     expect(liveRunLock(directory)).toBeDefined()
     const lease = { step: claimed.step.id, lease: claimed.step.lease }
     // A client that loses an untargeted claim response can recover its lease through ready.
@@ -110,72 +98,12 @@ exec "$@"
     expect((await call("heartbeat", { leases: [lease] }, worker)).menu.leases[0].lease).toBe(lease.lease)
     expect((await call("claim", {}, verifier)).step.reason).toBe("lease-held")
     expect((await call("claim", { channel: "solo" }, worker)).step.reason).toBe("lease-held")
-    await call("ready", {}, person, 403)
-    await call("claim", { role: "worker" }, person, 403)
-    expect((await call("claim", {}, dual)).step.reason).toBe("lease-held")
-    await call("question", { task: TASK, text: "Incomplete task tuple" }, worker, 400)
-    const question = { ...lease, task: TASK, text: "Which implementation?" }
-    const raised = (await call("question", question, worker)).question
-    expect((await call("question", question, worker)).question).toEqual(raised)
-    // 0271 on the wire: the pending listing rides both menu arms (this is
-    // the leases-held arm) — a plain worker channel reads existence alone,
-    // the dual token's person-questions grant carries the question's text
-    // beside the id (the authority split the coordinator checks), no other
-    // byte of the menu moving.
-    expect((await call("ready", {}, worker)).menu.pending).toEqual([{ kind: "question", id: raised.id }])
-    expect((await call("ready", {}, dual)).menu.pending).toEqual([
-      { kind: "question", id: raised.id, text: question.text, task: TASK },
-    ])
-    expect((await call("claim", {}, person)).step).toMatchObject({ kind: "question", id: raised.id, text: question.text })
-    expect((await call("claim", { role: "person" }, dual)).step.id).toBe(raised.id)
-    expect((await call("claim", { delegation: "unrestricted" }, releaseOnly)).step.kind).toBe("wait")
-    await call("answer", { item: raised.id, decision: "Forged", delegation: "unrestricted" }, releaseOnly, 400)
-    await call("answer", { item: raised.id, decision: "Forged" }, worker, 403)
-    await Promise.all([
-      call("answer", { item: raised.id, decision: "First candidate" }, person),
-      call("answer", { item: raised.id, decision: "Second candidate" }, dual),
-    ])
-    const pageRequest = { task: TASK, kind: "execute", cursor: null }
-    const page = (await call("brief", pageRequest, worker)).step
-    expect(page).toMatchObject({ kind: "answers", answers: [{ id: raised.id, question: question.text }] })
-    expect(page.answers).toHaveLength(1)
-    await call("brief", pageRequest, verifier, 400)
-    await call("brief", { ...pageRequest, channel: "solo" }, worker, 400)
-
-    const runResponse = await fetch(`${daemon.url}/runs`, {
-      method: "POST", headers: { authorization: `Bearer ${control}` }, body: JSON.stringify({ project: project.name }),
-    })
-    expect(runResponse.status).toBe(409)
-
-    const coordinator = daemon.runs().find((run) => run.live)
-    expect(coordinator?.pid).toBeNumber()
-    process.kill(coordinator!.pid!, "SIGKILL")
-    const crashDeadline = Date.now() + 3000
-    while (daemon.runs().some((run) => run.live) && Date.now() < crashDeadline) await Bun.sleep(10)
-    expect(daemon.runs().some((run) => run.live)).toBe(false)
-    expect((await call("claim", { task: TASK }, worker)).step.lease).toBe(lease.lease)
-    await call("answer", { item: raised.id, decision: "Replay must preserve the answer" }, person)
-    expect((await call("brief", pageRequest, worker)).step).toEqual(page)
-    const answerIds = [raised.id]
-    for (let n = 0; n < 20; n++) {
-      const item = (await call("question", { text: `${n}: ${"q".repeat(8000)}` }, worker)).question
-      await call("answer", { item: item.id, decision: "a".repeat(8000), rationale: "r".repeat(8000) }, person)
-      answerIds.push(item.id)
-    }
-    const refreshed = (await call("brief", { task: TASK, kind: "execute" }, worker)).step
-    expect(typeof refreshed.answerCursor).toBe("string")
-    const paged: string[] = []
-    let cursor: string | null | undefined = null
-    do {
-      const nextPage: { kind: string; answers: { id: string }[]; next?: string } = (await call("brief", { ...pageRequest, cursor }, worker)).step
-      expect(nextPage.kind).toBe("answers")
-      paged.push(...nextPage.answers.map(({ id }: { id: string }) => id))
-      cursor = nextPage.next
-    } while (cursor !== undefined)
-    expect(paged).toEqual(answerIds)
-    const remainder = (await call("brief", { ...pageRequest, cursor: refreshed.answerCursor }, worker)).step
-    expect(remainder.answers[0].id).toBe(answerIds[answerIds.indexOf(refreshed.answerCursor) + 1])
-    expect(await Bun.file(launches).text()).toBe(`${directory}\n${directory}\n`)
+    // 0282: the ask channel is gone — the question/answer routes are
+    // tombstoned (the 400/404 pins below) and no person grant exists; a
+    // control token never reaches the executor routes.
+    await call("question", { text: "Which implementation?" }, worker, 404)
+    await call("ready", {}, control, 403)
+    await call("claim", { role: "person" }, worker, 400)
     await call("release", lease, worker)
     const replacement = (await call("claim", { task: TASK }, worker)).step
     expect(replacement.lease).not.toBe(lease.lease)
@@ -304,72 +232,6 @@ test("the daemon grants and settles concurrent worktree leases through protocol 
   }
 }, 20_000)
 
-test("release grants bind HTTP approvals to the reviewed proposal and replay safely after daemon restart", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "auto-executor-gate-"))
-  const dataDir = await mkdtemp(join(tmpdir(), "auto-executor-data-"))
-  const git = gitOf(directory)
-  let daemon: DaemonHandle | undefined
-  try {
-    await git("init")
-    await git("config", "user.name", "Executor tests")
-    await git("config", "user.email", "executor@example.test")
-    await mkdir(join(directory, ".opencode/auto"), { recursive: true })
-    await Bun.write(join(directory, ".opencode/auto/config.json"), JSON.stringify({ subtask: "off", phases: "mt" }))
-    await Bun.write(join(directory, ".gitignore"), ".auto/\n")
-    await git("add", "-A")
-    await git("commit", "-qm", "Fixture")
-    const document = "docs/analysis.md"
-    await mkdir(join(directory, "docs"))
-    const proposal = "# Project analysis\n\n## Analysis\n\nTwo modules, one risk area.\n\n## Goals\n\nPort the core.\n\n## Project brief\n\nA faithful port.\n\n## Roadmap\n\n- R-01 mt — port the core\n"
-    await Bun.write(join(directory, document), proposal)
-    const store = new DaemonStore(dataDir)
-    const project = store.register(directory)
-    const releases = store.issueToken("person-releases").token
-    const questions = store.issueToken("person-questions").token
-    async function call(route: string, token: string, body: object = {}, status = 200) {
-      const response = await fetch(`${daemon!.url}/projects/${encodeURIComponent(project.name)}/executor/${route}`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}` },
-        body: JSON.stringify(body),
-      })
-      const result = await response.json()
-      expect(response.status, JSON.stringify(result)).toBe(status)
-      return result.step
-    }
-    daemon = await startDaemon({ dataDir, port: 0 })
-    expect(await call("claim", questions)).toMatchObject({ kind: "wait" })
-    const first = await call("claim", releases)
-    expect(first).toMatchObject({ kind: "human", gate: "project-start", document, proposal })
-    // 0262-04's blind spot on the wire: with the gate occurrence recorded
-    // and no question pending, the questions-scope claim names the pending
-    // gate instead of reading as nothing to attend to.
-    expect(await call("claim", questions)).toEqual({
-      kind: "wait", reason: "not-ready", detail: "No pending questions. A gate item is pending.", retryAfter: 2,
-    })
-    await call("answer", questions, { item: first.id, decision: "approve" }, 400)
-    const revised = proposal.replace("A faithful port.", "An incremental port.")
-    await Bun.write(join(directory, document), revised)
-    const current = await call("answer", releases, { item: first.id, decision: "approve" })
-    expect(current).toMatchObject({ kind: "human", proposal: revised })
-    expect(current.id).not.toBe(first.id)
-    expect(await Bun.file(join(directory, document)).text()).toBe(revised)
-    const approve = { item: current.id, decision: "approve" }
-    expect(await call("answer", releases, approve)).toMatchObject({ kind: "wait" })
-    const landed = await git("rev-parse", "HEAD")
-    expect((await git("show", "--format=", "--name-only", "HEAD")).trim()).toBe(document)
-    expect(await git("show", `HEAD:${document}`)).toContain("Clarified: yes")
-    await daemon.stop()
-    daemon = await startDaemon({ dataDir, port: 0 })
-    await call("answer", questions, approve, 400)
-    expect(await call("answer", releases, approve)).toMatchObject({ kind: "wait" })
-    expect(await git("rev-parse", "HEAD")).toBe(landed)
-  } finally {
-    await daemon?.stop()
-    await rm(dataDir, { recursive: true, force: true })
-    await rm(directory, { recursive: true, force: true })
-  }
-}, 20_000)
-
 // 0276 (0256 stage 2's first convergence kind): the formulate grant kind's
 // wire pins — the menu's row and catalog entry, the claim's leased brief
 // carrying the phase identity (the qualified id and the task-index path)
@@ -413,7 +275,7 @@ test("the formulate grant kind rides the wire beside the standing kinds", async 
   await chmod(launcher, 0o755)
   let daemon: DaemonHandle | undefined
   try {
-    daemon = await startDaemon({ dataDir, port: 0, launch: launcher })
+    daemon = await startDaemon({ dataDir, port: 0 })
     async function call(operation: string, body: unknown, token = worker, expected = 200) {
       const response = await fetch(`${daemon!.url}/projects/${encodeURIComponent(project.name)}/executor/${operation}`, {
         method: "POST",
@@ -426,7 +288,7 @@ test("the formulate grant kind rides the wire beside the standing kinds", async 
     }
     const ready = await call("ready", { channel: "solo" })
     expect(ready.menu.claimable).toMatchObject([{ unit: TASK, title: "Formulate the Implement tasks", kinds: ["formulate"] }])
-    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "synthesize", "verify"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "synthesize", "verify"])
     expect(ready.menu.types.formulate).toMatchObject({ id: "formulate", writes: { scope: "none" } })
     const claimed = await call("claim", { channel: "solo", task: TASK, kind: "formulate" })
     expect(claimed.step).toMatchObject({
@@ -486,7 +348,7 @@ test("the distill grant kind rides the wire beside the standing kinds", async ()
     }
     const ready = await call("ready", { channel: "solo" })
     expect(ready.menu.claimable).toMatchObject([{ unit: "R-01.P01", title: "P01-implement Implementation", kinds: ["distill"] }])
-    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "synthesize", "verify"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "synthesize", "verify"])
     expect(ready.menu.types.distill).toMatchObject({ id: "distill", writes: { scope: "none" } })
     const claimed = await call("claim", { channel: "solo", task: "R-01.P01", kind: "distill" })
     // The pair captured ahead of the assertion: Bun's toMatchObject with
@@ -512,7 +374,7 @@ test("the distill grant kind rides the wire beside the standing kinds", async ()
     const settled = await call("report", { channel: "solo", step: pair.step, lease: pair.lease, outcome: "ended" })
     expect(settled.step).toEqual({
       kind: "phase-boundary", phase: "R-01.P01",
-      remedy: "Run transfer to advance the phase.",
+      remedy: "Advance it with POST /projects/<project>/transfer.",
     })
     expect(await git("show", "-s", "--format=%B", "HEAD")).toContain("Auto-Stage: phase-handover")
     // The apply never happened coordinator-side: the phase's todo.md still
@@ -589,7 +451,7 @@ test("the audit grant kind rides the wire beside the standing kinds", async () =
     }
     const ready = await call("ready", { channel: "solo" })
     expect(ready.menu.claimable).toMatchObject([{ unit: TASK_2, title: "Adjudicate the due assurance rows (R-01)", kinds: ["audit"] }])
-    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "human", "question", "synthesize", "verify"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "synthesize", "verify"])
     expect(ready.menu.types.audit).toMatchObject({ id: "audit", writes: { scope: "none" } })
     const claimed = await call("claim", { channel: "solo", task: TASK_2, kind: "audit" })
     const pair = { step: claimed.step.id as string, lease: claimed.step.lease as string }
