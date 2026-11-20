@@ -118,8 +118,9 @@ describe("manual-driver prompt ratchet", () => {
     expect(executor).toContain("the coordinator's boundary checks are the authority either way")
     // The driver-side producer: one rendering derived from the fence's own
     // tables — never a second hand-maintained list (P5/P7). The formulate id
-    // joined with its own enactment (0276, 0261 D2's id-growth letter).
-    expect(coordinator).toContain("const WORK_TYPE_IDS = [\"execute\", \"verify\", \"fix\", \"formulate\"] as const satisfies readonly Grant[\"kind\"][]")
+    // joined with its own enactment (0276, 0261 D2's id-growth letter); the
+    // distill id with 0277's.
+    expect(coordinator).toContain("const WORK_TYPE_IDS = [\"execute\", \"verify\", \"fix\", \"formulate\", \"distill\"] as const satisfies readonly Grant[\"kind\"][]")
     expect(coordinator).toContain("export function executorTypeCatalog(): ExecutorTypes {")
     expect(coordinator).toContain("UNIT_STATE_DOC.source")
     expect(coordinator).toContain("taskDocPaths(CATALOG_UNIT).handoff")
@@ -141,7 +142,9 @@ describe("manual-driver prompt ratchet", () => {
     const steps = src("executor-steps.ts")
     // The enumeration and the write letter: the family named in prose, the
     // input todo's exclusion taught, the driver's close-out shapes refused.
-    expect(executor).toContain("For `execute`, `verify`, `fix`, or `formulate`, work in the returned `workspace` and follow `prompt`.")
+    // (0277 grew the enumeration with distill; the sentence anchor moved
+    // with it — the standing moved-anchor discipline.)
+    expect(executor).toContain("For `execute`, `verify`, `fix`, `formulate`, or `distill`, work in the returned `workspace` and follow `prompt`.")
     expect(executor).toContain("Formulation may write only the granted phase's planning documents — the `index` path the grant names, the planned tasks' `todo.md` files, and its coverage map and handoff")
     expect(executor).toContain("never its own input `todo.md`, and never a `done.md`, a tick, or a rename")
     // The producer's anchors: the family table and the exclusion, the
@@ -151,10 +154,45 @@ describe("manual-driver prompt ratchet", () => {
     expect(coordinator).toContain("path !== taskStatePaths(entry.grant.unit).pending")
     expect(coordinator).toContain("DONE_STATE_DOC_SOURCE")
     expect(coordinator).toContain("CATALOG_PHASE_INDEX")
-    expect(coordinator).toContain('grant.kind === "formulate" ? "phase-formulate" : "exec"')
+    expect(coordinator).toContain('grant.kind === "formulate" ? "phase-formulate" : grant.kind === "distill" ? "phase-handover" : "exec"')
     expect(steps).toContain("awaitingFormulation(plan.tasks, phase)")
     expect(steps).toContain("followUp: true")
     expect(steps).toContain("kind: \"formulate\"")
+  })
+
+  // plans/0277 (0256 stage 2's second convergence kind, the transfer
+  // advance's session work): the distill grant kind's 0203 both-sides arm —
+  // the executor.md item-2 sentences, the fence's per-kind arm and the
+  // catalog's distill letter are one ruled relationship, so the kind's write
+  // boundary cannot drift on one side. The behavioral proof lives in
+  // test/executor-catalog.test.ts (the letter equal to the fence over the
+  // corpus, both directions) and test/executor-distill.test.ts (the
+  // lifecycle); this arm pins the copy-bearing sides to the producer's
+  // anchors.
+  test("the distill kind: executor.md's sentences and the fence's per-kind arm are pinned together (plans/0277)", () => {
+    const executor = text("executor.md")
+    const coordinator = src("executor-coordinator.ts")
+    const steps = src("executor-steps.ts")
+    // The enumeration and the write letter: the family named in prose — the
+    // granted handover path alone, the completion shapes refused, the
+    // person's transfer act named, the landed share terminal (no
+    // verification share follows the distillation).
+    expect(executor).toContain("For `execute`, `verify`, `fix`, `formulate`, or `distill`, work in the returned `workspace` and follow `prompt`.")
+    expect(executor).toContain("Distillation may write only the granted phase's `handover` document — the path the grant names, its four protocol sections")
+    expect(executor).toContain("the boundary's completion shapes (the rename, the tick, the transition) stay the person's `transfer` act")
+    expect(executor).toContain("a landed distillation ends the unit — no verification share follows it")
+    // The producer's anchors: the fence's per-kind arm keyed on the carried
+    // handover path, the catalog's placeholder anchor, the stage word (the
+    // push distillation commit's own), the derivation's boundary predicate
+    // and the landed-receipt terminal the preview reads.
+    expect(coordinator).toContain('if (entry.grant.kind === "distill") return path === entry.grant.handover')
+    expect(coordinator).toContain("CATALOG_PHASE_HANDOVER")
+    expect(coordinator).toContain('grant.kind === "distill" ? "phase-handover" : "exec"')
+    expect(coordinator).toContain("async function distillationProblems(checkout: string, grant: Extract<Grant, { kind: \"distill\" }>): Promise<string[]> {")
+    expect(coordinator).toContain("previous.closeCommit !== undefined || last?.grant.kind === \"distill\"")
+    expect(steps).toContain("kind: \"distill\"")
+    expect(steps).toContain("phaseHandoverDoc(phase)")
+    expect(steps).toContain("!current.handoverValid")
   })
 
   // plans/0270 (0264-04's fix): the fingerprint letter on the protocol

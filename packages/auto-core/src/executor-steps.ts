@@ -3,13 +3,13 @@
 import { dirname, join } from "node:path"
 import { CONFIG_FILE, loadProjectConfig, type ProjectConfig } from "./config"
 import { ANALYSIS_DOC, taskDocPaths } from "./docpaths"
-import { handoffStatus } from "./document/roles"
+import { handoffStatus, validHandover } from "./document/roles"
 import { parkReleaseNote } from "./execute"
 import { awaitingFormulation } from "./formulate"
 import { repoRoots, statusEntriesRead, workdirEntry, workTree } from "./git"
 import { loadModes, type ModeSpec } from "./mode"
-import { currentPhase, phaseGateProblems, phaseGates, phaseSurveyDoc, readPhases, type PhaseUnit } from "./phases"
-import { renderFix, renderWhole, renderWrapup, type PromptFacts } from "./prompt"
+import { currentPhase, phaseGateProblems, phaseGates, phaseHandoverDoc, phaseSurveyDoc, phaseTitle, readPhases, type PhaseUnit } from "./phases"
+import { renderFix, renderPhaseHandover, renderWhole, renderWrapup, type PromptFacts } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { peekProgress } from "./resume"
 import { loadPlan, next, promptViews, readyTasks, strandedParks, taskIndexPath, type Plan } from "./tasks"
@@ -23,6 +23,7 @@ export type ExecutorPreview =
   | { kind: "wait"; reason: "not-ready" | "in-flight"; detail: string }
   | { kind: "execute"; unit: string; title: string; touches?: readonly string[]; prompt: string }
   | { kind: "formulate"; unit: string; title: string; phase: string; index: string; prompt: string }
+  | { kind: "distill"; unit: string; title: string; handover: string; prompt: string }
   | { kind: "phase-boundary"; phase: string; problems: readonly string[] }
   | { kind: "done" }
 
@@ -44,6 +45,14 @@ export type ExecutorSnapshot = {
       gateProblems: readonly string[]
       facts: PromptFacts
       mode?: ModeSpec
+      // 0277 (0256 stage 2's second convergence kind, the transfer advance's
+      // session work): the boundary derivation's durable inputs — the phase
+      // after the current one (the distillation brief's `next`) and whether
+      // the phase's handover document already passes validHandover (the push
+      // dispatch's idempotent skip predicate, read once here so the pure
+      // derivation below never touches disk).
+      following?: PhaseUnit
+      handoverValid: boolean
     }
   }
 }
@@ -86,7 +95,13 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
     ? readyTasks(current.plan).find(({ id }) => id === state.route?.task)
     : next(current.plan))
   const continuation = task !== undefined && task.id === state.continuationUnit
-  if (state.tree === "dirty" && !continuation && !state.route?.scoped) {
+  // 0277: the boundary's own continuation — a failed, expired or released
+  // distill lease routes the phase's qualified id like the execute
+  // continuation routes its task, so the retained edit (the partial handover
+  // document, the family's own write) rides the next attempt instead of
+  // meeting the clean-tree block a fresh reader cannot remedy.
+  const boundaryContinuation = state.route?.task === current?.plan.phase && state.continuationUnit === current?.plan.phase
+  if (state.tree === "dirty" && !continuation && !boundaryContinuation && !state.route?.scoped) {
     return { kind: "blocked", reason: "cleanTree", detail: "Inspect and resolve uncommitted changes before starting work." }
   }
   if (!current) {
@@ -142,13 +157,49 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
     const prompt = renderWhole(current.facts, views.plan, views.task, taskDocPaths(task.id), { phase, mode: current.mode, continuation: continuation && state.continuationHandoff })
     return { kind: "execute", unit: task.id, title: task.title, touches: task.touches, prompt }
   }
-  if (state.route) return { kind: "wait", reason: "not-ready", detail: `${state.route.task} is not ready.` }
+  // The boundary work's own address (0277): a targeted claim or continuation
+  // route naming the current phase's qualified id passes to the boundary
+  // derivation below — every other target keeps the standing not-ready wait.
+  if (state.route && state.route.task !== plan.phase) return { kind: "wait", reason: "not-ready", detail: `${state.route.task} is not ready.` }
   const parks = strandedParks(plan)
   if (parks.length) {
     return { kind: "blocked", reason: "mutualPark", detail: parks.map((task) => `${task.id} parks on ${task.parked}`).join(", ") }
   }
   if (state.round?.open) {
     return { kind: "wait", reason: "not-ready", detail: "The open round has no pending tasks. Add work or close the round." }
+  }
+  // 0277 (0256 stage 2's second convergence kind): the transfer advance's
+  // distillation session — the one that writes the phase's permanent handover
+  // document — rides the protocol beside its push twin, additive (P10 — the
+  // person's transfer path unchanged, byte-identical). The claimable keys on
+  // exactly the durable records the push dispatch keys on: the handover route
+  // (the index present, tasks listed, every one done — routePhase's own
+  // statuses) MINUS the push skip condition (validHandover of the handover
+  // document — the idempotent skip that goes straight to archiving), held
+  // behind the person's human gate (the survey-release arm above, plus the
+  // clarification problems the missing-survey shape carries — the same
+  // "human gate ahead of any session" discipline the advance itself runs).
+  // No protocol step ever *is* the advance: the completion rename, the wall's
+  // close, the brief install and the transition commit stay the person's
+  // transfer act (the apply), and the landed share composes with the push
+  // path's own interrupted-handover shape — the complete document on a
+  // committed tree skips the session and ②③ are made up push-side.
+  if (current.indexPresent && current.plan.tasks.length > 0 && current.plan.tasks.every((entry) => entry.status === "done") &&
+      !current.handoverValid && !current.gateProblems.some((problem) => problem.startsWith("clarification:"))) {
+    const handover = phaseHandoverDoc(phase)
+    return {
+      kind: "distill",
+      unit: plan.phase,
+      title: phaseTitle(phase),
+      handover,
+      prompt: renderPhaseHandover(current.facts, {
+        phase: phase.entry,
+        handover,
+        next: current.following ? phaseTitle(current.following) : undefined,
+        closedTasks: current.plan.tasks.flatMap((entry) =>
+          entry.closed === undefined ? [] : [{ id: entry.id, title: entry.title, reason: entry.closed }]),
+      }),
+    }
   }
   return { kind: "phase-boundary", phase: plan.phase, problems: current.gateProblems }
 }
@@ -198,10 +249,19 @@ async function readExecutorSnapshot(dir: string, continuationUnit?: string, chec
       Bun.file(join(dir, phaseSurveyDoc(phase))).exists(),
       plan.tasks.every((task) => task.status === "done") ? phaseGateProblems(dir, phase, gates) : [],
     ])
+    // 0277: the boundary derivation's inputs read once beside the standing
+    // ones — the phase after the current (readPhases' own order) and the
+    // handover document's validity (validHandover, the push skip predicate's
+    // own function).
+    const phases = round.phases
+    const following = phases[phases.findIndex((unit) => unit.id === phase.id) + 1]
+    const handoverValid = validHandover(await Bun.file(join(dir, phaseHandoverDoc(phase))).text().catch(() => ""))
     state.round.current = {
       phase, plan, indexPresent, surveyPresent, gateProblems,
       facts: promptFacts({ dir, intent: config.intent }),
       mode: loadModes(dir)[config.mode],
+      ...(following ? { following } : {}),
+      handoverValid,
     }
   }
   return state
@@ -275,8 +335,10 @@ type FollowUp = { kind: "verify"; unit: string; baseline: string; head: string }
 
 // The follow-up blocks (0276: the formulate step excluded with execute — a
 // follow-up derivation never answers with the fresh-claim formulate step,
-// its route bypasses the awaiting branch by construction).
-type FollowUpBlock = Exclude<ExecutorPreview, { kind: "execute" } | { kind: "formulate" }>
+// its route bypasses the awaiting branch by construction; 0277 adds the
+// distill step — a follow-up route always targets a task unit, so the
+// phase-addressed boundary step never answers one either).
+type FollowUpBlock = Exclude<ExecutorPreview, { kind: "execute" } | { kind: "formulate" } | { kind: "distill" }>
 
 export function readExecutorFollowUp(
   dir: string,
@@ -310,8 +372,11 @@ export async function readExecutorFollowUp(
   const step = deriveExecutorPreview(state)
   // The follow-up flag above bypasses the awaiting branch, so the formulate
   // step never answers a follow-up; the unreachable arm reads as off-route
-  // (the fresh-claim route alone owns the formulate step).
-  if (step.kind === "formulate") {
+  // (the fresh-claim route alone owns the formulate step). The distill step
+  // joins it by the route wait (0277): a follow-up targets a task id, which
+  // never equals the current phase's — the boundary step is the fresh-claim
+  // and continuation routes' alone.
+  if (step.kind === "formulate" || step.kind === "distill") {
     return { kind: "wait", reason: "not-ready", detail: `${share.unit} is outside the current phase route.` }
   }
   if (step.kind !== "execute") return step

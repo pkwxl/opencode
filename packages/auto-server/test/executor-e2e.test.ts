@@ -42,6 +42,15 @@ exec "$@"
   const start = () => startDaemon({ dataDir, port: 0, launch: launcher })
   try {
     await Bun.write(join(directory, "docs", TASK, "todo.md"), `# ${TASK}: the widget\n\nTouches: src/widget.ts\n\n## Scope\n\nBuild the widget.\n`)
+    // 0277: a valid phase handover committed ahead — the fixture models the
+    // post-distillation boundary (the push skip condition holding), so the
+    // close-out's next step reads the boundary, not the claimable
+    // distillation.
+    await Bun.write(join(directory, "docs/R-01/P01-implement/handover.md"), [
+      "# Handover", "",
+      ...["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]
+        .map((section) => `${section}\n\nDistilled content.\n`),
+    ].join("\n"))
     await git("add", "-A")
     await git("commit", "-qm", "declare write scope")
     daemon = await start()
@@ -76,7 +85,7 @@ exec "$@"
     // 0271's additive half rides the same menu: the pending person items,
     // the empty floor here (nothing pending on a bare project).
     expect(Object.keys(ready.menu).sort()).toEqual(["claimable", "leases", "pending", "types"])
-    expect(Object.keys(ready.menu.types).sort()).toEqual(["execute", "fix", "formulate", "human", "question", "verify"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["distill", "execute", "fix", "formulate", "human", "question", "verify"])
     const { types, pending, ...menuBefore } = ready.menu
     expect(Object.keys(menuBefore).sort()).toEqual(["claimable", "leases"])
     expect(pending).toEqual([])
@@ -247,6 +256,14 @@ test("the daemon grants and settles concurrent worktree leases through protocol 
     for (const unit of tasks) {
       await Bun.write(join(directory, "docs", unit, "todo.md"), `# ${unit}: a widget\n\nDepends: none\nTouches: src/${unit}.ts\n\n## Scope\n\nExport the widget.\n`)
     }
+    // 0277: the post-distillation boundary modeled ahead (the valid handover
+    // committed — the push skip condition), the lanes' close reading the
+    // boundary step as before.
+    await Bun.write(join(directory, "docs/R-01/P01-implement/handover.md"), [
+      "# Handover", "",
+      ...["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]
+        .map((section) => `${section}\n\nDistilled content.\n`),
+    ].join("\n"))
     await git("add", "-A")
     await git("commit", "-qm", "Declare independent scopes")
     daemon = await startDaemon({ dataDir, port: 0 })
@@ -403,7 +420,7 @@ test("the formulate grant kind rides the wire beside the standing kinds", async 
     }
     const ready = await call("ready", { channel: "solo" })
     expect(ready.menu.claimable).toMatchObject([{ unit: TASK, title: "Formulate the Implement tasks", kinds: ["formulate"] }])
-    expect(Object.keys(ready.menu.types).sort()).toEqual(["execute", "fix", "formulate", "human", "question", "verify"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["distill", "execute", "fix", "formulate", "human", "question", "verify"])
     expect(ready.menu.types.formulate).toMatchObject({ id: "formulate", writes: { scope: "none" } })
     const claimed = await call("claim", { channel: "solo", task: TASK, kind: "formulate" })
     expect(claimed.step).toMatchObject({
@@ -418,6 +435,85 @@ test("the formulate grant kind rides the wire beside the standing kinds", async 
     // an unknown one.
     expect(await call("brief", { channel: "solo", task: TASK, kind: "formulate" })).toMatchObject({ step: claimed.step })
     await call("claim", { channel: "solo", kind: "inaugurate" }, worker, 400)
+  } finally {
+    await daemon?.stop()
+    await rm(dataDir, { recursive: true, force: true })
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 20_000)
+
+// 0277 (0256 stage 2's second convergence kind, the transfer advance's
+// session work): the distill grant kind's wire pins — the menu's row and
+// catalog entry, the claim's leased brief carrying the handover document
+// path (the one write surface) beside the standing execute-shaped fields,
+// the settlement's landed share terminal on the wire (the boundary step
+// teaching the person's transfer, never a verify row), and the kind
+// vocabulary the request layer admits.
+test("the distill grant kind rides the wire beside the standing kinds", async () => {
+  const directory = await fixtureProject("auto-executor-distill-", { subtask: "off" })
+  const git = gitOf(directory)
+  // The handover route over the fixture's implicit implement phase: the
+  // task done (its done.md and the index tick), the phase itself still
+  // incomplete — exactly the durable records the advance's distillation
+  // keys on.
+  await rm(join(directory, "docs", TASK, "todo.md"))
+  await Bun.write(join(directory, "docs", TASK, "done.md"), `# ${TASK}: the widget\n`)
+  await Bun.write(join(directory, "docs/R-01/P01-implement/tasks.md"), `# Tasks\n\n- [x] ${TASK} the widget\n`)
+  await git("add", "-A")
+  await git("commit", "-qm", "task done, boundary awaits")
+  const dataDir = await mkdtemp(join(tmpdir(), "auto-executor-data-"))
+  const store = new DaemonStore(dataDir)
+  const project = store.register(directory)
+  const worker = store.issueToken("executor", "worker").token
+  let daemon: DaemonHandle | undefined
+  try {
+    daemon = await startDaemon({ dataDir, port: 0 })
+    async function call(operation: string, body: unknown, token = worker, expected = 200) {
+      const response = await fetch(`${daemon!.url}/projects/${encodeURIComponent(project.name)}/executor/${operation}`, {
+        method: "POST",
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+        body: JSON.stringify(body),
+      })
+      const result = await response.json()
+      expect(response.status, JSON.stringify(result)).toBe(expected)
+      return result
+    }
+    const ready = await call("ready", { channel: "solo" })
+    expect(ready.menu.claimable).toMatchObject([{ unit: "R-01.P01", title: "P01-implement Implementation", kinds: ["distill"] }])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["distill", "execute", "fix", "formulate", "human", "question", "verify"])
+    expect(ready.menu.types.distill).toMatchObject({ id: "distill", writes: { scope: "none" } })
+    const claimed = await call("claim", { channel: "solo", task: "R-01.P01", kind: "distill" })
+    // The pair captured ahead of the assertion: Bun's toMatchObject with
+    // expect.any() replaces the received fields it matches, so the grant's
+    // own strings are read before any asymmetric matcher touches them.
+    const pair = { step: claimed.step.id as string, lease: claimed.step.lease as string }
+    expect(claimed.step).toMatchObject({
+      kind: "distill", unit: "R-01.P01", title: "P01-implement Implementation",
+      handover: "docs/R-01/P01-implement/handover.md",
+      workspace: directory, attempt: 1, budget: expect.any(Number),
+      lease: expect.any(String), id: expect.any(String), deadline: expect.any(Number),
+    })
+    expect(claimed.step.prompt).toContain("docs/R-01/P01-implement/handover.md")
+    // The session writes the handover document; the settlement lands the
+    // share under the push distillation's own stage word and the wire's
+    // next step is the boundary — the person's transfer, never a verify
+    // row (0277 D6's ruling).
+    await Bun.write(join(directory, "docs/R-01/P01-implement/handover.md"), [
+      "# Handover", "",
+      ...["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]
+        .map((section) => `${section}\n\nDistilled content.\n`),
+    ].join("\n"))
+    const settled = await call("report", { channel: "solo", step: pair.step, lease: pair.lease, outcome: "ended" })
+    expect(settled.step).toEqual({
+      kind: "phase-boundary", phase: "R-01.P01",
+      remedy: "Run transfer to advance the phase.",
+    })
+    expect(await git("show", "-s", "--format=%B", "HEAD")).toContain("Auto-Stage: phase-handover")
+    // The apply never happened coordinator-side: the phase's todo.md still
+    // stands and the phases index is unticked — the completion shapes the
+    // person's transfer act.
+    expect(await Bun.file(join(directory, "docs/R-01/P01-implement/todo.md")).exists()).toBe(true)
+    expect(await Bun.file(join(directory, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 implement")
   } finally {
     await daemon?.stop()
     await rm(dataDir, { recursive: true, force: true })

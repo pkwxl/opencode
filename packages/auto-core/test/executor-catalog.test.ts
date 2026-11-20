@@ -86,6 +86,8 @@ const PATHS = [
   "docs/T-004/coverage.md",
   "docs/T-004/handoff.md",
   "docs/R-01/P01-implement/todo.md",
+  "docs/R-01/P01-implement/handover.md",
+  "docs/R-02/P03-design/handover.md",
   "docs/R-99/P12-data-model/done.md",
   "docs/T-1/subtasks.md",
   "docs/T-001/subtasks.md",
@@ -105,17 +107,19 @@ const PATHS = [
 ]
 
 test("the catalog's ids are exactly the ids the coordinator can grant", () => {
-  expect(Object.keys(catalog)).toEqual(["execute", "verify", "fix", "formulate", "human", "question"])
+  expect(Object.keys(catalog)).toEqual(["execute", "verify", "fix", "formulate", "distill", "human", "question"])
   // The work ids are the wire's grant kinds (compile-time satisfies beside
   // the rendering); the person ids are the step kinds the person channel
   // delivers — never an id the coordinator cannot grant (P13). The
   // formulate id joined with its own enactment (0276, 0261 D2's id-growth
   // letter: each new id its own change with its fence-tables entry and
-  // ratchet pin).
+  // ratchet pin); the distill id joins with 0277's (the transfer advance's
+  // session work).
   expect(catalog.execute.id).toBe("execute")
   expect(catalog.verify.id).toBe("verify")
   expect(catalog.fix.id).toBe("fix")
   expect(catalog.formulate.id).toBe("formulate")
+  expect(catalog.distill.id).toBe("distill")
   expect(catalog.human.id).toBe("human")
   expect(catalog.question.id).toBe("question")
 })
@@ -219,8 +223,40 @@ test("the formulate letter equals the fence's family arm, both sides (plans/0276
   expect(permitted({ grant: { kind: "formulate", unit: "T-004" } }, "docs/R-01/P01-implement/tasks.md")).toBe(false)
 })
 
-test("the person entries' authority vocabulary equals the authority checks", async () => {
-  const coordinator = await openExecutorCoordinator(project())
+// plans/0277 (0256 stage 2's second convergence kind, the transfer advance's
+// session work): the distill letter — the boundary distillation's write
+// boundary stated from the same table the fence reads. The writes letter
+// carries the handover document's placeholder alone (the granted `handover`
+// names the real one); the never letter is the standing refusal whole —
+// nothing the never-set refuses is admitted for the distill kind.
+test("the distill letter equals the fence's per-kind arm, both sides (plans/0277)", () => {
+  const handover = "docs/R-01/P01-implement/handover.md"
+  const grant = { grant: { kind: "distill" as const, unit: "R-01.P01", handover } }
+  for (const path of PATHS) {
+    expect(permitted(grant, path), path).toBe(path === handover)
+  }
+  expect(catalog.distill.writes.scope).toBe("none")
+  expect(catalog.distill.writes.paths).toEqual(["docs/R-NN/P<nn>-<type>/handover.md"])
+  expect(catalog.distill.writes.undeclared).toBeUndefined()
+  // The never letter is the standing rendering (verify's own array) — sound
+  // both directions: everything it denies the fence denies, and everything
+  // outside the one admitted path the fence refuses for the distill kind —
+  // the completion shapes (phases.md, the phase's todo/done) and another
+  // phase's handover document included (the honest limit 0276 stated for the
+  // formulate anchor: the per-unit anchor names the one admitted, a
+  // deny-list provisioner reading the letter alone under-dennies the rest,
+  // the coordinator's checks the authority per 0261 D3).
+  expect(catalog.distill.never.paths).toEqual(catalog.verify.never.paths)
+  for (const path of PATHS) {
+    if (neverMatch(path)) expect(permitted(grant, path), path).toBe(false)
+    if (path !== handover) expect(permitted(grant, path), path).toBe(false)
+  }
+  // No other kind ever carries the arm: an execute grant over the same unit
+  // never admits the handover document.
+  expect(permitted({ grant: { kind: "execute", unit: "R-01.P01" } }, handover)).toBe(false)
+})
+
+test("the person entries' authority vocabulary equals the authority checks", async () => {  const coordinator = await openExecutorCoordinator(project())
   try {
     const raised = await coordinator.question({ token: "worker", channel: "" }, "Which flavor?")
     const questions = { token: "person", channel: "a", delegation: ["questions"] as const }
@@ -269,7 +305,7 @@ test("the absent-block floor: a consumer that ignores the block reads the pre-ch
     // The menu's claimable kinds are always catalog members (never an id the
     // coordinator cannot grant).
     for (const kinds of menu.claimable.flatMap(({ kinds }) => [...kinds])) {
-      expect(["execute", "verify", "fix", "formulate"]).toContain(kinds)
+      expect(["execute", "verify", "fix", "formulate", "distill"]).toContain(kinds)
     }
     // The block rides both menu arms identically (the leases-held arm too).
     const grant = await coordinator.claim(holder)

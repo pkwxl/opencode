@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { CONFIG_FILE } from "../src/config"
+import { HANDOVER_SECTIONS } from "../src/document/roles"
 import { readExecutorPreview } from "../src/executor-steps"
 import { executorTypeCatalog, openExecutorCoordinator } from "../src/executor-coordinator"
 
@@ -79,6 +80,7 @@ test("previews the pending survey release before checking unowned dirt", async (
   write(dir, ".opencode/auto/phases/survey.md", "# Survey\n\nGate: human\n\n## plan duties\n\nRead the sources.\n\n<!-- auto: eof -->\n")
   const path = phase(dir, "survey")
   write(dir, `${path}/tasks.md`, "# Tasks\n\n- [x] T-001 Survey sources\n")
+  write(dir, `${path}/handover.md`, PHASE_HANDOVER)
   write(dir, "docs/T-001/done.md", "# Survey sources\n")
   const document = `${path}/survey.md`
   const survey = "# Survey\n\nFork: scope — widen coverage? Recommend: keep it narrow.\n"
@@ -112,10 +114,21 @@ test("an open round with completed tasks has no phase boundary to cross", async 
 
 const holder = { token: "worker-1", channel: "solo" }
 
+// A valid phase handover document (0277's push skip condition): a fixture
+// writing it models the post-distillation boundary — the distillation landed,
+// the apply (the completion rename, the transition commit) still the person's
+// transfer — so the executor's boundary step reads phase-boundary there.
+const PHASE_HANDOVER = [
+  "# Handover",
+  "",
+  ...HANDOVER_SECTIONS.map((section) => `${section}\n\nDistilled content.\n`),
+].join("\n")
+
 function executableProject() {
   const dir = project()
   const path = phase(dir, "implement")
   write(dir, `${path}/tasks.md`, "# Tasks\n\n- [ ] T-001 Implement widget\n")
+  write(dir, `${path}/handover.md`, PHASE_HANDOVER)
   write(dir, "docs/T-001/todo.md", "# Implement widget\n\nTouches: src/widget.ts\n\n## Scope\n\nImplement the widget.\n")
   commitFixture(dir)
   return dir
@@ -135,6 +148,7 @@ function nestedProject() {
   write(dir, CONFIG_FILE, JSON.stringify({ subtask: "off", isolate: ["vendor"] }))
   const path = phase(dir, "implement")
   write(dir, `${path}/tasks.md`, "# Tasks\n\n- [ ] T-001 Ship the nested change\n")
+  write(dir, `${path}/handover.md`, PHASE_HANDOVER)
   write(dir, "docs/T-001/todo.md", "# Ship the nested change\n\nTouches: vendor/src/lib.ts\n\n## Scope\n\nUpdate the nested library.\n")
   commitFixture(dir)
   return dir
@@ -997,6 +1011,7 @@ function surveyReleaseProject() {
   write(dir, ".opencode/auto/phases/survey.md", "# Survey\n\nGate: human\n\n## plan duties\n\nRead the sources.\n\n<!-- auto: eof -->\n")
   const path = phase(dir, "survey")
   write(dir, `${path}/tasks.md`, "# Tasks\n\n- [x] T-001 Survey sources\n")
+  write(dir, `${path}/handover.md`, PHASE_HANDOVER)
   write(dir, "docs/T-001/done.md", "# Survey sources\n")
   commitFixture(dir)
   const document = `${path}/survey.md`
