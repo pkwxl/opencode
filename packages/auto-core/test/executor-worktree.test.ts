@@ -74,10 +74,15 @@ test("disjoint code tasks lease independent worktrees and land through the coord
     })
     write(first.workspace, "src/one.ts", "export const one = 1\n")
     write(second.workspace, "src/two.ts", "export const two = 2\n")
-    expect(await coordinator.report(worker, first.id, first.lease, "ended")).toMatchObject({ kind: "landed" })
+    const firstShare = await coordinator.report(worker, first.id, first.lease, "ended")
+    expect(firstShare).toMatchObject({ kind: "landed" })
     expect(git(dir, "rev-parse", "HEAD")).toBe(base)
     expect(existsSync(join(dir, "src/one.ts"))).toBe(false)
-    expect(await coordinator.claim(worker, first.unit, "verify")).toMatchObject({ kind: "wait" })
+    // 0273: the producer's own token reads the settled terminal naming the
+    // booked lane share, not the retired wait.
+    const settled = await coordinator.claim(worker, first.unit, "verify")
+    if (settled.kind !== "settled" || firstShare.kind !== "landed") throw new Error(JSON.stringify(settled))
+    expect(settled.commit).toBe(firstShare.commit)
     const verify = await claim(coordinator, verifier, first.unit, "verify")
     expect(verify.workspace).toBe(first.workspace)
     write(verify.workspace, "docs/T-001/report.md", pass)

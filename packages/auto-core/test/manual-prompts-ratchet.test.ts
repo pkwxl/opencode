@@ -66,7 +66,9 @@ describe("manual-driver prompt ratchet", () => {
     expect(executor).toContain("a fresh agent context and a different token from the producer of the immediately preceding execute or fix share")
     expect(coordinator).toContain("entry.booking.outcome !== outcome")
     expect(coordinator).toContain("if (entry.booking.receipt) return entry.booking.receipt")
-    expect(coordinator).toContain("Verification requires a different token from the execute share's producer.")
+    // 0273 moved the same-token answer's rendering from the retired wait line
+    // to the settled terminal; the independence test itself is the anchor.
+    expect(coordinator).toContain("producer.holder.token === holder.token")
     // Only the coordinator can commit. The verifier's document scope is fixed.
     expect(executor).toContain("The coordinator owns staging, commits, and driver state.")
     expect(executor).toContain("Never run Git staging or commit operations.")
@@ -187,6 +189,25 @@ describe("manual-driver prompt ratchet", () => {
     expect(coordinator).toContain("The cause is outside this lease's permitted writes; question ${item.id} is raised for a person decision — retrying cannot fix it.")
     expect(coordinator).toContain("function neverSetRows(")
     expect(coordinator).toContain("function outsidePerimeter(")
+  })
+
+  // plans/0273 (0264-05's fix): the settled-holder terminal on the executor
+  // prompt, pinned beside the producer's anchors — the same-token verify
+  // claim over a booked report answering with the additive `settled` step
+  // kind naming the booked commit (the settlement's own evidence record),
+  // the client's act reconcile-and-end, and the lost-report letter naming
+  // the terminal as the lost response's reconciliation. The wire side lives
+  // in the executor e2e (wireStep's rendering arm); the behavior — the
+  // split, the live-share floor, the different-token independence — in
+  // test/executor-steps.test.ts.
+  test("the executor prompt names the settled-holder terminal (plans/0273)", () => {
+    const executor = text("executor.md")
+    const coordinator = src("executor-coordinator.ts")
+    expect(executor).toContain("A `settled` step answers a claim from a token whose share's report was already accepted")
+    expect(executor).toContain("reconcile against the commit and end the session")
+    expect(executor).toContain("A `settled` answer to a same-token claim also reconciles a lost report response")
+    expect(coordinator).toContain("kind: \"settled\", unit: producer.grant.unit, commit: receipt.commit,")
+    expect(coordinator).toContain("This token's claim on ${producer.grant.unit} has ended")
   })
 
   test("the src side of the grammar table still holds (anti-rot)", () => {

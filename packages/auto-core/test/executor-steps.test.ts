@@ -526,10 +526,12 @@ test("verification uses the durable producer token across coordinator restart", 
   const dir = executableProject()
   const first = await openExecutorCoordinator(dir)
   let landed
+  let execId: string | undefined
   const baseline = git(dir, "rev-parse", "HEAD").trim()
   try {
     const grant = await first.claim(holder)
     if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+    execId = grant.id
     write(dir, "src/widget.ts", "export const widget = 1\n")
     landed = await first.report(holder, grant.id, grant.lease, "ended")
     if (landed.kind !== "landed") throw new Error(JSON.stringify(landed))
@@ -538,9 +540,13 @@ test("verification uses the durable producer token across coordinator restart", 
   }
   const recovered = await openExecutorCoordinator(dir)
   try {
-    expect(await recovered.verification({ ...holder, channel: "new-channel" })).toMatchObject({
-      kind: "wait", reason: "not-ready", detail: expect.stringContaining("different token"),
-    })
+    // 0273: the same-token claim over the booked report reads the settled
+    // terminal naming the booked evidence, not the retired wait.
+    const settled = await recovered.verification({ ...holder, channel: "new-channel" })
+    if (settled.kind !== "settled") throw new Error(JSON.stringify(settled))
+    expect(settled.unit).toBe("T-001")
+    expect(settled.commit).toBe(landed.commit)
+    expect(settled.detail).toContain(execId)
     const verify = await recovered.verification({ ...holder, token: "worker-2" })
     expect(verify).toMatchObject({ kind: "verify", unit: "T-001", baseline, head: landed.commit })
     if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
@@ -550,6 +556,57 @@ test("verification uses the durable producer token across coordinator restart", 
     expect(await recovered.verification({ ...holder, token: "worker-2" })).toMatchObject({ kind: "blocked", reason: "isolation" })
   } finally {
     await recovered.close()
+  }
+})
+
+// 0273 (0264-05's fix): the same-token verification wait split on the booking
+// state — the wait's own site is by construction reached only over a booked
+// report (the findLast filter pins the producer landed), so the settled
+// holder now reads a distinct terminal naming the booked commit, every
+// neighboring answer byte-identical (P10).
+test("a booked report answers a same-token verify claim with the settled terminal naming the booked commit", async () => {
+  const dir = executableProject()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await coordinator.claim(holder)
+    if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
+    // The live-share floor: while the share is live (the report not booked),
+    // a same-token verify claim reads today's lease-held wait byte-identical,
+    // whatever channel it arrives on — nothing raised, nothing changed.
+    const held = {
+      kind: "wait", reason: "lease-held", deadline: grant.deadline,
+      detail: `Lease held by channel ${holder.channel} until ${new Date(grant.deadline).toISOString()}.`,
+    } as const
+    expect(await coordinator.claim(holder, "T-001", "verify")).toEqual(held)
+    expect(await coordinator.claim({ ...holder, channel: "other" }, "T-001", "verify")).toEqual(held)
+    write(dir, "src/widget.ts", "export const widget = 1\n")
+    // The report lands; its response is lost — the holder never reads it.
+    const landed = await coordinator.report(holder, grant.id, grant.lease, "ended")
+    if (landed.kind !== "landed") throw new Error(JSON.stringify(landed))
+    const progress = readFileSync(join(dir, ".auto/executor-progress.json"), "utf8")
+    // The reconciliation: the holder that retries its claim, and a rotated
+    // successor on the same token, read the booked evidence from the
+    // terminal — accepted, not wrong-token; no lease granted, no state
+    // written, the claim ended (the same terminal on every re-read).
+    const settled = {
+      kind: "settled", unit: "T-001", commit: landed.commit,
+      detail: `The report for ${grant.id} was accepted; its evidence is booked at ${landed.commit}. This token's claim on T-001 has ended — a different token performs the verification.`,
+    } as const
+    expect(await coordinator.claim(holder, "T-001", "verify")).toEqual(settled)
+    expect(await coordinator.claim({ ...holder, channel: "successor" }, "T-001", "verify")).toEqual(settled)
+    expect(await coordinator.verification(holder)).toEqual(settled)
+    expect(await coordinator.next(holder)).toEqual(settled)
+    // The standing lost-report retry letter rides beside it unchanged.
+    expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toEqual(landed)
+    expect(readFileSync(join(dir, ".auto/executor-progress.json"), "utf8")).toBe(progress)
+    expect((await coordinator.ready(holder)).leases).toEqual([])
+    // A different token still reads the verify grant — the standing
+    // independence behavior unchanged (0248 D6).
+    expect(await coordinator.claim({ ...holder, token: "worker-2" }, "T-001", "verify")).toMatchObject({
+      kind: "verify", unit: "T-001", head: landed.commit,
+    })
+  } finally {
+    await coordinator.close()
   }
 })
 
@@ -568,7 +625,7 @@ for (const verdict of ["pass", "fail"] as const) {
       expect((await coordinator.ready(holder)).claimable).toEqual([])
       expect((await coordinator.ready(verifier)).claimable).toMatchObject([{ unit: "T-001", kinds: ["verify"] }])
       expect(await coordinator.claim({ ...holder, channel: "different" }, "T-001", "verify")).toMatchObject({
-        kind: "wait", reason: "not-ready",
+        kind: "settled", unit: "T-001", commit: landed.commit,
       })
       const verify = await coordinator.claim(verifier, "T-001", "verify")
       if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
@@ -666,7 +723,7 @@ test("FAIL routes to fix and fresh verification keeps the task's original baseli
     write(dir, "src/widget.ts", "export const widget = 2\n")
     const fixed = await coordinator.report(worker, fix.id, fix.lease, "ended")
     if (fixed.kind !== "landed") throw new Error(JSON.stringify(fixed))
-    expect(await coordinator.claim({ ...worker, channel: "another" }, "T-001", "verify")).toMatchObject({ kind: "wait", reason: "not-ready" })
+    expect(await coordinator.claim({ ...worker, channel: "another" }, "T-001", "verify")).toMatchObject({ kind: "settled", commit: fixed.commit })
 
     const verify = await coordinator.claim(verifier, "T-001", "verify")
     if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
@@ -1428,7 +1485,9 @@ test("same-tree documentation leases reserve effective scopes and land only thei
     expect(share).toMatchObject({ kind: "landed" })
     expect(git(dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")).toBe("docs/first.md\n")
     expect(git(dir, "status", "--porcelain", "--", "docs/second.md")).toBe("?? docs/second.md\n")
-    expect(await coordinator.claim(holder, "T-001", "verify")).toMatchObject({ kind: "wait", detail: expect.stringContaining("different token") })
+    const settledShare = await coordinator.claim(holder, "T-001", "verify")
+    if (settledShare.kind !== "settled" || share.kind !== "landed") throw new Error(JSON.stringify(settledShare))
+    expect(settledShare.commit).toBe(share.commit)
     const verify = await coordinator.claim(verifier, "T-001", "verify")
     if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
     write(dir, "docs/T-001/report.md", docPass)

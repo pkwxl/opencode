@@ -31,6 +31,11 @@ function wireStep(step: Step): Record<string, unknown> {
       return { kind: "wait", reason: "gate", detail: `A person must attend ${step.gate} in ${step.document}.`, retryAfter: 2 }
     case "phase-boundary":
       return { kind: "phase-boundary", phase: step.phase, remedy: step.problems.join("\n") || "Run transfer to advance the phase." }
+    // 0273's additive terminal (0264-05's fix): a same-token claim over a
+    // booked report — distinct from done, which renders the round's own
+    // completion; the remedy names the booked commit, no retryAfter.
+    case "settled":
+      return { kind: "settled", unit: step.unit, commit: step.commit, remedy: step.detail }
     case "done":
       return { kind: "done", summary: "The round is complete." }
   }

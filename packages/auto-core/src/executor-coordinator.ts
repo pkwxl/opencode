@@ -98,7 +98,16 @@ type Entry = {
 }
 type LeaseWait = { kind: "wait"; reason: "lease-held"; detail: string; deadline: number }
 type BudgetBlock = { kind: "blocked"; reason: "attemptsExhausted" | "fixBudget"; detail: string }
-type DerivedStep = Exclude<ExecutorPreview, Execute> | BlockedReport | LeaseWait | BudgetBlock | QuestionWait
+// The settled-holder terminal (0273, 0264-05's fix): the additive step kind
+// answering a same-token verify claim over an already booked report — the
+// share's own producer (or its same-token successor) reading back its
+// settled share. Names the booked evidence (`commit`, the settlement's own
+// record) and states the ended claim. Distinct from `done` by ruling (P13's
+// single meanings: `done` is the round's completion, this the holder's —
+// verification by a different token is still pending work); terminal for
+// the client, which reconciles against the commit and ends.
+type SettledStep = { kind: "settled"; unit: string; commit: string; detail: string }
+type DerivedStep = Exclude<ExecutorPreview, Execute> | BlockedReport | LeaseWait | BudgetBlock | QuestionWait | SettledStep
 type Decision = DerivedStep | (Candidate & { scope?: readonly string[]; worktree?: true })
 type Claim = DerivedStep | Grant
 type LeaseKey = { step: string; lease: string }
@@ -1425,7 +1434,23 @@ export async function openExecutorCoordinator(
       return { kind: "blocked", reason: "isolation", detail: "The recorded execute share no longer matches Git history." }
     }
     if (producer.holder.token === holder.token) {
-      return { kind: "wait", reason: "not-ready", detail: "Verification requires a different token from the execute share's producer." }
+      // The settled-holder terminal (0273, 0264-05's fix). The producer this
+      // walk reached is by construction a landed share (the findLast filter
+      // pins the booking state — outcome ended, the evidence booked at
+      // receipt.commit), so a same-token claim here is the rotated successor
+      // or the holder that lost its report response reading back its own
+      // settled share: terminal for this token (the producer is pinned in
+      // history, 0248 D6's token-distinct rule), yet answered with a wait
+      // that can never clear for it — the finding's ambiguity. The terminal
+      // names the booked evidence (the settlement's own record, P6 — no new
+      // state) and the ended claim. Every neighboring answer is untouched
+      // (P10): a live share answers the lease-held wait above, a pending
+      // report the settlement waits, and a different token reads the grant
+      // below.
+      return {
+        kind: "settled", unit: producer.grant.unit, commit: receipt.commit,
+        detail: `The report for ${producer.grant.id} was accepted; its evidence is booked at ${receipt.commit}. This token's claim on ${producer.grant.unit} has ended — a different token performs the verification.`,
+      }
     }
     if (attempts(verifyID(producer.grant.unit)) >= MAX_ATTEMPTS) {
       return { kind: "blocked", reason: "attemptsExhausted", detail: `${producer.grant.unit} has reached the ${MAX_ATTEMPTS}-attempt verification limit.` }

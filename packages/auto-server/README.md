@@ -193,7 +193,9 @@ or release with its original step and lease. If a report was accepted
 before an interruption, a later claim resumes settlement before new work
 can be granted. A claim returns the specific block if settlement cannot
 proceed. Verification requires a different token from the execute or fix
-producer and a fresh agent context.
+producer and a fresh agent context. A same-token claim over its own booked
+report answers the terminal `settled`, naming the booked commit — that
+token's work on the unit has ended.
 
 Issue `person` for questions and release approvals or grant either separately
 with `person-questions` and `person-releases`. The daemon derives these grants

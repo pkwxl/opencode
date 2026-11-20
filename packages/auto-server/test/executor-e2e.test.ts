@@ -183,9 +183,16 @@ exec "$@"
     daemon = await start()
     expect((await call("ready", {}, verifier)).menu).toEqual({ claimable: [], leases: [], pending: [], types: executorTypeCatalog() })
     expect(await git("rev-parse", "HEAD")).toBe(beforeReport)
-    const blocked = await call("claim", { task: TASK, kind: "verify", channel: "another-channel" }, worker)
-    expect(blocked.step).toMatchObject({ kind: "wait", reason: "not-ready" })
+    // 0273 on the wire: the same-token verify claim over the booked report
+    // (the claim itself settling the replayed share above) renders the
+    // settled terminal — the additive step kind naming the booked commit,
+    // distinct from done and carrying no retryAfter.
+    const settled = await call("claim", { task: TASK, kind: "verify", channel: "another-channel" }, worker)
     const share = await git("rev-parse", "HEAD")
+    expect(settled.step).toEqual({
+      kind: "settled", unit: TASK, commit: share.trim(),
+      remedy: `The report for ${TASK} exec 1 was accepted; its evidence is booked at ${share.trim()}. This token's claim on ${TASK} has ended — a different token performs the verification.`,
+    })
     expect(await git("show", "HEAD:src/widget.ts")).toContain("widget")
     await call("report", { ...report, note: "A different retry note." }, worker)
     expect(await git("rev-parse", "HEAD")).toBe(share)
@@ -202,7 +209,8 @@ exec "$@"
     expect(fix).toMatchObject({ kind: "fix", round: "1.1" })
     await Bun.write(join(directory, "src/widget.ts"), "export const widget = 2\n")
     await call("report", { step: fix.id, lease: fix.lease, outcome: "ended" }, worker)
-    expect((await call("claim", { task: TASK, kind: "verify" }, worker)).step.kind).toBe("wait")
+    const fixShare = await git("rev-parse", "HEAD")
+    expect((await call("claim", { task: TASK, kind: "verify" }, worker)).step).toMatchObject({ kind: "settled", commit: fixShare.trim() })
     const reverify = (await call("claim", { task: TASK, kind: "verify" }, verifier)).step
     expect(reverify).toMatchObject({ kind: "verify", baseline: verify.baseline })
     expect(reverify.head).not.toBe(verify.head)
