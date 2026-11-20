@@ -175,7 +175,7 @@ default channel.
 | Operation | Body fields | Response payload |
 | --- | --- | --- |
 | `ready` | none | `menu` |
-| `claim` | optional `role` (`worker` or `person`), worker-only optional `task` and `kind` (`execute`, `verify`, or `fix`) | `step` |
+| `claim` | optional `role` (`worker` or `person`), worker-only optional `task` and `kind` (`execute`, `verify`, `fix`, or `formulate`) | `step` |
 | `brief` | `task`, `kind`, optional `cursor` | `step` |
 | `heartbeat` | `leases`, an array of `{ step, lease }` pairs | `menu` |
 | `report` | `step`, `lease`, `outcome` (`ended` or `failed`), optional `note` | `step` |

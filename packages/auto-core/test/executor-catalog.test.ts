@@ -14,8 +14,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { CONFIG_FILE } from "../src/config"
-import { taskDocPaths } from "../src/docpaths"
+import { taskDoc, taskDocPaths } from "../src/docpaths"
 import { roleOf } from "../src/document/roles"
+import { taskStatePaths } from "../src/tasks"
 import { withinScopes } from "../src/git"
 import { driverExclusive, executorTypeCatalog, openExecutorCoordinator, permitted } from "../src/executor-coordinator"
 
@@ -54,6 +55,10 @@ function commitFixture(dir: string) {
 const catalog = executorTypeCatalog()
 const neverMatch = (path: string) =>
   catalog.execute.never.paths.some((pattern) => new RegExp(pattern).test(path))
+// 0276: the formulate entry's never letter — the standing refusal minus the
+// family the per-kind arm admits.
+const neverFormulateMatch = (path: string) =>
+  catalog.formulate.never.paths.some((pattern) => new RegExp(pattern).test(path))
 
 // The corpus's paths are the fence's own input grammar — checkout-relative,
 // forward-slash status rows. Git metadata is unreachable by construction (it
@@ -76,6 +81,10 @@ const PATHS = [
   "docs/T-001/S12/done.md",
   "docs/R-01/phases.md",
   "docs/R-01/P01-implement/tasks.md",
+  "docs/R-01/P02-design/tasks.md",
+  "docs/T-004/todo.md",
+  "docs/T-004/coverage.md",
+  "docs/T-004/handoff.md",
   "docs/R-01/P01-implement/todo.md",
   "docs/R-99/P12-data-model/done.md",
   "docs/T-1/subtasks.md",
@@ -96,13 +105,17 @@ const PATHS = [
 ]
 
 test("the catalog's ids are exactly the ids the coordinator can grant", () => {
-  expect(Object.keys(catalog)).toEqual(["execute", "verify", "fix", "human", "question"])
+  expect(Object.keys(catalog)).toEqual(["execute", "verify", "fix", "formulate", "human", "question"])
   // The work ids are the wire's grant kinds (compile-time satisfies beside
   // the rendering); the person ids are the step kinds the person channel
-  // delivers — never an id the coordinator cannot grant (P13).
+  // delivers — never an id the coordinator cannot grant (P13). The
+  // formulate id joined with its own enactment (0276, 0261 D2's id-growth
+  // letter: each new id its own change with its fence-tables entry and
+  // ratchet pin).
   expect(catalog.execute.id).toBe("execute")
   expect(catalog.verify.id).toBe("verify")
   expect(catalog.fix.id).toBe("fix")
+  expect(catalog.formulate.id).toBe("formulate")
   expect(catalog.human.id).toBe("human")
   expect(catalog.question.id).toBe("question")
 })
@@ -156,6 +169,56 @@ test("the execute and fix letters equal the fence's scope, handoff and freeform 
   expect(catalog.execute.never.git).toBe("coordinator-only")
 })
 
+test("the formulate letter equals the fence's family arm, both sides (plans/0276)", () => {
+  const index = "docs/R-01/P01-implement/tasks.md"
+  const grant = { grant: { kind: "formulate" as const, unit: "T-004", index } }
+  // The family formula — the writes letter's behavioral statement: the
+  // granted phase index (the per-unit anchor), the planned tasks' pending
+  // documents' grammar MINUS the formulation unit's own input todo, the
+  // coverage map, and the standing handoff arm. No freeform floor: the
+  // planning session's deliverables are documents, the fence admits exactly
+  // them.
+  const family = (path: string) =>
+    path === index || path === taskDoc("T-004", "coverage") ||
+    (path !== taskStatePaths("T-004").pending && /^docs\/T-\d+\/todo\.md$/.test(path)) ||
+    path === taskDocPaths("T-004").handoff
+  for (const path of PATHS) {
+    expect(permitted(grant, path), path).toBe(family(path))
+  }
+  expect(catalog.formulate.writes.scope).toBe("none")
+  expect(catalog.formulate.writes.paths).toEqual([
+    "docs/R-NN/P<nn>-<type>/tasks.md",
+    taskStatePaths("T-NNN").pending,
+    taskDoc("T-NNN", "coverage"),
+  ])
+  expect(catalog.formulate.writes.undeclared).toBeUndefined()
+  // The never letter is sound — everything it denies, the fence denies —
+  // and the fence keeps the standing refusal for everything outside the
+  // family (another phase's task index included: the letter's per-unit
+  // anchor names the one admitted, a deny-list provisioner reading the
+  // letter alone under-dennies the rest, the coordinator's checks the
+  // authority per 0261 D3).
+  for (const path of PATHS) {
+    if (neverFormulateMatch(path)) expect(permitted(grant, path), path).toBe(false)
+    const standing = !permitted({ grant: { kind: "execute", unit: "T-001" }, scope: [path] }, path)
+    if (standing && !family(path)) expect(permitted(grant, path), path).toBe(false)
+  }
+  // The done half and the phases half stay refused — the admitted classes
+  // are exactly the pending grammar and the anchor.
+  expect(neverFormulateMatch("docs/T-001/done.md")).toBe(true)
+  expect(neverFormulateMatch("docs/T-004/todo.md")).toBe(false)
+  expect(neverFormulateMatch("docs/R-01/phases.md")).toBe(true)
+  expect(neverFormulateMatch("docs/R-01/P01-implement/tasks.md")).toBe(false)
+  // A fix round over the formulation unit carries the same context (the
+  // family arm rides the grant's data, not the kind alone — the plan's
+  // repair writes the plan's surfaces); every other fix grant keeps the
+  // ordinary fix letter, and neither verify nor execute ever carries it.
+  expect(permitted({ grant: { kind: "fix", unit: "T-004", index } }, "docs/R-01/P01-implement/tasks.md")).toBe(true)
+  expect(permitted({ grant: { kind: "fix", unit: "T-004" } }, "docs/R-01/P01-implement/tasks.md")).toBe(false)
+  expect(permitted({ grant: { kind: "execute", unit: "T-004", index } }, "docs/R-01/P01-implement/tasks.md")).toBe(false)
+  expect(permitted({ grant: { kind: "formulate", unit: "T-004" } }, "docs/R-01/P01-implement/tasks.md")).toBe(false)
+})
+
 test("the person entries' authority vocabulary equals the authority checks", async () => {
   const coordinator = await openExecutorCoordinator(project())
   try {
@@ -206,7 +269,7 @@ test("the absent-block floor: a consumer that ignores the block reads the pre-ch
     // The menu's claimable kinds are always catalog members (never an id the
     // coordinator cannot grant).
     for (const kinds of menu.claimable.flatMap(({ kinds }) => [...kinds])) {
-      expect(["execute", "verify", "fix"]).toContain(kinds)
+      expect(["execute", "verify", "fix", "formulate"]).toContain(kinds)
     }
     // The block rides both menu arms identically (the leases-held arm too).
     const grant = await coordinator.claim(holder)

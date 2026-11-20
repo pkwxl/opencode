@@ -14,6 +14,16 @@ function wireStep(step: Step): Record<string, unknown> {
       const { id, unit, title, prompt, budget, lease, deadline, attempt, workspace, answerCursor } = step
       return { kind: step.kind, id, unit, title, prompt, budget, lease, deadline, attempt, workspace, answerCursor }
     }
+    // 0276 (0256 stage 2's first convergence kind): the formulation grant —
+    // a fresh unit claim like execute, carrying the phase's identity (the
+    // qualified id and the task-index path) beside the brief. Additive under
+    // the frozen protocol; an old client stops and asks per the standing
+    // unknown-kind letter.
+    case "formulate": {
+      if (!("lease" in step)) throw new Error("Executor returned an unleased formulate step.")
+      const { id, unit, title, phase, index, prompt, budget, lease, deadline, attempt, workspace, answerCursor } = step
+      return { kind: step.kind, id, unit, title, phase, index, prompt, budget, lease, deadline, attempt, workspace, answerCursor }
+    }
     case "verify":
     case "fix": {
       if (!("lease" in step)) throw new Error("Executor returned an unleased follow-up step.")

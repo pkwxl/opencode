@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { liveRunLock } from "@opencode-ai/auto-core/lock"
@@ -76,7 +76,7 @@ exec "$@"
     // 0271's additive half rides the same menu: the pending person items,
     // the empty floor here (nothing pending on a bare project).
     expect(Object.keys(ready.menu).sort()).toEqual(["claimable", "leases", "pending", "types"])
-    expect(Object.keys(ready.menu.types).sort()).toEqual(["execute", "fix", "human", "question", "verify"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["execute", "fix", "formulate", "human", "question", "verify"])
     const { types, pending, ...menuBefore } = ready.menu
     expect(Object.keys(menuBefore).sort()).toEqual(["claimable", "leases"])
     expect(pending).toEqual([])
@@ -340,6 +340,84 @@ test("release grants bind HTTP approvals to the reviewed proposal and replay saf
     await call("answer", questions, approve, 400)
     expect(await call("answer", releases, approve)).toMatchObject({ kind: "wait" })
     expect(await git("rev-parse", "HEAD")).toBe(landed)
+  } finally {
+    await daemon?.stop()
+    await rm(dataDir, { recursive: true, force: true })
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 20_000)
+
+// 0276 (0256 stage 2's first convergence kind): the formulate grant kind's
+// wire pins — the menu's row and catalog entry, the claim's leased brief
+// carrying the phase identity (the qualified id and the task-index path)
+// beside the standing execute-shaped fields, and the kind vocabulary the
+// request layer admits (the unknown word still stops and asks).
+test("the formulate grant kind rides the wire beside the standing kinds", async () => {
+  const directory = await fixtureProject("auto-executor-formulate-", { subtask: "off" })
+  const git = gitOf(directory)
+  // The phase's standing formulation unit (the driver-written Formulate:
+// field carrying the owning phase's qualified id) over the fixture's
+  // implicit implement phase.
+  await Bun.write(join(directory, "docs", TASK, "todo.md"), [
+    `# ${TASK}: Formulate the Implement tasks`,
+    "Phase: R-01.P01",
+    "Formulate: R-01.P01",
+    "",
+    "## Goal",
+    "",
+    "Formulate the implementation phase's complete task plan from the named sources.",
+    "",
+    "## Scope",
+    "",
+    "The planning input, the project brief and the round brief.",
+    "",
+    "## Acceptance",
+    "",
+    "Every obligation the Scope's inputs name is covered by a planned task.",
+    "",
+    "<!-- auto: eof -->",
+    "",
+  ].join("\n"))
+  await Bun.write(join(directory, "docs/R-01/P01-implement/tasks.md"), `# Tasks\n\n- [ ] ${TASK} Formulate the Implement tasks\n`)
+  await git("add", "-A")
+  await git("commit", "-qm", "formulation unit stands")
+  const dataDir = await mkdtemp(join(tmpdir(), "auto-executor-data-"))
+  const store = new DaemonStore(dataDir)
+  const project = store.register(directory)
+  const worker = store.issueToken("executor", "worker").token
+  const launcher = join(dataDir, "launch.sh")
+  await Bun.write(launcher, `#!/bin/bash\nshift 2\nexec "$@"\n`)
+  await chmod(launcher, 0o755)
+  let daemon: DaemonHandle | undefined
+  try {
+    daemon = await startDaemon({ dataDir, port: 0, launch: launcher })
+    async function call(operation: string, body: unknown, token = worker, expected = 200) {
+      const response = await fetch(`${daemon!.url}/projects/${encodeURIComponent(project.name)}/executor/${operation}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      })
+      const result = await response.json()
+      expect(response.status, JSON.stringify(result)).toBe(expected)
+      return result
+    }
+    const ready = await call("ready", { channel: "solo" })
+    expect(ready.menu.claimable).toMatchObject([{ unit: TASK, title: "Formulate the Implement tasks", kinds: ["formulate"] }])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["execute", "fix", "formulate", "human", "question", "verify"])
+    expect(ready.menu.types.formulate).toMatchObject({ id: "formulate", writes: { scope: "none" } })
+    const claimed = await call("claim", { channel: "solo", task: TASK, kind: "formulate" })
+    expect(claimed.step).toMatchObject({
+      kind: "formulate", unit: TASK, title: "Formulate the Implement tasks",
+      phase: "R-01.P01", index: "docs/R-01/P01-implement/tasks.md",
+      workspace: directory, attempt: 1, budget: expect.any(Number),
+      lease: expect.any(String), id: expect.any(String), deadline: expect.any(Number),
+    })
+    expect(claimed.step.prompt).toContain("Formulate the implementation phase's complete task plan")
+    // The brief refresh replays the leased formulate grant; the request
+    // layer's kind vocabulary admits the word and still stops and asks on
+    // an unknown one.
+    expect(await call("brief", { channel: "solo", task: TASK, kind: "formulate" })).toMatchObject({ step: claimed.step })
+    await call("claim", { channel: "solo", kind: "inaugurate" }, worker, 400)
   } finally {
     await daemon?.stop()
     await rm(dataDir, { recursive: true, force: true })

@@ -6,21 +6,24 @@ import { join, relative } from "node:path"
 import { readClarificationProposal } from "./clarify"
 import { loadProjectConfig } from "./config"
 import { docShapeProblems } from "./doccheck"
-import { taskDocPaths } from "./docpaths"
+import { taskDoc, taskDocPaths } from "./docpaths"
 import { handoffStatus, parkDirective, parseResult, roleOf } from "./document/roles"
-import { tickedIndex } from "./document/unit"
+import { parseIndex, tickedIndex } from "./document/unit"
 import { parkCheck, STEER_CHAIN_BOUND } from "./execute"
-import { readExecutorAdmissionBlock, readExecutorParkPlan, readExecutorPreview, readExecutorFollowUp, type ExecutorPreview, type FixPreview, type VerificationPreview } from "./executor-steps"
+import { readExecutorAdmissionBlock, readExecutorParkPlan, readExecutorPreview, readExecutorFollowUp, planPhaseOf, type ExecutorPreview, type FixPreview, type VerificationPreview } from "./executor-steps"
 import {
   ensureExecutorWorkspace, executorWorkspacePath, ExecutorWorktreeError, landExecutorWorkspace,
   prepareExecutorLanding, removeExecutorWorkspace, validExecutorLanding, validExecutorWorkspace,
   type ExecutorLanding, type ExecutorWorkspace,
 } from "./executor-worktree"
-import { EMPTY_TREE, git, identityArgs, message, repoRoots, statusEntriesRead, WORKDIR_ROOTS, withinScopes, workdirEntry, driverStage } from "./git"
+import { awaitingFormulation } from "./formulate"
+import { ledgerOf, coverageProblems } from "./formulate-synthesis"
+import { contentAtBase, EMPTY_TREE, git, identityArgs, message, repoRoots, statusEntriesRead, WORKDIR_ROOTS, withinScopes, workdirEntry, driverStage } from "./git"
 import { log } from "./log"
 import { docEligible, docScope, scopesDisjoint } from "./lanes"
 import { acquireRunLock, liveRunLock } from "./lock"
-import { markDone, readyTasks, runtimeParked, setParked, taskStatePaths, type Task } from "./tasks"
+import { taskNumber } from "./numbering"
+import { markDone, plannedTaskProblems, readyTasks, runtimeParked, setParked, takenTaskIds, taskStatePaths, type Task } from "./tasks"
 
 export class ExecutorRequestError extends Error {}
 
@@ -60,8 +63,20 @@ type QuestionOffer = { kind: "question"; id: string; text: string; task?: string
 type QuestionWait = { kind: "wait"; reason: "question" | "gate" | "not-ready"; detail: string }
 type PersonStep = QuestionOffer | QuestionWait
 type Execute = Extract<ExecutorPreview, { kind: "execute" }>
-type Candidate = Execute | FixPreview | VerificationPreview
-type Grant = (Omit<Execute, "touches"> | Omit<FixPreview, "touches"> | VerificationPreview) & { id: string; lease: string; attempt: number; workspace: string; deadline: number; budget: number; answerCursor?: string | null }
+// 0276 (0256 stage 2's first convergence kind): the formulate step — the
+// phase's planning session as claimable work. The claim address is the
+// formulation unit's own task-shaped id (the durable record — the index
+// row, the todo, the done rename, the tick — is task-shaped, and one
+// formulation per phase makes the unit↔phase mapping functional both
+// ways); the phase's identity rides the grant as data (`phase`, the
+// qualified id; `index`, the phase's task-index path — the fence's
+// per-kind arm and the settlement's collect read them, never a second
+// lookup). The lease shape is serial: the formulation task declares no
+// Touches, so no lane tier admits it (0095 D5's own rule — a phase's only
+// ready unit, ahead of everything it plans).
+type Formulate = Extract<ExecutorPreview, { kind: "formulate" }>
+type Candidate = Execute | Formulate | FixPreview | VerificationPreview
+type Grant = (Omit<Execute, "touches"> | Formulate | Omit<FixPreview, "touches"> | VerificationPreview) & { id: string; lease: string; attempt: number; workspace: string; deadline: number; budget: number; answerCursor?: string | null }
 type BlockedReport = { kind: "blocked"; reason: "isolation" | "commitFailed"; detail: string }
 // The blocked-cause classification (0272, 0262-03's fix): `escalated` marks
 // the settlement causes whose remedy would require a write the holder's
@@ -108,7 +123,7 @@ type BudgetBlock = { kind: "blocked"; reason: "attemptsExhausted" | "fixBudget";
 // verification by a different token is still pending work); terminal for
 // the client, which reconciles against the commit and ends.
 type SettledStep = { kind: "settled"; unit: string; commit: string; detail: string }
-type DerivedStep = Exclude<ExecutorPreview, Execute> | BlockedReport | LeaseWait | BudgetBlock | QuestionWait | SettledStep
+type DerivedStep = Exclude<ExecutorPreview, Execute | Formulate> | BlockedReport | LeaseWait | BudgetBlock | QuestionWait | SettledStep
 type Decision = DerivedStep | (Candidate & { scope?: readonly string[]; worktree?: true })
 type Claim = DerivedStep | Grant
 type LeaseKey = { step: string; lease: string }
@@ -179,7 +194,7 @@ function sameHolder(a: Holder, b: Holder): boolean {
 
 function shareMessage(grant: Grant, parked = false): string {
   if (parked) return message(`${grant.unit} park ${grant.title}`, { id: grant.unit }, "park", [], `Executor lease ${grant.lease}`)
-  return message(grant.id, { id: grant.unit }, grant.kind === "verify" ? "wrapup" : grant.kind === "fix" ? "fix" : "exec", [], `Executor lease ${grant.lease}`)
+  return message(grant.id, { id: grant.unit }, grant.kind === "verify" ? "wrapup" : grant.kind === "fix" ? "fix" : grant.kind === "formulate" ? "phase-formulate" : "exec", [], `Executor lease ${grant.lease}`)
 }
 
 // 0246 D4 i's never-list stated as path grammar for the fence's own input
@@ -212,14 +227,41 @@ function standingRefusal(path: string): boolean {
     path.split("/").includes(AGENTS_NAME) || driverExclusive(path)
 }
 
+// The formulation family (0276, the formulate kind's per-kind permitted
+// arm): the phase's planning surfaces the formulation session writes — the
+// phase's task index (the grant's own `index` anchor), the planned tasks'
+// pending documents (the todo.md grammar MINUS the formulation unit's own
+// todo — the session's single input, never its write), and the unit's
+// coverage map (taskDoc's own construction). The arm rides grants carrying
+// the formulation context — formulate grants and fix rounds over the
+// formulation unit (the plan's repair) — and precedes the standing refusal
+// for exactly this family: the fence admits the write SURFACE, the
+// settlement judges the GRAMMAR (rows appended, nothing ticked, removed or
+// reordered — the fixed-prefix discipline; the new documents valid —
+// plannedTaskProblems; P7's letter). Everything the never-set refuses for
+// every kind stays refused here: done.md (the todo→done rename is the
+// close-out's alone), subtasks.md, phases.md, another phase's index, the
+// workdir, config, AGENTS.md — and the formulate kind takes no freeform
+// floor: the planning session's deliverables are documents, the fence
+// admits exactly them beside the standing handoff arm.
+const PENDING_PLAN_DOC = /^docs\/T-\d+\/todo\.md$/
+function formulationFamily(entry: { grant: { kind: Grant["kind"]; unit: string; index?: string } }, path: string): boolean {
+  return entry.grant.index !== undefined && (
+    path === entry.grant.index || path === taskDoc(entry.grant.unit, "coverage") ||
+    (PENDING_PLAN_DOC.test(path) && path !== taskStatePaths(entry.grant.unit).pending)
+  )
+}
+
 export function permitted(entry: {
-  grant: { kind: Grant["kind"]; unit: string }
+  grant: { kind: Grant["kind"]; unit: string; index?: string }
   scope?: readonly string[]
   touches?: readonly string[]
 }, path: string): boolean {
+  if ((entry.grant.kind === "formulate" || entry.grant.kind === "fix") && formulationFamily(entry, path)) return true
   if (standingRefusal(path)) return false
   const docs = taskDocPaths(entry.grant.unit)
   if (entry.grant.kind === "verify") return path === docs.report || path === docs.gaps
+  if (entry.grant.kind === "formulate" || entry.grant.index !== undefined) return path === docs.handoff
   if (path === docs.handoff) return true
   const scope = entry.scope ?? entry.touches
   // The role test yields inside a declared scope (0259): the ruled permitted
@@ -274,7 +316,7 @@ function outsidePerimeter(report: BlockedReport): SettlementBlocked {
 // the standing boundary checks, which fail loud.
 const GIT_LETTER = "coordinator-only" as const
 const CATALOG_UNIT = "T-NNN"
-const WORK_TYPE_IDS = ["execute", "verify", "fix"] as const satisfies readonly Grant["kind"][]
+const WORK_TYPE_IDS = ["execute", "verify", "fix", "formulate"] as const satisfies readonly Grant["kind"][]
 const PERSON_QUESTION_AUTHORITY = ["unrestricted", "questions"] as const
 const PERSON_RELEASE_AUTHORITY = ["unrestricted", "releases"] as const
 
@@ -294,10 +336,47 @@ function neverPaths(): string[] {
   ]
 }
 
+// The formulate entry's never letter (0276): the standing refusal MINUS the
+// family its per-kind arm admits — the pending documents' grammar (the done
+// half stays refused: the todo→done rename is the driver's close-out alone)
+// and the owning phase's index (another phase's index stays refused through
+// the anchor's per-unit letter). Rendered from UNIT_STATE_DOC's and
+// INDEX_DOC's own sources by dropping the admitted alternative — one table,
+// never a second (P5) — and the catalog test's corpus holds the rendering
+// and the fence equal, both directions.
+const DONE_STATE_DOC_SOURCE = UNIT_STATE_DOC.source.replace("(?:todo|done)", "done")
+const PHASES_DOC_SOURCE = INDEX_DOC.source.replace("(?:phases|P\\d{2,}-[a-z][a-z0-9-]*\\/tasks)", "phases")
+
+// The formulate letter's per-unit anchors: the placeholder forms of the
+// phase's task index (the granted `index` names the real one) and the
+// planned tasks' pending documents (the grammar's placeholder unit), beside
+// the coverage map's taskDoc construction — the same convention verify's
+// report/gaps paths carry (0269).
+const CATALOG_PHASE_INDEX = "docs/R-NN/P<nn>-<type>/tasks.md"
+
+function formulateNeverPaths(): string[] {
+  return [
+    `^(?:${WORKDIR_ROOTS.map(escapeRe).join("|")})(?:/|$)`,
+    `^${escapeRe(CONFIG_DIR)}(?:/|$)`,
+    `(?:^|/)${escapeRe(AGENTS_NAME)}(?:/|$)`,
+    DONE_STATE_DOC_SOURCE,
+    PHASES_DOC_SOURCE,
+    SUBTASKS_DOC.source,
+    CONFIG_DOC.source,
+  ]
+}
+
 function workTypeLetter(id: Grant["kind"]): ExecutorWorkTypeLetter {
   if (id === "verify") {
     const docs = taskDocPaths(CATALOG_UNIT)
     return { id, never: { git: GIT_LETTER, paths: neverPaths() }, writes: { scope: "none", paths: [docs.report, docs.gaps] } }
+  }
+  if (id === "formulate") {
+    return {
+      id,
+      never: { git: GIT_LETTER, paths: formulateNeverPaths() },
+      writes: { scope: "none", paths: [CATALOG_PHASE_INDEX, taskStatePaths(CATALOG_UNIT).pending, taskDoc(CATALOG_UNIT, "coverage")] },
+    }
   }
   return { id, never: { git: GIT_LETTER, paths: neverPaths() }, writes: { scope: "unit-effective", undeclared: "freeform", paths: [taskDocPaths(CATALOG_UNIT).handoff] } }
 }
@@ -321,6 +400,7 @@ export type ExecutorTypes = {
   readonly execute: ExecutorWorkTypeLetter
   readonly verify: ExecutorWorkTypeLetter
   readonly fix: ExecutorWorkTypeLetter
+  readonly formulate: ExecutorWorkTypeLetter
   readonly human: ExecutorPersonTypeLetter
   readonly question: ExecutorPersonTypeLetter
 }
@@ -332,6 +412,7 @@ const CATALOG: ExecutorTypes = {
   execute: workTypeLetter("execute"),
   verify: workTypeLetter("verify"),
   fix: workTypeLetter("fix"),
+  formulate: workTypeLetter("formulate"),
   human: { id: "human", authority: PERSON_RELEASE_AUTHORITY },
   question: { id: "question", authority: PERSON_QUESTION_AUTHORITY },
 }
@@ -414,6 +495,87 @@ async function nestedWitnesses(checkout: string, grant: Grant, intent: NonNullab
     if (witness !== expected) return false
   }
   return true
+}
+
+// The formulate settlement's mechanical collect (0276): every grammar the
+// push path's collect carries (runner's formulation arm) judged here — the
+// unit's own row staying in the index, the first attempt's fixed prefix
+// (pre-existing rows and their state files byte-identical to the claim-time
+// base), plannedTaskProblems over the index the session wrote, and the
+// coverage map against the landed ledger. Read-only, so a settlement
+// replay re-derives it unchanged. Two push checks have no window on the
+// protocol and are deliberately not rebuilt (P21): the landed-todo digest
+// (the fence excludes the unit's own todo, so an edit is an out-of-scope
+// never-set row that 0272's classification escalates to the person — the
+// push digest guarded a commit window the lease's live tree does not
+// have) and the driver's own-row restore (the holder is live: the blocked
+// voice teaches restoring its own row, a write inside the family). Content
+// quality stays the verify share's judgment (P3); this collect is
+// grammars alone (P7), its problems the holder's own remedy — replayable,
+// never escalated (every remedy a write inside the formulation family).
+async function formulationProblems(dir: string, grant: Extract<Grant, { kind: "formulate" }>, base: string): Promise<string[]> {
+  const phase = planPhaseOf(grant.phase, grant.index)
+  const indexText = await Bun.file(join(dir, grant.index)).text().catch(() => undefined)
+  if (indexText === undefined) return [`${grant.index} is missing`]
+  const entries = parseIndex(indexText, "task").entries
+  if (!entries.some(({ id }) => id === grant.unit)) {
+    return [
+      `${grant.index} no longer lists the formulation task ${grant.unit} — its own row must stay in the index (the driver ticks and closes the unit through it); restore the row, then re-run`,
+    ]
+  }
+  const problems: string[] = []
+  const skip = new Set([grant.unit])
+  const baseline = [{ root: dir, sha: base }]
+  if (grant.attempt === 1) {
+    // The fixed prefix (0205 D2): the pre-existing rows are the person's and
+    // the driver's — every row beside the formulation arrived through
+    // `plan --new-task` or a person's commit — fixed in place and content,
+    // judged against the claim-time base exactly as the push collect judges
+    // its unit-start baseline (a failed read degrades to the unchecked
+    // floor, never a block; a retry replans over its own prior output).
+    const indexed = await contentAtBase(dir, baseline, grant.index)
+    if (indexed.ok && indexed.text !== undefined) {
+      const expected = parseIndex(indexed.text, "task").entries
+      if (entries.length < expected.length) {
+        problems.push(
+          `${grant.index} lists ${entries.length} task(s) but held ${expected.length} before the session; the pre-existing lines are fixed — plan beside them, never remove one`,
+        )
+      } else {
+        for (let i = 0; i < expected.length; i++) {
+          const was = expected[i]!
+          const now = entries[i]!
+          if (now.id !== was.id) {
+            problems.push(`${grant.index} line ${now.line}: ${now.id} sits where ${was.id} sat; the pre-existing lines are fixed — plan after them, never reorder or replace`)
+            break
+          }
+          if (now.title !== was.title || now.ticked !== was.ticked) {
+            problems.push(`${grant.index} line ${now.line}: the existing line of ${was.id} was edited; pre-existing lines are fixed`)
+            break
+          }
+        }
+      }
+      for (const row of expected.filter((entry) => entry.id !== grant.unit)) {
+        skip.add(row.id)
+        const paths = taskStatePaths(row.id)
+        for (const key of ["pending", "complete"] as const) {
+          const was = await contentAtBase(dir, baseline, paths[key])
+          if (!was.ok) continue
+          const now = await Bun.file(join(dir, paths[key])).text().catch(() => undefined)
+          if (was.text === undefined && now !== undefined) {
+            problems.push(`${paths[key]} of the pre-existing task ${row.id} is new; a formulation session never touches a pre-existing task's state files`)
+          } else if (was.text !== undefined && now !== was.text) {
+            problems.push(`${paths[key]} of the pre-existing task ${row.id} was changed or removed; a formulation session never edits a pre-existing task's document`)
+          }
+        }
+      }
+    }
+  }
+  const checked = await plannedTaskProblems(dir, phase, { before: await takenTaskIds(dir, phase), numberStart: (taskNumber(grant.unit) ?? 1) + 1, skip })
+  const ledger = ledgerOf(await Bun.file(join(dir, taskStatePaths(grant.unit).pending)).text().catch(() => ""))
+  const coverage = ledger !== undefined
+    ? coverageProblems(ledger, await Bun.file(join(dir, taskDoc(grant.unit, "coverage"))).text().catch(() => ""), checked.ids)
+    : []
+  return [...problems, ...checked.problems, ...coverage]
 }
 
 export async function openExecutorCoordinator(
@@ -1018,6 +1180,18 @@ export async function openExecutorCoordinator(
         if (status === "continue") continuation = true
       }
     }
+    // The formulation output's collect (0276): grammars alone, before any
+    // staging — the share lands only over an index that passes the same
+    // mechanical checks the push path's collect enforces. Replayable by
+    // classification (every remedy is a write inside the holder's own
+    // formulation family), so the plain blocked answer — 0272's ladder, the
+    // details themselves teaching the holder's remedy.
+    if (grant.kind === "formulate") {
+      const problems = await formulationProblems(dir, grant, base)
+      if (problems.length) {
+        return { kind: "blocked", reason: "commitFailed", detail: `the formulation output is invalid: ${problems.join("; ")}` }
+      }
+    }
     if (grant.kind === "fix" && !continuation && changes.some(({ rel }) => rel !== gaps)) {
       // The old gap list is already durable in the verification commit. Its
       // removal is a driver effect, booked before mutation, so the reverify
@@ -1346,6 +1520,7 @@ export async function openExecutorCoordinator(
 
   function stepID(step: Candidate): string {
     if (step.kind === "verify") return verifyID(step.unit)
+    if (step.kind === "formulate") return `${step.unit} formulate ${entries.filter(({ grant, booking }) => grant.kind === "formulate" && grant.unit === step.unit && booking?.receipt?.kind === "landed").length + 1}`
     const prefix = step.kind === "fix" ? `${step.unit} fix ${step.round}.` : `${step.unit} exec `
     const completed = entries.filter(({ grant, booking }) => grant.id.startsWith(prefix) && booking?.receipt?.kind === "landed").length
     return `${prefix}${completed + 1}`
@@ -1360,15 +1535,17 @@ export async function openExecutorCoordinator(
     }
 
     // A failed, expired, or released lease can leave a continuation. Its
-    // captured base and scope still govern every retained edit.
-    if (last && last.grant.kind !== "execute" && !closedUnit) {
+    // captured base and scope still govern every retained edit. A formulate
+    // share continues like an execute share (0276): its handed-over
+    // continuation resumes as the next formulate attempt on the same unit.
+    if (last && last.grant.kind !== "execute" && last.grant.kind !== "formulate" && !closedUnit) {
       return { kind: "wait", reason: "in-flight", detail: "The execute share has advanced to verification." }
     }
     const continuation = last && last.booking?.receipt?.kind !== "landed" ? last : undefined
     const handedOver = previous?.kind === "landed" && previous.continuation ? last : undefined
-    const priorLanded = last?.grant.kind === "execute"
+    const priorLanded = last && (last.grant.kind === "execute" || last.grant.kind === "formulate")
       ? entries.findLast(({ grant, booking }) =>
-          grant.kind === "execute" && grant.unit === last.grant.unit &&
+          (grant.kind === "execute" || grant.kind === "formulate") && grant.unit === last.grant.unit &&
           booking?.receipt?.kind === "landed"
         )
       : undefined
@@ -1378,7 +1555,7 @@ export async function openExecutorCoordinator(
     const checkout = last && !terminal(last) ? await openCheckout(last) : dir
     if (typeof checkout !== "string") return checkout
     const step = await readExecutorPreview(dir, resumeUnit, route ? { task: route, scoped } : undefined, checkout)
-    if (step.kind !== "execute") return step
+    if (step.kind !== "execute" && step.kind !== "formulate") return step
     if (attempts(stepID(step)) >= MAX_ATTEMPTS) {
       return { kind: "blocked", reason: "attemptsExhausted", detail: `${step.unit} has reached the ${MAX_ATTEMPTS}-attempt limit.` }
     }
@@ -1428,9 +1605,12 @@ export async function openExecutorCoordinator(
       ? await Promise.all(tasks.map(({ task }) => select(holder, at, undefined, task.id, tasks)))
       : [await select(holder, at)]
     for (const step of decisions) {
-      if (step.kind === "execute" || step.kind === "verify" || step.kind === "fix") {
+      if (step.kind === "execute" || step.kind === "verify" || step.kind === "fix" || step.kind === "formulate") {
         claimable.push({
-          unit: step.unit, title: step.title, kinds: [step.kind], ...(step.kind !== "verify" ? { touches: step.touches } : {}),
+          unit: step.unit,
+          title: step.title,
+          kinds: [step.kind],
+          ...(step.kind !== "verify" && step.kind !== "formulate" ? { touches: step.touches } : {}),
         })
       }
     }
@@ -1438,7 +1618,7 @@ export async function openExecutorCoordinator(
   }
 
   function withoutGrant(step: Decision): DerivedStep {
-    return step.kind === "execute" || step.kind === "verify" || step.kind === "fix"
+    return step.kind === "execute" || step.kind === "verify" || step.kind === "fix" || step.kind === "formulate"
       ? { kind: "wait", reason: "not-ready", detail: `${step.unit} is available for a new claim.` }
       : step
   }
@@ -1499,7 +1679,7 @@ export async function openExecutorCoordinator(
       return { kind: "blocked", reason: "attemptsExhausted", detail: `${producer.grant.unit} has reached the ${MAX_ATTEMPTS}-attempt verification limit.` }
     }
     const original = entries.find(({ grant, booking }) => grant.unit === producer.grant.unit &&
-      grant.kind === "execute" && booking?.receipt?.kind === "landed"
+      (grant.kind === "execute" || grant.kind === "formulate") && booking?.receipt?.kind === "landed"
     )
     return readExecutorFollowUp(dir, { kind: "verify", unit: producer.grant.unit, baseline: original?.base ?? producer.base, head }, false, !!producer.scope, checkout)
   }
@@ -1577,6 +1757,13 @@ export async function openExecutorCoordinator(
     if (serialReservation()) return []
     const plan = await readExecutorParkPlan(dir)
     if (!plan) return []
+    // While the phase's formulation unit stands (0276), it is the phase's
+    // only claimable work — 0095 D5's serial rule ("a phase's only ready
+    // unit, its Touches everything, ahead of everything it plans"). The
+    // lane tiers stand down and the fresh-claim path derives the formulate
+    // step; today's behavior for a phase past its formulation is unchanged
+    // (the gate reads the same predicate the dispatch keys on, P6).
+    if (awaitingFormulation(plan.tasks, planPhaseOf(plan.phase, plan.index))) return []
     const reservations = reserved()
     const worktrees = (await loadProjectConfig(dir).catch(() => undefined))?.treeLanes === "on"
     const candidates = readyTasks(plan).map((task): ScopedTask | undefined => {
@@ -1641,7 +1828,11 @@ export async function openExecutorCoordinator(
       (last?.grant.kind === "fix" && (result?.kind !== "landed" || result.continuation))
     const needsVerification = (result?.kind === "landed" && !result.closeCommit && !result.continuation && !result.parked) ||
       (last?.grant.kind === "verify" && result?.kind !== "landed")
-    if (kind === "execute" || (kind === undefined && !needsFix && !needsVerification)) return preview(at, last ?? null, task, scoped)
+    // A formulate ask routes through the fresh-claim preview (0276): the
+    // formulate step derives where it stands, and claim's kind guard answers
+    // the mismatch — a formulate ask over a phase past its formulation, an
+    // execute ask while the formulation stands.
+    if (kind === "execute" || kind === "formulate" || (kind === undefined && !needsFix && !needsVerification)) return preview(at, last ?? null, task, scoped)
 
     return kind === "fix" || (kind === undefined && needsFix) ? fixing(at, last ?? null) : verification(holder, at, last ?? null)
   }
@@ -1674,7 +1865,7 @@ export async function openExecutorCoordinator(
       const plan = await readExecutorParkPlan(dir)
       const declaration = plan?.tasks.find(({ id }) => id === task)
       if (declaration && docEligible(declaration)) return scopedDecision(holder, at, kind, task)
-      if (kind === undefined || kind === "execute") return preview(at, null, task)
+      if (kind === undefined || kind === "execute" || kind === "formulate") return preview(at, null, task)
       return { kind: "wait", reason: "not-ready", detail: `${task} has no ${kind} step to claim.` }
     }
     if (hasReservations || scopedTasks.length) {
@@ -1683,7 +1874,10 @@ export async function openExecutorCoordinator(
       for (const scoped of scopedTasks) {
         const step = await scopedDecision(holder, at, kind, scoped.task.id, scoped)
         if (step.kind === "execute" || step.kind === "verify" || step.kind === "fix") return step
-        wait ??= step
+        // A formulate step never rides the scoped tiers (the candidates
+        // gate, 0276); reached only by type totality, it answers as the
+        // available new claim it is.
+        wait ??= step.kind === "formulate" ? withoutGrant(step) : step
       }
       if (wait) return wait
       return { kind: "wait", reason: "in-flight", detail: "The current workspace tier must settle before other work starts." }
@@ -1711,7 +1905,18 @@ export async function openExecutorCoordinator(
         if (blocked) return blocked
       }
       const step = await select(holder, now(), kind, task)
-      if (step.kind !== "execute" && step.kind !== "verify" && step.kind !== "fix") return step
+      if (step.kind !== "execute" && step.kind !== "verify" && step.kind !== "fix" && step.kind !== "formulate") return step
+      // The asked-kind guard (0276): a targeted claim receives its own kind
+      // or an honest wait naming the mismatch — dead code for the standing
+      // kinds (their routing guarantees the match by construction), made
+      // load-bearing by the formulate join, where the fresh-claim preview
+      // can derive a different step than the ask (an execute ask while the
+      // phase's formulation stands, a formulate ask over a phase past it).
+      // An untargeted claim takes the next step whatever its kind — the
+      // menu's claimable row named it.
+      if (kind !== undefined && step.kind !== kind) {
+        return { kind: "wait", reason: "not-ready", detail: `${step.unit} has no ${kind} step to claim.` }
+      }
       if (task !== undefined && task !== step.unit) {
         return { kind: "wait", reason: "not-ready", detail: `${task} is not the next serial unit.` }
       }
@@ -1723,10 +1928,10 @@ export async function openExecutorCoordinator(
       const checkout = workspace && last && retained ? await openCheckout(last) : dir
       if (typeof checkout !== "string") return checkout
       const base = workspace && !workspace.established ? workspace.start : await gitRead(checkout, "rev-parse", "HEAD")
-      if (step.kind !== "execute" && base !== step.head) {
+      if (step.kind !== "execute" && step.kind !== "formulate" && base !== step.head) {
         return { kind: "blocked", reason: "isolation", detail: "HEAD moved before the grant." }
       }
-      const { touches, scope, worktree: _, ...work } = step.kind === "verify" ? { ...step, touches: undefined } : step
+      const { touches, scope, worktree: _, ...work } = step.kind === "verify" || step.kind === "formulate" ? { ...step, touches: undefined } : step
       // The grant's budget is the project's declared executorLease (0260);
       // select's admission arm already proved the config loads, so a throw
       // here is a hand edit landing mid-claim and fails loud.

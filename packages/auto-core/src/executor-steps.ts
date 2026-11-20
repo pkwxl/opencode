@@ -1,6 +1,6 @@
 // Read-only executor previews (0246 D10 slice 1, 0249 D4). The coordinator
 // must re-evaluate under its run lock before admitting work.
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { CONFIG_FILE, loadProjectConfig, type ProjectConfig } from "./config"
 import { ANALYSIS_DOC, taskDocPaths } from "./docpaths"
 import { handoffStatus } from "./document/roles"
@@ -22,6 +22,7 @@ export type ExecutorPreview =
   | { kind: "human"; gate: "project-start" | "survey-release"; document: string; detail?: string }
   | { kind: "wait"; reason: "not-ready" | "in-flight"; detail: string }
   | { kind: "execute"; unit: string; title: string; touches?: readonly string[]; prompt: string }
+  | { kind: "formulate"; unit: string; title: string; phase: string; index: string; prompt: string }
   | { kind: "phase-boundary"; phase: string; problems: readonly string[] }
   | { kind: "done" }
 
@@ -31,7 +32,7 @@ export type ExecutorSnapshot = {
   activeProgress: boolean
   continuationUnit?: string
   continuationHandoff?: boolean
-  route?: { task: string; scoped?: boolean }
+  route?: { task: string; scoped?: boolean; followUp?: true }
   round?: {
     complete: boolean
     open: boolean
@@ -95,11 +96,46 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
   }
 
   const { phase, plan } = current
-  if (!current.indexPresent || awaitingFormulation(plan.tasks, phase)) {
+  if (!current.indexPresent) {
     return { kind: "wait", reason: "not-ready", detail: "The phase needs a task plan or formulation dispatch." }
   }
+  // 0276 (0256 stage 2's first convergence kind): the phase's formulation
+  // unit standing in the index is claimable coordinator work — the planning
+  // session that writes every task document rides the protocol beside its
+  // push twin, additive (P10 — the push path unchanged). The claimable keys
+  // on exactly the predicate the push dispatch keys on (awaitingFormulation:
+  // pending or blocked, never in flight — an in_progress unit belongs to a
+  // push session or its recovery ladder, conservatively waited, P12), the
+  // brief is the same derivation the push session reads (renderWhole over
+  // the formulation task, its todo the single input), and the phase's
+  // identity rides the grant as data (the qualified id and the index path —
+  // the landing fence's per-kind arm and the settlement's collect read
+  // them, never a second lookup). A follow-up route — the landed share's
+  // verification or fix round — passes the branch: the unit's wrap-up and
+  // fix sessions claim it while its todo still stands pending.
+  const awaiting = state.route?.followUp ? undefined : awaitingFormulation(plan.tasks, phase)
+  if (awaiting) {
+    const views = promptViews(plan, awaiting)
+    return {
+      kind: "formulate",
+      unit: awaiting.id,
+      title: awaiting.title,
+      phase: plan.phase,
+      index: plan.index,
+      prompt: renderWhole(current.facts, views.plan, views.task, taskDocPaths(awaiting.id), {
+        phase,
+        mode: current.mode,
+        continuation: continuation && state.continuationHandoff,
+      }),
+    }
+  }
   if (task) {
-    if (task.status === "in_progress" || task.formulate || task.closeAudit) {
+    // The follow-up derivation (a landed share's verification or fix round)
+    // renders below even over the formulation unit: the bypass is the
+    // follow-up route's alone, and an in_progress unit never carries one
+    // (a landed executor share leaves its unit pending — the driver, never
+    // the session, writes the in_progress state).
+    if ((task.status === "in_progress" || task.formulate || task.closeAudit) && !state.route?.followUp) {
       return { kind: "wait", reason: "not-ready", detail: `${task.id} requires specialized routing before a whole-task brief can be rendered.` }
     }
     const views = promptViews(plan, task)
@@ -197,6 +233,16 @@ export async function readExecutorParkPlan(dir: string) {
   return phase ? loadPlan(dir, phase) : undefined
 }
 
+// The PlanPhase of a qualified phase id plus its task-index path (0276):
+// the two strings carry the phase's whole identity, and the runner's own
+// reconstruction (plan.phase split beside dirname(plan.index)) lives here —
+// the one home the coordinator's formulation gate and the formulate
+// settlement's collect both read.
+export function planPhaseOf(phase: string, index: string): { round: string; id: string; dir: string } {
+  const [round, id] = phase.split(".")
+  return { round: round!, id: id!, dir: dirname(index) }
+}
+
 export type VerificationPreview = {
   kind: "verify"
   unit: string
@@ -214,13 +260,23 @@ export type FixPreview = {
   head: string
   round: number
   touches?: readonly string[]
+  // 0276: a fix round over the phase's formulation unit repairs the plan
+  // its session wrote — the formulation context (the qualified phase id and
+  // its index path) rides the grant so the landing fence's per-kind arm
+  // admits the same family the formulate share writes (per-unit context on
+  // the grant, 0261's letter). Absent on every other fix grant.
+  phase?: string
+  index?: string
   prompt: string
 }
 
 type FollowUp = { kind: "verify"; unit: string; baseline: string; head: string } |
   { kind: "fix"; unit: string; round: number; head: string }
 
-type FollowUpBlock = Exclude<ExecutorPreview, { kind: "execute" }>
+// The follow-up blocks (0276: the formulate step excluded with execute — a
+// follow-up derivation never answers with the fresh-claim formulate step,
+// its route bypasses the awaiting branch by construction).
+type FollowUpBlock = Exclude<ExecutorPreview, { kind: "execute" } | { kind: "formulate" }>
 
 export function readExecutorFollowUp(
   dir: string,
@@ -245,8 +301,19 @@ export async function readExecutorFollowUp(
 ): Promise<VerificationPreview | FixPreview | FollowUpBlock> {
   const state = await readExecutorSnapshot(dir, continuation ? share.unit : undefined, checkout)
   if ("kind" in state) return state
-  state.route = { task: share.unit, scoped }
+  // The follow-up flag (0276): the landed share's verification or fix round
+  // claims the unit through deriveExecutorPreview's ordinary task render —
+  // over the phase's formulation unit too, whose standing todo would
+  // otherwise answer the follow-up with the formulate step (the awaiting
+  // branch is the fresh-claim route's alone).
+  state.route = { task: share.unit, scoped, followUp: true }
   const step = deriveExecutorPreview(state)
+  // The follow-up flag above bypasses the awaiting branch, so the formulate
+  // step never answers a follow-up; the unreachable arm reads as off-route
+  // (the fresh-claim route alone owns the formulate step).
+  if (step.kind === "formulate") {
+    return { kind: "wait", reason: "not-ready", detail: `${share.unit} is outside the current phase route.` }
+  }
   if (step.kind !== "execute") return step
   const current = state.round?.current
   const task = current?.plan.tasks.find(({ id }) => id === share.unit)
@@ -259,6 +326,7 @@ export async function readExecutorFollowUp(
       ...share,
       title: task.title,
       touches: task.touches,
+      ...(task.formulate === current.plan.phase ? { phase: current.plan.phase, index: current.plan.index } : {}),
       prompt: renderFix(current.facts, views.plan, views.task, taskDocPaths(task.id), {
         mode: current.mode,
         phase: current.phase,

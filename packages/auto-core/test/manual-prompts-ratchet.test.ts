@@ -63,7 +63,7 @@ describe("manual-driver prompt ratchet", () => {
     expect(coordinator).toContain("!requested.has(entry) || !sameHolder(entry.holder, holder) || !live(entry, at)")
     // A replay settles the original booking, while the next verification needs an independent producer.
     expect(executor).toContain("Retry a lost report or release with its original pair and the same report outcome.")
-    expect(executor).toContain("a fresh agent context and a different token from the producer of the immediately preceding execute or fix share")
+    expect(executor).toContain("a fresh agent context and a different token from the producer of the immediately preceding execute, fix, or formulate share")
     expect(coordinator).toContain("entry.booking.outcome !== outcome")
     expect(coordinator).toContain("if (entry.booking.receipt) return entry.booking.receipt")
     // 0273 moved the same-token answer's rendering from the retired wait line
@@ -117,13 +117,44 @@ describe("manual-driver prompt ratchet", () => {
     expect(executor).toContain("Provisioning against it — sub-agent templates, sandbox allowlists, or nothing — is the operator's affair")
     expect(executor).toContain("the coordinator's boundary checks are the authority either way")
     // The driver-side producer: one rendering derived from the fence's own
-    // tables — never a second hand-maintained list (P5/P7).
-    expect(coordinator).toContain("const WORK_TYPE_IDS = [\"execute\", \"verify\", \"fix\"] as const satisfies readonly Grant[\"kind\"][]")
+    // tables — never a second hand-maintained list (P5/P7). The formulate id
+    // joined with its own enactment (0276, 0261 D2's id-growth letter).
+    expect(coordinator).toContain("const WORK_TYPE_IDS = [\"execute\", \"verify\", \"fix\", \"formulate\"] as const satisfies readonly Grant[\"kind\"][]")
     expect(coordinator).toContain("export function executorTypeCatalog(): ExecutorTypes {")
     expect(coordinator).toContain("UNIT_STATE_DOC.source")
     expect(coordinator).toContain("taskDocPaths(CATALOG_UNIT).handoff")
     expect(coordinator).toContain("const GIT_LETTER = \"coordinator-only\"")
     expect(coordinator).toContain("const types = executorTypeCatalog()")
+  })
+
+  // plans/0276 (0256 stage 2's first convergence kind): the formulate grant
+  // kind's 0203 both-sides arm — the executor.md item-2 sentences, the
+  // fence's family table and the catalog's formulate letter are one ruled
+  // relationship, so the kind's write boundary cannot drift on one side.
+  // The behavioral proof lives in test/executor-catalog.test.ts (the letter
+  // equal to the family arm over the corpus, both directions) and
+  // test/executor-formulate.test.ts (the lifecycle); this arm pins the
+  // copy-bearing sides to the producer's anchors.
+  test("the formulate kind: executor.md's sentences and the fence's family arm are pinned together (plans/0276)", () => {
+    const executor = text("executor.md")
+    const coordinator = src("executor-coordinator.ts")
+    const steps = src("executor-steps.ts")
+    // The enumeration and the write letter: the family named in prose, the
+    // input todo's exclusion taught, the driver's close-out shapes refused.
+    expect(executor).toContain("For `execute`, `verify`, `fix`, or `formulate`, work in the returned `workspace` and follow `prompt`.")
+    expect(executor).toContain("Formulation may write only the granted phase's planning documents — the `index` path the grant names, the planned tasks' `todo.md` files, and its coverage map and handoff")
+    expect(executor).toContain("never its own input `todo.md`, and never a `done.md`, a tick, or a rename")
+    // The producer's anchors: the family table and the exclusion, the
+    // catalog's formulate letter and its never rendering, the derivation's
+    // predicate and the grant's carried identity.
+    expect(coordinator).toContain("const PENDING_PLAN_DOC = /^docs\\/T-\\d+\\/todo\\.md$/")
+    expect(coordinator).toContain("path !== taskStatePaths(entry.grant.unit).pending")
+    expect(coordinator).toContain("DONE_STATE_DOC_SOURCE")
+    expect(coordinator).toContain("CATALOG_PHASE_INDEX")
+    expect(coordinator).toContain('grant.kind === "formulate" ? "phase-formulate" : "exec"')
+    expect(steps).toContain("awaitingFormulation(plan.tasks, phase)")
+    expect(steps).toContain("followUp: true")
+    expect(steps).toContain("kind: \"formulate\"")
   })
 
   // plans/0270 (0264-04's fix): the fingerprint letter on the protocol

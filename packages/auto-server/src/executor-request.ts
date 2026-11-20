@@ -2,7 +2,7 @@ import type { ExecutorHolder } from "@opencode-ai/auto-core/executor-coordinator
 import { REQUEST_BYTE_LIMIT, RequestError } from "./request"
 import type { ExecutorRoute, PersonDelegation } from "./ws-protocol"
 
-type WorkKind = "execute" | "verify" | "fix"
+type WorkKind = "execute" | "verify" | "fix" | "formulate"
 type Lease = { step: string; lease: string }
 type Action =
   | { route: "ready" }
@@ -32,8 +32,10 @@ function answerText(value: unknown, field: string, allowEmpty = false): string {
 }
 
 function workKind(value: unknown): WorkKind {
-  if (value === "execute" || value === "verify" || value === "fix") return value
-  throw new RequestError('Executor "kind" must be execute, verify, or fix.')
+  // 0276: the formulate kind joins the frozen vocabulary additively — an
+  // unknown word still stops and asks (the standing letter).
+  if (value === "execute" || value === "verify" || value === "fix" || value === "formulate") return value
+  throw new RequestError('Executor "kind" must be execute, verify, fix, or formulate.')
 }
 
 function key(body: Record<string, unknown>): Lease {
