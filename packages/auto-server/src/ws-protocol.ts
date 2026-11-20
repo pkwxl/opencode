@@ -1,8 +1,8 @@
 export const executorRoutes = ["ready", "claim", "brief", "report", "heartbeat", "release", "question", "answer"] as const
 export type ExecutorRoute = (typeof executorRoutes)[number]
 export type PersonDelegation = "unrestricted" | readonly ("questions" | "releases")[]
-export type StepRequest = { v: 1; type: "step-request"; id: string; route: ExecutorRoute; token: string; delegation?: PersonDelegation; body: unknown }
-export type StepDone = { v: 1; type: "step-done"; id: string; status: 200 | 400 | 500; body: Record<string, unknown> }
+export type StepRequest = { v: number; type: "step-request"; id: string; route: ExecutorRoute; token: string; delegation?: PersonDelegation; body: unknown }
+export type StepDone = { v: number; type: "step-done"; id: string; status: 200 | 400 | 500; body: Record<string, unknown> }
 
 
 // The interactive transport's wire protocol (P3b, auto-core plans/0067 §四):
@@ -45,7 +45,13 @@ export type StepDone = { v: 1; type: "step-done"; id: string; status: 200 | 400 
 // The protocol version this package speaks on both ends. Bump in one
 // conscious change that updates every speaker (the daemon, the worker
 // transport, and the published client vocabulary in docs/daemon.md).
-export const PROTOCOL_VERSION = 1
+// `0.1`, preview (plans/0279's version ruling, enacted by 0280): adding and
+// removing vocabulary stay open while it carries, the exit criterion is
+// sustained field testing, never a freeze claim — and the `1` it replaces
+// was premature (the spec's tombstone section, docs/protocol.md in
+// auto-core, is the compatibility record; a stale v1 speaker fails loudly
+// at the handshake with both versions named).
+export const PROTOCOL_VERSION = 0.1
 
 // How a question settled on the worker's side — the transport-level fact the
 // daemon forwards so a client can drop the question from its view. It names
@@ -164,13 +170,13 @@ export function parseFrame(raw: string): ParsedFrame {
       if (delegation !== undefined && delegation !== "unrestricted" &&
           (!Array.isArray(delegation) || !delegation.length || delegation.length > 2 ||
            !delegation.every((grant) => grant === "questions" || grant === "releases"))) return bad("invalid person delegation")
-      return { ok: true, frame: { v: 1, type, id, token, route, body: parsed.body, ...(delegation !== undefined && { delegation }) } }
+      return { ok: true, frame: { v: PROTOCOL_VERSION, type, id, token, route, body: parsed.body, ...(delegation !== undefined && { delegation }) } }
     }
     case "step-done": {
       const id = str("id")
       const { status, body } = parsed
       if (!id || (status !== 200 && status !== 400 && status !== 500) || !isRecord(body)) return bad("invalid step-done frame")
-      return { ok: true, frame: { v: 1, type, id, status, body } }
+      return { ok: true, frame: { v: PROTOCOL_VERSION, type, id, status, body } }
     }
     case "question": {
       const id = str("id")

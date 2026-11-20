@@ -155,7 +155,11 @@ describe("manual-driver prompt ratchet", () => {
     expect(coordinator).toContain("path !== taskStatePaths(entry.grant.unit).pending")
     expect(coordinator).toContain("DONE_STATE_DOC_SOURCE")
     expect(coordinator).toContain("CATALOG_PHASE_INDEX")
-    expect(coordinator).toContain('grant.kind === "formulate" ? "phase-formulate" : grant.kind === "distill" ? "phase-handover" : grant.kind === "audit" ? "close-audit" : "exec"')
+    // 0280 moved the shareMessage ternary into SHARE_STAGE_OF_KIND (the
+    // protocol-doc ratchet's table) — the pin moved with it, the standing
+    // moved-anchor discipline: the kind's stage word stays coupled to the
+    // executor.md enumeration.
+    expect(coordinator).toContain('formulate: "phase-formulate",')
     expect(steps).toContain("awaitingFormulation(plan.tasks, phase)")
     expect(steps).toContain("followUp: true")
     expect(steps).toContain("kind: \"formulate\"")
@@ -188,7 +192,10 @@ describe("manual-driver prompt ratchet", () => {
     // and the landed-receipt terminal the preview reads.
     expect(coordinator).toContain('if (entry.grant.kind === "distill") return path === entry.grant.handover')
     expect(coordinator).toContain("CATALOG_PHASE_HANDOVER")
-    expect(coordinator).toContain('grant.kind === "distill" ? "phase-handover" : grant.kind === "audit" ? "close-audit" : "exec"')
+    // 0280 moved the shareMessage ternary into SHARE_STAGE_OF_KIND — the
+    // pin moved with it (the kind's stage word stays coupled to the
+    // executor.md sentences).
+    expect(coordinator).toContain('distill: "phase-handover",')
     expect(coordinator).toContain("async function distillationProblems(checkout: string, grant: Extract<Grant, { kind: \"distill\" }>): Promise<string[]> {")
     expect(coordinator).toContain("previous.closeCommit !== undefined || last?.grant.kind === \"distill\"")
     expect(steps).toContain("kind: \"distill\"")
@@ -226,7 +233,7 @@ describe("manual-driver prompt ratchet", () => {
     expect(coordinator).toContain('if (entry.grant.kind === "audit") return path === entry.grant.findings || path === docs.handoff')
     expect(coordinator).toContain('if (entry.grant.kind === "fix" && entry.grant.findings !== undefined && path === entry.grant.findings) return true')
     expect(coordinator).toContain("CATALOG_TASK_FINDINGS")
-    expect(coordinator).toContain('grant.kind === "audit" ? "close-audit" : "exec"')
+    expect(coordinator).toContain('audit: "close-audit",')
     expect(coordinator).toContain("async function auditProblems(dir: string, grant: Extract<Grant, { kind: \"audit\" }>): Promise<string[]> {")
     expect(steps).toContain("kind: \"audit\"")
     expect(steps).toContain("closeAuditFindingsDoc(task.id)")

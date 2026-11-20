@@ -566,7 +566,7 @@ The WebSocket surface that carries **human interaction and run control**
 between a run's worker and its clients: a question asked inside a run is
 answerable from outside the process, and the graceful `/exit` (exit 3) is
 reachable over the network. Two endpoints per run, one typed versioned
-protocol (`src/ws-protocol.ts`, `v: 1` on every frame — a version skew is one
+protocol (`src/ws-protocol.ts`, `v: 0.1` on every frame — a version skew is one
 error frame and a close):
 
 | route                          | auth | meaning |

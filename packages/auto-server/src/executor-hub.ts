@@ -1,6 +1,7 @@
 // Program W's holder side (0275). One process owns one worker channel.
 // Run on the workspace host. The child consumes the brief on stdin.
 import { setTimeout as delay } from "node:timers/promises"
+import { EXECUTOR_PROTOCOL } from "@opencode-ai/auto-core/executor-coordinator"
 
 type Kind = "execute" | "verify" | "fix" | "formulate" | "distill" | "audit"
 type Pair = { step: string; lease: string }
@@ -111,7 +112,7 @@ async function main(args: string[], shutdown: AbortSignal) {
     })
     if (!response.ok) throw new Error(`Executor ${route} returned HTTP ${response.status}.`)
     const reply: Reply = await response.json()
-    if (reply.protocol !== 1) throw new Error("Unknown executor protocol.")
+    if (reply.protocol !== EXECUTOR_PROTOCOL) throw new Error(`Unknown executor protocol (this hub speaks ${EXECUTOR_PROTOCOL}, the daemon answered ${String(reply.protocol)}).`)
     return reply
   }
 

@@ -63,7 +63,7 @@ describe("the interactive transport protocol (typed, versioned)", () => {
     roundTrip({ type: "error", message: "no open question q9" }, "error")
     roundTrip({ type: "step-request", id: "r1", route: "heartbeat", token: "token-identity", body: { leases: [] } }, "executor request")
     roundTrip({ type: "step-request", id: "r2", route: "answer", token: "person-identity", delegation: ["questions"], body: { item: "q1", decision: "Proceed" } }, "delegated answer")
-    roundTrip({ type: "step-done", id: "r1", status: 200, body: { protocol: 1, menu: { leases: [], claimable: [] } } }, "executor reply")
+    roundTrip({ type: "step-done", id: "r1", status: 200, body: { protocol: 0.1, menu: { leases: [], claimable: [] } } }, "executor reply")
   })
 
   test("a version skew, an unknown type and misshapen frames are fatal protocol errors", () => {

@@ -66,7 +66,7 @@ exec "$@"
       call("ready", {}, worker),
       call("claim", {}, worker),
     ])
-    expect(ready.protocol).toBe(1)
+    expect(ready.protocol).toBe(0.1)
     expect(Object.keys(ready).sort()).toEqual(["build", "menu", "protocol"])
     // 0270's additive carrier: the build fingerprint rides the ready
     // envelope beside protocol — the handshake every session starts with,
@@ -89,7 +89,7 @@ exec "$@"
     const { types, pending, ...menuBefore } = ready.menu
     expect(Object.keys(menuBefore).sort()).toEqual(["claimable", "leases"])
     expect(pending).toEqual([])
-    expect(claimed).toMatchObject({ protocol: 1, step: { kind: "execute", unit: TASK, workspace: directory } })
+    expect(claimed).toMatchObject({ protocol: 0.1, step: { kind: "execute", unit: TASK, workspace: directory } })
     expect(await Bun.file(launches).text()).toBe(`${directory}\n`)
     expect(liveRunLock(directory)).toBeDefined()
     const lease = { step: claimed.step.id, lease: claimed.step.lease }
@@ -249,7 +249,7 @@ test("the daemon grants and settles concurrent worktree leases through protocol 
     })
     const result = await response.json()
     expect(response.status, JSON.stringify(result)).toBe(200)
-    expect(result.protocol).toBe(1)
+    expect(result.protocol).toBe(0.1)
     return result
   }
   try {

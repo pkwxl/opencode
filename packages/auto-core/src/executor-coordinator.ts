@@ -29,6 +29,17 @@ import { markDone, plannedTaskProblems, readyTasks, runtimeParked, setParked, ta
 
 export class ExecutorRequestError extends Error {}
 
+// The executor wire's version literal (plans/0279's version ruling, enacted
+// by 0280): `0.1`, PREVIEW — adding and removing routes, kinds, scopes and
+// stage words stay open while it carries, and the exit criterion is
+// sustained field testing, never a freeze claim. The `1` this replaces was
+// recorded as premature (the tombstone note in docs/protocol.md, the
+// spec's compatibility record); old clients fail loudly at the handshake.
+// One home for the literal both packages stamp: the reply envelope's
+// `protocol` field (executor-worker's 200 body) and the response-size
+// measures below, which simulate that envelope's shape.
+export const EXECUTOR_PROTOCOL = 0.1
+
 export type ExecutorHolder = { token: string; channel: string }
 type Holder = ExecutorHolder
 export type ExecutorPerson = ExecutorHolder & { delegation: "unrestricted" | readonly ("questions" | "releases")[] }
@@ -158,18 +169,18 @@ type Claim = DerivedStep | Grant
 type LeaseKey = { step: string; lease: string }
 // The pending person items on the read surface (0271, 0262-04's fix): kind
 // and id for every reader; the question's text (and task context) only for a
-// channel questionAuthority admits; the gate item never text — its proposal
-// is the offer route's own disclosure, release authority its gate. The `kind`
-// vocabulary is frozen additive under `protocol: 1` (P13): `question` |
-// `gate`, the ids exactly the ones the answer and gate routes use.
+  // channel questionAuthority admits; the gate item never text — its proposal
+  // is the offer route's own disclosure, release authority its gate. The `kind`
+  // vocabulary is frozen additive under the wire's `protocol` version (P13):
+  // `question` | `gate`, the ids exactly the ones the answer and gate routes use.
 type MenuPending =
   | { kind: "question"; id: string; text?: string; task?: string }
   | { kind: "gate"; id: string }
 type Menu = {
   claimable: { unit: string; title: string; kinds: [Grant["kind"]]; touches?: readonly string[] }[]
   leases: (LeaseKey & Pick<Grant, "kind" | "deadline" | "attempt">)[]
-  // 0261 D2's additive `types` block (enacted by 0269, under the frozen
-  // `protocol: 1` — P13): the restriction catalog rides the menu, the single
+  // 0261 D2's additive `types` block (enacted by 0269, under the
+  // `protocol` wire version — P13): the restriction catalog rides the menu, the single
   // dispatch-time payload (0246 D4 b's "hub-as-scheduler's menu" letter); a
   // client that ignores it behaves byte-identically (P10).
   types: ExecutorTypes
@@ -231,7 +242,34 @@ function shareMessage(grant: Grant, parked = false): string {
   // word is the one reused so the landed share's provenance stays
   // distinguishable from an ordinary execute share's — the FAIL finding's
   // reader reads the audit's commits by their stage.
-  return message(grant.id, { id: grant.unit }, grant.kind === "verify" ? "wrapup" : grant.kind === "fix" ? "fix" : grant.kind === "formulate" ? "phase-formulate" : grant.kind === "distill" ? "phase-handover" : grant.kind === "audit" ? "close-audit" : "exec", [], `Executor lease ${grant.lease}`)
+  return message(grant.id, { id: grant.unit }, executorStageOf(grant.kind), [], `Executor lease ${grant.lease}`)
+}
+
+// The share stage word per grant kind (0280's ratchet table): one exported
+// home the doc's stage-word enumeration pins against — each kind's word the
+// push family's own (0278's close-audit letter states the reuse rule), never
+// a protocol-invented word. The park, done and clarify stages are
+// shape-specific (shareMessage's park arm, closeVerified's done commit,
+// settleGate's clarify commit), enumerated beside the table in the spec.
+export const SHARE_STAGE_OF_KIND: Record<Grant["kind"], string> = {
+  execute: "exec",
+  verify: "wrapup",
+  fix: "fix",
+  formulate: "phase-formulate",
+  distill: "phase-handover",
+  audit: "close-audit",
+}
+
+// The protocol's whole stage-word vocabulary, one derivation (0280's ratchet
+// table): the per-kind share words plus the three shape-specific commits —
+// `park` (shareMessage's park arm), `done` (closeVerified's close-out) and
+// `clarify` (settleGate's release). The literals at those sites move in the
+// same conscious change as this derivation; the spec's enumeration
+// (docs/protocol.md) pins against it, both directions.
+export const SHARE_STAGE_WORDS = [...Object.values(SHARE_STAGE_OF_KIND), "park", "done", "clarify"] as const
+
+function executorStageOf(kind: Grant["kind"]): string {
+  return SHARE_STAGE_OF_KIND[kind]
 }
 
 // 0246 D4 i's never-list stated as path grammar for the fence's own input
@@ -372,15 +410,18 @@ function outsidePerimeter(report: BlockedReport): SettlementBlocked {
 // is the standing write contract's authority posture (0246 D4 i — the
 // coordinator alone stages and commits, P4; executor.md teaches it), cited
 // here as the frozen literal `git: "coordinator-only"`. Ids are frozen
-// additive under `protocol: 1` (P13) and never exceed what the coordinator
-// can grant: the work ids satisfy Grant["kind"], the person ids the step
+// additive under the wire's `protocol` version (P13) and never exceed what
+// the coordinator can grant: the work ids satisfy Grant["kind"], the person ids the step
 // kinds personStep and offerGate deliver. The type-level letter only —
 // per-unit scope stays where it rides (the menu's `touches`, the grant's
 // `workspace`). No enforcement claim is made (P12): violations surface at
 // the standing boundary checks, which fail loud.
 const GIT_LETTER = "coordinator-only" as const
 const CATALOG_UNIT = "T-NNN"
-const WORK_TYPE_IDS = ["execute", "verify", "fix", "formulate", "distill", "audit"] as const satisfies readonly Grant["kind"][]
+// Exported for the protocol-doc ratchet (0280): the doc's grant-kind
+// enumeration pins against this table — the one home the catalog, the wire
+// and the spec share (P5).
+export const WORK_TYPE_IDS = ["execute", "verify", "fix", "formulate", "distill", "audit"] as const satisfies readonly Grant["kind"][]
 const PERSON_QUESTION_AUTHORITY = ["unrestricted", "questions"] as const
 const PERSON_RELEASE_AUTHORITY = ["unrestricted", "releases"] as const
 
@@ -956,7 +997,7 @@ export async function openExecutorCoordinator(
     const { gate, document, digest, review, before } = proposal
     const item = prior?.digest === digest ? prior : { id: randomUUID(), gate, document, digest, position: questions.length + gates.length }
     const offer: GateOffer = { kind: "human", id: item.id, gate, document, proposal: before, review }
-    if (Buffer.byteLength(JSON.stringify({ protocol: 1, step: offer })) > MAX_RESPONSE_BYTES) {
+    if (Buffer.byteLength(JSON.stringify({ protocol: EXECUTOR_PROTOCOL, step: offer })) > MAX_RESPONSE_BYTES) {
       return { kind: "blocked", reason: "isolation", detail: "The gate proposal exceeds the executor response limit." }
     }
     if (item !== prior) await persistGates([...gates, item])
@@ -1069,7 +1110,7 @@ export async function openExecutorCoordinator(
   }
 
   function withAnswers(holder: Holder, grant: Grant): Grant | Extract<ExecutorPreview, { kind: "blocked" }> {
-    const size = (brief: Grant) => Buffer.byteLength(JSON.stringify({ protocol: 1, step: brief }))
+    const size = (brief: Grant) => Buffer.byteLength(JSON.stringify({ protocol: EXECUTOR_PROTOCOL, step: brief }))
     if (size({ ...grant, answerCursor: null }) > MAX_RESPONSE_BYTES) {
       return { kind: "blocked", reason: "config", detail: "The rendered brief exceeds the 256 KiB executor response limit. Shorten the project or task inputs." }
     }

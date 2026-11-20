@@ -79,6 +79,9 @@ export const REPO_LANE: readonly string[] = [
   "test/executor-formulate.test.ts",
   "test/executor-steps.test.ts",
   "test/executor-worktree.test.ts",
+  // The protocol-doc ratchet (plans/0280): pure doc-and-constant reads, but
+  // listed beside the executor family it pins.
+  "test/protocol-doc.test.ts",
   "test/git.test.ts",
   "test/gitignore.test.ts",
   "test/incident-regression.test.ts",

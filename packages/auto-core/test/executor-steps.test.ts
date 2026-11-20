@@ -1311,7 +1311,7 @@ test("large answer histories keep live briefs fetchable and page in settlement o
     const refreshed = await coordinator.brief(holder, grant.unit)
     if (!("lease" in refreshed) || typeof refreshed.answerCursor !== "string") throw new Error("Expected a live paged brief.")
     expect(refreshed.lease).toBe(grant.lease)
-    expect(Buffer.byteLength(JSON.stringify({ protocol: 1, step: refreshed }))).toBeLessThanOrEqual(256 * 1024)
+    expect(Buffer.byteLength(JSON.stringify({ protocol: 0.1, step: refreshed }))).toBeLessThanOrEqual(256 * 1024)
     const first = await coordinator.briefAnswers(holder, grant.unit, refreshed.answerCursor)
     expect(first.next).toBeDefined()
     await coordinator.answerQuestion(person, older.id, "Latest answer.")

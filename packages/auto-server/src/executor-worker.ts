@@ -1,8 +1,8 @@
-import { ExecutorRequestError, openExecutorCoordinator } from "@opencode-ai/auto-core/executor-coordinator"
+import { EXECUTOR_PROTOCOL, ExecutorRequestError, openExecutorCoordinator } from "@opencode-ai/auto-core/executor-coordinator"
 import { parseExecutorRequest } from "./executor-request"
 import { BRIDGE_TOKEN_ENV, parseTransport, RequestError } from "./request"
 import { buildFingerprint } from "./version"
-import { encodeFrame, parseFrame, type StepDone, type StepRequest } from "./ws-protocol"
+import { encodeFrame, parseFrame, PROTOCOL_VERSION, type StepDone, type StepRequest } from "./ws-protocol"
 
 type Coordinator = Awaited<ReturnType<typeof openExecutorCoordinator>>
 type Step = Awaited<ReturnType<Coordinator["claim"]>>
@@ -77,7 +77,7 @@ function wirePersonStep(step: Awaited<ReturnType<Coordinator["claimPerson"]>>): 
 }
 
 async function perform(coordinator: Coordinator, request: StepRequest): Promise<StepDone> {
-  const base = { v: 1, type: "step-done", id: request.id } as const
+  const base = { v: PROTOCOL_VERSION, type: "step-done", id: request.id } as const
   try {
     const { action, holder } = parseExecutorRequest(request.route, request.body, request.token, request.delegation)
     // 0271: the delegation rides the read surface too — the menu's pending
@@ -125,7 +125,7 @@ async function perform(coordinator: Coordinator, request: StepRequest): Promise<
         break
       }
     }
-    return { ...base, status: 200, body: { protocol: 1, ...payload } }
+    return { ...base, status: 200, body: { protocol: EXECUTOR_PROTOCOL, ...payload } }
   } catch (error) {
     if (error instanceof RequestError || error instanceof ExecutorRequestError) {
       return { ...base, status: 400, body: { error: error.message } }

@@ -7,7 +7,10 @@ lifecycle, all without a terminal. It is a shell in the core/shell contract's
 sense (`@opencode-ai/auto-core`'s `docs/shell-contract.md`): it imports the
 core and Node/Bun builtins only, adds no runtime dependency, and the core
 never knows HTTP. `docs/daemon.md` is the deep documentation of every route,
-gate and status; this README is the landed shape at a glance.
+gate and status; this README is the landed shape at a glance. The executor
+protocol's standing specification is the auto-core package's
+`docs/protocol.md` — the single source, enforced by the protocol-doc
+ratchet (`test/protocol-doc.test.ts` in both packages).
 
 ```
 opencode-auto-server register <dir>              # the whitelist (absolute)
@@ -183,7 +186,10 @@ default channel.
 | `question` | `text`, optional complete `task`, `step`, `lease` tuple | `question` with `id` and `state: "raised"` |
 | `answer` | `item`, `decision`, optional `rationale` | next eligible person `step` |
 
-Successful responses include `protocol: 1` and the listed payload. The
+Successful responses include `protocol: 0.1` and the listed payload —
+`0.1` is preview: vocabulary may be added or removed while it carries (the
+wire's standing specification is the auto-core package's
+`docs/protocol.md`, enforced by the protocol-doc ratchet). The
 `ready` response also includes `build` — the server's version and build
 commit — so a stale daemon shows itself at the handshake (running from
 source, the commit reads `dev`, never a fabricated value). Lease

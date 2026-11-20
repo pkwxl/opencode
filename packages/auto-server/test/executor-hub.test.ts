@@ -17,10 +17,10 @@ test("a long-running child receives its brief while the hub renews the issued pa
     calls.push(route)
     if (route === "heartbeat") {
       expect(body).toEqual({ leases: [pair] })
-      return { protocol: 1, menu: { claimable: [], leases: [{ ...pair, kind: "execute", deadline: Date.now() + 400 }] } }
+      return { protocol: 0.1, menu: { claimable: [], leases: [{ ...pair, kind: "execute", deadline: Date.now() + 400 }] } }
     }
     expect(body).toEqual({ ...pair, outcome: "ended" })
-    return { protocol: 1 }
+    return { protocol: 0.1 }
   }, new AbortController().signal)
   expect(calls.slice(0, -1)).toContain("heartbeat")
   expect(calls.at(-1)).toBe("report")
@@ -31,7 +31,7 @@ test("shutdown and launch failure give back a grant whose child never started", 
   const request = async (route: string, body: object) => {
     expect(body).toEqual(pair)
     calls.push(route)
-    return { protocol: 1 }
+    return { protocol: 0.1 }
   }
   await serveGrant(grant(), sleeper, request, AbortSignal.abort())
   await expect(serveGrant(grant(), ["/nonexistent-executor-child"], request, new AbortController().signal)).rejects.toThrow()
@@ -50,10 +50,10 @@ for (const reason of ["shutdown", "missing pair", "cap", "hung renewal"] as cons
           await new Promise((_, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }))
         }
         const lease = reason === "missing pair" ? "replaced" : pair.lease
-        return { protocol: 1, menu: { claimable: [], leases: [{ ...pair, lease, kind: issued.kind, deadline: issued.deadline }] } }
+        return { protocol: 0.1, menu: { claimable: [], leases: [{ ...pair, lease, kind: issued.kind, deadline: issued.deadline }] } }
       }
       expect(body).toEqual({ ...pair, outcome: "failed" })
-      return { protocol: 1 }
+      return { protocol: 0.1 }
     }, shutdown.signal)
     if (reason === "shutdown") {
       shutdown.abort()
@@ -103,7 +103,7 @@ for (const interrupt of ["claim", "child"] as const) {
           if (calls.filter(c => c.route === route).length === 1) return new Response(null, { status: 503 })
           payload = { step: { kind: "done" } }
         }
-        return Response.json({ protocol: 1, ...payload })
+        return Response.json({ protocol: 0.1, ...payload })
       },
     })
     try {
@@ -137,11 +137,11 @@ test("a successor checks authority and recovers a live grant only after orphan c
       calls.push(route)
       if (route === "session") return Response.json({ scopes })
       const issued = grant()
-      if (route === "ready") return Response.json({ protocol: 1, menu: {
+      if (route === "ready") return Response.json({ protocol: 0.1, menu: {
         leases: [{ ...pair, kind: issued.kind, deadline: issued.deadline }], claimable: [],
       } })
-      if (route === "claim") return Response.json({ protocol: 1, step: issued })
-      return Response.json({ protocol: 1, step: { kind: "done" } })
+      if (route === "claim") return Response.json({ protocol: 0.1, step: issued })
+      return Response.json({ protocol: 0.1, step: { kind: "done" } })
     },
   })
   try {
