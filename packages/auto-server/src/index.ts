@@ -15,8 +15,8 @@
 // @opencode-ai/sdk, the monorepo server package or any Effect infrastructure;
 // the server is self-contained on Bun.serve with zero added runtime
 // dependencies. test/isolation.test.ts holds that line as an assertion.
-import { resolve } from "node:path"
-import { accessSync, constants, statSync } from "node:fs"
+import { dirname, resolve } from "node:path"
+import { accessSync, constants, lstatSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { applyServerProfile } from "./profile"
 import { parseEnvFile } from "./env-boot"
@@ -32,7 +32,7 @@ const USAGE = `usage:
   opencode-auto-server register <directory> [--data-dir <dir>]
   opencode-auto-server unregister <name-or-directory> [--data-dir <dir>]
   opencode-auto-server projects [--data-dir <dir>]
-  opencode-auto-server token issue --scopes <read,control,…> [--name <label>] [--data-dir <dir>]
+  opencode-auto-server token issue --scopes <read,control,…> [--name <label>] [--out <file>] [--data-dir <dir>]
   opencode-auto-server token list [--data-dir <dir>]
   opencode-auto-server token revoke <name> [--data-dir <dir>]
   opencode-auto-server transfer <dir>
@@ -143,7 +143,10 @@ token — manage bearer tokens and their scopes: read (status/logs/events),
   with --open and at least one --root.
   Unauthenticated requests
   get 401, a token without the route's scope 403. The plaintext token is
-  printed once at issue; the store keeps only its digest.
+  printed once at issue, or with --out <file> written direct to that file
+  mode 0600 instead (a fresh path in an existing writable directory —
+  never overwriting, never creating directories, and nothing of the
+  credential on stdout); the store keeps only its digest either way.
 
 worker '<run request JSON>' — the unit the daemon spawns (P1b). The JSON
   document holds:
@@ -270,6 +273,70 @@ function runStored(action: () => void): void {
   }
 }
 
+// The --out arm of token issue (plans/0268, the 0264-06 remedy): the
+// credential's one clean delivery — written direct to the operator's file
+// mode 0600 and never to stdout, so a transcript, log or captured pipe
+// never carries it and a script storing the token needs no line-picking
+// (the finding's wrong-line grab). The status and shown-once lines stay
+// on stdout byte-identical. The path is taught first, proven after: the
+// parent directory must exist (this flag never creates directories —
+// mkdir is the operator's own act) and be writable, and the target must
+// not exist (a fresh credential writes a fresh file: no clobbered bytes,
+// no pre-existing mode left holding a credential) — then the mint, then
+// the exclusive 0600 write itself, so the proof never rests on the
+// pre-flight's race-free window. A failure between mint and delivery
+// never prints the credential: a file the write may have created is
+// removed (an EEXIST refused — that entry is not this command's), and
+// the refusal names the token for the operator's revoke; an automatic
+// rollback declined (a second store write inside an error path, its own
+// failure unhandleable cleanly — the residual 0268 records).
+function issueTokenToFile(dataDir: string, scopes: string, name: string | undefined, rawOut: string): void {
+  const path = resolve(rawOut)
+  const dir = dirname(path)
+  try {
+    if (!statSync(dir).isDirectory()) refuse(`--out takes a file in an existing directory — ${dir} is not a directory`)
+  } catch {
+    refuse(`--out takes a file in an existing directory — ${dir} does not exist (create it first; token issue never creates directories)`)
+  }
+  try {
+    accessSync(dir, constants.W_OK)
+  } catch {
+    refuse(`--out cannot write into ${dir} — the directory is not writable (pick a writable location for the credential)`)
+  }
+  try {
+    lstatSync(path)
+    refuse(`--out refuses to overwrite ${path} — a fresh credential writes a fresh 0600 file (move ${path} aside, or pass another path)`)
+  } catch {
+    // absent — the fresh-file arm.
+  }
+  let label: string | undefined
+  let issued: { name: string; scopes: string[] } | undefined
+  try {
+    const { token, stored } = new DaemonStore(dataDir).issueToken(scopes, name)
+    label = stored.name
+    // Exactly the bytes the shown-once line puts on stdout — the
+    // credential and the newline that terminates it, nothing else (no
+    // wrapper: the file's consumers are Bearer headers and scripts, and a
+    // wrapper would make every one of them parse).
+    writeFileSync(path, `${token}\n`, { flag: "wx", mode: 0o600 })
+    issued = { name: stored.name, scopes: [...stored.scopes] }
+  } catch (error) {
+    if ((error as { code?: string } | null)?.code !== "EEXIST") {
+      try {
+        rmSync(path, { force: true })
+      } catch {
+        // best-effort belt; the refusal below is the act.
+      }
+    }
+    if (error instanceof StoreError) refuse(error.message)
+    const detail = error instanceof Error ? error.message : String(error)
+    const named = label === undefined ? "the token (token list names it)" : `the token "${label}"`
+    refuse(`--out could not write ${path} (${detail}) — ${named} was issued but delivered nowhere; revoke it, then re-issue: opencode-auto-server token revoke`)
+  }
+  console.log(`✓ token "${issued.name}" issued with scopes: ${issued.scopes.join(", ")}`)
+  console.log(`the token is shown once; the store (${dataDir}/tokens.json) keeps only its digest`)
+}
+
 const command = args[0]
 
 // AUTO-DECISION (whitelist/token management is a CLI surface, not REST):
@@ -352,6 +419,7 @@ if (command === "token") {
     const { dataDir, rest } = takeDataDir(args.slice(2))
     let scopes: string | undefined
     let name: string | undefined
+    let out: string | undefined
     for (let at = 0; at < rest.length; at++) {
       const flag = rest[at]
       const value = rest[at + 1]
@@ -363,17 +431,26 @@ if (command === "token") {
         if (value === undefined || value.startsWith("--")) refuse("--name takes a label for the token (shown by token list)")
         name = value
         at++
+      } else if (flag === "--out") {
+        if (value === undefined || value.startsWith("--")) refuse("--out takes a file path — the credential is written there 0600 and never printed")
+        out = value
+        at++
       } else {
-        refuse(`unknown token issue argument "${flag}" (token issue takes --scopes and --name)`)
+        refuse(`unknown token issue argument "${flag}" (token issue takes --scopes, --name and --out)`)
       }
     }
     if (scopes === undefined) refuse(`--scopes is required (a comma-separated subset of: ${SCOPES.join(", ")})`)
-    runStored(() => {
-      const { token, stored } = new DaemonStore(dataDir).issueToken(scopes!, name)
-      console.log(`✓ token "${stored.name}" issued with scopes: ${stored.scopes.join(", ")}`)
-      console.log(token)
-      console.log(`the token is shown once; the store (${dataDir}/tokens.json) keeps only its digest`)
-    })
+    if (out !== undefined) issueTokenToFile(dataDir, scopes, name, out)
+    else {
+      // The floor (P10): no --out, the three stdout lines exactly as
+      // before — the credential between the status and shown-once lines.
+      runStored(() => {
+        const { token, stored } = new DaemonStore(dataDir).issueToken(scopes!, name)
+        console.log(`✓ token "${stored.name}" issued with scopes: ${stored.scopes.join(", ")}`)
+        console.log(token)
+        console.log(`the token is shown once; the store (${dataDir}/tokens.json) keeps only its digest`)
+      })
+    }
     process.exit(0)
   }
   if (sub === "list") {

@@ -20,7 +20,7 @@
 //     token issue/list/revoke (the bootstrap-safe way the whitelist and
 //     the tokens are managed), plus a serve smoke over a subprocess.
 import { describe, expect, test } from "bun:test"
-import { realpathSync } from "node:fs"
+import { existsSync, realpathSync, statSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
 import { basename, join } from "node:path"
 import { hostname, tmpdir } from "node:os"
@@ -837,6 +837,91 @@ describe("daemon CLI: the whitelist and token management", () => {
       const revoked = await runCli(["token", "revoke", "web", "--data-dir", dataDir])
       expect(revoked.code).toBe(0)
       expect((await runCli(["token", "list", "--data-dir", dataDir])).out).toContain("no tokens")
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  test("token issue --out: the credential direct to a fresh 0600 file, stdout carrying the status lines alone (plans/0268)", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "auto-server-token-out-"))
+    try {
+      const out = join(dataDir, "web.token")
+      const issued = await runCli(["token", "issue", "--scopes", "read,control", "--name", "web", "--out", out, "--data-dir", dataDir])
+      expect(issued.code, issued.err).toBe(0)
+      // stdout is exactly the two status lines — the credential never
+      // among them, so a transcript, log or captured pipe cannot grab it
+      // and no script must pick a line out of the mix (0264-06's shape).
+      expect(issued.out).toBe(`✓ token "web" issued with scopes: read, control\nthe token is shown once; the store (${join(dataDir, "tokens.json")}) keeps only its digest\n`)
+      // The file carries exactly the credential bytes and the newline the
+      // shown-once line itself would terminate — nothing else (no wrapper
+      // to make every consumer parse), and the store verifies those very
+      // bytes as the minted token.
+      const text = await Bun.file(out).text()
+      expect(text).toMatch(/^oas_[A-Za-z0-9_-]{43}\n$/)
+      expect(new DaemonStore(dataDir).verifyToken(text.trim())).toEqual(["read", "control"])
+      expect(statSync(out).mode & 0o777, "the credential file is 0600").toBe(0o600)
+      // The floor (P10): without --out the same mint prints the credential
+      // between the two status lines, byte-identical to the pre-0268 mix.
+      const shown = await runCli(["token", "issue", "--scopes", "read", "--name", "shown", "--data-dir", dataDir])
+      expect(shown.code, shown.err).toBe(0)
+      const lines = shown.out.split("\n")
+      expect(lines[0]).toBe('✓ token "shown" issued with scopes: read')
+      expect(lines[1]).toMatch(/^oas_[A-Za-z0-9_-]{43}$/)
+      expect(lines[2]).toBe(`the token is shown once; the store (${join(dataDir, "tokens.json")}) keeps only its digest`)
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  test("token issue --out refusals: missing parent, unwritable parent, existing target — the credential never printed, nothing orphaned (plans/0268)", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "auto-server-token-out-refuse-"))
+    try {
+      // A missing parent is refused naming the directory and teaching that
+      // the flag never creates it — and nothing is minted (the pre-flight
+      // precedes the store's write, so no orphan digest either).
+      const missing = await runCli(["token", "issue", "--scopes", "read", "--out", join(dataDir, "no-such-dir", "t.token"), "--data-dir", dataDir])
+      expect(missing.code).toBe(1)
+      expect(missing.err).toContain(join(dataDir, "no-such-dir"))
+      expect(missing.err).toContain("never creates directories")
+      expect(missing.out).not.toMatch(/^oas_/)
+      expect((await runCli(["token", "list", "--data-dir", dataDir])).out).toContain("no tokens")
+      // A parent that is not a directory (a file in the path) and one that
+      // is not writable: both refused naming the location.
+      const blocker = join(dataDir, "blocker")
+      await Bun.write(blocker, "not a directory\n")
+      const notDir = await runCli(["token", "issue", "--scopes", "read", "--out", join(blocker, "t.token"), "--data-dir", dataDir])
+      expect(notDir.code).toBe(1)
+      expect(notDir.err).toContain("is not a directory")
+      expect(notDir.out).not.toMatch(/^oas_/)
+      const roDir = join(dataDir, "ro")
+      await mkdir(roDir, { mode: 0o500 })
+      const ro = await runCli(["token", "issue", "--scopes", "read", "--out", join(roDir, "t.token"), "--data-dir", dataDir])
+      expect(ro.code).toBe(1)
+      expect(ro.err).toContain(roDir)
+      expect(ro.err).toContain("not writable")
+      expect(ro.out).not.toMatch(/^oas_/)
+      expect(existsSync(join(roDir, "t.token"))).toBe(false)
+      // An existing target is never clobbered — the bytes survive, the
+      // credential never printed.
+      const existing = join(dataDir, "existing.token")
+      await Bun.write(existing, "precious\n")
+      const clash = await runCli(["token", "issue", "--scopes", "read", "--out", existing, "--data-dir", dataDir])
+      expect(clash.code).toBe(1)
+      expect(clash.err).toContain("refuses to overwrite")
+      expect(clash.err).toContain(existing)
+      expect(await Bun.file(existing).text()).toBe("precious\n")
+      expect(clash.out).not.toMatch(/^oas_/)
+      // A mint refusal under a valid --out leaves no empty file behind
+      // (the exclusive write follows the mint, never precedes it).
+      const fresh = join(dataDir, "fresh.token")
+      const badScope = await runCli(["token", "issue", "--scopes", "read,nonsense", "--out", fresh, "--data-dir", dataDir])
+      expect(badScope.code).toBe(1)
+      expect(badScope.err).toContain('unknown scope "nonsense"')
+      expect(existsSync(fresh)).toBe(false)
+      // The valueless flag is the usage teaching.
+      const valueless = await runCli(["token", "issue", "--scopes", "read", "--out", "--data-dir", dataDir])
+      expect(valueless.code).toBe(1)
+      expect(valueless.err).toContain("--out takes a file path")
     } finally {
       await rm(dataDir, { recursive: true, force: true })
     }

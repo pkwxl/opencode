@@ -77,10 +77,20 @@ printed exactly once at issue, and issuing/revoking takes effect on the next
 request (the store reads per request, no daemon restart needed):
 
 ```
-opencode-auto-server token issue --scopes read,control [--name <label>]
+opencode-auto-server token issue --scopes read,control [--name <label>] [--out <file>]
 opencode-auto-server token list
 opencode-auto-server token revoke <name>
 ```
+
+`--out <file>` (plans/0268) is the script-safe delivery: the credential is
+written direct to that file — mode 0600, exactly the token bytes and their
+newline — and never printed to stdout, which keeps carrying the status and
+shown-once lines alone (a transcript, log or captured pipe never holds the
+credential, and storing it needs no line-picking). The path must be a fresh
+file in an existing writable directory: an existing target is refused (never
+clobbered), a missing parent is refused naming it (`token issue` never
+creates directories), and an unopenable path fails exit 1 with the
+credential printed nowhere.
 
 ## The REST control plane (P1c)
 

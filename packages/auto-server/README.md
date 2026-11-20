@@ -11,7 +11,7 @@ gate and status; this README is the landed shape at a glance.
 
 ```
 opencode-auto-server register <dir>              # the whitelist (absolute)
-opencode-auto-server token issue --scopes read,control,answer,config
+opencode-auto-server token issue --scopes read,control,answer,config [--out <file>]
 opencode-auto-server serve [--port 4770] [--host 127.0.0.1] [--data-dir <dir>] [--launch <confinement script>] [--env-file <declaration file>] [--open --root <dir> …]
 # then: open the daemon's URL in a browser, paste a token — or talk REST.
 ```
@@ -156,7 +156,10 @@ without the route's scope. Scopes: `read` (status/observability/models),
 `config` (init/amend/fix/reset), `answer` (the question channel),
 `probe` (the model probe alone — opt-in, carried by no default token set,
 and beside the scope it takes an explicit `confirm` field and the
-per-daemon 10-minute rate window).
+per-daemon 10-minute rate window). The plaintext token is printed once at
+issue; `token issue --out <file>` instead writes it direct to a fresh 0600
+file — never overwriting, never creating directories, nothing of the
+credential on stdout.
 
 ## Executor preview
 
