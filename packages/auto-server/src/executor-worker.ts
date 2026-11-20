@@ -1,6 +1,7 @@
 import { ExecutorRequestError, openExecutorCoordinator } from "@opencode-ai/auto-core/executor-coordinator"
 import { parseExecutorRequest } from "./executor-request"
 import { BRIDGE_TOKEN_ENV, parseTransport, RequestError } from "./request"
+import { buildFingerprint } from "./version"
 import { encodeFrame, parseFrame, type StepDone, type StepRequest } from "./ws-protocol"
 
 type Coordinator = Awaited<ReturnType<typeof openExecutorCoordinator>>
@@ -46,7 +47,12 @@ async function perform(coordinator: Coordinator, request: StepRequest): Promise<
     let payload: Record<string, unknown>
     switch (action.route) {
       case "ready":
-        payload = { menu: await coordinator.ready(holder) }
+        // 0270's additive carrier: the build fingerprint rides the ready
+        // envelope beside protocol — the handshake every session starts
+        // with, the one place identity needs carrying (per-response
+        // repetition declined). A client that ignores the field reads the
+        // pre-change envelope.
+        payload = { build: buildFingerprint(), menu: await coordinator.ready(holder) }
         break
       case "heartbeat":
         payload = { menu: await coordinator.heartbeat(holder, action.leases) }

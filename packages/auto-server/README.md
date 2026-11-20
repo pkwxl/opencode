@@ -183,7 +183,10 @@ default channel.
 | `question` | `text`, optional complete `task`, `step`, `lease` tuple | `question` with `id` and `state: "raised"` |
 | `answer` | `item`, `decision`, optional `rationale` | next eligible person `step` |
 
-Successful responses include `protocol: 1` and the listed payload. Lease
+Successful responses include `protocol: 1` and the listed payload. The
+`ready` response also includes `build` — the server's version and build
+commit — so a stale daemon shows itself at the handshake (running from
+source, the commit reads `dev`, never a fabricated value). Lease
 deadlines use Unix milliseconds. After an ambiguous untargeted claim,
 reconcile `menu.leases` with `ready` before claiming again. Retry a report
 or release with its original step and lease. If a report was accepted

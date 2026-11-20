@@ -16,7 +16,7 @@ executor ready '{"channel":"worker"}'
 executor claim '{"channel":"worker","task":"T-012","kind":"execute"}'
 ```
 
-Treat HTTP errors as request failures. Show the operator the error if it needs their action. Successful responses carry `protocol: 1` and one payload, `step`, `menu`, or `question`. Stop and ask the operator to update the client if the protocol or a step kind is unknown.
+Treat HTTP errors as request failures. Show the operator the error if it needs their action. Successful responses carry `protocol: 1` and one payload, `step`, `menu`, or `question`. The `ready` response also carries `build`, the server's version and build commit — read it to detect a stale daemon. Stop and ask the operator to update the client if the protocol or a step kind is unknown; unknown extra fields are additive, not an unknown protocol.
 
 ## Solo worker
 

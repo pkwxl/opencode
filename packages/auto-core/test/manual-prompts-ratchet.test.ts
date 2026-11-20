@@ -112,6 +112,22 @@ describe("manual-driver prompt ratchet", () => {
     expect(coordinator).toContain("const types = executorTypeCatalog()")
   })
 
+  // plans/0270 (0264-04's fix): the fingerprint letter on the protocol
+  // sentence. The ruled relationship is three-sided — the manual sentence,
+  // the wire field, the identity's home — but two of the sides live in
+  // packages/auto-server (src/version.ts the one home, the e2e pinning the
+  // `build` field with the dev fallback and the stripped envelope floor);
+  // this arm holds the manual side so the teaching cannot drift from the
+  // ruled vocabulary (the additive-fields letter keeping the stop-and-ask
+  // keyed on unknown protocols and step kinds, never on the additive field).
+  test("the executor prompt's protocol sentence carries the build fingerprint letter (plans/0270)", () => {
+    const executor = text("executor.md")
+    expect(executor).toContain("The `ready` response also carries `build`, the server's version and build commit")
+    expect(executor).toContain("read it to detect a stale daemon")
+    expect(executor).toContain("unknown extra fields are additive, not an unknown protocol")
+    expect(executor).toContain("Stop and ask the operator to update the client if the protocol or a step kind is unknown")
+  })
+
   test("the person prompt preserves delegated authority and proposal-bound settlement", () => {
     const executor = text("executor.md")
     const person = text("person.md")

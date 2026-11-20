@@ -22,7 +22,7 @@ import { applyServerProfile } from "./profile"
 import { parseEnvFile } from "./env-boot"
 import { DEFAULT_HOSTNAME, DEFAULT_PORT, deriveWorkerCommand, startDaemon } from "./daemon"
 import { defaultDataDir, DaemonStore, SCOPES, StoreError } from "./store"
-import { VERSION } from "./version"
+import { BUILD_COMMIT, VERSION } from "./version"
 import { runWorker } from "./worker"
 
 const USAGE = `usage:
@@ -580,7 +580,11 @@ if (command === "serve") {
   // assessment's §8 Q4 boundary) and the run lock's stale detection cannot
   // cross hosts; a loopback default keeps the token-guarded control plane
   // off the network until an operator explicitly widens it with --host.
-  console.log(`opencode-auto-server ${VERSION} serving on ${daemon.url} (data dir: ${dataDir})`)
+  // The banner carries the stamped identity from the same home the wire
+  // reads (plans/0270): the version beside the build commit, so a stale
+  // daemon names itself at its own startup line ("dev" = running from
+  // source, nothing stamped).
+  console.log(`opencode-auto-server ${VERSION} (build ${BUILD_COMMIT}) serving on ${daemon.url} (data dir: ${dataDir})`)
   console.log(`web client: open ${daemon.url}/ in a browser — paste a token, and the read surface and run controls render scope-aware from the API`)
   console.log(`whitelist: ${projects.length} project${projects.length === 1 ? "" : "s"} registered${projects.length ? ` (${projects.map((project) => project.name).join(", ")})` : ""} — runs target registered projects only`)
   console.log(`auth: ${tokens.length} token${tokens.length === 1 ? "" : "s"} (scopes: ${SCOPES.join(", ")}); requests carry 'Authorization: Bearer <token>'`)

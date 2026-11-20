@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { liveRunLock } from "@opencode-ai/auto-core/lock"
 import { executorTypeCatalog } from "@opencode-ai/auto-core/executor-coordinator"
+import { buildFingerprint, VERSION } from "../src/version"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
 import { fixtureProject, gitOf, TASK, TASK_2 } from "./fixtures/project"
@@ -57,7 +58,17 @@ exec "$@"
       call("claim", {}, worker),
     ])
     expect(ready.protocol).toBe(1)
-    expect(Object.keys(ready).sort()).toEqual(["menu", "protocol"])
+    expect(Object.keys(ready).sort()).toEqual(["build", "menu", "protocol"])
+    // 0270's additive carrier: the build fingerprint rides the ready
+    // envelope beside protocol — the handshake every session starts with,
+    // the one place identity needs carrying. This suite runs the daemon from
+    // source, so the commit is the honest dev fallback, never a fabricated
+    // sha; a client that ignores the field reads the pre-change envelope.
+    expect(ready.build).toEqual(buildFingerprint())
+    expect(ready.build).toEqual({ version: VERSION, commit: "dev" })
+    const { build, ...envelopeBefore } = ready
+    expect(build).toEqual({ version: "0.0.0", commit: "dev" })
+    expect(Object.keys(envelopeBefore).sort()).toEqual(["menu", "protocol"])
     // 0269's additive carrier: the restriction catalog rides the menu itself
     // (0246 D4 b's menu letter — the single dispatch-time payload), the
     // worker passing the coordinator's rendering through with no second
