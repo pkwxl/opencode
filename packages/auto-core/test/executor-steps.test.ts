@@ -552,7 +552,15 @@ test("verification uses the durable producer token across coordinator restart", 
     if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
     expect(verify.prompt).toContain(`${baseline}..${landed.commit}`)
     expect(git(dir, "rev-parse", "HEAD").trim()).toBe(landed.commit)
+    // 0274 (0264-03's fix): an untrailered direct commit is the bounded
+    // person-amendment class — logged and passed, the witness re-based past
+    // it, verification proceeding over the person's act.
     git(dir, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "Foreign HEAD")
+    expect(await recovered.verification({ ...holder, token: "worker-2" })).toMatchObject({ kind: "verify", unit: "T-001" })
+    git(dir, "reset", "-q", "--hard", landed.commit!)
+    // A commit in the driver's stage grammar outside the ledger stays
+    // terminal divergence (P12).
+    git(dir, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "Foreign share", "-m", "Auto-Task: T-001", "-m", "Auto-Stage: exec")
     expect(await recovered.verification({ ...holder, token: "worker-2" })).toMatchObject({ kind: "blocked", reason: "isolation" })
   } finally {
     await recovered.close()
@@ -1579,6 +1587,43 @@ test("same-tree settlement replay proves the booked parent after a sibling share
     expect(git(dir, "log", "-1", "--format=%s", "HEAD").trim()).toBe(second.id)
   } finally {
     await recovered.close()
+  }
+})
+
+// 0274 (0264-03's fix), the same-tree arm: a person amendment on main
+// between sibling shares — the commit the settlement's walk and the
+// verification walk both read as terminal divergence before the class.
+test("a person amendment between same-tree shares passes the settlement and verification walks", async () => {
+  const dir = docLeaseProject()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const first = await coordinator.claim(holder, "T-001")
+    const second = await coordinator.claim(secondWorker, "T-002")
+    if (first.kind !== "execute" || second.kind !== "execute") throw new Error(JSON.stringify({ first, second }))
+    write(dir, "docs/first.md", "# First\n")
+    write(dir, "docs/second.md", "# Second\n")
+    const firstShare = await coordinator.report(holder, first.id, first.lease, "ended")
+    if (firstShare.kind !== "landed") throw new Error(JSON.stringify(firstShare))
+    write(dir, "housekeeping.md", "person note\n")
+    git(dir, "add", "housekeeping.md")
+    git(dir, "-c", "user.name=Person", "-c", "user.email=person@example.invalid", "commit", "-m", "Person housekeeping between shares")
+    const amendment = git(dir, "rev-parse", "HEAD").trim()
+    // The sibling settlement re-bases over the amendment (its booked parent
+    // walks past it), and its share lands on top.
+    const secondShare = await coordinator.report(secondWorker, second.id, second.lease, "ended")
+    expect(secondShare).toMatchObject({ kind: "landed" })
+    expect(git(dir, "rev-parse", "HEAD^").trim()).toBe(amendment)
+    expect(git(dir, "log", "-1", "--format=%s", "HEAD").trim()).toBe(second.id)
+    // Verification over the amended chain proceeds (the producer walk passes
+    // the amendment and the sibling's booked share) and closes the unit.
+    const verify = await coordinator.claim(verifier, "T-001", "verify")
+    if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
+    write(dir, "docs/T-001/report.md", docPass)
+    expect(await coordinator.report(verifier, verify.id, verify.lease, "ended")).toMatchObject({ kind: "landed", verdict: "pass" })
+    expect(readFileSync(join(dir, "housekeeping.md"), "utf8")).toBe("person note\n")
+    expect(git(dir, "status", "--porcelain", "--", "docs", "housekeeping.md")).toBe("")
+  } finally {
+    await coordinator.close()
   }
 })
 

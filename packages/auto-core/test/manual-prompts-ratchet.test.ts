@@ -130,6 +130,25 @@ describe("manual-driver prompt ratchet", () => {
     expect(executor).toContain("Stop and ask the operator to update the client if the protocol or a step kind is unknown")
   })
 
+  // plans/0274 (0264-03's fix): the accepted act vocabulary named in the
+  // executor prompt and the isolation walk's classifier held together — the
+  // manual sentence teaches exactly what the machine passes (the person's
+  // direct commits, no stage trailer, logged and passed) and what it still
+  // refuses, so neither side can drift from the other.
+  test("the executor prompt's act vocabulary and the isolation walk's classifier are pinned together (plans/0274)", () => {
+    const executor = text("executor.md")
+    const coordinator = src("executor-coordinator.ts")
+    expect(executor).toContain("The person's direct commits — plain commits carrying none of the coordinator's stage trailers — may appear in the workspace's history between the executor's own shares")
+    expect(executor).toContain("the protocol logs and passes them")
+    expect(executor).toContain("Never author such a commit yourself — this prohibition is unchanged")
+    expect(executor).toContain("an isolation block over any other unknown commit still means divergence")
+    // The driver-side classifier: the wall's driverStage grammar inside the
+    // walk's one home, and the log line that names what it passed.
+    expect(coordinator).toContain("async function settledChain(at: string, base: string, head: string): Promise<string[] | undefined>")
+    expect(coordinator).toContain("driverStage(body.out) !== undefined")
+    expect(coordinator).toContain("the isolation walk passed")
+  })
+
   test("the person prompt preserves delegated authority and proposal-bound settlement", () => {
     const executor = text("executor.md")
     const person = text("person.md")

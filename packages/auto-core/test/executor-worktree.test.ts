@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, spyOn, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -300,6 +300,156 @@ test("a lane fences the root config even when a declaration names it", async () 
     })
     rmSync(join(grant.workspace, "opencode.json"))
     expect(await coordinator.report(worker, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
+  } finally {
+    await coordinator.close()
+  }
+})
+
+// 0274 (0264-03's fix): the bounded person-amendment class in the isolation
+// walk — 0132 D2's sealedChannelCheck classifier mirrored for the executor
+// lanes. The finding's measured shape replayed: the supervisor's direct
+// .gitignore commit inside the lane repo and the operator's housekeeping
+// commit on main (the d17366a8 decision's own remedy) both wedged the lanes
+// at the isolation gate until reverted; the walk now logs them and re-bases
+// past them, verification proceeding over the person's acts.
+const personIdentity = ["-c", "user.name=Person", "-c", "user.email=person@example.invalid"]
+
+function personCommit(dir: string, path: string, text: string, subject: string, ...body: string[]) {
+  write(dir, path, text)
+  git(dir, "add", "--", path)
+  git(dir, ...personIdentity, "commit", "-m", subject, ...body.map((paragraph) => ["-m", paragraph]).flat())
+}
+
+test("the isolation walk passes bounded person amendments and unwedges the lane", async () => {
+  const dir = project(["src/one.ts", "src/two.ts"])
+  const printed: string[] = []
+  const seen = spyOn(console, "log").mockImplementation((...args: unknown[]) => { printed.push(args.join(" ")) })
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const first = await claim(coordinator, worker, "T-001", "execute")
+    write(first.workspace, "src/one.ts", "export const one = 1\n")
+    const firstShare = await coordinator.report(worker, first.id, first.lease, "ended")
+    expect(firstShare).toMatchObject({ kind: "landed" })
+    // The no-amendment floor (P10): the exactly-booked chain logs nothing.
+    expect(printed.join("\n")).not.toContain("person amendment")
+    // The supervisor's incident: a direct .gitignore commit in the lane repo,
+    // after the share landed — no driver stage trailer.
+    write(first.workspace, ".gitignore", "/.auto/\n/housekeeping\n")
+    git(first.workspace, "add", ".gitignore")
+    git(first.workspace, ...personIdentity, "commit", "-m", "Supervisor housekeeping in the lane")
+    // The d17366a8 shape: the operator's housekeeping commit on main,
+    // outside any settled share.
+    personCommit(dir, "NOTES.md", "operator note\n", "Operator housekeeping on main")
+    // The second lane unwedges too (a fresh worktree admission walking main).
+    const second = await claim(coordinator, peer, "T-002", "execute")
+    expect(second.workspace).not.toBe(dir)
+    // Verification proceeds over both amendments (a different token), the
+    // lane landing re-based past the main-side one.
+    const verify = await claim(coordinator, verifier, first.unit, "verify")
+    expect(verify.workspace).toBe(first.workspace)
+    write(verify.workspace, "docs/T-001/report.md", pass)
+    const receipt = await coordinator.report(verifier, verify.id, verify.lease, "ended")
+    expect(receipt).toMatchObject({ kind: "landed", verdict: "pass", closeCommit: git(dir, "rev-parse", "HEAD") })
+    expect(readFileSync(join(dir, "src/one.ts"), "utf8")).toBe("export const one = 1\n")
+    expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("/.auto/\n/housekeeping\n")
+    expect(readFileSync(join(dir, "NOTES.md"), "utf8")).toBe("operator note\n")
+    expect(git(dir, "log", "--merges", "--format=%s")).toContain("T-001 landing")
+    expect(readFileSync(join(dir, index), "utf8")).toContain("- [x] T-001")
+    expect(existsSync(first.workspace)).toBe(false)
+    expect(git(dir, "status", "--porcelain")).toBe("")
+    // The detection record (P8): the walk's log line names what it passed.
+    expect(printed.join("\n")).toContain("person amendment(s)")
+    expect(printed.join("\n")).toContain("no driver stage trailer")
+  } finally {
+    seen.mockRestore()
+    await coordinator.close()
+  }
+})
+
+test("a driver-grammar commit outside the ledger still blocks the walk terminally", async () => {
+  const dir = project()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const first = await claim(coordinator, worker, "T-001", "execute")
+    write(first.workspace, "src/one.ts", "export const one = 1\n")
+    expect(await coordinator.report(worker, first.id, first.lease, "ended")).toMatchObject({ kind: "landed" })
+    // A commit carrying the driver's stage grammar that no share booked —
+    // today's terminal divergence, the teaching byte-identical (P12).
+    write(first.workspace, "src/forged.ts", "export const forged = 1\n")
+    git(first.workspace, "add", "src/forged.ts")
+    git(first.workspace, "-c", "user.name=Session", "-c", "user.email=session@example.invalid",
+      "commit", "-m", "Forged share", "-m", "Auto-Task: T-001", "-m", "Auto-Stage: exec")
+    expect(await coordinator.claim(verifier, first.unit, "verify")).toEqual({
+      kind: "blocked", reason: "isolation", detail: "The recorded execute share no longer matches Git history.",
+    })
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("a merge the walk cannot read blocks; a prose trailer mention stays the person's amendment", async () => {
+  const dir = project()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const first = await claim(coordinator, worker, "T-001", "execute")
+    write(first.workspace, "src/one.ts", "export const one = 1\n")
+    expect(await coordinator.report(worker, first.id, first.lease, "ended")).toMatchObject({ kind: "landed" })
+    const lane = git(first.workspace, "rev-parse", "--abbrev-ref", "HEAD")
+    // A person-made merge on the chain: no trailer, but the second parent
+    // rides history the walk cannot bound — divergence, conservatively.
+    git(first.workspace, "checkout", "-q", "-b", "side")
+    write(first.workspace, "src/side.txt", "side\n")
+    git(first.workspace, "add", "src/side.txt")
+    git(first.workspace, ...personIdentity, "commit", "-m", "Side work")
+    git(first.workspace, "checkout", "-q", lane)
+    git(first.workspace, ...personIdentity, "merge", "--no-ff", "-m", "Person merge", "side")
+    expect(await coordinator.claim(verifier, first.unit, "verify")).toEqual({
+      kind: "blocked", reason: "isolation", detail: "The recorded execute share no longer matches Git history.",
+    })
+    // Undone, a plain commit whose prose merely mentions the driver's mark
+    // is the amendment — the trailer block's grammar (0173 D2), not a
+    // substring scan.
+    git(first.workspace, "reset", "-q", "--hard", "HEAD^")
+    personCommit(first.workspace, "src/note.txt", "note\n", "Person note", "This quotes the driver's Auto-Stage: exec marker in prose.")
+    const verify = await claim(coordinator, verifier, first.unit, "verify")
+    expect(verify.workspace).toBe(first.workspace)
+    write(verify.workspace, "docs/T-001/report.md", pass)
+    expect(await coordinator.report(verifier, verify.id, verify.lease, "ended")).toMatchObject({ kind: "landed", verdict: "pass" })
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("multiple amendments and an amendment ahead of a booked landing compose on main", async () => {
+  const dir = project(["src/one.ts", "src/two.ts"])
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const first = await claim(coordinator, worker, "T-001", "execute")
+    write(first.workspace, "src/one.ts", "export const one = 1\n")
+    const firstShare = await coordinator.report(worker, first.id, first.lease, "ended")
+    expect(firstShare).toMatchObject({ kind: "landed" })
+    // Two stacked amendments between the execute share and the verify grant.
+    personCommit(dir, "one.md", "first note\n", "Person housekeeping one")
+    personCommit(dir, "two.md", "second note\n", "Person housekeeping two")
+    const verify = await claim(coordinator, verifier, first.unit, "verify")
+    write(verify.workspace, "docs/T-001/report.md", pass)
+    const receipt = await coordinator.report(verifier, verify.id, verify.lease, "ended")
+    expect(receipt).toMatchObject({ kind: "landed", verdict: "pass" })
+    // The booked landing sits on the amendment stack, and the close-out on
+    // the landing — the walk re-based past both person commits (the
+    // first-parent chain; the lane's own share commits ride the merge's
+    // second parent).
+    const subjects = git(dir, "log", "--first-parent", "--format=%s").split("\n")
+    expect(subjects.slice(0, 4)).toEqual([
+      expect.stringContaining("T-001 done"),
+      expect.stringContaining("T-001 landing"),
+      "Person housekeeping two",
+      "Person housekeeping one",
+    ])
+    expect(readFileSync(join(dir, "one.md"), "utf8")).toBe("first note\n")
+    expect(readFileSync(join(dir, "two.md"), "utf8")).toBe("second note\n")
+    expect(readFileSync(join(dir, "src/one.ts"), "utf8")).toBe("export const one = 1\n")
+    expect(git(dir, "status", "--porcelain")).toBe("")
   } finally {
     await coordinator.close()
   }

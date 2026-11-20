@@ -16,7 +16,8 @@ import {
   prepareExecutorLanding, removeExecutorWorkspace, validExecutorLanding, validExecutorWorkspace,
   type ExecutorLanding, type ExecutorWorkspace,
 } from "./executor-worktree"
-import { EMPTY_TREE, git, identityArgs, message, repoRoots, statusEntriesRead, WORKDIR_ROOTS, withinScopes, workdirEntry } from "./git"
+import { EMPTY_TREE, git, identityArgs, message, repoRoots, statusEntriesRead, WORKDIR_ROOTS, withinScopes, workdirEntry, driverStage } from "./git"
+import { log } from "./log"
 import { docEligible, docScope, scopesDisjoint } from "./lanes"
 import { acquireRunLock, liveRunLock } from "./lock"
 import { markDone, readyTasks, runtimeParked, setParked, taskStatePaths, type Task } from "./tasks"
@@ -805,11 +806,28 @@ export async function openExecutorCoordinator(
     })
   }
 
-  // Every intervening commit must be a settled coordinator write. A ref
-  // rewrite, merge, developer commit or a neighbor with an unsettled result
-  // may not be used to move a lease's landing baseline.
-  async function knownHead(base: string, head: string): Promise<boolean> {
-    if (base === head) return true
+  // The isolation walk's one home (0274, 0264-03's fix — 0132 D2's
+  // sealedChannelCheck person-amendment class mirrored into the isolation
+  // walk 0253 ruled): every commit on the walked first-parent chain since
+  // the booked base must be a settled coordinator write — a booked share,
+  // close or landing, exactly as the `known` table records it — or a
+  // **person amendment**: a plain (non-merge) commit whose message's trailer
+  // block carries no driver stage (`driverStage` — the wall's own
+  // classifier; every road the coordinator commits through stamps
+  // `Auto-Stage`, the person's direct commits never do). An amendment is
+  // logged (the line at the exit, P8 — a finding that teaches what it saw,
+  // never a block) and the walk continues past it — the anchor re-based
+  // over the person's commit, the lane unwedged (P2: the person's acts are
+  // legitimate; P20: in-flight work kept). Everything else still blocks
+  // conservatively (P12): a commit in the driver's grammar the walk did not
+  // book (a share outside this ledger, a forged trailer) is terminal
+  // divergence, a merge is structure the walk cannot read (a booked landing
+  // alone passes as one), and an unreadable history fails the walk. Returns
+  // the amendments passed (short shas; [] over the exactly-booked chain),
+  // undefined on divergence — the callers' blocked answers byte-identical
+  // to the pre-class walk.
+  async function settledChain(at: string, base: string, head: string): Promise<string[] | undefined> {
+    if (base === head) return []
     const known = new Map<string, boolean>()
     for (const { booking, worktree } of entries) {
       const receipt = booking?.receipt
@@ -819,16 +837,41 @@ export async function openExecutorCoordinator(
         if (receipt.landingCommit) known.set(receipt.landingCommit, true)
       }
     }
-    const log = await git(dir, ["rev-list", "--first-parent", "--parents", `${base}..${head}`])
-    if (log.code !== 0) return false
-    const links = log.out.trim().split("\n")
+    const read = await git(at, ["rev-list", "--first-parent", "--parents", `${base}..${head}`])
+    if (read.code !== 0) return undefined
+    const links = read.out.trim().split("\n")
+    const amendments: string[] = []
     let current = head
     for (const link of links) {
       const [commit, parent, merge, extra] = link.split(" ")
-      if (commit !== current || !parent || extra || known.get(commit) !== Boolean(merge)) return false
+      if (commit !== current || !parent || extra) return undefined
+      if (known.get(commit) !== Boolean(merge)) {
+        // The class's bound: the person's own plain commits only. A merge
+        // rides a second parent's whole history — unreadable structure; and
+        // a commit carrying the driver's stage grammar outside the ledger
+        // is driver-family divergence, never the person's act.
+        const body = merge ? undefined : await git(at, ["show", "-s", "--format=%B", commit])
+        if (body === undefined || body.code !== 0 || driverStage(body.out) !== undefined) return undefined
+        amendments.push(commit.slice(0, 7))
+      }
       current = parent
     }
-    return current === base
+    if (current !== base) return undefined
+    if (amendments.length) {
+      log(
+        `ℹ the isolation walk passed ${amendments.length} person amendment(s) since ${base.slice(0, 7)} (${amendments.join(", ")}) — ` +
+          `commit(s) with no driver stage trailer, the person's direct acts; review them: git log --oneline ${base.slice(0, 7)}..${head.slice(0, 7)}`,
+      )
+    }
+    return amendments
+  }
+
+  // Every intervening commit must be a settled coordinator write or a
+  // bounded person amendment (0274). A ref rewrite, merge, a driver-grammar
+  // commit outside the ledger, or a neighbor with an unsettled result may
+  // not be used to move a lease's landing baseline.
+  async function knownHead(base: string, head: string): Promise<boolean> {
+    return (await settledChain(dir, base, head)) !== undefined
   }
 
   function siblingDirt(unit: string, path: string, status: string): boolean {
@@ -1353,7 +1396,7 @@ export async function openExecutorCoordinator(
       const status = await workspaceStatus(checkout)
       const head = await gitRead(checkout, "rev-parse", "HEAD")
       const receipt = handoff.booking?.receipt
-      if (!status || receipt?.kind !== "landed" || !(scoped && !handoff.worktree ? await knownHead(receipt.commit, head) : head === receipt.commit) ||
+      if (!status || receipt?.kind !== "landed" || !(scoped && !handoff.worktree ? await knownHead(receipt.commit, head) : (await settledChain(checkout, receipt.commit, head)) !== undefined) ||
           (!continuation && reportedChanges(handoff, status).length > 0)) {
         return { kind: "blocked", reason: "isolation", detail: "The handed-over workspace must still match the landed share." }
       }
@@ -1365,7 +1408,7 @@ export async function openExecutorCoordinator(
     if (continuation?.grant.unit === step.unit && (!continuation.worktree || continuation.worktree.established)) {
       const status = await workspaceStatus(checkout)
       const head = await gitRead(checkout, "rev-parse", "HEAD")
-      if (!status || !(scoped && !continuation.worktree ? await knownHead(continuation.base, head) : head === continuation.base) ||
+      if (!status || !(scoped && !continuation.worktree ? await knownHead(continuation.base, head) : (await settledChain(checkout, continuation.base, head)) !== undefined) ||
           reportedChanges(continuation, status).some(({ rel }) => !permitted(continuation, rel))) {
         return { kind: "blocked", reason: "isolation", detail: "The previous attempt's workspace needs inspection before continuation." }
       }
@@ -1430,7 +1473,7 @@ export async function openExecutorCoordinator(
     if (typeof checkout !== "string") return checkout
     const head = await gitRead(checkout, "rev-parse", "HEAD")
     const witness = await gitRead(checkout, "show", "-s", "--format=%P%n%T%n%B", receipt.commit)
-    if (!(producer.scope && !producer.worktree ? await knownHead(receipt.commit, head) : head === receipt.commit) || witness !== `${booking.parent ?? producer.base}\n${booking.intent.tree}\n${shareMessage(producer.grant)}`) {
+    if (!(producer.scope && !producer.worktree ? await knownHead(receipt.commit, head) : (await settledChain(checkout, receipt.commit, head)) !== undefined) || witness !== `${booking.parent ?? producer.base}\n${booking.intent.tree}\n${shareMessage(producer.grant)}`) {
       return { kind: "blocked", reason: "isolation", detail: "The recorded execute share no longer matches Git history." }
     }
     if (producer.holder.token === holder.token) {
@@ -1503,7 +1546,7 @@ export async function openExecutorCoordinator(
     const head = await gitRead(checkout, "rev-parse", "HEAD")
     const handedOver = fixChain.at(-1)?.booking?.receipt
     const expected = handedOver?.kind === "landed" ? handedOver.commit : receipt.commit
-    if (!(last.scope && !last.worktree ? await knownHead(expected, head) : head === expected)) {
+    if (!(last.scope && !last.worktree ? await knownHead(expected, head) : (await settledChain(checkout, expected, head)) !== undefined)) {
       return { kind: "blocked", reason: "isolation", detail: "HEAD no longer matches the landed gap list or fix handover." }
     }
     const dirty = await workspaceStatus(checkout)
