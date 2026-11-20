@@ -713,21 +713,36 @@ async function receiptStandsAtClosingTree(dir: string, receipt: CoverReceipt, de
 // so until then the honest reading is mechanical: a document that names the
 // id and carries the verdict adjudicates, one that does not names nothing
 // (P7 — the driver checks grammars, never content).
-export async function gatherAdjudications(dir: string, round: number, rows: readonly AssuranceRow[]): Promise<AdjudicationReceipt[]> {
+export async function gatherAdjudications(dir: string, round: number, rows: readonly AssuranceRow[], exclude?: string): Promise<AdjudicationReceipt[]> {
   const files: string[] = []
   for (const pattern of [join("docs", "*", "findings.md"), join(roundDir(round), "P*", "audit.md"), join(roundDir(round), "P*", "verdict.md")]) {
     for await (const file of new Bun.Glob(pattern).scan({ cwd: dir, onlyFiles: true })) files.push(file)
   }
   const receipts: AdjudicationReceipt[] = []
   for (const file of files) {
+    // 0278: one document of the gather excluded on request — the audit
+    // settlement's naming check reads the round's cover with the unit's own
+    // findings document left out, so the claim-time due set stands at
+    // settlement (the freshly written adjudication cannot cover its own
+    // owed rows out from under the collect).
+    if (exclude !== undefined && file === exclude) continue
     const text = await Bun.file(join(dir, file)).text().catch(() => "")
     const result = parseResult(text)
     if (result === undefined) continue
-    const named = rows.filter((row) => new RegExp(`(^|[^A-Za-z0-9-])${row.id}([^A-Za-z0-9-]|$)`).test(text)).map((row) => row.id)
+    const named = rows.filter((row) => namesRowId(text, row.id)).map((row) => row.id)
     if (!named.length) continue
     receipts.push({ doc: file, rows: named, result: result.type === "pass" ? "PASS" : "FAIL" })
   }
   return receipts
+}
+
+// The row-naming linkage, one home (0278): the word-boundary rule the
+// adjudication gather reads — a document names a row when the row's id
+// appears delimited (never as a substring of a longer token). Exported for
+// the audit settlement's collect, which judges the same grammar over the
+// unit's own findings document.
+export function namesRowId(text: string, id: string): boolean {
+  return new RegExp(`(^|[^A-Za-z0-9-])${id}([^A-Za-z0-9-]|$)`).test(text)
 }
 
 // The one composition both halves of the cover set consume (S4): load the
@@ -739,14 +754,14 @@ export async function gatherAdjudications(dir: string, round: number, rows: read
 // on it — P12: an unjudgeable due set is never silently empty).
 export type CoverSetReading = { delta: RoundDelta | undefined; due: DueRow[]; rows: CoverRow[]; adjudications: AdjudicationReceipt[] }
 
-export async function readCoverSet(dir: string, round: number): Promise<CoverSetReading | undefined> {
+export async function readCoverSet(dir: string, round: number, opts: { excluding?: string } = {}): Promise<CoverSetReading | undefined> {
   const table = await readAssuranceTable(dir)
   if (table === undefined) return undefined
   const delta = await measureRoundDelta(dir, round)
   const due = dueSet(table, { delta })
   if (!due.length) return undefined
   const receipts = await gatherCoverReceipts(dir, round, delta)
-  const adjudications = await gatherAdjudications(dir, round, table)
+  const adjudications = await gatherAdjudications(dir, round, table, opts.excluding)
   return { delta, due, rows: coverSet(due, { delta, receipts, adjudications }), adjudications }
 }
 

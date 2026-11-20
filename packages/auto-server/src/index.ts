@@ -36,7 +36,7 @@ const USAGE = `usage:
   opencode-auto-server token issue --scopes <read,control,…> [--name <label>] [--out <file>] [--data-dir <dir>]
   opencode-auto-server token list [--data-dir <dir>]
   opencode-auto-server token revoke <name> [--data-dir <dir>]
-  opencode-auto-server executor-hub [--resume] CONNECTION PROJECT CHANNEL execute|verify|fix|formulate|distill COMMAND [ARG ...]
+  opencode-auto-server executor-hub [--resume] CONNECTION PROJECT CHANNEL execute|verify|fix|formulate|distill|audit COMMAND [ARG ...]
   opencode-auto-server transfer <dir>
   opencode-auto-server worker '<run request JSON>'
 

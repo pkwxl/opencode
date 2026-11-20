@@ -69,9 +69,11 @@ export const REPO_LANE: readonly string[] = [
   "test/driver-helper.test.ts",
   "test/exec-session.test.ts",
   // The restriction catalog's derivation proof (plans/0269), the formulate
-  // grant kind's lifecycle (plans/0276) and the distill grant kind's
-  // (plans/0277): the fixture tests drive real git repositories (the
-  // coordinator's run lock and menu over a project fixture).
+  // grant kind's lifecycle (plans/0276), the distill grant kind's
+  // (plans/0277) and the audit grant kind's (plans/0278): the fixture tests
+  // drive real git repositories (the coordinator's run lock and menu over a
+  // project fixture).
+  "test/executor-audit.test.ts",
   "test/executor-catalog.test.ts",
   "test/executor-distill.test.ts",
   "test/executor-formulate.test.ts",

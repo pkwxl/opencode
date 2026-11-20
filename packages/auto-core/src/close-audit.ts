@@ -273,6 +273,26 @@ export async function updateAssuranceBaselines(dir: string, round: number): Prom
 // machinery resolves the same relative path).
 export const closeAuditFindingsDoc = (id: string): string => join(taskDir(id), "findings.md")
 
+// The due rows an audit settlement judges its findings document against
+// (plans/0278, the protocol arm): the round's close-due uncovered set with
+// the unit's own findings document excluded from the adjudication gather —
+// the claim-time key the constructor keyed the unit on, re-derived at
+// settlement (P6: no persisted due set, the cover read fresh; a row
+// hand-covered mid-lease simply leaves the set, the collect naming what
+// stands). undefined = a table that does not parse or nothing due — the
+// naming check stands down, the close gate holding the same problem
+// separately, exactly the constructor's own posture above.
+export async function auditDueRows(dir: string, round: number, findings: string): Promise<readonly CoverRow[] | undefined> {
+  let rows: readonly CoverRow[]
+  try {
+    rows = (await readCoverSet(dir, round, { excluding: findings }))?.rows ?? []
+  } catch {
+    return undefined
+  }
+  const due = closeDueUncovered(rows)
+  return due.length ? due : undefined
+}
+
 // The ensure result's terminal lines (the close arms' own rendering): the
 // construction's lines verbatim, the gate's two strict arms through the
 // shared stop-line shapes (the unreadable arm teaching investigation, never

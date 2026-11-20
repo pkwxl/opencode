@@ -2,7 +2,7 @@ import type { ExecutorHolder } from "@opencode-ai/auto-core/executor-coordinator
 import { REQUEST_BYTE_LIMIT, RequestError } from "./request"
 import type { ExecutorRoute, PersonDelegation } from "./ws-protocol"
 
-type WorkKind = "execute" | "verify" | "fix" | "formulate" | "distill"
+type WorkKind = "execute" | "verify" | "fix" | "formulate" | "distill" | "audit"
 type Lease = { step: string; lease: string }
 type Action =
   | { route: "ready" }
@@ -34,9 +34,10 @@ function answerText(value: unknown, field: string, allowEmpty = false): string {
 function workKind(value: unknown): WorkKind {
   // 0276: the formulate kind joins the frozen vocabulary additively — an
   // unknown word still stops and asks (the standing letter). 0277 adds the
-  // distill kind (the transfer advance's distillation session) the same way.
-  if (value === "execute" || value === "verify" || value === "fix" || value === "formulate" || value === "distill") return value
-  throw new RequestError('Executor "kind" must be execute, verify, fix, formulate, or distill.')
+  // distill kind (the transfer advance's distillation session) and 0278 the
+  // audit kind (the close-audit session) the same way.
+  if (value === "execute" || value === "verify" || value === "fix" || value === "formulate" || value === "distill" || value === "audit") return value
+  throw new RequestError('Executor "kind" must be execute, verify, fix, formulate, distill, or audit.')
 }
 
 function key(body: Record<string, unknown>): Lease {

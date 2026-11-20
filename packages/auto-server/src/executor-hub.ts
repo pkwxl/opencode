@@ -2,7 +2,7 @@
 // Run on the workspace host. The child consumes the brief on stdin.
 import { setTimeout as delay } from "node:timers/promises"
 
-type Kind = "execute" | "verify" | "fix" | "formulate" | "distill"
+type Kind = "execute" | "verify" | "fix" | "formulate" | "distill" | "audit"
 type Pair = { step: string; lease: string }
 type Held = Pair & { deadline: number; kind: Kind }
 type Menu = { leases: Held[]; claimable: { unit: string; kinds: Kind[] }[] }
@@ -80,13 +80,13 @@ export async function serveGrant(grant: Grant, command: string[], request: Reque
   return reply
 }
 
-const isKind = (value: string): value is Kind => ["execute", "verify", "fix", "formulate", "distill"].includes(value)
+const isKind = (value: string): value is Kind => ["execute", "verify", "fix", "formulate", "distill", "audit"].includes(value)
 
 async function main(args: string[], shutdown: AbortSignal) {
   const resume = args[0] === "--resume"
   const [connection, project, channel, kind, ...command] = resume ? args.slice(1) : args
   if (!connection || !project || !channel || !isKind(kind) || !command.length) {
-    throw new Error("Usage: opencode-auto-server executor-hub [--resume] CONNECTION PROJECT CHANNEL execute|verify|fix|formulate|distill COMMAND [ARG ...]")
+    throw new Error("Usage: opencode-auto-server executor-hub [--resume] CONNECTION PROJECT CHANNEL execute|verify|fix|formulate|distill|audit COMMAND [ARG ...]")
   }
   if (process.platform === "win32") throw new Error("The executor hub requires POSIX process groups to stop workspace writers.")
   const { url, token } = await Bun.file(connection).json()

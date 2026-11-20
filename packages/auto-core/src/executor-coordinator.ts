@@ -3,10 +3,12 @@
 import { createHash, randomUUID } from "node:crypto"
 import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import { join, relative } from "node:path"
+import { auditDueRows } from "./close-audit"
 import { readClarificationProposal } from "./clarify"
 import { loadProjectConfig } from "./config"
 import { docShapeProblems } from "./doccheck"
 import { taskDoc, taskDocPaths } from "./docpaths"
+import { namesRowId } from "./assurance"
 import { constraintPitfallResolves, handoffStatus, parkDirective, parseResult, roleOf, validHandover, HANDOVER_SECTIONS } from "./document/roles"
 import { parseIndex, tickedIndex } from "./document/unit"
 import { parkCheck, STEER_CHAIN_BOUND } from "./execute"
@@ -83,12 +85,27 @@ type Formulate = Extract<ExecutorPreview, { kind: "formulate" }>
 // document/unit machinery, so no second address space is invented — 0276
 // declined the phase id for formulation because THAT record was task-shaped,
 // the grounds met by their opposite here); the write surface rides the grant
-// as data (`handover`, the document path — the fence's per-kind arm and the
-// settlement's collect read it, never a second lookup). The lease shape is
+// as data (`handover`, the document path — the fence's per-kind arm and
+// the settlement's collect read it, never a second lookup). The lease shape is
 // serial: the boundary declares no Touches, no lane tier admits it.
 type Distill = Extract<ExecutorPreview, { kind: "distill" }>
-type Candidate = Execute | Formulate | Distill | FixPreview | VerificationPreview
-type Grant = (Omit<Execute, "touches"> | Formulate | Distill | Omit<FixPreview, "touches"> | VerificationPreview) & { id: string; lease: string; attempt: number; workspace: string; deadline: number; budget: number; answerCursor?: string | null }
+// 0278 (0256 stage 2's third and final convergence kind): the audit step —
+// the round's standing close-audit unit's session work (the adjudication
+// the close arms constructed the unit for) as claimable work beside its
+// push twin. The claim address is the standing unit's own task-shaped id
+// (the durable record is task-shaped — the constructor's whole design one
+// delta-scoped task unit: the index row, the todo, the done rename, the
+// findings document; 0276's grounds apply, the round-id declined — R-NN is
+// the round's own name, not a unit address); the write surface and the
+// round's identity ride the grant as data (`findings`, the document path,
+// `round`, the marker field's own number — the fence's per-kind arm and
+// the settlement's collect read them, never a second lookup). The lease
+// shape is serial: the audit unit declares no Touches, no lane tier admits
+// it, and the terminal phase's every other task is done — the standing
+// emptiness the gate.
+type Audit = Extract<ExecutorPreview, { kind: "audit" }>
+type Candidate = Execute | Formulate | Distill | Audit | FixPreview | VerificationPreview
+type Grant = (Omit<Execute, "touches"> | Formulate | Distill | Audit | Omit<FixPreview, "touches"> | VerificationPreview) & { id: string; lease: string; attempt: number; workspace: string; deadline: number; budget: number; answerCursor?: string | null }
 type BlockedReport = { kind: "blocked"; reason: "isolation" | "commitFailed"; detail: string }
 // The blocked-cause classification (0272, 0262-03's fix): `escalated` marks
 // the settlement causes whose remedy would require a write the holder's
@@ -135,7 +152,7 @@ type BudgetBlock = { kind: "blocked"; reason: "attemptsExhausted" | "fixBudget";
 // verification by a different token is still pending work); terminal for
 // the client, which reconciles against the commit and ends.
 type SettledStep = { kind: "settled"; unit: string; commit: string; detail: string }
-type DerivedStep = Exclude<ExecutorPreview, Execute | Formulate | Distill> | BlockedReport | LeaseWait | BudgetBlock | QuestionWait | SettledStep
+type DerivedStep = Exclude<ExecutorPreview, Execute | Formulate | Distill | Audit> | BlockedReport | LeaseWait | BudgetBlock | QuestionWait | SettledStep
 type Decision = DerivedStep | (Candidate & { scope?: readonly string[]; worktree?: true })
 type Claim = DerivedStep | Grant
 type LeaseKey = { step: string; lease: string }
@@ -206,7 +223,15 @@ function sameHolder(a: Holder, b: Holder): boolean {
 
 function shareMessage(grant: Grant, parked = false): string {
   if (parked) return message(`${grant.unit} park ${grant.title}`, { id: grant.unit }, "park", [], `Executor lease ${grant.lease}`)
-  return message(grant.id, { id: grant.unit }, grant.kind === "verify" ? "wrapup" : grant.kind === "fix" ? "fix" : grant.kind === "formulate" ? "phase-formulate" : grant.kind === "distill" ? "phase-handover" : "exec", [], `Executor lease ${grant.lease}`)
+  // 0278: the audit share's stage word `close-audit` is the push family's
+  // own — the construction commits' and the baselines commit's own word
+  // (close-audit.ts's three commit sites), the only close-audit-specific
+  // stage the push vocabulary carries (the session's own work lands
+  // push-side under the ordinary task execute stage). The family's stamped
+  // word is the one reused so the landed share's provenance stays
+  // distinguishable from an ordinary execute share's — the FAIL finding's
+  // reader reads the audit's commits by their stage.
+  return message(grant.id, { id: grant.unit }, grant.kind === "verify" ? "wrapup" : grant.kind === "fix" ? "fix" : grant.kind === "formulate" ? "phase-formulate" : grant.kind === "distill" ? "phase-handover" : grant.kind === "audit" ? "close-audit" : "exec", [], `Executor lease ${grant.lease}`)
 }
 
 // 0246 D4 i's never-list stated as path grammar for the fence's own input
@@ -265,7 +290,7 @@ function formulationFamily(entry: { grant: { kind: Grant["kind"]; unit: string; 
 }
 
 export function permitted(entry: {
-  grant: { kind: Grant["kind"]; unit: string; index?: string; handover?: string }
+  grant: { kind: Grant["kind"]; unit: string; index?: string; handover?: string; findings?: string }
   scope?: readonly string[]
   touches?: readonly string[]
 }, path: string): boolean {
@@ -276,13 +301,29 @@ export function permitted(entry: {
   // arms below are task-unit-shaped and never apply (the early return keeps
   // the phase-unit id out of taskDocPaths entirely). The never-set above
   // keeps everything else refused: phases.md (the tick is the apply's), the
-  // phase's todo/done (the completion rename is the apply's — the person's
-  // transfer through completePhase), another phase's handover (the anchor
-  // names the one admitted), subtasks, the workdir, config, AGENTS.md. No
-  // freeform floor, no handoff arm — the push distillation is a one-shot
-  // bypass session with no Status-line channel.
+  // phase's own todo.md/done.md (the completion rename is the apply's — the
+  // person's transfer through completePhase), another phase's handover
+  // document, subtasks.md, the workdir, config, AGENTS.md. No freeform
+  // floor, no handoff arm — the push distillation is a one-shot bypass
+  // session with no Status-line channel.
   if (entry.grant.kind === "distill") return path === entry.grant.handover
   const docs = taskDocPaths(entry.grant.unit)
+  // The audit kind's per-kind arm (0278): the granted findings document —
+  // the adjudication's one deliverable, the template's own law "an
+  // adjudication judges and documents, it never repairs in-round: modify
+  // nothing outside your own task directory" — beside the standing handoff
+  // arm (the audit session is an ordinary whole-task session, the push
+  // channel's own: an audit share hands over and continues like an execute
+  // share). No freeform floor. The never-set above keeps everything else
+  // refused: the unit's own todo.md/done.md (the close-out's), subtasks.md,
+  // phases.md, the task indexes, the workdir, config, AGENTS.md.
+  if (entry.grant.kind === "audit") return path === entry.grant.findings || path === docs.handoff
+  // The fix context arm (0278): a fix round over the standing close-audit
+  // unit carries the findings path — the repair rewrites the same document
+  // the audit share wrote (the verify share's FAIL funnel repairing the
+  // document's acceptance, never the invariant), the per-unit context
+  // riding the grant (0276's fix-context discipline).
+  if (entry.grant.kind === "fix" && entry.grant.findings !== undefined && path === entry.grant.findings) return true
   if (entry.grant.kind === "verify") return path === docs.report || path === docs.gaps
   if (entry.grant.kind === "formulate" || entry.grant.index !== undefined) return path === docs.handoff
   if (path === docs.handoff) return true
@@ -339,7 +380,7 @@ function outsidePerimeter(report: BlockedReport): SettlementBlocked {
 // the standing boundary checks, which fail loud.
 const GIT_LETTER = "coordinator-only" as const
 const CATALOG_UNIT = "T-NNN"
-const WORK_TYPE_IDS = ["execute", "verify", "fix", "formulate", "distill"] as const satisfies readonly Grant["kind"][]
+const WORK_TYPE_IDS = ["execute", "verify", "fix", "formulate", "distill", "audit"] as const satisfies readonly Grant["kind"][]
 const PERSON_QUESTION_AUTHORITY = ["unrestricted", "questions"] as const
 const PERSON_RELEASE_AUTHORITY = ["unrestricted", "releases"] as const
 
@@ -379,6 +420,11 @@ const CATALOG_PHASE_INDEX = "docs/R-NN/P<nn>-<type>/tasks.md"
 // The distill letter's per-unit anchor (0277): the placeholder form of the
 // phase's handover document (the granted `handover` names the real one).
 const CATALOG_PHASE_HANDOVER = "docs/R-NN/P<nn>-<type>/handover.md"
+// The audit letter's per-unit anchor (0278): the placeholder form of the
+// standing close-audit unit's findings document (the granted `findings`
+// names the real one), beside the standing handoff placeholder — the two
+// paths the fence's per-kind arm admits.
+const CATALOG_TASK_FINDINGS = "docs/T-NNN/findings.md"
 
 function formulateNeverPaths(): string[] {
   return [
@@ -415,6 +461,18 @@ function workTypeLetter(id: Grant["kind"]): ExecutorWorkTypeLetter {
   if (id === "distill") {
     return { id, never: { git: GIT_LETTER, paths: neverPaths() }, writes: { scope: "none", paths: [CATALOG_PHASE_HANDOVER] } }
   }
+  // The audit entry (0278): the standing never paths whole (the findings
+  // document is not in the never-set) and the writes letter carrying the
+  // findings document's placeholder beside the standing handoff's — the
+  // two paths the fence's per-kind arm admits. The honest limit, stated
+  // once beside 0276/0277's own: another unit's findings document matches
+  // neither the never grammar nor the writes anchor — the per-unit anchor
+  // names the one admitted, the fence refuses the rest, and the
+  // coordinator's boundary checks are the authority either way (0261 D3's
+  // posture).
+  if (id === "audit") {
+    return { id, never: { git: GIT_LETTER, paths: neverPaths() }, writes: { scope: "none", paths: [CATALOG_TASK_FINDINGS, taskDocPaths(CATALOG_UNIT).handoff] } }
+  }
   return { id, never: { git: GIT_LETTER, paths: neverPaths() }, writes: { scope: "unit-effective", undeclared: "freeform", paths: [taskDocPaths(CATALOG_UNIT).handoff] } }
 }
 
@@ -439,6 +497,7 @@ export type ExecutorTypes = {
   readonly fix: ExecutorWorkTypeLetter
   readonly formulate: ExecutorWorkTypeLetter
   readonly distill: ExecutorWorkTypeLetter
+  readonly audit: ExecutorWorkTypeLetter
   readonly human: ExecutorPersonTypeLetter
   readonly question: ExecutorPersonTypeLetter
 }
@@ -452,6 +511,7 @@ const CATALOG: ExecutorTypes = {
   fix: workTypeLetter("fix"),
   formulate: workTypeLetter("formulate"),
   distill: workTypeLetter("distill"),
+  audit: workTypeLetter("audit"),
   human: { id: "human", authority: PERSON_RELEASE_AUTHORITY },
   question: { id: "question", authority: PERSON_QUESTION_AUTHORITY },
 }
@@ -510,8 +570,9 @@ async function workspaceStatus(checkout: string, roots?: readonly string[]): Pro
 async function ignoredArtifactRows(checkout: string, grant: Grant, plain: readonly { rel: string }[]): Promise<{ rel: string; status: string }[]> {
   const docs = taskDocPaths(grant.unit)
   // The distill kind's artifact is the granted handover document itself
-  // (0277) — the phase-unit id never reaches taskDocPaths' arms.
-  const artifacts = grant.kind === "verify" ? [docs.report, docs.gaps] : grant.kind === "distill" ? [grant.handover] : [docs.handoff]
+  // (0277) — the phase-unit id never reaches taskDocPaths' arms. The audit
+  // kind's artifact is the granted findings document (0278).
+  const artifacts = grant.kind === "verify" ? [docs.report, docs.gaps] : grant.kind === "distill" ? [grant.handover] : grant.kind === "audit" ? [grant.findings] : [docs.handoff]
   const seen = new Set(plain.map(({ rel }) => rel))
   const ask = artifacts.filter((path) => !seen.has(path))
   if (!ask.length) return []
@@ -644,6 +705,43 @@ async function distillationProblems(checkout: string, grant: Extract<Grant, { ki
   }
   const lint = constraintPitfallResolves(text)
   if (lint) problems.push(lint)
+  return problems
+}
+
+// The audit settlement's mechanical collect (0278): the push path's own
+// grammars over the findings document, judged through their own functions —
+// parseResult (the one `Result:` grammar home: the document must end with
+// its adjudication's receipt line, PASS or FAIL, the line the driver reads
+// as the cover evidence) and the due-row linkage (namesRowId, the
+// adjudication gather's own naming rule: every row the round owes at the
+// closing tree — auditDueRows reading the cover set with the unit's own
+// findings document excluded, so the claim-time set the constructor keyed
+// the unit on stands — named in the document). The verdict itself is never
+// judged here (P7 — the FAIL finding is the person's decision surface, the
+// no-fix rule: the share lands whatever the verdict); a table that does
+// not parse stands the naming check down (the constructor's own posture —
+// it keys nothing on an unjudgeable set, the close gate holding the named
+// problem at the person's moment). Replayable by classification (every
+// remedy a rewrite of the holder's own document), so the plain blocked
+// answer — 0272's ladder, the details themselves teaching the holder's
+// remedy. The push halves with no window on the protocol deliberately not
+// rebuilt (P21): the close arms' construction, the baseline citation
+// (`updateAssuranceBaselines`, the close arms' own commit) and the
+// person's remediation itself.
+async function auditProblems(dir: string, grant: Extract<Grant, { kind: "audit" }>): Promise<string[]> {
+  const text = await Bun.file(join(dir, grant.findings)).text().catch(() => undefined)
+  if (text === undefined) return [`${grant.findings} is missing`]
+  const problems: string[] = []
+  if (parseResult(text) === undefined) {
+    problems.push(`${grant.findings} must end with its adjudication's result line as the last line of body text: \`Result: PASS\`, or \`Result: FAIL <one-sentence reason>\` — the driver reads it as the receipt`)
+  }
+  const due = await auditDueRows(dir, grant.round, grant.findings)
+  if (due !== undefined) {
+    const missing = due.filter(({ due: entry }) => !namesRowId(text, entry.row.id)).map(({ due: entry }) => `${entry.row.id} (${entry.row.invariant})`)
+    if (missing.length) {
+      problems.push(`${grant.findings} must carry one section per due row, the row's id in the section's heading — missing: ${missing.join(", ")}`)
+    }
+  }
   return problems
 }
 
@@ -1322,6 +1420,19 @@ export async function openExecutorCoordinator(
         return { kind: "blocked", reason: "commitFailed", detail: `the handover distillation is invalid: ${problems.join("; ")}` }
       }
     }
+    // The audit output's collect (0278): grammars alone, in the distill
+    // placement — past the zero-write answer (a share that wrote nothing
+    // has no adjudication to judge) and ahead of any staging. The share
+    // lands whatever the verdict (the no-fix rule: a FAIL finding is the
+    // person's, routed at the round's close, never a repair input here);
+    // replayable by classification (the holder's remedy is rewriting its
+    // own document), the plain blocked answer — 0272's ladder.
+    if (grant.kind === "audit") {
+      const problems = await auditProblems(checkout, grant)
+      if (problems.length) {
+        return { kind: "blocked", reason: "commitFailed", detail: `the close-audit findings are invalid: ${problems.join("; ")}` }
+      }
+    }
 
     // Stage and prove every repository root that carries observed changes
     // (0258): each root stages its own rows and the staged set must name
@@ -1608,6 +1719,7 @@ export async function openExecutorCoordinator(
     if (step.kind === "verify") return verifyID(step.unit)
     if (step.kind === "formulate") return `${step.unit} formulate ${entries.filter(({ grant, booking }) => grant.kind === "formulate" && grant.unit === step.unit && booking?.receipt?.kind === "landed").length + 1}`
     if (step.kind === "distill") return `${step.unit} distill ${entries.filter(({ grant, booking }) => grant.kind === "distill" && grant.unit === step.unit && booking?.receipt?.kind === "landed").length + 1}`
+    if (step.kind === "audit") return `${step.unit} audit ${entries.filter(({ grant, booking }) => grant.kind === "audit" && grant.unit === step.unit && booking?.receipt?.kind === "landed").length + 1}`
     const prefix = step.kind === "fix" ? `${step.unit} fix ${step.round}.` : `${step.unit} exec `
     const completed = entries.filter(({ grant, booking }) => grant.id.startsWith(prefix) && booking?.receipt?.kind === "landed").length
     return `${prefix}${completed + 1}`
@@ -1632,15 +1744,17 @@ export async function openExecutorCoordinator(
     // continuation resumes as the next formulate attempt on the same unit.
     // A distill entry continues the same way (0277): its retained edit — the
     // partial handover document, the family's own write — rides the next
-    // attempt on the same phase unit.
-    if (last && last.grant.kind !== "execute" && last.grant.kind !== "formulate" && last.grant.kind !== "distill" && !closedUnit) {
+    // attempt on the same phase unit. An audit entry joins them (0278): the
+    // audit session is an ordinary whole-task session, its handed-over
+    // continuation resuming as the next audit attempt on the same unit.
+    if (last && last.grant.kind !== "execute" && last.grant.kind !== "formulate" && last.grant.kind !== "distill" && last.grant.kind !== "audit" && !closedUnit) {
       return { kind: "wait", reason: "in-flight", detail: "The execute share has advanced to verification." }
     }
     const continuation = last && last.booking?.receipt?.kind !== "landed" ? last : undefined
     const handedOver = previous?.kind === "landed" && previous.continuation ? last : undefined
-    const priorLanded = last && (last.grant.kind === "execute" || last.grant.kind === "formulate")
+    const priorLanded = last && (last.grant.kind === "execute" || last.grant.kind === "formulate" || last.grant.kind === "audit")
       ? entries.findLast(({ grant, booking }) =>
-          (grant.kind === "execute" || grant.kind === "formulate") && grant.unit === last.grant.unit &&
+          (grant.kind === "execute" || grant.kind === "formulate" || grant.kind === "audit") && grant.unit === last.grant.unit &&
           booking?.receipt?.kind === "landed"
         )
       : undefined
@@ -1650,7 +1764,7 @@ export async function openExecutorCoordinator(
     const checkout = last && !terminal(last) ? await openCheckout(last) : dir
     if (typeof checkout !== "string") return checkout
     const step = await readExecutorPreview(dir, resumeUnit, route ? { task: route, scoped } : undefined, checkout)
-    if (step.kind !== "execute" && step.kind !== "formulate" && step.kind !== "distill") return step
+    if (step.kind !== "execute" && step.kind !== "formulate" && step.kind !== "distill" && step.kind !== "audit") return step
     if (attempts(stepID(step)) >= MAX_ATTEMPTS) {
       return { kind: "blocked", reason: "attemptsExhausted", detail: `${step.unit} has reached the ${MAX_ATTEMPTS}-attempt limit.` }
     }
@@ -1700,12 +1814,12 @@ export async function openExecutorCoordinator(
       ? await Promise.all(tasks.map(({ task }) => select(holder, at, undefined, task.id, tasks)))
       : [await select(holder, at)]
     for (const step of decisions) {
-      if (step.kind === "execute" || step.kind === "verify" || step.kind === "fix" || step.kind === "formulate" || step.kind === "distill") {
+      if (step.kind === "execute" || step.kind === "verify" || step.kind === "fix" || step.kind === "formulate" || step.kind === "distill" || step.kind === "audit") {
         claimable.push({
           unit: step.unit,
           title: step.title,
           kinds: [step.kind],
-          ...(step.kind !== "verify" && step.kind !== "formulate" && step.kind !== "distill" ? { touches: step.touches } : {}),
+          ...(step.kind !== "verify" && step.kind !== "formulate" && step.kind !== "distill" && step.kind !== "audit" ? { touches: step.touches } : {}),
         })
       }
     }
@@ -1713,7 +1827,7 @@ export async function openExecutorCoordinator(
   }
 
   function withoutGrant(step: Decision): DerivedStep {
-    return step.kind === "execute" || step.kind === "verify" || step.kind === "fix" || step.kind === "formulate" || step.kind === "distill"
+    return step.kind === "execute" || step.kind === "verify" || step.kind === "fix" || step.kind === "formulate" || step.kind === "distill" || step.kind === "audit"
       ? { kind: "wait", reason: "not-ready", detail: `${step.unit} is available for a new claim.` }
       : step
   }
@@ -1780,8 +1894,11 @@ export async function openExecutorCoordinator(
     if (attempts(verifyID(producer.grant.unit)) >= MAX_ATTEMPTS) {
       return { kind: "blocked", reason: "attemptsExhausted", detail: `${producer.grant.unit} has reached the ${MAX_ATTEMPTS}-attempt verification limit.` }
     }
+    // The verify share's charter baseline: the unit's true start — its first
+    // landed producer share (execute, formulate, or audit; 0184's adoption
+    // letter), falling to the producer's own base where none landed before.
     const original = entries.find(({ grant, booking }) => grant.unit === producer.grant.unit &&
-      (grant.kind === "execute" || grant.kind === "formulate") && booking?.receipt?.kind === "landed"
+      (grant.kind === "execute" || grant.kind === "formulate" || grant.kind === "audit") && booking?.receipt?.kind === "landed"
     )
     return readExecutorFollowUp(dir, { kind: "verify", unit: producer.grant.unit, baseline: original?.base ?? producer.base, head }, false, !!producer.scope, checkout)
   }
@@ -1934,15 +2051,19 @@ export async function openExecutorCoordinator(
       (last?.grant.kind === "fix" && (result?.kind !== "landed" || result.continuation))
     // A landed distill receipt never needs verification (0277 — the boundary's
     // judgment is the person's, D6's ruling): the unit's chain ended at the
-    // landing.
+    // landing. An audit producer's landed receipt does need it (0278, D6's
+    // ruling: the push closeout runs the wrap-up for the unit, the verify
+    // kind is that session converged).
     const needsVerification = (result?.kind === "landed" && !result.closeCommit && !result.continuation && !result.parked && last?.grant.kind !== "distill") ||
       (last?.grant.kind === "verify" && result?.kind !== "landed")
     // A formulate ask routes through the fresh-claim preview (0276): the
     // formulate step derives where it stands, and claim's kind guard answers
     // the mismatch — a formulate ask over a phase past its formulation, an
     // execute ask while the formulation stands. A distill ask joins it
-    // (0277): the boundary step derives where it stands the same way.
-    if (kind === "execute" || kind === "formulate" || kind === "distill" || (kind === undefined && !needsFix && !needsVerification)) return preview(at, last ?? null, task, scoped)
+    // (0277): the boundary step derives where it stands the same way. An
+    // audit ask joins both (0278): the audit step derives where the standing
+    // unit routes it.
+    if (kind === "execute" || kind === "formulate" || kind === "distill" || kind === "audit" || (kind === undefined && !needsFix && !needsVerification)) return preview(at, last ?? null, task, scoped)
 
     return kind === "fix" || (kind === undefined && needsFix) ? fixing(at, last ?? null) : verification(holder, at, last ?? null)
   }
@@ -1975,7 +2096,7 @@ export async function openExecutorCoordinator(
       const plan = await readExecutorParkPlan(dir)
       const declaration = plan?.tasks.find(({ id }) => id === task)
       if (declaration && docEligible(declaration)) return scopedDecision(holder, at, kind, task)
-      if (kind === undefined || kind === "execute" || kind === "formulate" || kind === "distill") return preview(at, null, task)
+      if (kind === undefined || kind === "execute" || kind === "formulate" || kind === "distill" || kind === "audit") return preview(at, null, task)
       return { kind: "wait", reason: "not-ready", detail: `${task} has no ${kind} step to claim.` }
     }
     if (hasReservations || scopedTasks.length) {
@@ -1988,8 +2109,10 @@ export async function openExecutorCoordinator(
         // gate, 0276); reached only by type totality, it answers as the
         // available new claim it is. The distill step joins the exclusion
         // (0277): the boundary declares no Touches, so no scoped tier ever
-        // derives it.
-        wait ??= step.kind === "formulate" || step.kind === "distill" ? withoutGrant(step) : step
+        // derives it. The audit step joins both (0278): the audit unit
+        // declares no Touches and the terminal phase's every other task is
+        // done — the standing emptiness the gate.
+        wait ??= step.kind === "formulate" || step.kind === "distill" || step.kind === "audit" ? withoutGrant(step) : step
       }
       if (wait) return wait
       return { kind: "wait", reason: "in-flight", detail: "The current workspace tier must settle before other work starts." }
@@ -2017,7 +2140,7 @@ export async function openExecutorCoordinator(
         if (blocked) return blocked
       }
       const step = await select(holder, now(), kind, task)
-      if (step.kind !== "execute" && step.kind !== "verify" && step.kind !== "fix" && step.kind !== "formulate" && step.kind !== "distill") return step
+      if (step.kind !== "execute" && step.kind !== "verify" && step.kind !== "fix" && step.kind !== "formulate" && step.kind !== "distill" && step.kind !== "audit") return step
       // The asked-kind guard (0276): a targeted claim receives its own kind
       // or an honest wait naming the mismatch — dead code for the standing
       // kinds (their routing guarantees the match by construction), made
@@ -2027,7 +2150,9 @@ export async function openExecutorCoordinator(
       // An untargeted claim takes the next step whatever its kind — the
       // menu's claimable row named it. The distill join rides the same
       // guard (0277): a distill ask over a phase whose handover already
-      // stands valid, an execute ask at the boundary.
+      // stands valid, an execute ask at the boundary. The audit join rides
+      // it too (0278): an audit ask before the close arms construct the
+      // unit, an execute ask while the standing unit routes the phase.
       if (kind !== undefined && step.kind !== kind) {
         return { kind: "wait", reason: "not-ready", detail: `${step.unit} has no ${kind} step to claim.` }
       }
@@ -2042,10 +2167,10 @@ export async function openExecutorCoordinator(
       const checkout = workspace && last && retained ? await openCheckout(last) : dir
       if (typeof checkout !== "string") return checkout
       const base = workspace && !workspace.established ? workspace.start : await gitRead(checkout, "rev-parse", "HEAD")
-      if (step.kind !== "execute" && step.kind !== "formulate" && step.kind !== "distill" && base !== step.head) {
+      if (step.kind !== "execute" && step.kind !== "formulate" && step.kind !== "distill" && step.kind !== "audit" && base !== step.head) {
         return { kind: "blocked", reason: "isolation", detail: "HEAD moved before the grant." }
       }
-      const { touches, scope, worktree: _, ...work } = step.kind === "verify" || step.kind === "formulate" || step.kind === "distill" ? { ...step, touches: undefined } : step
+      const { touches, scope, worktree: _, ...work } = step.kind === "verify" || step.kind === "formulate" || step.kind === "distill" || step.kind === "audit" ? { ...step, touches: undefined } : step
       // The grant's budget is the project's declared executorLease (0260);
       // select's admission arm already proved the config loads, so a throw
       // here is a hand edit landing mid-claim and fails loud.

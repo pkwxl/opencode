@@ -2,6 +2,7 @@
 // must re-evaluate under its run lock before admitting work.
 import { dirname, join } from "node:path"
 import { CONFIG_FILE, loadProjectConfig, type ProjectConfig } from "./config"
+import { closeAuditFindingsDoc } from "./close-audit"
 import { ANALYSIS_DOC, taskDocPaths } from "./docpaths"
 import { handoffStatus, validHandover } from "./document/roles"
 import { parkReleaseNote } from "./execute"
@@ -24,6 +25,7 @@ export type ExecutorPreview =
   | { kind: "execute"; unit: string; title: string; touches?: readonly string[]; prompt: string }
   | { kind: "formulate"; unit: string; title: string; phase: string; index: string; prompt: string }
   | { kind: "distill"; unit: string; title: string; handover: string; prompt: string }
+  | { kind: "audit"; unit: string; title: string; findings: string; round: number; prompt: string }
   | { kind: "phase-boundary"; phase: string; problems: readonly string[] }
   | { kind: "done" }
 
@@ -145,12 +147,52 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
     }
   }
   if (task) {
+    // 0278 (0256 stage 2's third and final convergence kind): the round's
+    // standing close-audit unit — the audit session work (the adjudication
+    // `run` dispatches through the ordinary pipeline push-side) rides the
+    // protocol beside its push twin, additive (P10 — the construction stays
+    // the close arms' write at the person's close attempt, so with no unit
+    // standing the surface is byte-identical). The claimable keys on the
+    // marker field the constructor wrote (the same `Close-audit:` line
+    // standingCloseAudit reads), never in progress (an in_progress unit
+    // belongs to a push session or its recovery ladder, conservatively
+    // waited, P12 — the standing specialized-routing wait's own bytes), and
+    // a marker that does not parse falls to the same wait (the honest
+    // conservative read). The brief is the same derivation the push-side
+    // audit session reads: renderWhole over the unit, its todo the single
+    // input (the registered close-audit template's own rendering); the
+    // write surface and the round's identity ride the grant as data
+    // (findings, closeAuditFindingsDoc's own construction; round, the
+    // marker field's own number), read by the fence and the collect, never
+    // looked up twice. The follow-up route (the landed share's
+    // verification or fix round) bypasses the branch through the standing
+    // followUp flag — the wrap-up and fix sessions claim the unit while its
+    // todo still stands pending.
+    if (task.closeAudit !== undefined && !state.route?.followUp) {
+      const round = /^R-(\d+)$/.exec(task.closeAudit)?.[1]
+      if (task.status !== "in_progress" && round !== undefined) {
+        const views = promptViews(plan, task)
+        return {
+          kind: "audit",
+          unit: task.id,
+          title: task.title,
+          findings: closeAuditFindingsDoc(task.id),
+          round: Number(round),
+          prompt: renderWhole(current.facts, views.plan, views.task, taskDocPaths(task.id), {
+            phase,
+            mode: current.mode,
+            continuation: continuation && state.continuationHandoff,
+          }),
+        }
+      }
+      return { kind: "wait", reason: "not-ready", detail: `${task.id} requires specialized routing before a whole-task brief can be rendered.` }
+    }
     // The follow-up derivation (a landed share's verification or fix round)
     // renders below even over the formulation unit: the bypass is the
     // follow-up route's alone, and an in_progress unit never carries one
     // (a landed executor share leaves its unit pending — the driver, never
     // the session, writes the in_progress state).
-    if ((task.status === "in_progress" || task.formulate || task.closeAudit) && !state.route?.followUp) {
+    if ((task.status === "in_progress" || task.formulate) && !state.route?.followUp) {
       return { kind: "wait", reason: "not-ready", detail: `${task.id} requires specialized routing before a whole-task brief can be rendered.` }
     }
     const views = promptViews(plan, task)
@@ -324,9 +366,14 @@ export type FixPreview = {
   // its session wrote — the formulation context (the qualified phase id and
   // its index path) rides the grant so the landing fence's per-kind arm
   // admits the same family the formulate share writes (per-unit context on
-  // the grant, 0261's letter). Absent on every other fix grant.
+  // the grant, 0261's letter). Absent on every other fix grant. 0278: a fix
+  // round over the standing close-audit unit carries the audit context —
+  // the findings document path — so the fence admits the same document the
+  // audit share writes (the repair fixes the document's acceptance, never
+  // the invariant).
   phase?: string
   index?: string
+  findings?: string
   prompt: string
 }
 
@@ -337,8 +384,10 @@ type FollowUp = { kind: "verify"; unit: string; baseline: string; head: string }
 // follow-up derivation never answers with the fresh-claim formulate step,
 // its route bypasses the awaiting branch by construction; 0277 adds the
 // distill step — a follow-up route always targets a task unit, so the
-// phase-addressed boundary step never answers one either).
-type FollowUpBlock = Exclude<ExecutorPreview, { kind: "execute" } | { kind: "formulate" } | { kind: "distill" }>
+// phase-addressed boundary step never answers one either; 0278 adds the
+// audit step — the followUp flag bypasses the marker-field branch the same
+// way, the wrap-up and fix renders owning the route).
+type FollowUpBlock = Exclude<ExecutorPreview, { kind: "execute" } | { kind: "formulate" } | { kind: "distill" } | { kind: "audit" }>
 
 export function readExecutorFollowUp(
   dir: string,
@@ -375,8 +424,10 @@ export async function readExecutorFollowUp(
   // (the fresh-claim route alone owns the formulate step). The distill step
   // joins it by the route wait (0277): a follow-up targets a task id, which
   // never equals the current phase's — the boundary step is the fresh-claim
-  // and continuation routes' alone.
-  if (step.kind === "formulate" || step.kind === "distill") {
+  // and continuation routes' alone. The audit step joins by the flag (0278):
+  // the marker-field branch is the fresh-claim route's alone, the wrap-up
+  // and fix renders owning the follow-up.
+  if (step.kind === "formulate" || step.kind === "distill" || step.kind === "audit") {
     return { kind: "wait", reason: "not-ready", detail: `${share.unit} is outside the current phase route.` }
   }
   if (step.kind !== "execute") return step
@@ -392,6 +443,10 @@ export async function readExecutorFollowUp(
       title: task.title,
       touches: task.touches,
       ...(task.formulate === current.plan.phase ? { phase: current.plan.phase, index: current.plan.index } : {}),
+      // 0278: the audit context rides the fix grant over the standing
+      // close-audit unit — the fence's family arm admits the findings
+      // document for the repair (the marker field the derivation reads).
+      ...(task.closeAudit !== undefined ? { findings: closeAuditFindingsDoc(task.id) } : {}),
       prompt: renderFix(current.facts, views.plan, views.task, taskDocPaths(task.id), {
         mode: current.mode,
         phase: current.phase,

@@ -74,6 +74,8 @@ const PATHS = [
   "docs/T-001/handoff.md",
   "docs/T-001/report.md",
   "docs/T-001/gaps.md",
+  "docs/T-001/findings.md",
+  "docs/T-002/findings.md",
   "docs/T-002/handoff.md",
   "docs/T-001/todo.md",
   "docs/T-001/done.md",
@@ -107,19 +109,21 @@ const PATHS = [
 ]
 
 test("the catalog's ids are exactly the ids the coordinator can grant", () => {
-  expect(Object.keys(catalog)).toEqual(["execute", "verify", "fix", "formulate", "distill", "human", "question"])
+  expect(Object.keys(catalog)).toEqual(["execute", "verify", "fix", "formulate", "distill", "audit", "human", "question"])
   // The work ids are the wire's grant kinds (compile-time satisfies beside
   // the rendering); the person ids are the step kinds the person channel
   // delivers — never an id the coordinator cannot grant (P13). The
   // formulate id joined with its own enactment (0276, 0261 D2's id-growth
   // letter: each new id its own change with its fence-tables entry and
-  // ratchet pin); the distill id joins with 0277's (the transfer advance's
-  // session work).
+  // ratchet pin); the distill id with 0277's (the transfer advance's
+  // session work), the audit id with 0278's (the close-audit session — the
+  // docket's convergence kinds complete).
   expect(catalog.execute.id).toBe("execute")
   expect(catalog.verify.id).toBe("verify")
   expect(catalog.fix.id).toBe("fix")
   expect(catalog.formulate.id).toBe("formulate")
   expect(catalog.distill.id).toBe("distill")
+  expect(catalog.audit.id).toBe("audit")
   expect(catalog.human.id).toBe("human")
   expect(catalog.question.id).toBe("question")
 })
@@ -256,6 +260,48 @@ test("the distill letter equals the fence's per-kind arm, both sides (plans/0277
   expect(permitted({ grant: { kind: "execute", unit: "R-01.P01" } }, handover)).toBe(false)
 })
 
+// plans/0278 (0256 stage 2's third and final convergence kind, the
+// close-audit session): the audit letter — the standing close-audit unit's
+// write boundary stated from the same table the fence reads. The writes
+// letter carries the findings document's placeholder beside the handoff's
+// (the two paths the per-kind arm admits); the never letter is the standing
+// refusal whole — nothing the never-set refuses is admitted for the audit
+// kind (the findings document is not in the never-set).
+test("the audit letter equals the fence's per-kind arm, both sides (plans/0278)", () => {
+  const findings = "docs/T-002/findings.md"
+  const handoff = taskDocPaths("T-002").handoff
+  const grant = { grant: { kind: "audit" as const, unit: "T-002", findings } }
+  for (const path of PATHS) {
+    expect(permitted(grant, path), path).toBe(path === findings || path === handoff)
+  }
+  expect(catalog.audit.writes.scope).toBe("none")
+  expect(catalog.audit.writes.paths).toEqual(["docs/T-NNN/findings.md", taskDocPaths("T-NNN").handoff])
+  expect(catalog.audit.writes.undeclared).toBeUndefined()
+  // The never letter is the standing rendering (verify's own array) — sound
+  // both directions: everything it denies the fence denies, and everything
+  // outside the two admitted paths the fence refuses for the audit kind —
+  // the close-out shapes (the unit's todo/done, the indexes, phases.md) and
+  // another unit's findings document included (the honest limit 0276/0277
+  // stated for their anchors: the per-unit anchor names the one admitted, a
+  // deny-list provisioner reading the letter alone under-dennies the rest,
+  // the coordinator's checks the authority per 0261 D3).
+  expect(catalog.audit.never.paths).toEqual(catalog.verify.never.paths)
+  for (const path of PATHS) {
+    if (neverMatch(path)) expect(permitted(grant, path), path).toBe(false)
+    if (path !== findings && path !== handoff) expect(permitted(grant, path), path).toBe(false)
+  }
+  // No other kind ever carries the arm: an execute or verify grant over the
+  // same unit never admits the findings document.
+  expect(permitted({ grant: { kind: "execute", unit: "T-002" } }, findings)).toBe(false)
+  expect(permitted({ grant: { kind: "verify", unit: "T-002" } }, findings)).toBe(false)
+  // A fix round over the standing close-audit unit carries the context (the
+  // arm rides the grant's data, not the kind alone — the repair rewrites
+  // the same document the audit share wrote); every other fix grant keeps
+  // the ordinary fix letter.
+  expect(permitted({ grant: { kind: "fix", unit: "T-002", findings } }, findings)).toBe(true)
+  expect(permitted({ grant: { kind: "fix", unit: "T-002" } }, findings)).toBe(false)
+})
+
 test("the person entries' authority vocabulary equals the authority checks", async () => {  const coordinator = await openExecutorCoordinator(project())
   try {
     const raised = await coordinator.question({ token: "worker", channel: "" }, "Which flavor?")
@@ -305,7 +351,7 @@ test("the absent-block floor: a consumer that ignores the block reads the pre-ch
     // The menu's claimable kinds are always catalog members (never an id the
     // coordinator cannot grant).
     for (const kinds of menu.claimable.flatMap(({ kinds }) => [...kinds])) {
-      expect(["execute", "verify", "fix", "formulate", "distill"]).toContain(kinds)
+      expect(["execute", "verify", "fix", "formulate", "distill", "audit"]).toContain(kinds)
     }
     // The block rides both menu arms identically (the leases-held arm too).
     const grant = await coordinator.claim(holder)
