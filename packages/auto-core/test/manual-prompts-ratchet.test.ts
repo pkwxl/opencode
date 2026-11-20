@@ -80,6 +80,18 @@ describe("manual-driver prompt ratchet", () => {
     expect(executor).not.toMatch(/\bgit\s+(?:add|commit|reset|stash)\b|Auto-Stage:/)
   })
 
+  test("the hub chooses the child by kind and preserves single-writer ownership across rotation (0275)", () => {
+    const executor = text("executor.md")
+    expect(executor).toContain("spawn the typed child for the granted kind")
+    expect(executor).toContain("Use a hub-held grant when a child's turn can outlast a heartbeat")
+    expect(executor).toContain("Use a self-serving channel when the child can renew throughout its turn")
+    expect(executor).toContain("stop the child first, then report failed for work that began or release an unused grant")
+    expect(executor).toContain("The operator decides when to rotate a hub session")
+    expect(executor).toContain("end the session with its live grants riding to their deadlines")
+    expect(executor).toContain("first duty in an inherited workspace is to stop any orphaned child")
+    expect(executor).toContain("Recover through `menu.leases` on the same token and channel before dispatching another writer")
+  })
+
   // plans/0269 (enacting plans/0261 D2/D4/D5): the restriction catalog's 0203
   // both-sides ratchet — the wire `types` block, the fence's permitted-set
   // tables and executor.md's catalog sentence are one ruled relationship, so

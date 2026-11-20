@@ -23,6 +23,7 @@ import { parseEnvFile } from "./env-boot"
 import { DEFAULT_HOSTNAME, DEFAULT_PORT, deriveWorkerCommand, startDaemon } from "./daemon"
 import { defaultDataDir, DaemonStore, SCOPES, StoreError } from "./store"
 import { BUILD_COMMIT, VERSION } from "./version"
+import { runExecutorHub } from "./executor-hub"
 import { runWorker } from "./worker"
 
 const USAGE = `usage:
@@ -35,6 +36,7 @@ const USAGE = `usage:
   opencode-auto-server token issue --scopes <read,control,…> [--name <label>] [--out <file>] [--data-dir <dir>]
   opencode-auto-server token list [--data-dir <dir>]
   opencode-auto-server token revoke <name> [--data-dir <dir>]
+  opencode-auto-server executor-hub [--resume] CONNECTION PROJECT CHANNEL execute|verify|fix COMMAND [ARG ...]
   opencode-auto-server transfer <dir>
   opencode-auto-server worker '<run request JSON>'
 
@@ -226,6 +228,16 @@ frames, and a transport loss degrades the same way`
 applyServerProfile()
 
 const args = process.argv.slice(2)
+
+// The child's argv is opaque to the host, including its help/version flags.
+if (args[0] === "executor-hub" && args[1] !== "--help" && args[1] !== "-h") {
+  try {
+    await runExecutorHub(args.slice(1))
+  } catch (error) {
+    refuse(error instanceof Error ? error.message : String(error))
+  }
+  process.exit(0)
+}
 
 if (args.includes("--help") || args.includes("-h")) {
   console.log(USAGE)
@@ -599,7 +611,7 @@ if (command === "serve") {
   for (const warning of daemon.bootWarnings) console.log(warning)
 } else {
   // Nothing else exists: refuse with the usage text rather than pretending.
-  console.error(`opencode-auto-server: unknown command ${command ?? "(none)"} — the command surface is serve, register, unregister, projects, token, transfer and worker`)
+  console.error(`opencode-auto-server: unknown command ${command ?? "(none)"} — the command surface is serve, register, unregister, projects, token, transfer, executor-hub and worker`)
   console.error(USAGE)
   process.exit(1)
 }

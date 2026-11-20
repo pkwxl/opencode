@@ -34,6 +34,10 @@ If a claim response is lost, check the same channel's `menu.leases` with `ready`
 
 Use `ready` to assign an offered task and kind by ID. Start a child with that target and let it claim on its own channel, or claim on a hub-owned channel and pass the leased brief and workspace to a child that cannot make requests. Start work only after the coordinator grants a lease for that task. Use a separate channel for each concurrent worker and keep each worker inside its assigned workspace and scope. A hub that holds the grant handles all requests for that child, including heartbeat and settlement. For self-serving children, have them heartbeat and report or have an authorized caller act on the same token and channel once they stop. Stop an interrupted child before giving back its lease. Report `"failed"` if the child stops after work began, or release if it never began. Leave implementation to the leased worker.
 
+Read each unit's `menu.claimable` kinds and spawn the typed child for the granted kind. Use a hub-held grant when a child's turn can outlast a heartbeat. The resident hub renews on its own token and channel while the child works. Use a self-serving channel when the child can renew throughout its turn. On shutdown, stop the child first, then report failed for work that began or release an unused grant.
+
+The operator decides when to rotate a hub session. For planned rotation, end the session with its live grants riding to their deadlines. The successor's first duty in an inherited workspace is to stop any orphaned child. Recover through `menu.leases` on the same token and channel before dispatching another writer.
+
 Keep project loops and leases separate. Use `GET /projects` with `read` to list registered projects. Where the operator enabled open creation, `POST /projects` with `projects` accepts `root`, `name`, and optional `config` for a new directory under a declared root. Retry creation with the same token and unchanged body.
 
 <!-- auto: eof -->

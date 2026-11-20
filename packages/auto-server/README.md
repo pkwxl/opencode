@@ -197,6 +197,24 @@ producer and a fresh agent context. A same-token claim over its own booked
 report answers the terminal `settled`, naming the booked commit — that
 token's work on the unit has ended.
 
+On a POSIX workspace host, start a resident hub for one work kind.
+This example starts an execute worker.
+
+```sh
+opencode-auto-server executor-hub connection.json my-project build-lane execute /path/to/execute-agent
+```
+
+Supply a local connection file with `url` and an executor-only `token`.
+Use one hub per token and channel. Its command starts a fresh process for
+each grant in the granted workspace and receives the rendered prompt on
+stdin. Exit zero when the turn ends or nonzero on failure. Child commands
+must keep their writers in the spawned process group. Start verification
+with its own command and a different token. The hub renews while the
+command runs. SIGINT and SIGTERM stop the process group before settlement.
+After an unplanned exit, stop any orphaned writers before restarting,
+including when a lease has already expired. Pass `--resume` before the
+connection file to recover a still-live grant after that check.
+
 Issue `person` for questions and release approvals or grant either separately
 with `person-questions` and `person-releases`. The daemon derives these grants
 from the bearer token. A person-only token defaults to a person claim. A
