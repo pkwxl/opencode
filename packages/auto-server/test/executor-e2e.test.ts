@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { liveRunLock } from "@opencode-ai/auto-core/lock"
+import { executorTypeCatalog } from "@opencode-ai/auto-core/executor-coordinator"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
 import { fixtureProject, gitOf, TASK, TASK_2 } from "./fixtures/project"
@@ -57,6 +58,14 @@ exec "$@"
     ])
     expect(ready.protocol).toBe(1)
     expect(Object.keys(ready).sort()).toEqual(["menu", "protocol"])
+    // 0269's additive carrier: the restriction catalog rides the menu itself
+    // (0246 D4 b's menu letter — the single dispatch-time payload), the
+    // worker passing the coordinator's rendering through with no second
+    // author; a client that ignores the block reads the pre-change menu.
+    expect(Object.keys(ready.menu).sort()).toEqual(["claimable", "leases", "types"])
+    expect(Object.keys(ready.menu.types).sort()).toEqual(["execute", "fix", "human", "question", "verify"])
+    const { types, ...menuBefore } = ready.menu
+    expect(Object.keys(menuBefore).sort()).toEqual(["claimable", "leases"])
     expect(claimed).toMatchObject({ protocol: 1, step: { kind: "execute", unit: TASK, workspace: directory } })
     expect(await Bun.file(launches).text()).toBe(`${directory}\n`)
     expect(liveRunLock(directory)).toBeDefined()
@@ -149,7 +158,7 @@ exec "$@"
     expect(liveRunLock(directory)).toBeUndefined()
 
     daemon = await start()
-    expect((await call("ready", {}, verifier)).menu).toEqual({ claimable: [], leases: [] })
+    expect((await call("ready", {}, verifier)).menu).toEqual({ claimable: [], leases: [], types: executorTypeCatalog() })
     expect(await git("rev-parse", "HEAD")).toBe(beforeReport)
     const blocked = await call("claim", { task: TASK, kind: "verify", channel: "another-channel" }, worker)
     expect(blocked.step).toMatchObject({ kind: "wait", reason: "not-ready" })

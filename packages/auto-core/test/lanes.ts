@@ -68,6 +68,10 @@ export const REPO_LANE: readonly string[] = [
   // case spawns a holder process for the lock to name.
   "test/driver-helper.test.ts",
   "test/exec-session.test.ts",
+  // The restriction catalog's derivation proof (plans/0269): the fixture
+  // tests drive real git repositories (the coordinator's run lock and menu
+  // over a project fixture).
+  "test/executor-catalog.test.ts",
   "test/executor-steps.test.ts",
   "test/executor-worktree.test.ts",
   "test/git.test.ts",

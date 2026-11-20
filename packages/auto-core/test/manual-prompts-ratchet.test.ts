@@ -78,6 +78,40 @@ describe("manual-driver prompt ratchet", () => {
     expect(executor).not.toMatch(/\bgit\s+(?:add|commit|reset|stash)\b|Auto-Stage:/)
   })
 
+  // plans/0269 (enacting plans/0261 D2/D4/D5): the restriction catalog's 0203
+  // both-sides ratchet — the wire `types` block, the fence's permitted-set
+  // tables and executor.md's catalog sentence are one ruled relationship, so
+  // a change to the fence's grammar cannot land without the catalog and the
+  // prompt line moving with it. The derivation's behavioral proof lives in
+  // test/executor-catalog.test.ts (the catalog proven equal to
+  // permitted/driverExclusive over a path corpus, both directions, the
+  // absent-block floor beside); this arm pins the two copy-bearing sides to
+  // each other — the manual sentence beside the standing per-kind teaching
+  // pinned above, and the producer's derivation anchors (the ids satisfy the
+  // grant kinds, the never grammar rendered from the never-list constants'
+  // own sources, the artifact paths through taskDocPaths, the block riding
+  // the menu).
+  test("the catalog: executor.md's sentence and the wire's types block are pinned together (plans/0269)", () => {
+    const executor = text("executor.md")
+    const coordinator = src("executor-coordinator.ts")
+    // The manual sentence (0261 D4's catalog half): the block states the
+    // restrictions, provisioning them is the operator's affair, the
+    // coordinator's boundary checks the authority either way — the catalog
+    // type-level only, per-unit scope riding touches/workspace.
+    expect(executor).toContain("The `types` block on `ready`'s menu states each work type's restrictions in machine-readable form")
+    expect(executor).toContain("per-unit scope riding the menu's `touches` and the grant's `workspace`")
+    expect(executor).toContain("Provisioning against it — sub-agent templates, sandbox allowlists, or nothing — is the operator's affair")
+    expect(executor).toContain("the coordinator's boundary checks are the authority either way")
+    // The driver-side producer: one rendering derived from the fence's own
+    // tables — never a second hand-maintained list (P5/P7).
+    expect(coordinator).toContain("const WORK_TYPE_IDS = [\"execute\", \"verify\", \"fix\"] as const satisfies readonly Grant[\"kind\"][]")
+    expect(coordinator).toContain("export function executorTypeCatalog(): ExecutorTypes {")
+    expect(coordinator).toContain("UNIT_STATE_DOC.source")
+    expect(coordinator).toContain("taskDocPaths(CATALOG_UNIT).handoff")
+    expect(coordinator).toContain("const GIT_LETTER = \"coordinator-only\"")
+    expect(coordinator).toContain("const types = executorTypeCatalog()")
+  })
+
   test("the person prompt preserves delegated authority and proposal-bound settlement", () => {
     const executor = text("executor.md")
     const person = text("person.md")

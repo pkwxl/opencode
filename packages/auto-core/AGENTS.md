@@ -32,7 +32,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 
 ## Navigation (locate by change; NNNN = numbered plans/NNNN-*.md document; the corpus manifest is plans/INDEX.md, the why of a mechanism is docs/principles.md)
 
-- Executor leases (serial, documentation-scoped same-tree, and separate code worktrees) → `src/executor-coordinator.ts` + `src/executor-steps.ts` + `src/executor-worktree.ts` (0246; 0248–0254; the convergence review 0255; 0257-01's fix 0258 — the nested-root settlement; 0257-02's fix 0259 — the fence's in-scope artifact paths; 0257-03's fix 0260 — the lease clock configured; 0262's field-findings record; 0262-01's fix 0263 — the settlement's ignored artifact paths)
+- Executor leases (serial, documentation-scoped same-tree, and separate code worktrees) → `src/executor-coordinator.ts` + `src/executor-steps.ts` + `src/executor-worktree.ts` (0246; 0248–0254; the convergence review 0255; 0257-01's fix 0258 — the nested-root settlement; 0257-02's fix 0259 — the fence's in-scope artifact paths; 0257-03's fix 0260 — the lease clock configured; 0262's field-findings record; 0262-01's fix 0263 — the settlement's ignored artifact paths; 0261's enactment 0269 — the restriction catalog rendered from the fence's tables onto `ready`'s menu)
 - Independence direction (the wake-up daemon over the split agent engine, the core slim-down gated on the convergence review, the opencode decoupling and rename) → `plans/0256-independence-direction.md` (the censuses and the seven stages; the demolition gated at stage 5)
 - Executor protocol completion program (the 0267 docket: the completion slices, the stage-2 convergence kinds, the evaluation gate and the freeze) → `plans/0267-protocol-completion-program.md`
 

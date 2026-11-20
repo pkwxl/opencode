@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { CONFIG_FILE } from "../src/config"
 import { readExecutorPreview } from "../src/executor-steps"
-import { openExecutorCoordinator } from "../src/executor-coordinator"
+import { executorTypeCatalog, openExecutorCoordinator } from "../src/executor-coordinator"
 
 const projects: string[] = []
 afterEach(() => {
@@ -192,7 +192,7 @@ for (const point of ["booked", "committed"] as const) {
     const recovered = await openExecutorCoordinator(dir)
     try {
       const replacement = { token: "worker-2", channel: "solo" }
-      expect(await recovered.ready(replacement)).toEqual({ claimable: [], leases: [] })
+      expect(await recovered.ready(replacement)).toEqual({ claimable: [], leases: [], types: executorTypeCatalog() })
       expect(git(dir, "rev-parse", "HEAD").trim()).toBe(crashHead)
       if (question) {
         expect(await recovered.claim(replacement)).toMatchObject({ kind: "wait", reason: "gate" })
@@ -985,7 +985,7 @@ for (const point of ["gate-booked", "gate-marked", "gate-committed"] as const) {
     const crashHead = git(dir, "rev-parse", "HEAD")
     const recovered = await openExecutorCoordinator(dir)
     try {
-      expect(await recovered.ready(holder)).toEqual({ claimable: [], leases: [] })
+      expect(await recovered.ready(holder)).toEqual({ claimable: [], leases: [], types: executorTypeCatalog() })
       expect(git(dir, "rev-parse", "HEAD")).toBe(crashHead)
       expect(await recovered.claim(holder)).toMatchObject({ kind: "phase-boundary" })
       expect(git(dir, "rev-list", "--count", `${base}..HEAD`).trim()).toBe("1")

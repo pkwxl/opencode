@@ -16,7 +16,7 @@ import {
   prepareExecutorLanding, removeExecutorWorkspace, validExecutorLanding, validExecutorWorkspace,
   type ExecutorLanding, type ExecutorWorkspace,
 } from "./executor-worktree"
-import { EMPTY_TREE, git, identityArgs, message, repoRoots, statusEntriesRead, withinScopes, workdirEntry } from "./git"
+import { EMPTY_TREE, git, identityArgs, message, repoRoots, statusEntriesRead, WORKDIR_ROOTS, withinScopes, workdirEntry } from "./git"
 import { docEligible, docScope, scopesDisjoint } from "./lanes"
 import { acquireRunLock, liveRunLock } from "./lock"
 import { markDone, readyTasks, runtimeParked, setParked, taskStatePaths, type Task } from "./tasks"
@@ -95,6 +95,11 @@ type LeaseKey = { step: string; lease: string }
 type Menu = {
   claimable: { unit: string; title: string; kinds: [Grant["kind"]]; touches?: readonly string[] }[]
   leases: (LeaseKey & Pick<Grant, "kind" | "deadline" | "attempt">)[]
+  // 0261 D2's additive `types` block (enacted by 0269, under the frozen
+  // `protocol: 1` — P13): the restriction catalog rides the menu, the single
+  // dispatch-time payload (0246 D4 b's "hub-as-scheduler's menu" letter); a
+  // client that ignores it behaves byte-identically (P10).
+  types: ExecutorTypes
 }
 type ScopedTask = { task: Task; worktree: boolean }
 type Checkpoint = "booked" | "committed" | "park-recorded" | "close-index-written" | "closed-files" | "closed-commit" | "gate-booked" | "gate-marked" | "gate-committed" |
@@ -145,13 +150,30 @@ function shareMessage(grant: Grant, parked = false): string {
 const UNIT_STATE_DOC = /^docs\/(?:T-\d+(?:\/S\d+)?|R-\d+\/P\d{2,}-[a-z][a-z0-9-]*)\/(?:todo|done)\.md$/
 const INDEX_DOC = /^docs\/R-\d+\/(?:phases|P\d{2,}-[a-z][a-z0-9-]*\/tasks)\.md$/
 const SUBTASKS_DOC = /^docs\/T-\d+\/subtasks\.md$/
-function driverExclusive(path: string): boolean {
-  return path === "opencode.json" || UNIT_STATE_DOC.test(path) || INDEX_DOC.test(path) || SUBTASKS_DOC.test(path)
+const CONFIG_DOC = /^opencode\.json$/
+const CONFIG_DIR = ".opencode"
+const AGENTS_NAME = "AGENTS.md"
+export function driverExclusive(path: string): boolean {
+  return CONFIG_DOC.test(path) || UNIT_STATE_DOC.test(path) || INDEX_DOC.test(path) || SUBTASKS_DOC.test(path)
 }
 
-function permitted(entry: Entry, path: string): boolean {
-  if (workdirEntry(path) || path === ".opencode" || path.startsWith(".opencode/") || path.split("/").includes("AGENTS.md")) return false
-  if (driverExclusive(path)) return false
+// The standing refusal set (0246 D4 i's never-list, stated as the one table
+// both renderings read): the driver workdir roots (WORKDIR_ROOTS through
+// workdirEntry), the root config directory and every AGENTS.md segment, plus
+// driverExclusive's documents. The fence (permitted below, the settlement
+// rendering) and the catalog (executorTypeCatalog, the dispatch rendering)
+// are the two renderings of exactly this table — one source, P5/P7.
+function standingRefusal(path: string): boolean {
+  return workdirEntry(path) || path === CONFIG_DIR || path.startsWith(`${CONFIG_DIR}/`) ||
+    path.split("/").includes(AGENTS_NAME) || driverExclusive(path)
+}
+
+export function permitted(entry: {
+  grant: { kind: Grant["kind"]; unit: string }
+  scope?: readonly string[]
+  touches?: readonly string[]
+}, path: string): boolean {
+  if (standingRefusal(path)) return false
   const docs = taskDocPaths(entry.grant.unit)
   if (entry.grant.kind === "verify") return path === docs.report || path === docs.gaps
   if (path === docs.handoff) return true
@@ -164,6 +186,94 @@ function permitted(entry: Entry, path: string): boolean {
   // serial floor stands unchanged (P10).
   if (scope !== undefined) return withinScopes(path, scope)
   return roleOf(path) === "freeform"
+}
+
+// The executor restriction catalog (0261 D2, enacted by 0269): the
+// machine-readable statement of each work type's restrictions on `ready`'s
+// menu — the tool's whole duty toward a coding-agent consumer being
+// information provision. Every letter is derived from the tables above, the
+// same tables the landing fence reads: the `never` path grammar from the
+// standing refusal set's own members (WORKDIR_ROOTS, the config and AGENTS
+// arms, driverExclusive's documents — rendered as regex sources), the
+// `writes` artifact paths from taskDocPaths itself over the placeholder unit,
+// the `undeclared` floor's word from roleOf's own "freeform" role, and the
+// person entries' authority vocabulary from the questionAuthority and
+// releaseAuthority checks — never a second hand-maintained list (P5,
+// P7). The one letter no path table carries is the Git prohibition: its home
+// is the standing write contract's authority posture (0246 D4 i — the
+// coordinator alone stages and commits, P4; executor.md teaches it), cited
+// here as the frozen literal `git: "coordinator-only"`. Ids are frozen
+// additive under `protocol: 1` (P13) and never exceed what the coordinator
+// can grant: the work ids satisfy Grant["kind"], the person ids the step
+// kinds personStep and offerGate deliver. The type-level letter only —
+// per-unit scope stays where it rides (the menu's `touches`, the grant's
+// `workspace`). No enforcement claim is made (P12): violations surface at
+// the standing boundary checks, which fail loud.
+const GIT_LETTER = "coordinator-only" as const
+const CATALOG_UNIT = "T-NNN"
+const WORK_TYPE_IDS = ["execute", "verify", "fix"] as const satisfies readonly Grant["kind"][]
+const PERSON_QUESTION_AUTHORITY = ["unrestricted", "questions"] as const
+const PERSON_RELEASE_AUTHORITY = ["unrestricted", "releases"] as const
+
+function escapeRe(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function neverPaths(): string[] {
+  return [
+    `^(?:${WORKDIR_ROOTS.map(escapeRe).join("|")})(?:/|$)`,
+    `^${escapeRe(CONFIG_DIR)}(?:/|$)`,
+    `(?:^|/)${escapeRe(AGENTS_NAME)}(?:/|$)`,
+    UNIT_STATE_DOC.source,
+    INDEX_DOC.source,
+    SUBTASKS_DOC.source,
+    CONFIG_DOC.source,
+  ]
+}
+
+function workTypeLetter(id: Grant["kind"]): ExecutorWorkTypeLetter {
+  if (id === "verify") {
+    const docs = taskDocPaths(CATALOG_UNIT)
+    return { id, never: { git: GIT_LETTER, paths: neverPaths() }, writes: { scope: "none", paths: [docs.report, docs.gaps] } }
+  }
+  return { id, never: { git: GIT_LETTER, paths: neverPaths() }, writes: { scope: "unit-effective", undeclared: "freeform", paths: [taskDocPaths(CATALOG_UNIT).handoff] } }
+}
+
+export type ExecutorNeverLetter = { readonly git: typeof GIT_LETTER; readonly paths: readonly string[] }
+export type ExecutorWriteLetter = {
+  readonly scope: "unit-effective" | "none"
+  readonly paths: readonly string[]
+  readonly undeclared?: "freeform"
+}
+export type ExecutorWorkTypeLetter = {
+  readonly id: (typeof WORK_TYPE_IDS)[number]
+  readonly never: ExecutorNeverLetter
+  readonly writes: ExecutorWriteLetter
+}
+export type ExecutorPersonTypeLetter = {
+  readonly id: "human" | "question"
+  readonly authority: readonly ("unrestricted" | "questions" | "releases")[]
+}
+export type ExecutorTypes = {
+  readonly execute: ExecutorWorkTypeLetter
+  readonly verify: ExecutorWorkTypeLetter
+  readonly fix: ExecutorWorkTypeLetter
+  readonly human: ExecutorPersonTypeLetter
+  readonly question: ExecutorPersonTypeLetter
+}
+
+// The rendering beside menu(): one object computed from the tables at module
+// init, every menu carrying the same reference. Exported for the wire — the
+// coordinator is its one home (0269's ruling records the measured size).
+const CATALOG: ExecutorTypes = {
+  execute: workTypeLetter("execute"),
+  verify: workTypeLetter("verify"),
+  fix: workTypeLetter("fix"),
+  human: { id: "human", authority: PERSON_RELEASE_AUTHORITY },
+  question: { id: "question", authority: PERSON_QUESTION_AUTHORITY },
+}
+export function executorTypeCatalog(): ExecutorTypes {
+  return CATALOG
 }
 
 function sameDocument(left: string | undefined, right: string): boolean {
@@ -1101,9 +1211,10 @@ export async function openExecutorCoordinator(
   }
 
   async function menu(holder: Holder, at: number): Promise<Menu> {
+    const types = executorTypeCatalog()
     const leases = entries.filter((entry) => live(entry, at) && sameHolder(entry.holder, holder))
       .map(({ grant: { id: step, lease, kind, deadline, attempt } }) => ({ step, lease, kind, deadline, attempt }))
-    if (leases.length) return { claimable: [], leases }
+    if (leases.length) return { claimable: [], leases, types }
     const claimable: Menu["claimable"] = []
     const tasks = await scopeCandidates()
     const decisions = tasks.length
@@ -1116,7 +1227,7 @@ export async function openExecutorCoordinator(
         })
       }
     }
-    return { claimable, leases }
+    return { claimable, leases, types }
   }
 
   function withoutGrant(step: Decision): DerivedStep {

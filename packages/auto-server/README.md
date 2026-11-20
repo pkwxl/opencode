@@ -211,7 +211,11 @@ Different projects can hold worker leases concurrently. Within a project,
 use `ready` to see which task and step pairs the coordinator can offer. Use
 a distinct channel for each concurrent worker. A worker may start only
 after `claim` grants its lease and must stay inside the returned `workspace`
-and task scope.
+and task scope. The menu also carries a `types` block stating each work
+type's restrictions — the standing prohibitions and permitted write surfaces
+as machine-readable grammar, the person steps' authority vocabulary.
+Provisioning against it is the operator's affair; the coordinator's
+boundary checks are the authority either way.
 
 Ready whole-task units with disjoint documentation-only `Touches` scopes
 can share the project checkout. With `treeLanes: on`, ready code units with
