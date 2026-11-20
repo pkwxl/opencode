@@ -192,7 +192,12 @@ for (const point of ["booked", "committed"] as const) {
     const recovered = await openExecutorCoordinator(dir)
     try {
       const replacement = { token: "worker-2", channel: "solo" }
-      expect(await recovered.ready(replacement)).toEqual({ claimable: [], leases: [], types: executorTypeCatalog() })
+      // The recovered menu (a plain worker reader — 0271's existence split:
+      // the booked arm's unanswered question rides as kind and id alone).
+      expect(await recovered.ready(replacement)).toEqual({
+        claimable: [], leases: [], types: executorTypeCatalog(),
+        ...(question ? { pending: [{ kind: "question", id: question.id }] } : { pending: [] }),
+      })
       expect(git(dir, "rev-parse", "HEAD").trim()).toBe(crashHead)
       if (question) {
         expect(await recovered.claim(replacement)).toMatchObject({ kind: "wait", reason: "gate" })
@@ -961,6 +966,57 @@ test("person claims return the oldest eligible question or gate across restart",
   }
 })
 
+// 0271 (0262-04's fix): the pending person items on the read surface —
+// existence for every reader, question content only for question authority,
+// the no-questions wait arm naming pending gate existence, answering
+// unchanged.
+test("ready lists pending person items: kind and id for every reader, text for question authority", async () => {
+  const { dir } = surveyReleaseProject()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const raised = await coordinator.question(holder, "Which flavor?")
+    // Before an eligible person claim records the occurrence, no gate item
+    // id exists to list (0250: ids persist at the first eligible
+    // derivation) — the plain worker reader sees the question's existence
+    // alone, no text.
+    expect((await coordinator.ready(holder)).pending).toEqual([{ kind: "question", id: raised.id }])
+    const gate = await coordinator.claimGate(releaser)
+    if (gate.kind !== "human") throw new Error(JSON.stringify(gate))
+    // A plain worker channel: kind and id for both kinds, no text — ordered
+    // by the shared issuance order (the question raised before the gate
+    // was recorded).
+    expect((await coordinator.ready(holder)).pending).toEqual([
+      { kind: "question", id: raised.id },
+      { kind: "gate", id: gate.id },
+    ])
+    // A question-authority channel: the question's text beside the id (the
+    // question step's own shape); the gate item stays kind and id — its
+    // proposal is the offer route's own disclosure.
+    const questionOnly = { ...releaser, delegation: ["questions"] as const }
+    expect((await coordinator.ready(questionOnly, questionOnly)).pending).toEqual([
+      { kind: "question", id: raised.id, text: "Which flavor?" },
+      { kind: "gate", id: gate.id },
+    ])
+    // A release-authority channel reads no question text: the split is the
+    // same admitted set the claim path checks, authority widening nothing.
+    expect((await coordinator.ready(releaser, releaser)).pending).toEqual([
+      { kind: "question", id: raised.id },
+      { kind: "gate", id: gate.id },
+    ])
+    // The no-questions wait arm names pending gate existence (0262-04's
+    // blind spot), the answering routes themselves unchanged.
+    expect(await coordinator.claimQuestion(questionOnly)).toMatchObject({ kind: "question", id: raised.id })
+    await coordinator.answerQuestion(questionOnly, raised.id, "Vanilla.")
+    expect(await coordinator.claimQuestion(questionOnly)).toEqual({
+      kind: "wait", reason: "not-ready", detail: "No pending questions. A gate item is pending.",
+    })
+    expect((await coordinator.ready(holder)).pending).toEqual([{ kind: "gate", id: gate.id }])
+    expect(await coordinator.claimGate(releaser)).toMatchObject({ kind: "human", id: gate.id })
+  } finally {
+    await coordinator.close()
+  }
+})
+
 for (const point of ["gate-booked", "gate-marked", "gate-committed"] as const) {
   test(`recovers an approved untracked survey release after death at ${point}`, async () => {
     const { dir, document } = surveyReleaseProject()
@@ -985,7 +1041,7 @@ for (const point of ["gate-booked", "gate-marked", "gate-committed"] as const) {
     const crashHead = git(dir, "rev-parse", "HEAD")
     const recovered = await openExecutorCoordinator(dir)
     try {
-      expect(await recovered.ready(holder)).toEqual({ claimable: [], leases: [], types: executorTypeCatalog() })
+      expect(await recovered.ready(holder)).toEqual({ claimable: [], leases: [], pending: [], types: executorTypeCatalog() })
       expect(git(dir, "rev-parse", "HEAD")).toBe(crashHead)
       expect(await recovered.claim(holder)).toMatchObject({ kind: "phase-boundary" })
       expect(git(dir, "rev-list", "--count", `${base}..HEAD`).trim()).toBe("1")

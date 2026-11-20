@@ -92,6 +92,15 @@ type DerivedStep = Exclude<ExecutorPreview, Execute> | BlockedReport | LeaseWait
 type Decision = DerivedStep | (Candidate & { scope?: readonly string[]; worktree?: true })
 type Claim = DerivedStep | Grant
 type LeaseKey = { step: string; lease: string }
+// The pending person items on the read surface (0271, 0262-04's fix): kind
+// and id for every reader; the question's text (and task context) only for a
+// channel questionAuthority admits; the gate item never text — its proposal
+// is the offer route's own disclosure, release authority its gate. The `kind`
+// vocabulary is frozen additive under `protocol: 1` (P13): `question` |
+// `gate`, the ids exactly the ones the answer and gate routes use.
+type MenuPending =
+  | { kind: "question"; id: string; text?: string; task?: string }
+  | { kind: "gate"; id: string }
 type Menu = {
   claimable: { unit: string; title: string; kinds: [Grant["kind"]]; touches?: readonly string[] }[]
   leases: (LeaseKey & Pick<Grant, "kind" | "deadline" | "attempt">)[]
@@ -100,6 +109,12 @@ type Menu = {
   // dispatch-time payload (0246 D4 b's "hub-as-scheduler's menu" letter); a
   // client that ignores it behaves byte-identically (P10).
   types: ExecutorTypes
+  // 0271's additive `pending` list: the pending person items as dispatch-
+  // time data on the same menu (0269's carrier letter — never an envelope
+  // sibling, 0270's letter reserving those for handshake identity); derived
+  // from the durable records personStep and offerGate already read (P6), a
+  // reader that ignores it behaves byte-identically (P10).
+  pending: MenuPending[]
 }
 type ScopedTask = { task: Task; worktree: boolean }
 type Checkpoint = "booked" | "committed" | "park-recorded" | "close-index-written" | "closed-files" | "closed-commit" | "gate-booked" | "gate-marked" | "gate-committed" |
@@ -127,6 +142,15 @@ const PERSON_STATE = join(".auto", "executor-questions.json")
 
 function questionAuthority(person: ExecutorPerson): boolean {
   return person.delegation === "unrestricted" || (Array.isArray(person.delegation) && person.delegation.includes("questions"))
+}
+
+// The offerable gate predicate (0271 naming it one home): the record an
+// eligible person claim would offer — not superseded, not yet booked into a
+// release intent. offerGate's derived item, the pending listing and the
+// question-scope wait arm all read this one predicate (P5/P6); a booked or
+// committed gate is the coordinator's settlement, no longer a person item.
+function offerable(gate: Gate): boolean {
+  return !gate.intent && !gate.superseded
 }
 
 function sameHolder(a: Holder, b: Holder): boolean {
@@ -358,11 +382,16 @@ export async function openExecutorCoordinator(
   options: { checkpoint?: (point: Checkpoint) => void; now?: () => number } = {},
 ): Promise<{
   claim(holder: Holder, task?: string, kind?: Grant["kind"]): Promise<Claim>
-  ready(holder: Holder): Promise<Menu>
+  // The optional person on ready/heartbeat (0271): the reader's delegation
+  // when the requesting token carries one, the pending listing's authority
+  // split reading questionAuthority from the same admitted set the claim
+  // path checks — kind and id for every reader, question text only for a
+  // question-authority channel.
+  ready(holder: Holder, person?: ExecutorPerson): Promise<Menu>
   brief(holder: Holder, task: string, kind?: Grant["kind"]): Promise<Claim>
   briefAnswers(holder: Holder, task: string, after?: string, kind?: Candidate["kind"]): Promise<AnswerPage>
   verification(holder: Holder): Promise<DerivedStep | VerificationPreview>
-  heartbeat(holder: Holder, leases: readonly LeaseKey[]): Promise<Menu>
+  heartbeat(holder: Holder, leases: readonly LeaseKey[], person?: ExecutorPerson): Promise<Menu>
   release(holder: Holder, step: string, lease: string): Promise<DerivedStep>
   report(holder: Holder, step: string, lease: string, outcome: "ended" | "failed", note?: string): Promise<Receipt | DerivedStep>
   next(holder: Holder): Promise<DerivedStep>
@@ -553,7 +582,7 @@ export async function openExecutorCoordinator(
       if (blocked) return blocked
     }
     const proposal = await gateProposal()
-    const prior = gates.findLast((item) => !item.intent && !item.superseded)
+    const prior = gates.findLast(offerable)
     if (prior && prior.digest !== proposal?.digest) await updateGate(prior, { ...prior, superseded: true })
     if (!proposal) return { kind: "wait", reason: "not-ready", detail: "No validated gate awaits release." }
     const { gate, document, digest, review, before } = proposal
@@ -568,10 +597,46 @@ export async function openExecutorCoordinator(
 
   function personStep(person: ExecutorPerson): PersonStep {
     const pending = questions.find((item) => !item.answer)
-    if (!pending) return { kind: "wait", reason: "not-ready", detail: "No pending questions." }
+    if (!pending) {
+      // 0262-04's blind spot named: a person attending with no question to
+      // answer still learns a gate item is pending — the existence the read
+      // surface lists, surfaced here so the claim arm never reads as "nothing
+      // to attend to" while a gate waits (the menu carries the id).
+      if (gates.some(offerable)) {
+        return { kind: "wait", reason: "not-ready", detail: "No pending questions. A gate item is pending." }
+      }
+      return { kind: "wait", reason: "not-ready", detail: "No pending questions." }
+    }
     if (!questionAuthority(person)) return { kind: "wait", reason: "gate", detail: "A pending question requires a person with question authority." }
     const { id, text, task } = pending
     return { kind: "question", id, text, task }
+  }
+
+  // The read surface's pending listing (0271, 0262-04's fix): derived from
+  // the same durable records the claim path reads — the unanswered questions
+  // (personStep's own filter) and the offerable gates (offerGate's derived
+  // items) — ordered by the one shared issuance order (0250: legacy questions
+  // before legacy gates, then position). Existence for every reader; the
+  // question's text and task context only for a channel questionAuthority
+  // admits — the privileged item is exactly the question step's own shape,
+  // the same content the claim route already discloses to the same authority
+  // (P2: routing precision, never authority widening; P6: no new state).
+  function pendingItems(person: ExecutorPerson | undefined): MenuPending[] {
+    const rows: { order: number; item: MenuPending }[] = []
+    for (const { id, text, task, answer, position } of questions) {
+      if (answer) continue
+      rows.push({
+        order: position ?? -2,
+        item: person !== undefined && questionAuthority(person)
+          ? { kind: "question", id, text, ...(task !== undefined && { task }) }
+          : { kind: "question", id },
+      })
+    }
+    for (const gate of gates) {
+      if (!offerable(gate)) continue
+      rows.push({ order: gate.position ?? -1, item: { kind: "gate", id: gate.id } })
+    }
+    return rows.sort((a, b) => a.order - b.order).map(({ item }) => item)
   }
 
   async function settleQuestion(person: ExecutorPerson, id: string, decision: string, rationale?: string) {
@@ -1210,11 +1275,12 @@ export async function openExecutorCoordinator(
     return step
   }
 
-  async function menu(holder: Holder, at: number): Promise<Menu> {
+  async function menu(holder: Holder, at: number, person?: ExecutorPerson): Promise<Menu> {
     const types = executorTypeCatalog()
+    const pending = pendingItems(person)
     const leases = entries.filter((entry) => live(entry, at) && sameHolder(entry.holder, holder))
       .map(({ grant: { id: step, lease, kind, deadline, attempt } }) => ({ step, lease, kind, deadline, attempt }))
-    if (leases.length) return { claimable: [], leases, types }
+    if (leases.length) return { claimable: [], leases, types, pending }
     const claimable: Menu["claimable"] = []
     const tasks = await scopeCandidates()
     const decisions = tasks.length
@@ -1227,7 +1293,7 @@ export async function openExecutorCoordinator(
         })
       }
     }
-    return { claimable, leases, types }
+    return { claimable, leases, types, pending }
   }
 
   function withoutGrant(step: Decision): DerivedStep {
@@ -1523,7 +1589,7 @@ export async function openExecutorCoordinator(
       if (workspace && !retained) checkpoint?.("workspace-booked")
       return workspace ? grantCheckout(holder, entry) : brief
     }),
-    ready: (holder) => serialize(() => menu(holder, now())),
+    ready: (holder, person) => serialize(() => menu(holder, now(), person)),
     brief: (holder, task, kind) => serialize(async () => {
       const last = latest(task)
       if (last && (kind === undefined || kind === last.grant.kind) && live(last, now())) {
@@ -1556,7 +1622,7 @@ export async function openExecutorCoordinator(
       const step = await select(holder, now(), "verify")
       return step.kind === "verify" ? step : withoutGrant(step)
     }),
-    heartbeat: (holder, leases) => serialize(async () => {
+    heartbeat: (holder, leases, person) => serialize(async () => {
       const requested = new Set(leases.map(({ step, lease }) => lookup(step, lease)))
       const at = now()
       const renewed = entries.map((entry) => {
@@ -1569,7 +1635,7 @@ export async function openExecutorCoordinator(
         return deadline > entry.grant.deadline ? { ...entry, grant: { ...entry.grant, deadline } } : entry
       })
       if (renewed.some((entry, i) => entry !== entries[i])) await persist(renewed)
-      return menu(holder, at)
+      return menu(holder, at, person)
     }),
     release: (holder, step, lease) => serialize(async () => {
       const entry = lookup(step, lease)

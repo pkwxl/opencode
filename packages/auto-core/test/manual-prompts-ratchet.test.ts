@@ -147,7 +147,25 @@ describe("manual-driver prompt ratchet", () => {
     expect(coordinator).toContain("!live(entry, now()) || !sameHolder(entry.holder, holder) || entry.grant.unit !== target.task")
     expect(executor).toContain("send that value as `cursor` on the same brief request")
     expect(coordinator).toContain("!sameHolder(last.holder, holder) || !live(last, now())")
-    expect(person).not.toMatch(/\bgit\s+(?:add|commit|reset|stash)\b|Clarified:\s*yes/)
+    expect(person).not.toMatch(/\bgit\s+(add|commit|reset|stash)\b|Clarified:\s*yes/)
+  })
+
+  // plans/0271 (0262-04's fix): the pending-items letter on the person
+  // prompt, pinned beside the read surface's producer anchors — the menu's
+  // pending list (kind and id for every reader, question text gated to the
+  // same authority check the claim path reads) and the wait arm that names
+  // pending gate existence. The wire side lives in the executor e2e and the
+  // coordinator-side behavior in test/executor-steps.test.ts.
+  test("the person prompt names the pending listing on ready (plans/0271)", () => {
+    const person = text("person.md")
+    const coordinator = src("executor-coordinator.ts")
+    expect(person).toContain("the menu's `pending` list names each pending person item by `kind` (`question` or `gate`) and `id`")
+    expect(person).toContain("with question text only for a grant that answers questions")
+    expect(person).toContain("Answer items through the standing routes.")
+    expect(coordinator).toContain("function pendingItems(person: ExecutorPerson | undefined): MenuPending[] {")
+    expect(coordinator).toContain("person !== undefined && questionAuthority(person)")
+    expect(coordinator).toContain("const pending = pendingItems(person)")
+    expect(coordinator).toContain('detail: "No pending questions. A gate item is pending."')
   })
 
   test("the src side of the grammar table still holds (anti-rot)", () => {

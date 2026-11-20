@@ -201,6 +201,10 @@ from the bearer token. A person-only token defaults to a person claim. A
 token with `executor` defaults to a worker claim and can request
 `role: "person"` if it also has a person grant. Person claims return the oldest
 eligible `question` or `human` step. Use its ID as `item` when answering.
+The `ready` and `heartbeat` menus also carry `pending`, naming every pending
+person item by `kind` (`question` or `gate`) and `id`, with question text only
+when the requesting token's grant answers questions; gate proposals stay
+behind the person claim.
 Release decisions use `"approve"` and apply to the reviewed proposal. If the
 proposal changes, the response offers a new item. Replaying a settled answer
 preserves the original decision and returns fresh person work.

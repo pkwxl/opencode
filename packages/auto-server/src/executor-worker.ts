@@ -44,6 +44,12 @@ async function perform(coordinator: Coordinator, request: StepRequest): Promise<
   const base = { v: 1, type: "step-done", id: request.id } as const
   try {
     const { action, holder } = parseExecutorRequest(request.route, request.body, request.token, request.delegation)
+    // 0271: the delegation rides the read surface too — the menu's pending
+    // listing splits existence (kind and id, every reader) from question
+    // content (question-authority channels alone), the coordinator's own
+    // authority check deciding; undefined for a token carrying no person
+    // grant, the plain-worker floor.
+    const person = request.delegation ? { ...holder, delegation: request.delegation } : undefined
     let payload: Record<string, unknown>
     switch (action.route) {
       case "ready":
@@ -52,10 +58,10 @@ async function perform(coordinator: Coordinator, request: StepRequest): Promise<
         // with, the one place identity needs carrying (per-response
         // repetition declined). A client that ignores the field reads the
         // pre-change envelope.
-        payload = { build: buildFingerprint(), menu: await coordinator.ready(holder) }
+        payload = { build: buildFingerprint(), menu: await coordinator.ready(holder, person) }
         break
       case "heartbeat":
-        payload = { menu: await coordinator.heartbeat(holder, action.leases) }
+        payload = { menu: await coordinator.heartbeat(holder, action.leases, person) }
         break
       case "claim":
         payload = { step: action.role === "person"

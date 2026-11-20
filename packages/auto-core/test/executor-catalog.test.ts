@@ -195,11 +195,14 @@ test("the absent-block floor: a consumer that ignores the block reads the pre-ch
   const holder = { token: "worker", channel: "" }
   try {
     const menu = await coordinator.ready(holder)
-    const { types, ...before } = menu
+    const { types, pending, ...before } = menu
     expect(Object.keys(before).sort()).toEqual(["claimable", "leases"])
     expect(before.claimable).toMatchObject([{ unit: "T-001", title: "Ready", kinds: ["execute"] }])
     expect(before.leases).toEqual([])
     expect(types).toEqual(catalog)
+    // 0271's floor half: no pending person items and the list renders the
+    // empty shape (a consumer that ignores it unperturbed, P10).
+    expect(pending).toEqual([])
     // The menu's claimable kinds are always catalog members (never an id the
     // coordinator cannot grant).
     for (const kinds of menu.claimable.flatMap(({ kinds }) => [...kinds])) {
@@ -209,11 +212,12 @@ test("the absent-block floor: a consumer that ignores the block reads the pre-ch
     const grant = await coordinator.claim(holder)
     if (grant.kind !== "execute") throw new Error(JSON.stringify(grant))
     const held = await coordinator.ready(holder)
-    const { types: heldTypes, ...heldBefore } = held
+    const { types: heldTypes, pending: heldPending, ...heldBefore } = held
     expect(Object.keys(heldBefore).sort()).toEqual(["claimable", "leases"])
     expect(held.claimable).toEqual([])
     expect(held.leases).toMatchObject([{ step: grant.id, lease: grant.lease }])
     expect(heldTypes).toEqual(catalog)
+    expect(heldPending).toEqual([])
   } finally {
     await coordinator.close()
   }

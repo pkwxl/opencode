@@ -73,10 +73,13 @@ exec "$@"
     // (0246 D4 b's menu letter — the single dispatch-time payload), the
     // worker passing the coordinator's rendering through with no second
     // author; a client that ignores the block reads the pre-change menu.
-    expect(Object.keys(ready.menu).sort()).toEqual(["claimable", "leases", "types"])
+    // 0271's additive half rides the same menu: the pending person items,
+    // the empty floor here (nothing pending on a bare project).
+    expect(Object.keys(ready.menu).sort()).toEqual(["claimable", "leases", "pending", "types"])
     expect(Object.keys(ready.menu.types).sort()).toEqual(["execute", "fix", "human", "question", "verify"])
-    const { types, ...menuBefore } = ready.menu
+    const { types, pending, ...menuBefore } = ready.menu
     expect(Object.keys(menuBefore).sort()).toEqual(["claimable", "leases"])
+    expect(pending).toEqual([])
     expect(claimed).toMatchObject({ protocol: 1, step: { kind: "execute", unit: TASK, workspace: directory } })
     expect(await Bun.file(launches).text()).toBe(`${directory}\n`)
     expect(liveRunLock(directory)).toBeDefined()
@@ -99,6 +102,15 @@ exec "$@"
     const question = { ...lease, task: TASK, text: "Which implementation?" }
     const raised = (await call("question", question, worker)).question
     expect((await call("question", question, worker)).question).toEqual(raised)
+    // 0271 on the wire: the pending listing rides both menu arms (this is
+    // the leases-held arm) — a plain worker channel reads existence alone,
+    // the dual token's person-questions grant carries the question's text
+    // beside the id (the authority split the coordinator checks), no other
+    // byte of the menu moving.
+    expect((await call("ready", {}, worker)).menu.pending).toEqual([{ kind: "question", id: raised.id }])
+    expect((await call("ready", {}, dual)).menu.pending).toEqual([
+      { kind: "question", id: raised.id, text: question.text, task: TASK },
+    ])
     expect((await call("claim", {}, person)).step).toMatchObject({ kind: "question", id: raised.id, text: question.text })
     expect((await call("claim", { role: "person" }, dual)).step.id).toBe(raised.id)
     expect((await call("claim", { delegation: "unrestricted" }, releaseOnly)).step.kind).toBe("wait")
@@ -169,7 +181,7 @@ exec "$@"
     expect(liveRunLock(directory)).toBeUndefined()
 
     daemon = await start()
-    expect((await call("ready", {}, verifier)).menu).toEqual({ claimable: [], leases: [], types: executorTypeCatalog() })
+    expect((await call("ready", {}, verifier)).menu).toEqual({ claimable: [], leases: [], pending: [], types: executorTypeCatalog() })
     expect(await git("rev-parse", "HEAD")).toBe(beforeReport)
     const blocked = await call("claim", { task: TASK, kind: "verify", channel: "another-channel" }, worker)
     expect(blocked.step).toMatchObject({ kind: "wait", reason: "not-ready" })
@@ -297,6 +309,12 @@ test("release grants bind HTTP approvals to the reviewed proposal and replay saf
     expect(await call("claim", questions)).toMatchObject({ kind: "wait" })
     const first = await call("claim", releases)
     expect(first).toMatchObject({ kind: "human", gate: "project-start", document, proposal })
+    // 0262-04's blind spot on the wire: with the gate occurrence recorded
+    // and no question pending, the questions-scope claim names the pending
+    // gate instead of reading as nothing to attend to.
+    expect(await call("claim", questions)).toEqual({
+      kind: "wait", reason: "not-ready", detail: "No pending questions. A gate item is pending.", retryAfter: 2,
+    })
     await call("answer", questions, { item: first.id, decision: "approve" }, 400)
     const revised = proposal.replace("A faithful port.", "An incremental port.")
     await Bun.write(join(directory, document), revised)
