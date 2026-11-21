@@ -235,3 +235,131 @@ test("the unscoped flavor: the same re-derivation over the serial floor", async 
     await coordinator.close()
   }
 })
+
+// 0290 F1's fix 0291: the shadowed continuation. The field's entry sequence
+// (erofs T-064) — a landed flagged share followed by a dead lease the
+// continuation itself routed — held the person's amendment out forever under
+// 0289's guard (the flagged entry was never the unit's latest entry again),
+// while the routing's priorHandoff read kept following the flag wherever it
+// sat. The guard is re-keyed to the flag's own routing position: the unit's
+// latest *landed* entry — dead tails shadow nothing.
+test("the shadow: a released dead tail no longer hides the flag from the person's amendment", async () => {
+  const dir = project()
+  const printed: string[] = []
+  const seen = spyOn(console, "log").mockImplementation((...args: unknown[]) => { printed.push(args.join(" ")) })
+  const peer = { token: "peer", channel: "other" }
+  let coordinator = await openExecutorCoordinator(dir, { now: () => 1 })
+  try {
+    const grant = (await coordinator.claim(worker, "T-064", "execute")) as Grant
+    write(dir, "docs/T-064/notes.md", "# Notes\n\n<!-- auto: eof -->\n")
+    write(dir, "docs/T-064/handoff.md", "# Handoff\n\nThe implementation stands whole.\n\nStatus: continue\n")
+    expect(await coordinator.report(worker, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed", continuation: true })
+    // The probing claim the stranded continuation invites, released without
+    // a report — the dead tail that shadowed the flag in the field.
+    const probe = (await coordinator.claim(peer, "T-064", "execute")) as Grant
+    await coordinator.release(peer, probe.id, probe.lease)
+    // The person's channel: the Status line amended and committed.
+    write(dir, "docs/T-064/handoff.md", "# Handoff\n\nThe implementation stands whole.\n\nStatus: done\n")
+    git(dir, "add", "--", "docs/T-064/handoff.md")
+    git(dir, ...person, "commit", "-m", "person: the handoff's status amended to done")
+    // The menu read — the first wire act — reaches the shadowed flag (the
+    // pre-fix guard skipped the flagged entry forever: latest(unit) was the
+    // dead tail, never the landing again).
+    const menu = await coordinator.ready(verifier)
+    expect(printed.join("\n")).toContain("re-derived T-064 exec 1 on T-064")
+    expect(printed.join("\n")).toContain("the amended handoff no longer reads a continue status")
+    expect(ledger(dir)[0]!.booking?.receipt).not.toHaveProperty("continuation")
+    // The dead tail still routes the designed takeover — the site's measured
+    // move, now over a corrected flag: one bounded share drains the tail.
+    expect(menu.claimable).toMatchObject([{ unit: "T-064", kinds: ["execute"] }])
+    const takeover = (await coordinator.claim(peer, "T-064", "execute")) as Grant
+    expect(takeover.id).toBe("T-064 exec 2")
+    expect(takeover.attempt).toBe(1)
+    // The takeover share is truthful bounded work (a real write in scope),
+    // and it lands clean — the handoff reads done, no flag is derived.
+    write(dir, "docs/T-064/notes.md", "# Notes\n\nRevisited over the already-whole unit.\n\n<!-- auto: eof -->\n")
+    expect(await coordinator.report(peer, takeover.id, takeover.lease, "ended")).toMatchObject({ kind: "landed" })
+    expect(ledger(dir)[1]!.booking?.receipt).not.toHaveProperty("continuation")
+    // The verify share follows at the next wire act — the field's stranded
+    // share, reachable through the corrected chain.
+    const after = await coordinator.ready(verifier)
+    expect(after.claimable).toEqual([{ unit: "T-064", title: "Task 64", kinds: ["verify"] }])
+    const verify = await coordinator.claim(verifier, "T-064", "verify")
+    if (!("lease" in verify) || verify.kind !== "verify") throw new Error(JSON.stringify(verify))
+    write(dir, "docs/T-064/report.md", pass)
+    expect(await coordinator.report(verifier, verify.id, verify.lease, "ended")).toMatchObject({ kind: "landed", verdict: "pass" })
+    expect(readFileSync(join(dir, index), "utf8")).toContain("- [x] T-064")
+  } finally {
+    seen.mockRestore()
+    await coordinator.close()
+  }
+})
+
+test("the shadow's expired flavor: the same re-derivation over a dead tail that outlived its lease", async () => {
+  const dir = project()
+  let clock = 1
+  let coordinator = await openExecutorCoordinator(dir, { now: () => clock })
+  try {
+    const grant = (await coordinator.claim(worker, "T-064", "execute")) as Grant
+    write(dir, "docs/T-064/notes.md", "# Notes\n\n<!-- auto: eof -->\n")
+    write(dir, "docs/T-064/handoff.md", "# Handoff\n\nStatus: continue\n")
+    expect(await coordinator.report(worker, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed", continuation: true })
+    const probe = (await coordinator.claim({ token: "peer", channel: "other" }, "T-064", "execute")) as Grant
+    await coordinator.close()
+    clock = probe.deadline + 1
+    coordinator = await openExecutorCoordinator(dir, { now: () => clock })
+    write(dir, "docs/T-064/handoff.md", "# Handoff\n\nStatus: done\n")
+    git(dir, "add", "--", "docs/T-064/handoff.md")
+    git(dir, ...person, "commit", "-m", "person: the handoff's status amended to done")
+    // The unit stands open, so the dead-letter sweep leaves the expired tail
+    // to the takeover — but the flag correction no longer needs the tail to
+    // be the unit's latest entry of any kind.
+    const menu = await coordinator.ready(verifier)
+    expect(ledger(dir)[0]!.booking?.receipt).not.toHaveProperty("continuation")
+    expect(menu.claimable).toMatchObject([{ unit: "T-064", kinds: ["execute"] }])
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("the shield: a later landed entry holds the floor and the older flag stays routing-dead", async () => {
+  const dir = project()
+  const printed: string[] = []
+  const seen = spyOn(console, "log").mockImplementation((...args: unknown[]) => { printed.push(args.join(" ")) })
+  let coordinator = await openExecutorCoordinator(dir, { now: () => 1 })
+  try {
+    // Two flagged landings in a row: the continuation re-grant landed
+    // carrying its own flag — the routing now follows the second flag alone.
+    const first = (await coordinator.claim(worker, "T-064", "execute")) as Grant
+    write(dir, "docs/T-064/notes.md", "# Notes\n\n<!-- auto: eof -->\n")
+    write(dir, "docs/T-064/handoff.md", "# Handoff\n\nStatus: continue\n")
+    expect(await coordinator.report(worker, first.id, first.lease, "ended")).toMatchObject({ kind: "landed", continuation: true })
+    const second = (await coordinator.claim({ token: "peer", channel: "other" }, "T-064", "execute")) as Grant
+    write(dir, "docs/T-064/notes.md", "# Notes\n\nCarried further.\n\n<!-- auto: eof -->\n")
+    write(dir, "docs/T-064/handoff.md", "# Handoff\n\nThe carry stands whole.\n\nStatus: continue\n")
+    expect(await coordinator.report({ token: "peer", channel: "other" }, second.id, second.lease, "ended")).toMatchObject({ kind: "landed", continuation: true })
+    // The handoff still reads continue over an open unit: the floor holds the
+    // routing flag (the second landing), and the older flag is shielded —
+    // routing-dead, never re-derived on its own.
+    let menu = await coordinator.ready(verifier)
+    expect(printed.join("\n")).not.toContain("re-derived")
+    expect(ledger(dir)[0]!.booking?.receipt).toMatchObject({ kind: "landed", continuation: true })
+    expect(ledger(dir)[1]!.booking?.receipt).toMatchObject({ kind: "landed", continuation: true })
+    expect(menu.claimable).toMatchObject([{ unit: "T-064", kinds: ["execute"] }])
+    // The person's amendment corrects the routing flag alone; the shielded
+    // one keeps its flag (harmless — priorHandoff reads only the latest
+    // landed entry) and the verify share follows the corrected receipt.
+    write(dir, "docs/T-064/handoff.md", "# Handoff\n\nStatus: done\n")
+    git(dir, "add", "--", "docs/T-064/handoff.md")
+    git(dir, ...person, "commit", "-m", "person: the handoff's status amended to done")
+    menu = await coordinator.ready(verifier)
+    expect(printed.join("\n")).toContain("re-derived T-064 exec 2 on T-064")
+    expect(printed.join("\n")).not.toContain("re-derived T-064 exec 1 on T-064")
+    expect(ledger(dir)[0]!.booking?.receipt).toHaveProperty("continuation")
+    expect(ledger(dir)[1]!.booking?.receipt).not.toHaveProperty("continuation")
+    expect(menu.claimable).toEqual([{ unit: "T-064", title: "Task 64", kinds: ["verify"] }])
+  } finally {
+    seen.mockRestore()
+    await coordinator.close()
+  }
+})

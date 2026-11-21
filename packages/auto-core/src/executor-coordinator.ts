@@ -930,6 +930,16 @@ export async function openExecutorCoordinator(
     return entries.findLast(({ grant }) => grant.unit === unit)
   }
 
+  // The unit's latest *landed* entry — the position the continuation flag
+  // actually routes from (the priorHandoff read below walks landed entries
+  // with findLast, position-independent of later dead or non-landing
+  // entries). 0290 F1's fix 0291 keyed the correction sweep to this same
+  // read: a flag shadows only behind a later landed entry, never behind a
+  // dead tail.
+  function lastLanded(unit: string): Entry | undefined {
+    return entries.findLast(({ grant, booking }) => grant.unit === unit && booking?.receipt?.kind === "landed")
+  }
+
   function reserved(): Entry[] {
     const units = new Map(entries.map((entry) => [entry.grant.unit, entry]))
     return [...units.values()].filter((entry) => {
@@ -1018,17 +1028,20 @@ export async function openExecutorCoordinator(
   // routing takes over, the verify share follows — or completing the unit
   // (0274's marks): the re-booking adds the additive `closed: "person"`
   // facet, the fence releases, the claim ends, no verify over a person-closed
-  // unit (P3). Only the unit's latest entry routes; a handoff that still
-  // reads continue over an open unit holds the designed continuation (the
-  // floor, pinned by the standing suite); live leases are never touched
-  // (P12); each re-booking logs its finding and provenance (P8).
+  // unit (P3). Only the unit's latest landed entry's flag routes (the
+  // priorHandoff read's own findLast position — 0290 F1's shadow: dead or
+  // booked non-landing tails shadow nothing, a later landed entry still
+  // shields the older flag as routing-dead); a handoff that still reads
+  // continue over an open unit holds the designed continuation (the floor,
+  // pinned by the standing suite); live leases are never touched (P12);
+  // each re-booking logs its finding and provenance (P8).
   async function reconcileContinuations(): Promise<string[]> {
     const lines: string[] = []
     for (const entry of entries) {
       const booking = entry.booking
       const receipt = booking?.receipt
       if (receipt?.kind !== "landed" || !receipt.continuation || booking?.outcome !== "ended") continue
-      if (latest(entry.grant.unit) !== entry) continue
+      if (lastLanded(entry.grant.unit) !== entry) continue
       if (await unitCompleted(entry.grant.unit, entry.grant.kind)) {
         await book(entry, { ...booking, receipt: { ...receipt, continuation: undefined, closed: "person" } })
         const line = `ℹ re-derived ${entry.grant.id} on ${entry.grant.unit} — the unit reads done in the durable record (the person's completion); the continuation claim ended, the unit closed without a verify share`
