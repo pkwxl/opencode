@@ -419,32 +419,6 @@ export async function ensureRegressionGreen(
   return held.length ? { kind: "held", lanes: held } : { kind: "ok" }
 }
 
-// The remediation-wave input (D5, the 0079 §4 held-verdict shape): the
-// append session reads the receipts' bounded evidence and the suspects, and
-// writes the tasks that re-green the lane — dm-glm's T-100 pattern, the
-// parked wave's remediation hop, as planned work.
-export function regressionRepairInput(phase: PhaseUnit, lanes: readonly HeldLane[]): string {
-  const facts = lanes
-    .map((held) => {
-      const suspects = held.suspects.length ? held.suspects.map((task) => `${task.id} ${task.title}`).join("; ") : "no task of this phase touched the lane's surfaces (an earlier phase or the person did)"
-      const evidence = held.evidence.length ? held.evidence.join("\n") : "(the log is empty)"
-      return [
-        `- Lane \`${held.lane}\` red at the phase's final tree. Receipt \`${held.receipt}\` (log ${held.log}).`,
-        `  Suspects (own commits touching the lane's surfaces since its last green receipt): ${suspects}.`,
-        "  The receipt's bounded evidence:",
-        "",
-        "  ```",
-        ...evidence.split("\n").map((line) => `  ${line}`),
-        "  ```",
-      ].join("\n")
-    })
-    .join("\n")
-  return [
-    `Repair round: the phase is held by its regression gate — the declared full-regression lane(s) ran red at the phase's final tree. ${facts}`,
-    "",
-    "Append repair tasks that fix what the receipts found and re-run the lanes so they green at the new tree; the phase is distilled again after the tasks run.",
-  ].join("\n")
-}
 
 // The gate-stop lines (the logGateStop posture): the held phase, the
 // receipts, the suspects, and the person's ways on.
@@ -455,7 +429,7 @@ export function regressionHoldLines(directory: string, phase: PhaseUnit, lanes: 
     lines.push(`  the lane \`${held.lane}\` is red at the phase's final tree — receipt ${held.receipt}, log ${held.log}`)
     lines.push(`  suspects: ${held.suspects.length ? held.suspects.map((task) => `${task.id} (${task.title})`).join(", ") : "no task of this phase touched the lane's surfaces"}`)
   }
-  lines.push(`  to rework: append fix tasks with ${bin} plan ${directory} --append -p <text> (the phase distills again after they run and the gate re-checks)`)
+  lines.push(`  to rework: add fix tasks one at a time (task-add), or fix the receipts' findings by hand — the phase distills again after they run and the gate re-checks (the repair-append budget is retired, plans/0283)`)
   lines.push(`  to close the phase without its gate: ${bin} close ${phaseKey(phase).id} ${directory} --reason <text>`)
   return lines
 }

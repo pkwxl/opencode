@@ -156,7 +156,9 @@ describe("the close (D2): predicate, recorded target, idempotency, reopening, th
     expect(blocked.length).toBeGreaterThan(0)
     expect(blocked.join("\n")).toContain("cannot close under this run's agent fleet")
     expect(blocked.join("\n")).toContain("the seal would be a record with no session-side enforcement")
-    expect(blocked.join("\n")).toContain("OPENCODE_AUTO_AGENT=opencode")
+    // plans/0283: the sealing-advance command teaching retired with the
+    // transfer command — the refusal names the fleet remedy alone.
+    expect(blocked.join("\n")).toContain("amend the config's agent key")
     // The refusal sits ahead of every mutating step (P12/P20): the door
     // still stands, the stamped allow still in place, no wall commit.
     expect(existsSync(join(dir, "linux"))).toBe(true)

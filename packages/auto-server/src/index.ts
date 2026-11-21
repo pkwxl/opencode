@@ -20,8 +20,6 @@ import { accessSync, constants, lstatSync, rmSync, statSync, writeFileSync } fro
 import { readFile } from "node:fs/promises"
 import { applyServerProfile } from "./profile"
 import { parseEnvFile } from "./env-boot"
-import { transferDeterministic } from "@opencode-ai/auto-core/transfer"
-import { loadProjectConfig } from "@opencode-ai/auto-core/config"
 import { DEFAULT_HOSTNAME, DEFAULT_PORT, deriveWorkerCommand, startDaemon } from "./daemon"
 import { defaultDataDir, DaemonStore, SCOPES, StoreError } from "./store"
 import { BUILD_COMMIT, VERSION } from "./version"
@@ -39,8 +37,7 @@ const USAGE = `usage:
   opencode-auto-server token list [--data-dir <dir>]
   opencode-auto-server token revoke <name> [--data-dir <dir>]
   opencode-auto-server executor-hub [--resume] CONNECTION PROJECT CHANNEL execute|verify|fix|formulate|synthesize|distill|audit COMMAND [ARG ...]
-  opencode-auto-server transfer <dir>
-  opencode-auto-server worker '<run request JSON>'
+  opencode-auto-server worker '<coordinator request JSON>'
 
 opencode-auto-server is the headless automation service shell of opencode-auto:
 a daemon that runs the driver over HTTP and streams run state (REST + SSE).
@@ -106,77 +103,28 @@ token — manage bearer tokens and their scopes (plans/0282's six): read
   never overwriting, never creating directories, and nothing of the
   credential on stdout); the store keeps only its digest either way.
 
-worker '<run request JSON>' — the unit the daemon spawns (P1b). The JSON
-  document holds:
-  directory  (required) the target directory of the run
-  options    per-run options (the run flags of opencode-auto run): verbose,
-             waitAnswer, waitBetween, permission, newSession, dryrun,
-             maxSessions, server, repair, stopAfter, boundary. Width ≥ 2
-             (maxSessions) is served: it activates the core's lane scheduler
-             (doc lanes at tier 0, worktree lanes under treeLanes on|auto —
-             the lane children are workers of this binary), and a wide run
-             carries no interactive transport (the core's one-channel rule),
-             so its questions take the stdin-closed degradation path.
-             stopAfter and waitAnswer > 0 are serial-path options — refused
-             up front when they ride width. The project's constitutional
-             config keys are frozen by init (.opencode/auto/config.json)
-             and refused here — revise them with opencode-auto amend, never
-             on a run
-  switches   per-run OPENCODE_AUTO_* experimental switch overrides, applied
-             to the worker's environment before the run starts (each run is
-             a fresh process, so the switch layer is safely per-run). The
-             two env-only names are not switches and are refused:
-             OPENCODE_AUTO_MODELS (the operator registry layer's path) and
-             OPENCODE_AUTO_SERVER (the external server URL's env form) ride
-             the operator's channels — the XDG config root the worker
-             inherits, the confinement launcher's environment overlay —
-             never a run request
-  transport  the interactive transport (P3b, daemon-written): the worker
-             bridge WebSocket URL. The per-run secret rides the worker's
+worker '<coordinator request JSON>' — the unit the daemon spawns (P1b,
+narrowed to the executor carriage by plans/0282). The JSON document holds:
+  directory  (required) the target directory of the coordinator
+  executor   true, always — the coordinator worker is the one shape; the
+             protocol does nothing via push, ever again (plans/0282), so
+             plain runs, planning sessions, transfers and lanes are
+             pull-only work on the executor protocol (execute/verify/fix/
+             formulate/synthesize/distill/audit grants over
+             POST /projects/<project>/executor), never spawned. The
+             retired payloads (options, switches, plan, transfer, lane)
+             are tombstoned: the worker refuses every field beyond
+             {directory, executor, transport}, and the spec's tombstone
+             section (auto-core's docs/protocol.md) is the compatibility
+             record
+  transport  the bridge URL payload { run, url } (required — the worker's
+             socket back to the daemon's executor routes, the daemon's one
+             WebSocket surface). The per-run secret rides the worker's
              spawn environment (OPENCODE_AUTO_BRIDGE_TOKEN), never the
-             request document — argv is world-readable (plans/0222). The
-             worker builds its Interactive implementation from the pair and
-             injects it through runAll's io/Interactive seam, so questions
-             and /exit, /failback control are bridged to the daemon's
-             WebSocket endpoint
-  plan       the plan payload (P3c, daemon-written — the plan operation's
-             loop route): { "input"?: "<planning input text>",
-             "append"?: true|false }. The run performs the CLI plan
-             command's work: runAll under stopBefore: execute
-             (humanQuestions armed — the sessions' questions wait for the
-             human with no timeout over the transport), the planning input
-             persisted by the planning step, --append's semantics
-  transfer   the transfer payload (daemon- or transfer-command-written):
-             { "resynthesize"?: true|false }. The run performs the CLI
-             transfer command's work: runTransfer, one person-bracketed
-             advance resolved by state (the project start, the phase
-             boundary, the round close/open), the loop under stopBefore
-             formulate inside it — mutually exclusive with plan
-  lane       the lane payload (laneLauncher-written, never a client's — POST
-             /runs refuses it): { "unit": "<task id>", "merge"?: "<branch>" }.
-             The run performs the CLI's hidden _lane entry's work:
-             runLaneWorker, one unit in its worktree — this is the payload
-             the profile's lane launcher self-spawns per lane dispatch of a
-             wide parent run, mutually exclusive with plan, transfer and the
-             transport
+             request document — argv is world-readable (plans/0222)
 
-transfer <dir> — the person's advance command, the CLI shell's transfer on
-  this binary (every core text naming "opencode-auto-server transfer <dir>"
-  — a phased run's boundary stop, the plan refusal over an unstarted
-  project — points here, and this is what makes it true). It self-spawns
-  one worker carrying the transfer payload above (one advance per process,
-  the topology's own unit) and exits with the advance's own code: 0 a
-  review, round-open or roadmap-exhausted stop; 1 a usage or state error
-  (m mode's refusal among them); 2 a gate held or nothing to advance.
-  Headless by construction: its questions degrade the hand-spawned worker's
-  way (a permission question blocks, exit 2) — answer questions over a
-  daemon's transfer operation instead (POST /projects/<project>/transfer),
-  which attaches the interactive transport
-
-the worker's stdin is closed: without a transport payload, questions degrade
-to the unanswered path (permission questions block the run with exit 2),
-never a hang; with one, every human interaction rides the bridge as typed
-frames, and a transport loss degrades the same way`
+the worker's stdin is closed: the coordinator's interactions ride the
+bridge alone`
 
 // The profile is set before anything else (shell-contract §E.2: set once at
 // shell-entry startup), so every core message the entry reaches is shaped by
@@ -323,34 +271,18 @@ if (command === "worker") {
   await runWorker(args.slice(1))
 }
 
-// transfer <dir> (the plans/0101 absorb): the person's advance command on
-// this binary — the core's runTransfer (the project start, the phase
-// boundary, the round close/open; one advance per invocation, resolved by
-// state). AUTO-DECISION (self-spawn, not an in-process call): the advance
-// delegates to runAll inside the core (the handover distillation, the
-// formulation construction), and this package's process topology is one
-// worker child per run — the same rule the daemon's transfer operation
-// follows — so the command spawns itself as a worker carrying the transfer
-// payload and propagates the child's exit code verbatim. Output is
-// inherited (the advance's lines are the person's reading); stdin is closed
-// by construction (questions degrade the hand-spawned worker's way — the
-// daemon's transfer operation is the interactive surface).
+// transfer <dir> is retired (plans/0283, the CLI tombstones letter): the
+// advance is the daemon's transfer operation — an in-process deterministic
+// apply (git and document writes only, zero agent processes, the
+// distillation and the construction the distill/synthesize grants') over a
+// registered project, not a local subcommand. The notice is the one answer
+// whatever follows the command (P13's tombstone discipline), naming the
+// executor surface.
 if (command === "transfer") {
-  const rest = args.slice(1)
-  if (rest.length > 1 || rest.some((arg) => arg.startsWith("--"))) {
-    refuse("transfer takes the target directory alone (and no flags): one person-bracketed advance per invocation, resolved by state — the advance's surface is the daemon's transfer operation")
-  }
-  const directory = resolve(rest[0] ?? process.cwd())
-  const config = await loadProjectConfig(directory)
-  process.exit(await transferDeterministic(directory, {
-    phases: config.phases,
-    build: config.build,
-    scanExempt: config.scanExempt,
-    isolate: config.isolate,
-    autoNumber: config.autoNumber,
-    testByDriver: config.testByDriver,
-    acceptanceGate: config.acceptanceGate,
-  }))
+  console.error(
+    "transfer is retired (plans/0283): the person-bracketed advance is the daemon's transfer operation — POST /projects/<project>/transfer over a registered project (serve first; the advance is a deterministic apply, the distillation and the construction the distill/synthesize grants' over the executor protocol)",
+  )
+  process.exit(1)
 }
 
 if (command === "register" || command === "unregister" || command === "projects") {
@@ -532,7 +464,7 @@ if (command === "serve") {
   for (const warning of daemon.bootWarnings) console.log(warning)
 } else {
   // Nothing else exists: refuse with the usage text rather than pretending.
-  console.error(`opencode-auto-server: unknown command ${command ?? "(none)"} — the command surface is serve, register, unregister, projects, token, transfer, executor-hub and worker`)
+  console.error(`opencode-auto-server: unknown command ${command ?? "(none)"} — the command surface is serve, register, unregister, projects, token, executor-hub and worker`)
   console.error(USAGE)
   process.exit(1)
 }

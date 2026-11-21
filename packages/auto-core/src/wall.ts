@@ -580,7 +580,7 @@ async function closeWall(ctx: WallCtx, phase: PhaseUnit, sealing: PhaseUnit): Pr
     return [
       `⏸ the wall cannot close under this run's agent fleet: the standing deny the close records in ${OPENCODE_CONFIG_FILE} reaches sessions only through an agent that carries permission.external_directory into them, ` +
         `and this run's fleet carries it nowhere (plans/0190 — the claude adapter translates no external_directory rule today) — the seal would be a record with no session-side enforcement. ` +
-        `Run the sealing advance under an agent that carries it (the built-in opencode adapter does): OPENCODE_AUTO_AGENT=opencode ${bin} transfer ${dir}, or amend the config's agent key; nothing was mutated`,
+        `Run the sealing advance under an agent fleet that carries the declared posture (the built-in opencode adapter does), or amend the config's agent key; nothing was mutated`,
     ]
   }
   // (1) The admission scan — read-only, so a block mutates nothing and the

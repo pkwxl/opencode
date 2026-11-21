@@ -43,7 +43,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       hibernate: undefined,
       agent: undefined,
       laneIsolation: false,
-      planVerify: false,
       remediate: true,
       analysis: true,
       park: true,
@@ -91,7 +90,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       hibernate: undefined,
       agent: undefined,
       laneIsolation: false,
-      planVerify: false,
       remediate: true,
       analysis: true,
       park: true,
@@ -135,7 +133,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       hibernate: { startMin: 240, durationMin: 360 },
       agent: "claude",
       laneIsolation: false,
-      planVerify: false,
       remediate: true,
       analysis: true,
       park: true,
@@ -301,6 +298,9 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         "verify-fix",
         "review-audit",
         "review-planfix",
+        // plans/0283: the knowledge extraction's routing words.
+        "knowledge",
+        "prior-knowledge",
         "review-fixrun",
         "final-plan",
         "number-recovery",
@@ -369,11 +369,11 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
 })
 
 describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
-  test("the default combination is silent: non-default items undefined; the full listing names all twenty-three", () => {
+  test("the default combination is silent: non-default items undefined; the full listing names all twenty-two", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_PLAN_VERIFY=off, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_SYNTHESIS_TIMEOUT=15, OPENCODE_AUTO_REGRESSION=on, OPENCODE_AUTO_DOC_LANES=on",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_SYNTHESIS_TIMEOUT=15, OPENCODE_AUTO_REGRESSION=on, OPENCODE_AUTO_DOC_LANES=on",
     )
   })
 
@@ -381,7 +381,7 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "on" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=on")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_PLAN_VERIFY=off, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_SYNTHESIS_TIMEOUT=15, OPENCODE_AUTO_REGRESSION=on, OPENCODE_AUTO_DOC_LANES=on",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_SYNTHESIS_TIMEOUT=15, OPENCODE_AUTO_REGRESSION=on, OPENCODE_AUTO_DOC_LANES=on",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "off" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=off")
@@ -561,6 +561,18 @@ describe("the retired-switch registry (a removed mechanism's variable)", () => {
     expect(retiredSwitchNotes({ [NAME]: "1" })).toEqual([note])
     expect(retiredSwitchNotes({})).toEqual([])
     expect(retiredSwitchNotes({ [NAME]: "" })).toEqual([])
+  })
+
+  test("the charter verifier's switch is retired (plans/0283): the notice names the retirement, the variable never parses", () => {
+    const name = "OPENCODE_AUTO_PLAN_VERIFY"
+    const note = "the charter verifier was removed; the plan and append steps are deterministic"
+    expect(RETIRED_SWITCHES[name]).toBe(note)
+    expect(retiredSwitchNotes({ [name]: "on" })).toEqual([`⚠ ${name} is retired (${note}); the variable is ignored`])
+    // The variable never parses and the switch lines never list it (the
+    // registry's pass-through: a retired name is ignored, its notice the
+    // startup line's).
+    expect("planVerify" in parseSwitches({ [name]: "on" })).toBe(false)
+    expect(nonDefaultSwitches(parseSwitches({ [name]: "on" }))).toBeUndefined()
   })
 
   test("the switch-diet tranche-1 retirements: in-chain reuse and concurrent test handover", () => {

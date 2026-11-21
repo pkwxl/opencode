@@ -74,3 +74,25 @@ describe("server serve entry: --launch is retired (plans/0282)", () => {
     }
   })
 })
+
+// The transfer command's tombstone (plans/0283, the CLI tombstones letter):
+// the advance is the daemon's transfer operation — the word on this binary
+// answers with the permanent usage refusal naming that surface, whatever
+// follows it (P13's tombstone discipline: one notice, exit 1).
+describe("server entry: transfer <dir> is retired (plans/0283)", () => {
+  test("the command is a usage refusal naming the transfer operation, whatever follows", async () => {
+    const run = await runServer(["transfer", "/tmp/anywhere", "--resynthesize"])
+    expect(run.code).toBe(1)
+    expect(run.err).toContain("transfer is retired (plans/0283)")
+    expect(run.err).toContain("POST /projects/<project>/transfer")
+    expect(run.err).toContain("distill/synthesize grants")
+  })
+
+  test("the usage text teaches the narrowed coordinator carriage — no transfer row, no push payloads", async () => {
+    const run = await runServer(["--help"])
+    expect(run.code).toBe(0)
+    expect(run.out).toContain("{directory, executor, transport}")
+    expect(run.out).not.toContain("transfer <dir>")
+    expect(run.out).not.toContain("the lane payload")
+  })
+})

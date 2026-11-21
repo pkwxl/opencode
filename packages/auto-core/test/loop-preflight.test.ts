@@ -295,9 +295,10 @@ describe("the start clean gate's interrupted-unit exemption (plans/0149)", () =>
     }
   })
 
-  // plans/0236 D5 (0165-078): the start-gate block names the driver's own
-  // record-less writes per family — the knowledge partial (whose committed
-  // truncation existingKnowledge would ratify) and the background receipt.
+  // plans/0236 D5 (0165-078), re-keyed by plans/0283: the start-gate block
+  // names the driver's own record-less writes per family — a retired
+  // extraction's interrupted knowledge write (delete it; nothing rewrites
+  // it) and the background receipt.
   test("the dirty block teaches per family for the driver's interrupted knowledge write and regression receipt", async () => {
     const dir = await project()
     await mkdir(join(dir, "docs/R-01/P03-knowledge"), { recursive: true })
@@ -310,7 +311,7 @@ describe("the start clean gate's interrupted-unit exemption (plans/0149)", () =>
       "⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:",
       "  docs/R-01/P03-knowledge/kb.md",
       "  docs/R-01/regression/3-verify-full.md",
-      "  docs/R-01/P03-knowledge/kb.md is the driver's interrupted knowledge write — delete it and re-run (the extraction writes it anew; a partial document must not become the phase's committed knowledge)",
+      "  docs/R-01/P03-knowledge/kb.md is a retired extraction's interrupted knowledge write (plans/0283: the session no longer runs) — delete it (a partial document must not become the phase's committed knowledge)",
       "  docs/R-01/regression/3-verify-full.md is the driver's background regression receipt — safe to commit as-is (the run's record is the evidence); deleted, the lane re-runs at the next boundary",
     ])
   })

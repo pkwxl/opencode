@@ -4,8 +4,9 @@
 // `--boundary flow` restores today's continuous crossing. Pinned over the
 // phase loop on the native fake agent: the stop's lines and exit code, the
 // state it leaves (no handover document, the phase unit open), the crossing
-// under flow, the knowledge phase's boundary (its extraction is the phase's
-// work; the distillation after it is transfer's), and the complete-route
+// under flow, the knowledge phase's boundary (its extraction retired with
+// plans/0283 — no session runs, the distillation after it is transfer's),
+// and the complete-route
 // pointer a plain run meets on a round already closed. The stop lands only
 // on the handover route — runTaskLoop returns 0 past the lane landings, so
 // the route itself carries D1's clean-end guarantee; the transfer suite
@@ -111,7 +112,7 @@ describe("run's boundary stop (plans/0101 D1)", () => {
     expect(again.lines.some((line) => line.includes("close it with: opencode-auto transfer"))).toBe(false)
   })
 
-  test("a knowledge phase's boundary: its extraction is the phase's work and runs; the distillation after it is transfer's", async () => {
+  test("a knowledge phase's boundary: no session runs (the knowledge extraction retired, plans/0283); the route goes straight to the boundary stop, the distillation transfer's", async () => {
     const f = await fixture("mtk", (dir) => ({ turn: (ctx) => knowledgeTurn(dir)(ctx) ?? artifactTurns(dir)(ctx) }))
     // Seed the round at its knowledge phase: the earlier phases complete
     // (their units done, the index ticked) — the k phase is current, its
@@ -120,11 +121,14 @@ describe("run's boundary stop (plans/0101 D1)", () => {
     for (const unit of state.phases.slice(0, 2)) expect(await completePhase(f.dir, unit, [])).toEqual([])
     await f.commit("earlier phases complete")
     const stopped = await f.run()
-    // The extraction session ran (the phase's work — kb.md alone; the
-    // k-final report duty retired, plans/0109 D4), and the run stopped at
-    // the phase's boundary ahead of the k phase's handover distillation.
+    // The knowledge extraction is retired (plans/0283, confirming 0277's
+    // residual): a task-less phase runs no session — the knowledge-capable
+    // turn script above never fires, no kb.md is produced, and the run
+    // stops at the phase's boundary ahead of the k phase's handover
+    // distillation with its own banner naming the retirement.
     expect(stopped.code).toBe(0)
-    expect(has(f, "docs/R-01/P03-knowledge/kb.md")).toBe(true)
+    expect(stopped.lines.some((line) => line.includes("P03-knowledge Knowledge distillation phase: no session (the knowledge extraction retired, plans/0283)"))).toBe(true)
+    expect(has(f, "docs/R-01/P03-knowledge/kb.md")).toBe(false)
     expect(has(f, "docs/R-01/report-for-user.md")).toBe(false)
     expect(has(f, "docs/R-01/P03-knowledge/handover.md")).toBe(false)
     expect(has(f, "docs/R-01/P03-knowledge/todo.md")).toBe(true)

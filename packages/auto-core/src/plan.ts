@@ -183,13 +183,20 @@ export async function planPrelude(dir: string, opts: {
     if (opts.input || opts.append) {
       return stop(1, [
         `--new-task adds the task you name with no session; it takes no planning input and no --append — ` +
-          `pass only the title (${surface.plan(dir, "--new-task \"<title>\"")}), or plan from an input instead (${surface.plan(dir, "--append -p <text> | --file <path>")})`,
+          `pass only the title (${surface.tasks(dir, "--new-task \"<title>\"")})`,
       ])
     }
   }
-  if (opts.append && !opts.input) {
+  // The task-append session is retired (plans/0283, the standing
+  // disposition): appends ride task-add (one task at a time, no session) and
+  // re-formulation (a changed planning input re-formulates the phase's plan
+  // through its formulation). Refused before any route logic, the prelude's
+  // own door — the pull path (a daemon's plan operation) never reaches the
+  // loop's append arms.
+  if (opts.append) {
     return stop(1, [
-      `--append requires a planning input: pass one with ${surface.plan(dir, "-p <text> | --file <path>")} — appending adds the tasks planned from the input to the current phase`,
+      `--append is retired (plans/0283): the task-append session no longer runs — ` +
+        `add one task at a time with ${surface.tasks(dir, "--new-task \"<title>\"")}, or re-formulate the phase's plan through its inputs (the plan-input.md the formulation reads)`,
     ])
   }
   // The work-order routes (rows 12–13, plans/0076): the shell checks the
@@ -485,9 +492,9 @@ export async function planPrelude(dir: string, opts: {
       return stop(1, [
         manual
           ? `the single phase already lists tasks; --phase prepares a planning input for a phase with none — ` +
-            `add tasks with ${surface.plan(dir, "--append -p <text> | --file <path>")}, or list them by hand in ${taskIndexPath(route.phase)}`
+            `add tasks with ${surface.tasks(dir, "--new-task \"<title>\"")} (one at a time), or list them by hand in ${taskIndexPath(route.phase)}`
           : `${phaseRefText(route.phase)} is past planning; --phase prepares the planning input of a phase still to plan — ` +
-            `add tasks to a planned phase with ${surface.plan(dir, "--append -p <text> | --file <path>")}`,
+            `add tasks to a planned phase with ${surface.tasks(dir, "--new-task \"<title>\"")}`,
       ])
     }
     let target: { phase: PhaseUnit; listed: boolean } | undefined
@@ -619,8 +626,8 @@ export async function planPrelude(dir: string, opts: {
     if (opts.input !== undefined || opts.append) {
       if (route.type === "plan") {
         return stop(1, [
-          `the open round lists no task yet: add the first with ${surface.plan(dir, "--new-task \"<title>\"")} ` +
-            `(a planning input appends once a task exists — ${surface.plan(dir, "--append -p <text>")})`,
+          `the open round lists no task yet: add the first with ${surface.tasks(dir, "--new-task \"<title>\"")} ` +
+            `(one task at a time — the task-append session is retired, plans/0283)`,
         ])
       }
       const mid = await midPipelineTask(dir)
@@ -668,7 +675,7 @@ export async function planPrelude(dir: string, opts: {
       return stop(1, [
         `no reviewed plan task awaits dispatch: ${phaseRefText(route.phase)} holds ${pending} pending task(s) — execute work for ${surface.run(dir)}; ` +
           `the boundary and the next plan task are transfer's (${surface.transfer(dir)})` +
-          (opts.input ? `; a planning input adds tasks with --append, it never dispatches` : ""),
+          (opts.input ? `; a planning input re-formulates the plan through its inputs (the phase's plan-input.md), it never dispatches` : ""),
       ])
     }
     // The input-invalidation rule (plans/0101 D4 — 0053 D10's restart rule
@@ -719,7 +726,7 @@ async function planningNotices(dir: string, phase: PhaseUnit | undefined, input:
     )
   }
   if (!input && phase !== undefined && !(await readPlanInput(dir, phase))?.trim()) {
-    lines.push("ℹ no planning input given; plan --scaffold prints a template to complete (opencode-auto plan <dir> --scaffold)")
+    lines.push("ℹ no planning input given; the active intent pack's ## planning-input section carries the template to complete (into the phase's plan-input.md)")
   }
   return lines
 }
@@ -1005,7 +1012,7 @@ export async function gateStopLines(directory: string, phase: PhaseUnit, problem
     lines.push(`  to accept: review ${handover} and ${acceptance}, add the line \`${ACCEPTED_MARK}\` to ${acceptance}, commit, re-run`)
   }
   lines.push(
-    `  to rework: ${acceptance ? `write your notes in ${acceptance}, ` : ""}append fix tasks with ${surface.plan(directory, "--append -p <text>")} ` +
+    `  to rework: ${acceptance ? `write your notes in ${acceptance}, ` : ""}add fix tasks with ${surface.tasks(directory, "--new-task \"<title>\"")} ` +
       `(the stale handover is removed and distilled again after them)`,
   )
   lines.push(`  to close the phase without its gate: ${bin} close ${phaseKey(phase).id} ${directory} --reason <text>`)
@@ -1405,7 +1412,7 @@ export function executeNotice(dir: string, route: Extract<PhaseRoute<Plan>, { ty
   }
   return [
     `ℹ ${phaseRefText(route.phase)} is planned (${pending} of ${total} tasks pending); next: ${surface.run(dir)} ` +
-      `— or add tasks with ${surface.plan(dir, "--append -p <text>")}, or close units with ${bin} close <ref>`,
+      `— or add tasks with ${surface.tasks(dir, "--new-task \"<title>\"")}, or close units with ${bin} close <ref>`,
   ]
 }
 
@@ -1480,8 +1487,8 @@ export async function openRoundEmptyLines(dir: string, index: string): Promise<s
   const n = await currentRound(dir)
   const round = roundDirName(n)
   return [
-    `ℹ no tasks listed in ${index} yet — round ${round} is open: add the first with ${surface.plan(dir, "--new-task \"<title>\"")} ` +
-      `(or ${surface.plan(dir, "--append -p <text>")} once one exists); the round stays open, absorbing tasks one by one`,
+    `ℹ no tasks listed in ${index} yet — round ${round} is open: add the first with ${surface.tasks(dir, "--new-task \"<title>\"")} ` +
+      `(one at a time); the round stays open, absorbing tasks one by one`,
   ]
 }
 
@@ -1493,8 +1500,8 @@ export async function openRoundWrapLines(dir: string): Promise<string[]> {
   const n = await currentRound(dir)
   const round = roundDirName(n)
   return [
-    `ℹ round ${round} stays open: absorb more work with ${surface.plan(dir, "--new-task \"<title>\"")} ` +
-      `(or ${surface.plan(dir, "--append -p <text>")} for a described batch); to close it, fill the ## Close of ${roundBriefPath(n)}, commit, then run: ${surface.transfer(dir)}`,
+    `ℹ round ${round} stays open: absorb more work with ${surface.tasks(dir, "--new-task \"<title>\"")}; ` +
+      `to close it, fill the ## Close of ${roundBriefPath(n)}, commit, then run: ${surface.transfer(dir)}`,
   ]
 }
 
@@ -1524,7 +1531,7 @@ export function plannedLines(dir: string, phase: PhaseUnit, ids: readonly string
   const index = taskIndexPath(phase)
   const next = manual
     ? `next: review them, then run: ${surface.run(dir)}`
-    : `next: review them (edit, close, or plan --append), then run: ${surface.run(dir)}`
+    : `next: review them (edit lines, close a task, or add more with ${surface.tasks(dir, "--new-task \"<title>\"")}), then run: ${surface.run(dir)}`
   if (manual) {
     const span = ids.length > 1 ? `${ids[0]}…${ids[ids.length - 1]}` : (ids[0] ?? "")
     return [`✓ planned ${ids.length} task(s) (${span}) into ${index}`, next]

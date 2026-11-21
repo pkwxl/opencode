@@ -312,17 +312,6 @@ beforeEach(() => {
 afterEach(() => {
   for (const [key, value] of envSaved) if (value !== undefined) process.env[key] = value
 })
-// The plan verifier rides this suite (the ladder's `Consistent: yes` turn):
-// the switch defaults off since plans/0113, so the suite clamps it on for
-// its own runs and restores the default after (the clampSwitches restore
-// idiom the remediate kill-switch tests use).
-beforeAll(() => {
-  clampSwitches({ planVerify: true })
-})
-afterAll(() => {
-  clampSwitches({ planVerify: false })
-})
-
 describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", () => {
   test("a good constructor reply lands the synthesized todo and its audit line; the ledger rides the single input", async () => {
     const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? artifactTurns(dir)(ctx)!)
@@ -350,11 +339,9 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       expect(wrapup!.text).toContain("- O-01 | docs/R-01/P01-implement/plan-input.md |")
       expect(wrapup!.text).toContain("docs/T-001/coverage.md")
       expect(lines.some((line) => line.includes("✓ formulation synthesis: the constructor a re-voiced"))).toBe(true)
-      // Plans/0113: the verifier rides the deep planning route — the session
-      // that judged this prompt ran on the deep entry's model (prov/a), not
-      // the classifier route's (prov/free).
-      const verifyPrompt = f.agent.prompts.find((prompt) => prompt.text.includes("You read one prompt that a planning step"))
-      expect(verifyPrompt?.model).toBe("prov/a")
+      // Plans/0283: no verifier session follows the constructor — the plan
+      // step is deterministic, nothing judges the composed prompt.
+      expect(f.agent.prompts.some((prompt) => prompt.text.includes("You read one prompt that a planning step"))).toBe(false)
       // The synthesized document is committed: the phase-formulate commit
       // carries it (the audit's prompt-audit commit ahead of it).
       const log = await f.git("log", "--format=%s", "--", "docs/T-001/todo.md")
@@ -445,7 +432,11 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       const todo = await unitDoc(f.dir, "T-001")
       expect(todo).not.toContain(LEDGER_HEADING)
       expect(todo).toContain("The project's intent charter binds this plan in addition")
-      expect(await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()).not.toContain("synthesis:")
+      // No verifier session, so no audit verdict either (plans/0283): the
+      // audit may not exist at all; when it does, no synthesis entry is in
+      // it.
+      const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text().catch(() => "")
+      expect(audit).not.toContain("synthesis:")
     } finally {
       clampSwitches({ synthesis: true })
       await rmSync(f.dir, { recursive: true, force: true })

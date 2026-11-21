@@ -49,14 +49,12 @@ import tplFix from "../templates/prompts/fix.md" with { type: "file" }
 import tplFormulateFidelity from "../templates/prompts/formulate-fidelity.md" with { type: "file" }
 import tplFormulateSynthesize from "../templates/prompts/formulate-synthesize.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
-import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
 import tplModeBrief from "../templates/prompts/_mode-brief.md" with { type: "file" }
 import tplParkRelease from "../templates/prompts/park-release.md" with { type: "file" }
 import tplPartials from "../templates/prompts/_partials.md" with { type: "file" }
 import tplPlanVerify from "../templates/prompts/plan-verify.md" with { type: "file" }
 import tplPhaseAppend from "../templates/prompts/phase-append.md" with { type: "file" }
 import tplPhaseHandover from "../templates/prompts/phase-handover.md" with { type: "file" }
-import tplPriorKnowledge from "../templates/prompts/prior-knowledge.md" with { type: "file" }
 import tplSplitRejected from "../templates/prompts/split-rejected.md" with { type: "file" }
 import tplStepUp from "../templates/prompts/step-up.md" with { type: "file" }
 import tplStuckHint from "../templates/prompts/stuck-hint.md" with { type: "file" }
@@ -122,7 +120,6 @@ const embedded: Record<string, string> = {
   // the mechanical anchoring cannot make.
   "formulate-fidelity": tplFormulateFidelity,
   "handoff-steer": tplHandoffSteer,
-  knowledge: tplKnowledge,
   // The core-owned operating-mode brief (plans/0082 §3 D3): registered data,
   // rendered as pre-built text the way intent-pack sections are, injected at
   // diagnosis time only — never a persisted copy in the target.
@@ -134,7 +131,6 @@ const embedded: Record<string, string> = {
   "plan-verify": tplPlanVerify,
   "phase-append": tplPhaseAppend,
   "phase-handover": tplPhaseHandover,
-  "prior-knowledge": tplPriorKnowledge,
   "split-rejected": tplSplitRejected,
   "step-up": tplStepUp,
   "stuck-hint": tplStuckHint,

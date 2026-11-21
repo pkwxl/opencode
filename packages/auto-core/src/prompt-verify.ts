@@ -1,66 +1,25 @@
-// The plan-step consistency verifier (plans/0080 §5): before a planning
-// session runs, one small verifier session judges the composed planning
-// prompt against the active intent pack's `## guarantees` / `### verify-plan`
-// charter — the semantic layer the render gate's literals cannot reach (a
-// plan input can contradict the charter without matching any pattern). The
-// verifier is the classifier's sibling, mechanically: a fresh bare one-shot
-// session (tools denied, questions refused), a strict protocol-line parser,
-// and no dependency on the session-driving machinery (the classify.ts
-// precedent's import discipline holds here too).
-//
-// Activation: the pack's `### verify-plan` charter plus the switch — a pack
-// without a charter never verifies (the zero-intent floor), and the switch
-// (OPENCODE_AUTO_PLAN_VERIFY, default off since plans/0113) enables the
-// check for a pack that declares one, never adds a charter. The model comes
-// from the registry's planning route — the `phase-plan` candidate list (the
-// deep tier), the same selection discipline the synthesis constructor's
-// planRouteEntry applies (plans/0097); plans/0113 moved it off the
-// `classifier` route (charter conformance over a large composed prompt is
-// deep work, and a flaky cheap endpoint fail-closing every planning step
-// was the fleet's recurring block). A run with no usable planning-route
-// entry skips the verifier with a log line — the mechanical layers (render
-// gate, precedence blocks) still hold, only the semantic check is absent.
-//
-// Fail-closed (the person's ruling, 0080; the time arm retired by plans/0113
-// D3): a verifier that cannot produce a parsable verdict — a session error,
-// a garbage reply — is retried once and then blocks the planning step
-// (exit 2) with the last reply text. The verdict itself is waited for with
-// no wall: a deep session is not a classification call on a timer, and the
-// fleet's fail-closed blocks were walls, never content. A guarantee that
-// can be slept through is not a guarantee; flakiness surfaces loudly.
-// The token cost of the two calls is not booked to a stats bucket in v1 (one
-// deep-route call per planning step; noted in plans/0080 §5's explicitly-not).
+// The charter-check family's mechanical halves (plans/0080's verifier, the
+// 0082 clamp): the strict reply parser, the default-check call over a text
+// (the run-start charter clamp's engine), and the round's prompt-audit
+// append every composition record commits through. The verifier session
+// itself (the composed planning prompt's semantic check) is retired
+// (plans/0283): the plan and append steps are deterministic — no verifier
+// session runs ahead of them, and OPENCODE_AUTO_PLAN_VERIFY is a tombstone.
+// checkTextAgainstCharter stays (the run-start clamp and the executor-side
+// consumers): the classifier's sibling — a fresh bare one-shot session
+// (tools denied, questions refused), a strict protocol-line parser, and no
+// dependency on the session-driving machinery.
 import { join } from "node:path"
 import { classifierEntry, oneShot } from "./classify"
 import type { GitOps } from "./git"
 import { log } from "./log"
-import { resolvedVerifyPlan, verifyPlanCharterText } from "./intent/guarantees"
 import { packSubsection } from "./intent/load"
-import { candidateList } from "./model-route"
-import { usableAt } from "./model-window"
-import type { ModelEntry } from "./models-schema"
-import type { PhaseTypeEntry } from "./phases/registry"
 import type { PromptFacts } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { renderPrompt } from "./prompt"
 import type { RoutingFacts } from "./routing"
-import { entryPassesAgentFilter } from "./select"
 import { SWITCH_ENV, autoSwitches } from "./switches"
-import type { AgentPool } from "./agent-pool"
 import type { ClientSource } from "./opts"
-
-const VERIFY_TITLE = "auto: plan consistency check"
-
-type PlanVerifyOutcome =
-  // The pack declares no charter: the check does not exist for this project —
-  // the caller neither logs nor records anything (the zero-intent floor).
-  | { kind: "inactive" }
-  // The charter is declared but the check cannot run (switch off, no routing,
-  // no usable entry): the caller logs one ℹ line and records the skip.
-  | { kind: "skipped"; reason: string }
-  | { kind: "consistent"; reply: string }
-  | { kind: "inconsistent"; evidence: string }
-  | { kind: "failed"; reason: string }
 
 // The strict reply parser (the parseClassifierReply discipline): the last
 // line that parses wins, nothing else counts. `Consistent: yes` | 
@@ -78,103 +37,8 @@ export function parseVerifyReply(text: string): { consistent: boolean; evidence?
   return undefined
 }
 
-// The first usable entry of the planning route (plans/0113): the `phase-plan`
-// candidate list — the deep tier the planning sessions and the synthesis
-// constructor dispatch on — walked with the classifierEntry discipline (the
-// agent filter, the windows, the down marks, the key rings; the context cap
-// does not — the entry list already encodes fitness, the formulate-synthesis
-// planRouteEntry precedent). The verifier judges the prompt the planning
-// sessions run under; it rides their route, not the classifier's.
-export function planningRouteEntry(
-  routing: RoutingFacts,
-  entry: PhaseTypeEntry | undefined,
-  now: number,
-): { name: string; entry: ModelEntry } | undefined {
-  const list = candidateList(routing.registry, entry, "phase-plan")
-  for (const name of list.names) {
-    const model = routing.registry.models.get(name)
-    if (model === undefined) continue
-    if (!entryPassesAgentFilter(routing.registry, routing.agentFilter, model)) continue
-    if (!usableAt(model, routing.registry.tz, now)) continue
-    if (routing.router.isModelDown(name, now)) continue
-    if (model.provider !== undefined && !routing.router.ringHasUsableKey(model.provider, now)) continue
-    return { name, entry: model }
-  }
-  return undefined
-}
 
-// Judge one composed planning prompt. pool is the run's server control (the
-// entry's agent resolves its host through it); routing carries the registry
-// and the router the entry selection reads; step names the planning step in
-// the prompt and the audit record (e.g. "phase-plan R-01.P02-implement").
-// entry is the formulation's phase type entry (plans/0097 D1, keyed by type
-// id since plans/0100 D9); absent in m mode, where the pack-global charter
-// alone resolves. Activation: the resolved charter (global + phase) — a pack
-// declaring only `verify-plan-test` verifies test phases and never the
-// others.
-export async function verifyPlanPrompt(input: {
-  pool: AgentPool
-  routing: RoutingFacts | undefined
-  facts: PromptFacts
-  step: string
-  prompt: string
-  entry?: PhaseTypeEntry
-}): Promise<PlanVerifyOutcome> {
-  const charter = verifyPlanCharterText(resolvedVerifyPlan(input.facts.pack, input.entry))
-  if (charter === undefined) return { kind: "inactive" }
-  if (!autoSwitches().planVerify) return { kind: "skipped", reason: `${SWITCH_ENV.planVerify}=off — the semantic check is off (the default since plans/0113; the render gate and the precedence blocks still hold)` }
-  if (input.routing === undefined) {
-    return { kind: "skipped", reason: "no model registry routing — no planning-route entry to run the verifier on (the render gate and the precedence blocks still hold)" }
-  }
-  const now = input.routing.clock.now()
-  const pick = planningRouteEntry(input.routing, input.entry, now)
-  if (pick === undefined) {
-    return { kind: "skipped", reason: "no usable planning-route entry (the registry names none, or none is up) — the render gate and the precedence blocks still hold" }
-  }
-  const client = await input.pool.client(pick.entry.agent)
-  const text = renderPrompt(input.facts, "plan-verify", { charter, prompt: input.prompt, step: input.step })
-  // The wait is visible (the constructor's start-line discipline, 0097): one
-  // line naming the step and the model before the session, so an operator
-  // watching a long judgment knows where the run sits.
-  log(`⏳ plan verification: ${input.step} — the verifier ${pick.name} is judging the composed prompt (no wall; the reply is awaited)`)
-  let lastReason = "the verifier session produced no answer"
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    // No wall (plans/0113 D3): the reply is waited for; only the session's
-    // own end — idle, the stream's end, a failure event — terminates the
-    // call, so no time limit ever fail-closes the step.
-    const outcome = await oneShot(client, pick.entry, text, undefined, VERIFY_TITLE)
-    if (outcome.kind === "failed") {
-      lastReason = `the verifier ${pick.name} failed: ${outcome.error.message ?? "session error"}`
-      continue
-    }
-    const verdict = parseVerifyReply(outcome.text)
-    if (verdict === undefined) {
-      lastReason = `the verifier ${pick.name} replied without a parsable Consistent line; its last words: ${outcome.text.trim().split("\n").slice(-3).join(" ⏎ ").slice(0, 400)}`
-      continue
-    }
-    if (verdict.consistent) return { kind: "consistent", reply: outcome.text.trim() }
-    return { kind: "inconsistent", evidence: verdict.evidence ?? "the charter and the prompt conflict (the verifier named no span)" }
-  }
-  return { kind: "failed", reason: `${lastReason} (after one retry — fail-closed, plans/0080 §5)` }
-}
 
-// The audit record line (plans/0080 §5): what the driver appends to the
-// round's docs/R-NN/prompt-audit.md after each verifier run — the wall
-// documentation a clean-room defense wants, written before the planning
-// session so the step's own commit carries it. An inactive outcome never
-// reaches here.
-export function verifyAuditEntry(step: string, outcome: Exclude<PlanVerifyOutcome, { kind: "inactive" }>): string {
-  const stamp = new Date().toISOString()
-  const verdict =
-    outcome.kind === "consistent"
-      ? `consistent`
-      : outcome.kind === "inconsistent"
-        ? `INCONSISTENT — ${outcome.evidence}`
-        : outcome.kind === "failed"
-          ? `FAILED — ${outcome.reason}`
-          : `skipped — ${outcome.reason}`
-  return `- ${stamp} ${step}: ${verdict}`
-}
 
 // The round's prompt-audit append (plans/0080 §5, the 0102 complexity-17
 // dedup): the one write+commit behind every audit entry — the verifier

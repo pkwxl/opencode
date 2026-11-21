@@ -709,9 +709,9 @@ describe("the verification loop (0083 D1–D7)", () => {
       const plan = await reloadUnits(dir)
       const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off", wrapup: false })
       expect(outcome).toMatchObject({ type: "blocked" })
-      // Today's closeout message verbatim, with the repair fact.
+      // Today's closeout message verbatim, the FAIL verdict surfaced as
+      // state (plans/0283: the repair fact retired with the budget).
       expect((outcome as { question: string }).question).toContain("the task report concluded Result: FAIL (x is wrong)")
-      expect((outcome as { repair?: { reason?: string } }).repair).toEqual({ reason: "x is wrong" })
       // One session only: the whole-task session wrote the report itself.
       expect(calls.prompts.length).toBe(1)
       expect(promptText(calls.prompts[0]!)).not.toContain("only performs the wrap-up")
@@ -915,14 +915,14 @@ describe("the driver-run lane gate (0096 D5)", () => {
     }
   })
 
-  test("red past the budget → blocked with the repair fact, the message naming the red lanes and the stalled count", async () => {
+  test("red past the budget → blocked, the message naming the red lanes and the stalled count (the FAIL as state, plans/0283)", async () => {
     const dir = await laneRepo({ gate: `echo "the widget is broken"; exit 1` })
     try {
       const fix = fixTurn(dir, false)
       const { client } = scriptedClient([workTurn(dir), fix, fix])
       const plan = await reloadUnits(dir)
       const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, subtask: "off", testByDriver: true })
-      expect(outcome).toMatchObject({ type: "blocked", repair: { reason: "the anchor lane gate is red (LANE_RC=1)" } })
+      expect(outcome).toMatchObject({ type: "blocked" })
       expect((outcome as { question: string }).question).toContain("the driver-run test lanes of T-001 concluded red")
       expect((outcome as { question: string }).question).toContain("the last two fix rounds closed no gap (2 fix rounds spent, the gap list still counts 1 gap)")
       const subjects = (await git(dir, "log", "--format=%s")).split("\n")

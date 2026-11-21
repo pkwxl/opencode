@@ -353,6 +353,20 @@ describe("planPrelude: row 3, the phase-index drift (D34; phased re-ruled by 020
 })
 
 describe("planPrelude: routes (rows 4–9)", () => {
+  // The --append retirement (plans/0283): the flag is refused at the
+  // prelude's own door, before any route logic — the task-append session no
+  // longer runs; appends ride task-add (one task at a time) or a changed
+  // planning input's re-formulation.
+  const retired = (dir: string): { type: "stop"; code: number; lines: string[] } => ({
+    type: "stop",
+    code: 1,
+    lines: [
+      `--append is retired (plans/0283): the task-append session no longer runs — ` +
+        `add one task at a time with opencode-auto plan ${dir} --new-task "<title>", ` +
+        `or re-formulate the phase's plan through its inputs (the plan-input.md the formulation reads)`,
+    ],
+  })
+
   test(
     "row 4: a blocked route exits 1 with its reason",
     withDir(async (dir) => {
@@ -442,7 +456,7 @@ describe("planPrelude: routes (rows 4–9)", () => {
       expect(await planPrelude(dir, { phases: "am", input: INPUT })).toEqual({
         type: "stop",
         code: 1,
-        lines: [`${refusal}; a planning input adds tasks with --append, it never dispatches`],
+        lines: [`${refusal}; a planning input re-formulates the plan through its inputs (the phase's plan-input.md), it never dispatches`],
       })
     }),
   )
@@ -473,10 +487,12 @@ describe("planPrelude: routes (rows 4–9)", () => {
         `ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (1 pending); next: opencode-auto run ${dir}, ` +
         `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`
       expect(await planPrelude(dir, { phases: "m" })).toEqual({ type: "stop", code: 0, lines: [notice] })
-      // In m mode the input on a non-empty index is an append (D23): the flag
-      // is implied, and an explicit one accepted as redundant.
+      // In m mode the input on a non-empty index is an append (D23): the
+      // flag is implied — the input alone rides the implied append, while
+      // the explicit flag itself is refused at the door (the task-append
+      // session retired, plans/0283).
       expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({ type: "loop" })
-      expect(await planPrelude(dir, { phases: "m", input: INPUT, append: true })).toEqual({ type: "loop" })
+      expect(await planPrelude(dir, { phases: "m", input: INPUT, append: true })).toEqual(retired(dir))
       // All done: m mode's phase stays open, so this is still row 9.
       await listTasks(dir, implement!, [["T-001", true], ["T-002", true]])
       expect(await planPrelude(dir, { phases: "m" })).toEqual({
@@ -487,7 +503,7 @@ describe("planPrelude: routes (rows 4–9)", () => {
             `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`,
         ],
       })
-      expect(await planPrelude(dir, { phases: "m", input: INPUT, append: true })).toEqual({ type: "loop" })
+      expect(await planPrelude(dir, { phases: "m", input: INPUT, append: true })).toEqual(retired(dir))
     }),
   )
 
@@ -515,23 +531,23 @@ describe("planPrelude: routes (rows 4–9)", () => {
   )
 
   test(
-    "row 10: --append on the phased execute and handover routes goes to the loop targeting the phase named now",
+    "row 10: --append on the phased execute and handover routes is refused at the door (the task-append session retired, plans/0283); the input alone rides row 6's boundary refusal",
     withDir(async (dir) => {
       await establishRound(dir, { phases: "am" })
       const [analysis] = await phasesOf(dir)
       await listTasks(dir, analysis!, [["T-001", true], ["T-002", false]])
-      // Execute route: the append targets this phase, guard passing.
-      expect(await planPrelude(dir, { phases: "am", input: INPUT, append: true })).toEqual({ type: "loop" })
-      // Handover route on the last task phase (only a task-less one follows):
-      // the append still targets this phase — it never advances to another
-      // one — while the same input without the flag is row 6's boundary
-      // refusal (plans/0101 D4).
+      // Execute route: the flag never reaches the route logic — the
+      // retirement refusal fires first, whatever the guard's verdict.
+      expect(await planPrelude(dir, { phases: "am", input: INPUT, append: true })).toEqual(retired(dir))
+      // Handover route on the last task phase (only a task-less one
+      // follows): the same refusal, while the input without the flag is
+      // row 6's boundary refusal (plans/0101 D4).
       await establishRound(dir, { phases: "amk" })
       const [a, implement] = await phasesOf(dir)
       await listTasks(dir, a!, [["T-001", true]])
       await completePhase(dir, a!)
       await listTasks(dir, implement!, [["T-002", true]])
-      expect(await planPrelude(dir, { phases: "amk", input: INPUT, append: true })).toEqual({ type: "loop" })
+      expect(await planPrelude(dir, { phases: "amk", input: INPUT, append: true })).toEqual(retired(dir))
       expect(await planPrelude(dir, { phases: "amk", input: INPUT })).toEqual({
         type: "stop",
         code: 1,
@@ -544,47 +560,33 @@ describe("planPrelude: routes (rows 4–9)", () => {
   )
 
   test(
-    "row 10 D26: a record of an open task on the execute route stops the append",
+    "row 10 D26: a record of an open task no longer stops the explicit append — the retirement refusal fires before the guard (plans/0283)",
     withDir(async (dir) => {
       await establishRound(dir, { phases: "am" })
       const [analysis] = await phasesOf(dir)
       await listTasks(dir, analysis!, [["T-001", true], ["T-002", false]])
       await saveProgress(dir, { task: "T-002", at: 1, active: true, phase: { kind: "subtasks", index: 2 } })
-      expect(await planPrelude(dir, { phases: "am", input: INPUT, append: true })).toEqual({
-        type: "stop",
-        code: 1,
-        lines: ["T-002 is mid-pipeline (its resume point is in .auto/progress.json); finish it with run, or close it, before appending"],
-      })
+      // The mid-pipeline stop is unreachable through the retired flag (the
+      // guard itself stays for the implied append — m mode's row 9 D26
+      // above pins that arm).
+      expect(await planPrelude(dir, { phases: "am", input: INPUT, append: true })).toEqual(retired(dir))
     }),
   )
 
   test(
-    "--append without input is a usage error everywhere; on the phased plan route the input rides row 6's refusal (plans/0101 D4)",
+    "--append is refused everywhere at the prelude's door, with or without an input, before any write (the retirement, plans/0283)",
     withDir(async (dir) => {
-      // A usage error before any route logic — including the round-setup
-      // rows, where it fires instead of the D5 input refusal, and before
-      // anything is written.
+      // The refusal fires before any route logic — including the
+      // round-setup rows, where it fires instead of the D5 input refusal,
+      // and before anything is written.
       for (const phases of ["am", "m"]) {
-        expect(await planPrelude(dir, { phases, append: true })).toEqual({
-          type: "stop",
-          code: 1,
-          lines: [
-            `--append requires a planning input: pass one with opencode-auto plan ${dir} -p <text> | --file <path> — appending adds the tasks planned from the input to the current phase`,
-          ],
-        })
+        expect(await planPrelude(dir, { phases, append: true })).toEqual(retired(dir))
       }
       expect(await exists(dir, "docs/R-01")).toBe(false)
-      // The phased plan route refuses the input-and-append alike: the
-      // construction is transfer's, the input's home the document.
+      // On an established round the input-and-append pair meets the same
+      // door: the retirement precedes row 6's own refusal.
       await establishRound(dir, { phases: "am" })
-      expect(await planPrelude(dir, { phases: "am", input: INPUT, append: true })).toEqual({
-        type: "stop",
-        code: 1,
-        lines: [
-          `nothing is constructed for R-01.P01 analysis yet — transfer constructs its plan task and stops for your review; run: opencode-auto transfer ${dir} ` +
-            `(the planning input's home is docs/R-01/P01-analysis/plan-input.md — write it there, or prepare it with opencode-auto plan ${dir} --phase, commit, and the construct reads it)`,
-        ],
-      })
+      expect(await planPrelude(dir, { phases: "am", input: INPUT, append: true })).toEqual(retired(dir))
     }),
   )
 })
@@ -688,7 +690,7 @@ describe("planPrelude: --new-task (row 11, plans/0058)", () => {
   test("usage backstops: input or --append alongside, and a blank or multi-line title", withDir(async (dir) => {
     const excluded =
       `--new-task adds the task you name with no session; it takes no planning input and no --append — ` +
-      `pass only the title (opencode-auto plan ${dir} --new-task "<title>"), or plan from an input instead (opencode-auto plan ${dir} --append -p <text> | --file <path>)`
+      `pass only the title (opencode-auto plan ${dir} --new-task "<title>")`
     expect(await planPrelude(dir, { phases: "am", newTask: TITLE, input: INPUT })).toEqual({ type: "stop", code: 1, lines: [excluded] })
     expect(await planPrelude(dir, { phases: "am", newTask: TITLE, append: true })).toEqual({ type: "stop", code: 1, lines: [excluded] })
     for (const bad of ["", "   ", "two\nlines"]) {
@@ -837,7 +839,7 @@ describe("plan's stop lines (D8, D15)", () => {
       const [analysis] = await phasesOf(dir)
       expect(plannedLines("/p", analysis!, ["T-004", "T-005"], false)).toEqual([
         "✓ planned R-01.P01 analysis: 2 task(s) in docs/R-01/P01-analysis/tasks.md",
-        "next: review them (edit, close, or plan --append), then run: opencode-auto run /p",
+        `next: review them (edit lines, close a task, or add more with opencode-auto plan /p --new-task "<title>"), then run: opencode-auto run /p`,
       ])
       expect(plannedLines("/p", analysis!, ["T-012", "T-013", "T-015"], true)[0]).toBe("✓ planned 3 task(s) (T-012…T-015) into docs/R-01/P01-analysis/tasks.md")
       expect(plannedLines("/p", analysis!, ["T-012"], true)[0]).toBe("✓ planned 1 task(s) (T-012) into docs/R-01/P01-analysis/tasks.md")
@@ -1263,34 +1265,56 @@ describe("planPrelude: --round / --phase (rows 14–15, plans/0084)", () => {
 })
 
 describe("planPrelude: the open-round rows (plans/0243 B)", () => {
-  test("an empty open round: bare plan teaches the open channels; an input teaches the first --new-task; --append rides the same refusal", withDir(async (dir) => {
+  test("an empty open round: bare plan teaches the open channels; an input teaches the first --new-task; the --append flag meets the retirement at the door", withDir(async (dir) => {
     await establishRound(dir, { phases: "implement", open: { goal: "absorb fixes" } })
     const bare = await planPrelude(dir, { phases: "mt" })
     expect(bare.type).toBe("stop")
     if (bare.type === "stop") {
       expect(bare.code).toBe(0)
-      expect(bare.lines[0]).toContain("no tasks listed in docs/R-01/P01-implement/tasks.md yet — round R-01 is open: add the first with")
-      expect(bare.lines[0]).toContain("--new-task")
+      // The empty teaching names task-add alone (plans/0283: no --append
+      // parenthetical — the task-append session is retired).
+      expect(bare.lines[0]).toBe(
+        `ℹ no tasks listed in docs/R-01/P01-implement/tasks.md yet — round R-01 is open: add the first with opencode-auto plan ${dir} --new-task "<title>" ` +
+          `(one at a time); the round stays open, absorbing tasks one by one`,
+      )
     }
-    for (const opts of [{ input: INPUT }, { append: true, input: INPUT }]) {
-      const refused = await planPrelude(dir, { phases: "mt", ...opts })
-      expect(refused).toEqual({
-        type: "stop",
-        code: 1,
-        lines: [
-          `the open round lists no task yet: add the first with opencode-auto plan ${dir} --new-task "<title>" ` +
-            `(a planning input appends once a task exists — opencode-auto plan ${dir} --append -p <text>)`,
-        ],
-      })
-    }
+    // An input on the empty index teaches the first task-add channel (the
+    // task-append session retired, plans/0283 — the parenthetical names it).
+    expect(await planPrelude(dir, { phases: "mt", input: INPUT })).toEqual({
+      type: "stop",
+      code: 1,
+      lines: [
+        `the open round lists no task yet: add the first with opencode-auto plan ${dir} --new-task "<title>" ` +
+          `(one task at a time — the task-append session is retired, plans/0283)`,
+      ],
+    })
+    // The explicit flag never reaches the open-round arm — the retirement
+    // refusal at the prelude's door answers it.
+    expect(await planPrelude(dir, { phases: "mt", append: true, input: INPUT })).toEqual({
+      type: "stop",
+      code: 1,
+      lines: [
+        `--append is retired (plans/0283): the task-append session no longer runs — ` +
+          `add one task at a time with opencode-auto plan ${dir} --new-task "<title>", ` +
+          `or re-formulate the phase's plan through its inputs (the plan-input.md the formulation reads)`,
+      ],
+    })
   }))
 
-  test("a working open round: an input implies the append (the loop's open arm takes it); bare plan points at run; all done teaches the wrap-up", withDir(async (dir) => {
+  test("a working open round: an input implies the append (the loop's open arm takes it); the explicit flag is retired; bare plan points at run; all done teaches the wrap-up", withDir(async (dir) => {
     await establishRound(dir, { phases: "implement", open: { goal: "absorb fixes" } })
     const [implement] = await phasesOf(dir)
     await listTasks(dir, implement!, [["T-001", false]])
     expect(await planPrelude(dir, { phases: "mt", input: INPUT })).toEqual({ type: "loop" })
-    expect(await planPrelude(dir, { phases: "mt", append: true, input: INPUT })).toEqual({ type: "loop" })
+    expect(await planPrelude(dir, { phases: "mt", append: true, input: INPUT })).toEqual({
+      type: "stop",
+      code: 1,
+      lines: [
+        `--append is retired (plans/0283): the task-append session no longer runs — ` +
+          `add one task at a time with opencode-auto plan ${dir} --new-task "<title>", ` +
+          `or re-formulate the phase's plan through its inputs (the plan-input.md the formulation reads)`,
+      ],
+    })
     const bare = await planPrelude(dir, { phases: "mt" })
     expect(bare.type).toBe("stop")
     if (bare.type === "stop") {
@@ -1302,8 +1326,12 @@ describe("planPrelude: the open-round rows (plans/0243 B)", () => {
     expect(done.type).toBe("stop")
     if (done.type === "stop") {
       expect(done.code).toBe(0)
-      expect(done.lines[0]).toContain("round R-01 stays open: absorb more work with")
-      expect(done.lines[0]).toContain("to close it, fill the ## Close of docs/R-01/round.md")
+      // The wrap teaching names task-add alone, no --append parenthetical
+      // (plans/0283).
+      expect(done.lines[0]).toBe(
+        `ℹ round R-01 stays open: absorb more work with opencode-auto plan ${dir} --new-task "<title>"; ` +
+          `to close it, fill the ## Close of docs/R-01/round.md, commit, then run: opencode-auto transfer ${dir}`,
+      )
     }
   }))
 

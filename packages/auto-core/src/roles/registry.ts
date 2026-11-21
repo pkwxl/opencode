@@ -55,7 +55,11 @@ import { MODEL_ROLES, type ModelRole } from "../switches"
 // the phase-handover distillation (the context-handover mechanism of whole
 // and subtask sessions is the "handoff" family in docpaths/testrun wording,
 // never a role).
-export const SESSION_ROLES = ["decompose", "whole", "subtask", "wrapup", "planning", "handover", "knowledge"] as const
+// The knowledge role is retired (plans/0283: the k-phase and
+// prior-knowledge extraction sessions no longer run); the read-only
+// one-artifact side channel remains as its own kind — the blockage
+// diagnosis session (plans/0082 §4 D4).
+export const SESSION_ROLES = ["decompose", "whole", "subtask", "wrapup", "planning", "handover", "diagnose"] as const
 type SessionRole = (typeof SESSION_ROLES)[number]
 
 // Which usage-driven mechanisms (src/usage.ts) a role's sessions run. The
@@ -264,16 +268,14 @@ export const SESSION_ROLE_DESCRIPTORS: readonly SessionRoleEntry[] = [
     verdict: "phase-gates",
   },
   {
-    role: "knowledge",
-    name: "knowledge extraction",
-    // One work kind, two one-shot variants: the k-phase extraction and the
-    // second-migration prior-knowledge extraction (both "read evidence,
-    // distill a document" sessions through requireArtifact). Since plans/0082
-    // §4 D4 the blockage diagnosis session rides the same simple
-    // side-channel tier: a read-only one-artifact session over the
+    role: "diagnose",
+    name: "blockage diagnosis (the read-only side channel)",
+    // The knowledge extraction's one-shot variants are retired (plans/0283);
+    // the side-channel shape they shared lives on for the blockage diagnosis
+    // (plans/0082 §4 D4): a read-only one-artifact session over the
     // requireArtifact skeleton, its strict parse the backstop.
-    routing: ["knowledge", "prior-knowledge", "diagnose"],
-    templates: ["knowledge", "prior-knowledge", "diagnose"],
+    routing: ["diagnose"],
+    templates: ["diagnose"],
     tier: "simple",
     usage: { handover: false, testHandover: false, forkGuard: false, splitGuard: false },
     collect: "document-marker",

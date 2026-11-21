@@ -13,7 +13,7 @@ import { ROLE_POLICIES, roleOf } from "../src/document/roles"
 import { parseLaneReceipt, type TestLane } from "../src/intent/test-lanes"
 import { commitTree } from "../src/git"
 import { phaseType } from "../src/phases/registry"
-import { ensureRegressionGreen, newestGreenReceipt, recoverRegression, regressionBoundary, regressionCovered, regressionHoldLines, regressionInFlight, regressionLanes, regressionRepairInput, REGRESSION_COPY, roundNumberOf, runRegressionLane, strictRegressionWait } from "../src/regression"
+import { ensureRegressionGreen, newestGreenReceipt, recoverRegression, regressionBoundary, regressionCovered, regressionHoldLines, regressionInFlight, regressionLanes, REGRESSION_COPY, roundNumberOf, runRegressionLane, strictRegressionWait } from "../src/regression"
 import { EOF_MARK } from "../src/doccheck"
 import { freshRepo, git } from "./fixtures/runner"
 
@@ -443,13 +443,16 @@ describe("the phase-close hold (ensureRegressionGreen — plans/0098 D5)", () =>
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
       const receiptText2 = await Bun.file(join(dir, held.lanes[0]!.receipt)).text()
       expect(receiptText2).toContain("the widget regressed at the edge case")
-      const input = regressionRepairInput(phase, held.lanes)
-      expect(input).toContain("T-001 migrate the widget core")
-      expect(input).toContain("the widget regressed at the edge case")
-      expect(input).toContain("Append repair tasks that fix what the receipts found")
       const lines = regressionHoldLines(dir, phase, held.lanes)
       expect(lines[0]).toContain("held by its regression gate")
       expect(lines.some((line) => line.includes("T-001"))).toBe(true)
+      // The rework arm since plans/0283: task-add one fix task at a time or
+      // by-hand rework with the phase distilling again — the repair-append
+      // budget that once traded a held gate for bounded repair rounds is
+      // retired.
+      expect(lines).toContain(
+        "  to rework: add fix tasks one at a time (task-add), or fix the receipts' findings by hand — the phase distills again after they run and the gate re-checks (the repair-append budget is retired, plans/0283)",
+      )
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

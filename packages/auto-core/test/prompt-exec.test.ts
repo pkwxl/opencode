@@ -19,8 +19,6 @@ import {
   renderDryrun,
   renderFanout,
   renderHandoffSteer,
-  renderKnowledge,
-  renderPriorKnowledge,
   renderSplitRejected,
   renderStuckHint,
   renderSubtask,
@@ -1202,8 +1200,6 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
     expect(wrapup).toContain("an indexed report")
     expect(wrapup).toContain("Every item above must appear; also list any other proxy decisions you identified on your own")
     expect(wrapOf(plan, task, { solo: true })).toContain("a summary of the output (what changed, key decisions and open items), so that later sessions")
-    expect(renderKnowledge(facts(), { file: "kb.md" })).toContain("## Quality constraints (hard requirements)\n\n1. Final state first")
-    expect(renderPriorKnowledge(facts(), { file: "kb.md" })).toContain("deduplicate across documents")
     expect(renderStuckHint(facts(), stuck)).toContain("still going in circles. Write these three things out")
     expect(renderStuckHint(facts(), { ...stuck, level: 1 })).not.toContain("Write these three things out")
     // The AGENTS.md block carries no maintenance rules any more (plans/0054 D2).
@@ -1244,10 +1240,6 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
       expect(wrapup).toContain("docs/T-002/report.md: so that later sessions")
       expect(wrapup).toContain("Every item above must appear.")
       expect(wrapOf(plan, task, { solo: true })).toContain("report.md: so that later sessions")
-      const knowledge = renderKnowledge(facts(), { file: "kb.md" })
-      expect(knowledge).not.toContain("Quality constraints")
-      expect(knowledge).toMatch(/`>\n\n## Steps/)
-      expect(renderPriorKnowledge(facts(), { file: "kb.md" })).not.toContain("Quality constraints")
       const hint = renderStuckHint(facts(), stuck)
       expect(hint).toContain("still going in circles.\n")
       expect(hint).not.toContain("Write these three things out")
@@ -1258,7 +1250,7 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
       const subtask = subOf(plan, task, "write the schema part of the migration script")
       expect(subtask).not.toContain("The call should have been the user's")
       expect(subtask).toContain("AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)")
-      for (const text of [decompose, wrapup, knowledge, hint, subtask]) expect(text).not.toMatch(/\{\{|\}\}/)
+      for (const text of [decompose, wrapup, hint, subtask]) expect(text).not.toMatch(/\{\{|\}\}/)
     })
   })
 

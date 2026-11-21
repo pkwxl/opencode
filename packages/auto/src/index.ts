@@ -21,23 +21,16 @@ import { applySync, formatSyncPlan, planSync, syncWritesAnything, type SyncPlan 
 import { releaseCheck } from "@opencode-ai/auto-core/release"
 import { PROVENANCE_FILE } from "@opencode-ai/auto-core/provenance"
 import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
-import { clarifyGate } from "@opencode-ai/auto-core/clarify"
 import { checkPrompts, formatCheckPrompts, formatInstallPrompts, installPrompts } from "@opencode-ai/auto-core/install-prompts"
 import { renderHelperBrief } from "@opencode-ai/auto-core/driver-helper"
 import { landUnit } from "@opencode-ai/auto-core/land"
 import { forkTask, removeFork } from "@opencode-ai/auto-core/fork"
 import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
-import { runAll, runLaneWorker, type RunAllOpts } from "@opencode-ai/auto-core/loop"
-import { configRunOptions } from "@opencode-ai/auto-core/loop-preflight"
-import { runBannerLines } from "@opencode-ai/auto-core/banner"
 import { runConfigSequence } from "@opencode-ai/auto-core/config-op"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { describeModels, formatModels } from "@opencode-ai/auto-core/models-describe"
 import { probeModels } from "@opencode-ai/auto-core/agent-pool"
-import { planPrelude } from "@opencode-ai/auto-core/plan"
-import { runTransfer } from "@opencode-ai/auto-core/transfer"
-import type { PlanInput } from "@opencode-ai/auto-core/plan-input"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
 import { legacyLayoutProblem, parsePhases } from "@opencode-ai/auto-core/phases"
 import { loadPhaseTypes } from "@opencode-ai/auto-core/phases/custom"
@@ -45,9 +38,22 @@ import { PRESET_FORM, phasesProblem, type PhaseTypeEntry } from "@opencode-ai/au
 import { renderStatus } from "@opencode-ai/auto-core/status"
 import { roundDirName } from "@opencode-ai/auto-core/docpaths"
 import { SUBTASK_MODES, type PermissionMode, type SubtaskMode } from "@opencode-ai/auto-core/opts"
-import { loadIntents, planningInputScaffold } from "@opencode-ai/auto-core/intent/load"
 import { parseIntentBundle, resolveIntentBundle, type IntentBundle } from "@opencode-ai/auto-core/bundle"
-import { shellProfile } from "@opencode-ai/auto-core/shell"
+import { setShellProfile, shellProfile } from "@opencode-ai/auto-core/shell"
+
+// The shell profile (shell-contract §E.2: set once at shell-entry startup):
+// the run/plan/transfer/clarify channels are no longer subcommands of this
+// binary (plans/0283's tombstones) — they are a daemon's operations and the
+// executor protocol, so the core's served teachings render them through the
+// surface seam instead of naming dead commands.
+setShellProfile({
+  surface: {
+    run: () => "the executor protocol (POST /projects/<project>/executor/claim over a daemon — opencode-auto-server serve)",
+    plan: () => "the plan operation of a daemon (POST /projects/<project>/plan — opencode-auto-server serve)",
+    transfer: () => "the transfer operation of a daemon (POST /projects/<project>/transfer — opencode-auto-server serve)",
+    tasks: () => "the task-add operation of a daemon (POST /projects/<project>/tasks — opencode-auto-server serve)",
+  },
+})
 
 const args = process.argv.slice(2)
 const command = args[0]
@@ -254,7 +260,7 @@ function pushRepeat(key: string, value: string) {
 // per-flag ordering, which multiplies answers for one retirement).
 if (command === "continue") {
   console.error(
-    `continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} transfer <dir> — it runs the round-close checks and opens the next round`,
+    `continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and advance with the transfer operation of a daemon (POST /projects/<project>/transfer) — it runs the round-close checks and opens the next round`,
   )
   process.exit(1)
 }
@@ -271,6 +277,31 @@ if (command === "check") {
   console.error(
     `check is retired: the principle scan and the reference check were removed; ${shellProfile().bin} fix --dryrun <dir> lists the configuration findings`,
   )
+  process.exit(1)
+}
+
+// `run`, `plan`, `transfer` and `clarify` are retired (plans/0283, the
+// pull-only program's CLI tombstones): the protocol does nothing via push,
+// ever again — a phase's tasks, the planning session, the distillation and
+// the construction are grants external coding agents claim over the
+// executor protocol, and the person's acts (the boundary advance, the
+// release, the task add) are a daemon's deterministic operations. Like
+// `continue`'s, each notice is the one answer whatever follows the command:
+// it fires before the flag refusals, the unknown-option scan, the
+// legacy-layout check and the run-lock refusal — a retired command has no
+// flags, directory or lock semantics left to honor.
+const RETIREMENT_NOTICES: Record<string, string> = {
+  run: "run is retired (plans/0283): the protocol does nothing via push — a phase's tasks are execute grants external coding agents claim over the executor protocol (a daemon's POST /projects/<project>/executor/claim; opencode-auto-server serve registers the project)",
+  plan: "plan is retired (plans/0283): the no-agent planning routes are the daemon's plan operation (POST /projects/<project>/plan), the planning session the formulate grant's over the executor protocol, and one task at a time the task-add operation's (POST /projects/<project>/tasks)",
+  transfer: "transfer is retired (plans/0283): the person-bracketed advance is the daemon's transfer operation (POST /projects/<project>/transfer) — a deterministic apply (git and document writes only), the distillation and the construction the distill/synthesize grants' over the executor protocol",
+  clarify: "clarify is retired (plans/0283): the person's release act is the daemon's clarify operation (POST /projects/<project>/clarify) — or the document edit itself (the whole-line `Clarified: yes`) plus its commit",
+  // The hidden lane-worker entry: the push lane workers are demolished with
+  // the run that spawned them — concurrency rides the executor protocol's
+  // scoped/doc lease tiers.
+  _lane: "_lane is retired (plans/0283): the push lane workers are demolished — concurrency rides the executor protocol's scoped/doc lease tiers (external workers claim grants in their own worktrees)",
+}
+if (command !== undefined && command in RETIREMENT_NOTICES) {
+  console.error(RETIREMENT_NOTICES[command])
   process.exit(1)
 }
 
@@ -295,7 +326,7 @@ interface CommandHelp {
   options: readonly string[] // OPTION_HELP keys, in the view's display order
 }
 const FROZEN_OPTIONS =
-  "project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --intent, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --tree-lanes, --scan-exempt, --isolate) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error"
+  "project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --intent, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --tree-lanes, --scan-exempt, --isolate) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); the run command that once took them is retired (plans/0283)"
 const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   [
     "init",
@@ -344,61 +375,6 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
       "The state is keyed on the config: an unloadable one refuses (fix the config layer first)",
   ],
   [
-    "plan",
-    "plan (auto-core plans/0101 D4) is the dispatch half of the person-bracketed boundary: bare plan runs the awaiting, reviewed plan task transfer constructed — the formulation session, the collect checks and the wrap-up, " +
-      "one session chain stopping on completion (the produced index and task documents are committed, so the second review, of the actual decomposition, is free, and run is its approval act). " +
-      "Every phased state that is not that dispatch refuses naming transfer: the project start and the round establishment (transfer's project-start shape), the complete round (transfer closes it and opens the next), " +
-      "an unplanned phase or one at its boundary (transfer constructs and stops for review). Two guards hold the seam: the round brief docs/R-NN/round.md must be filled — an untouched stub refuses exit 2 naming the fill " +
-      "(no planning session dispatches against an empty round brief) — and an input (-p/--prompt <text> | --file <path>, m mode's planning channel and --append's) that changes what the reviewed todo rendered refuses naming the transfer re-run, " +
-      "whose idempotent reconstruct absorbs it (the input's home is the phase's plan-input.md; plan --phase prepares it assisted). " +
-      "--append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (in m mode the input already implies the append on a non-empty index); it requires an input, " +
-      "refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. " +
-      '--new-task "<one-line title>" adds the one task you name with no session at all — the driver allocates the number, writes docs/T-NNN/todo.md and the index line and commits (targeting, guards and the stale-handover removal as --append\'s; ' +
-      "the title is the whole task content, so review the document before run). " +
-      "--export <T-NNN> | --adopt <T-NNN> are the standalone work-order routes (plans/0076): --export renders a ready unit's work order to stdout (nothing persisted — run it with your own coding-agent session outside the driver, " +
-      "its question protocol the attended record-then-review shape), and --adopt re-checks the externally-driven unit, runs the test handover, performs the ticks and todo.md → done.md renames and lands the unified commit — " +
-      "the driver-side closer a hand-commit would break. The two are mutually exclusive, and each refuses -p/--file, --append, --new-task and --force-close. " +
-      "It takes run's session options; config options, --dryrun, --wait-between, --max-sessions, --repair and --boundary are refused. Exit codes as run's (the guards: the stub-round refusal 2, the state refusals 1)",
-  ],
-  [
-    "plan-force-close",
-    'plan --force-close <ref> --reason <text> closes a unit (close\'s semantics: the Closed: field, the close commit, a phase\'s mechanical handover) and continues planning in the same process under one run lock — ' +
-      'replace a task (plan <dir> --force-close T-005 --reason "…" --append -p "do X instead") or skip a phase into the next one (plan <dir> --force-close R-01.P02 --reason "…"); ' +
-      "--reason (one line, required) is the confirmation, and --cascade / --commit-changes | --stash-changes are close's options. " +
-      "The close runs first: a refused close exits 1 with nothing done, a failed close commit exits 2, and after a successful close the exit code is plan's",
-  ],
-  [
-    "plan-prep",
-    "plan --round | --phase (mutually exclusive, no other option) are the assisted preparation stops (auto-core plans/0084): plan writes nothing itself — it points the AGENTS.md block's guidance at the document of the moment " +
-      "so your own coding agent, interactive or not, can help you fill it. --round targets the round brief docs/R-NN/round.md of the round at hand (goal, acceptance and release criteria; in m mode the stub is written, round-close needs it); " +
-      "--phase targets the planning input docs/R-NN/P<nn>-<type>/plan-input.md of the next phase to plan (the active intent pack's scaffold rides in the guidance, and plan --scaffold prints it to stdout); " +
-      "the existing gates check the result — the round-start gate for the brief, the construct's own input read for the input (phased: transfer reads it and stops for review; m mode: plan's session). " +
-      "In m mode on a fresh target (no rounds yet) the first plan opens the assisted project analysis instead — the phased project-start shape is transfer's below; " +
-      "OPENCODE_AUTO_ANALYSIS=off skips the analysis and establishes R-01 directly, as plan always did in m mode",
-  ],
-  [
-    "transfer",
-    "transfer [dir] is the single advance command of the person-bracketed boundaries (auto-core plans/0101): one advance per invocation, resolved by state — " +
-      "the project start (the assisted project analysis re-homed from plan: the stub, the release gate, the brief install, R-01 established under the released roadmap's line for the round, stopping at the round-start gate — review the setup, fill docs/R-NN/round.md, commit), " +
-      'the phase boundary (a survey with open forks refuses exit 2 ahead of any session until your "Clarified: yes"; released, the advance distills the handover, closes the phase — installing the approved project brief — ' +
-      "and constructs the next phase's plan task docs/T-NNN/todo.md, stopping for your review: the todo is driver-owned, a rejection is fixed through its inputs — round.md, plan-input.md, the brief, the roadmap line — and transfer re-run), " +
-      "the round close (the same invocation when the closed phase was the round's last: the round-close checks gate it, and the stop is your moment with the round's close — its ## Close listing, a commissioned report-for-user.md beside it), " +
-      "and the round open (the roadmap's next line applied, the establish stop naming its source; a released roadmap that plans no line for the next round is exhausted — extend ## Roadmap and re-run, exit 0). " +
-      "plan dispatches the reviewed plan task, run executes the phase and stops at its clean end. " +
-      "--resynthesize bypasses the digest keep of a standing plan task: the constructor session re-voices the sources under the charter and the reconstruct lands the new todo for review — the channel for a rejected synthesized ledger " +
-      "(a rejected input needs no flag, the plain re-run absorbs it). m mode refuses (its plan/run shapes stand); it takes run's session options only",
-  ],
-  [
-    "clarify",
-    'clarify [dir] is the person\'s release command (auto-core plans/0116): it writes the whole-line "Clarified: yes" into the one document a gate is awaiting and commits it — the unreleased docs/analysis.md at the project start, ' +
-      'or the held survey.md of the current human-gated phase (open "Fork:" lines) at a phase boundary — byte-identical to a correct hand edit plus its commit, which is exactly what it saves you: finding the document, ' +
-      "writing the marker exactly (an inline or lowercase form does not release), and committing the edit (the advance runs only on a committed state). " +
-      'Before writing it prints what the release accepts — the survey\'s Fork: lines with their "Recommend:" defaults, the analysis\'s roadmap lines — so running it is the review; the mark accepts every default, ' +
-      "and your own answers sit beside the fork lines (before, riding the release commit, or after, as a plain committed edit the planners read). The gates stay the mechanical authority and the manual path stays fully supported. " +
-      "It refuses (exit 2) when nothing awaits, when problems hold the release, when a Fork: line lacks its Recommend: default, or when the worktree is dirty beyond the target document; " +
-      "it takes a directory argument only, refuses beside a live run, and never starts a session",
-  ],
-  [
     "close",
     "close <ref> closes a unit (task T-NNN, phase R-NN.P<nn> or round R-NN) without completing it — done for scheduling, never delivered: the reason goes into a Closed: field of the unit's done.md, " +
       'a close commit (Auto-Stage: force-close), and for a phase a driver-written mechanical handover that records the skipped gates. The ref comes first (then the directory); the explicit ref and the required one-line --reason are the confirmation (no prompt), ' +
@@ -420,13 +396,8 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   ],
   [
     "run-lock",
-    "run lock: run, plan and transfer hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike; transfer holds it across its state checks and the advance), " +
-      "close holds it around its writes, and land around its branch moves; init, amend, clarify, fix, sync and reset refuse while another process holds it (fix/sync --dryrun read and print only, so they run beside a live run; " +
-      "-f does not override the refusal), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close",
-  ],
-  [
-    "new-session",
-    "--new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)",
+    "run lock: close holds it around its writes, and land around its branch moves; init, amend, fix, sync and reset refuse while another process holds it (fix/sync --dryrun read and print only, so they run beside a live run; " +
+      "-f does not override the refusal), and status shows it on its first line. The daemon-side operations (plan, transfer, clarify, the coordinator) hold the lock in their own process — a local command meeting it refuses the same way. A lock whose process is gone is removed by the next command that takes it",
   ],
   ["mode", "-m/--mode prompt-level scenario mode (built-in migrate, debug, fix, fork, pr; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)"],
   [
@@ -502,29 +473,6 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
       "The list replaces the stored one, none removes it",
   ],
   [
-    "max-sessions",
-    "--max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). The default 1 runs everything serially; above 1 gives documentation waves out of the box — documentation-scoped tasks run side by side as their declared Depends/Touches allow, doc phases' planning arranging the declarations at this width (the pack's ## doc-parallelism teaching, no config needed); " +
-      "code tasks run concurrently only under --tree-lanes (the execution tier: the default runs them serially in one tree with the tests parallel; on/auto run them as concurrent lanes in isolated worktrees, a level — init --parallel — adding their planning depth); " +
-      "--interactive and --wait-answer are refused above 1 (one human cannot steer concurrent sessions)",
-  ],
-  [
-    "boundary",
-    '--boundary stop|flow run option (auto-core plans/0101): run\'s shape at the phase boundaries. stop (the default) ends the run at the current phase\'s clean end — every unit done, the lanes landed — before the handover, ' +
-      'naming transfer as the advance command (a survey with open forks stops exit 2 awaiting your "Clarified: yes"); flow restores the continuous crossing of the boundaries, for trusted unattended stretches. ' +
-      "A run-side width only — never a config key — and orthogonal to plan's stop condition",
-  ],
-  [
-    "repair",
-    "--repair [1-10] run option (auto-core plans/0079 §4): the bounded repair budget — how many automatic repair rounds a task report's Result: FAIL (or a held verdict gate) may drive before blocking for the human: " +
-      "the failed task is closed and an appending session adds rework tasks over the report's evidence, which then run and re-verify. Acceptance gates never auto-repair — the human's sign alone; repair rounds open wherever the FAIL or held gate is judged with no lane in flight (the serial path, the lane loops' post-drain degrades, the doc loop's finishBlocked, the phase-level gates — never a lane worker's own blocked exit, never under a stop condition); per run, never persisted",
-  ],
-  [
-    "stop-after",
-    "--stop-after <T-NNN> run option (auto-core plans/0128): the task whose completion ends this run — the retry's guardrail (fork prints the hint), usable anywhere the serial loop runs. " +
-      "The run stops cleanly (exit 0) once that task closes, its handover and the phase's remaining tasks staying for the next run; an already-complete target stops at once; a target outside the routed phase's index is a usage error. " +
-      "Serial runs only — refused beside --max-sessions ≥ 2 and the lane switches; never persisted",
-  ],
-  [
     "fork",
     "fork <T-NNN | sha> <worktree-path> (auto-core plans/0128): build an experiment environment in a new directory and retry a task from its beginning — or experiment at any exact commit — without the main tree, its branches or its history being touched. " +
       "A task target T-NNN forks at the state before the task first started (the parent of its oldest Auto-Task commit of the current corpus — a task number re-issued after a wipe-and-restart never forks at the state before the restart, plans/0140; the success line names the older lineage when one exists); a sha target forks at that commit itself. Nested repositories are reconstructed alongside, aligned at the state the fork commit records. " +
@@ -547,7 +495,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   ],
   [
     "implement-retired",
-    "--implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)",
+    "--implement-file / --implement-prompt are retired (and with them the plan command itself, plans/0283): the planning input is the phase's plan-input.md, the planning session the formulate grant's over the executor protocol",
   ],
   [
     "models",
@@ -579,6 +527,10 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
     `continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} transfer <dir> — it runs the round-close checks and opens the next round`,
   ],
   ["check-retired", `check is retired: the principle scan and the reference check were removed; ${shellProfile().bin} fix --dryrun <dir> lists the configuration findings`],
+  [
+    "push-retired",
+    "run, plan, transfer, clarify (and the hidden _lane lane worker) are retired (plans/0283): the protocol does nothing via push, ever again — a phase's tasks, the planning session, the distillation and the construction are grants external coding agents claim over the executor protocol (a daemon's POST /projects/<project>/executor/claim; opencode-auto-server serve registers the project), and the person's acts — the boundary advance, the release, the task add — are the daemon's transfer/clarify/tasks operations. The task-append session (plan --append), the repair budget (run --repair) and the charter verifier are retired with them: FAIL verdicts surface as state, the fix grant repairs verify FAILs, appends ride task-add and re-formulation",
+  ],
 ]
 // The exit-codes line and the per-command pointer close every help view.
 // 3 is the /exit pause under --interactive (auto-core plans/0143): the core's
@@ -586,7 +538,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
 // 0/1/2/130 while README and MANUAL already named 3 — one vocabulary, one
 // conscious lockstep (P13).
 const EXIT_CODES =
-  "exit codes: 0 all complete (including the boundary stop of run --boundary stop and transfer's review stops); 1 usage/environment error (the same code fix --dryrun answers with configuration findings); " +
+  "exit codes: 0 all complete (including the daemon-side boundary and review stops of the transfer operation); 1 usage/environment error (the same code fix --dryrun answers with configuration findings); " +
   "2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); " +
   "3 /exit received under --interactive, paused and exited at a safe boundary (no human attention needed — rerunning recovers fully); " +
   "130 force-terminated by two consecutive Ctrl+C"
@@ -601,33 +553,10 @@ const COMMANDS: readonly CommandHelp[] = [
       "opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--intent <name>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--tree-lanes off|auto|on] [--scan-exempt none|<globs>] [--isolate <rel-path>]... [--name <name> --email <email>] [-f|--force]",
     options: ["frozen", "init", "mode", "prompt", "phases", "test-by-driver", "handover-test", "auto-number", "wrapup", "agent", "parallel", "tree-lanes", "scan-exempt", "isolate", "force", "run-lock"],
   },
-  {
-    name: "run",
-    summary: "execute the current phase's tasks one by one — the driver commits after every session — and stop at its clean end, the phase boundary",
-    synopsis:
-      "opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions <n>] [--boundary stop|flow] [--repair [1-10]] [--stop-after <T-NNN>]",
-    options: ["frozen", "new-session", "max-sessions", "boundary", "repair", "stop-after", "run-lock"],
-  },
-  {
-    name: "plan",
-    summary: "plan the current phase and stop before execution, for review (the dispatch half of the person-bracketed boundary)",
-    synopsis:
-      'opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--scaffold] [--round | --phase] [--export <T-NNN> | --adopt <T-NNN>] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]',
-    options: ["frozen", "plan", "plan-force-close", "plan-prep", "prompt", "new-session", "run-lock"],
-  },
-  {
-    name: "transfer",
-    summary: "advance one person-bracketed boundary per invocation, resolved by state — the single advance command",
-    synopsis:
-      "opencode-auto transfer [dir] [--resynthesize] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]",
-    options: ["frozen", "transfer", "new-session", "run-lock"],
-  },
-  {
-    name: "clarify",
-    summary: "write the person's Clarified: yes release mark into the one document a gate awaits, and commit it",
-    synopsis: "opencode-auto clarify [dir]",
-    options: ["clarify"],
-  },
+
+
+
+
   {
     name: "close",
     summary: "close a unit (task T-NNN, phase R-NN.P<nn>, round R-NN) without completing it — done for scheduling, never delivered",
@@ -715,11 +644,11 @@ const OPTION_TEXT: ReadonlyMap<string, string> = new Map<string, string>([
   ...OPTION_HELP.map(([key, text]) => [key, text] as const),
 ])
 const COMMAND_BY_NAME: ReadonlyMap<string, CommandHelp> = new Map(COMMANDS.map((entry) => [entry.name, entry]))
-// The words that name a command: the public eighteen plus `_lane` — the
-// hidden lane-worker entry is a real command (the parent run's launcher
-// invokes this CLI with it) but never appears in any help surface; its own
-// option ladder below answers everything it is passed, --help included.
-const KNOWN_COMMANDS: ReadonlySet<string> = new Set([...COMMANDS.map((entry) => entry.name), "_lane"])
+// The words that name a command: the public surface minus the retired
+// (run/plan/transfer/clarify answer with their retirement notices ahead of
+// every interception, and the hidden `_lane` — the push lane worker — is
+// demolished with them, plans/0283).
+const KNOWN_COMMANDS: ReadonlySet<string> = new Set(COMMANDS.map((entry) => entry.name))
 
 // The closest live command names for an unknown word (the unknown-command
 // refusal's suggestions): edit distance 1 always suggests (2 from five
@@ -831,47 +760,45 @@ const OWNED_FLAGS: ReadonlyArray<{ owner: string; keys: readonly string[]; line:
     owner: "plan",
     keys: ["append"],
     line: (_key, command) =>
-      `--append is a plan option: ${command ?? "this command"} takes no --append. Append tasks with opencode-auto plan <dir> --append -p <text> | --file <path>`,
+      `--append is retired with plan (plans/0283: the task-append session no longer runs): ${command ?? "this command"} takes no --append. Add one task at a time with the task-add operation of a daemon (POST /projects/<project>/tasks), or re-formulate the phase's plan through its inputs`,
   },
   {
     owner: "plan",
     keys: ["force-close"],
     line: (_key, command) =>
-      `--force-close is a plan option: ${command ?? "this command"} takes no --force-close. ` +
-      `Close a unit and keep planning with opencode-auto plan <dir> --force-close <ref> --reason <text>; to only close, opencode-auto close <ref> [dir] --reason <text>`,
+      `--force-close is retired with plan (plans/0283): ${command ?? "this command"} takes no --force-close. ` +
+      `Close a unit with opencode-auto close <ref> [dir] --reason <text> — close-then-continue over the daemon is the close operation then the plan operation`,
   },
   {
     owner: "plan",
     keys: ["scaffold"],
     line: (_key, command) =>
-      `--scaffold is a plan option: ${command ?? "this command"} takes no --scaffold. Print the planning-input template with opencode-auto plan <dir> --scaffold`,
+      `--scaffold is retired with plan (plans/0283): ${command ?? "this command"} takes no --scaffold. The active intent pack's ## planning-input section carries the planning-input scaffold`,
   },
   {
     owner: "plan",
     keys: ["new-task"],
     line: (_key, command) =>
-      `--new-task is a plan option: ${command ?? "this command"} takes no --new-task. Add a known task without a session with opencode-auto plan <dir> --new-task "<one-line title>"`,
+      `--new-task is retired with plan (plans/0283): ${command ?? "this command"} takes no --new-task. One task at a time is the task-add operation of a daemon (POST /projects/<project>/tasks with the one-line title)`,
   },
   {
     owner: "plan",
     keys: ["export", "adopt"],
     line: (key, command) =>
-      `--${key} is a plan option: ${command ?? "this command"} takes no --${key}. ` +
-      `Render a ready unit's standalone work order with opencode-auto plan <dir> --export <task id>, and close the externally-driven unit out with opencode-auto plan <dir> --adopt <task id>`,
+      `--${key} is retired with plan (plans/0283): ${command ?? "this command"} takes no --${key}. The standalone work-order routes retired with their command — the executor protocol's grants carry the work to external agents`,
   },
   {
     owner: "plan",
     keys: ["round", "phase"],
     line: (key, command) =>
-      `--${key} is a plan option: ${command ?? "this command"} takes no --${key}. ` +
-      `Prepare the round brief with opencode-auto plan <dir> --round, or the next phase's planning input with opencode-auto plan <dir> --phase`,
+      `--${key} is retired with plan (plans/0283): ${command ?? "this command"} takes no --${key}. The documents are the person's own channel — fill the round brief (docs/R-NN/round.md) or the planning input (docs/R-NN/P<nn>-<type>/plan-input.md) with your coding agent directly`,
   },
   {
     owner: "transfer",
     keys: ["resynthesize"],
     line: (_key, command) =>
-      `--resynthesize is a transfer option: ${command ?? "this command"} takes no --resynthesize. ` +
-      `Re-voice a rejected plan task's synthesis with opencode-auto transfer <dir> --resynthesize`,
+      `--resynthesize is retired with transfer (plans/0283): ${command ?? "this command"} takes no --resynthesize. ` +
+      `The transfer operation of a daemon (POST /projects/<project>/transfer) carries the resynthesize request field`,
   },
   {
     owner: "land",
@@ -932,7 +859,7 @@ const COMPLETION_RETIRED =
   'Plan the checking as tasks (for example the v acceptance phase); a task report whose result line reads "Result: FAIL" stops the run'
 const MIGRATION_RETIRED =
   "is retired: the migration source and target are intent, not configuration — state them in the project analysis's `## Project brief` proposal (or opencode-auto amend <dir> --brief <text> | --brief-file <path>) or in the planning input, which planning sessions read"
-const IMPLEMENT_RETIRED = "is retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)"
+const IMPLEMENT_RETIRED = "is retired (and with it the plan command itself, plans/0283): the planning input is the phase's plan-input.md, the planning session the formulate grant's over the executor protocol"
 const INIT_PROMPT_RETIRED =
   "is retired: init takes no prompt and writes no brief — the project analysis (opened by the first plan/transfer) proposes and installs the brief, and the planning input is plan -p"
 const INIT_BRIEF_RETIRED =
@@ -1041,7 +968,7 @@ const strictOptionRefusal =
     if (CONFIG_FLAGS.includes(key))
       return `${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${amendHint(key)}${configKeyRevision(key).file ? ", or edit that file directly" : ""}; ${command} takes no config options`
     if (key === "prompt" || key === "file")
-      return `${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option (the planning input: opencode-auto plan <dir> -p <text> | --file <path>); ${command} takes no planning input`
+      return `${key === "prompt" ? "-p/--prompt" : "--file"} is retired with the plan command (plans/0283 — the planning input is the phase's plan-input.md, read by the formulation); ${command} takes no planning input`
     const similar = similarOptions(key)
     return `--${key} is not a ${command} option${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}: ${usageLine}`
   }
@@ -1115,21 +1042,6 @@ for (const [key, value] of flags) {
 // D14; transfer's rows plans/0101 D2): plan stops before any task runs and
 // transfer executes none, so run's execution shaping applies to neither. The
 // two command-specific `what` texts differ where the reason genuinely does.
-const RUN_OPTION_REFUSALS: ReadonlyArray<{ key: string; flag: string; what: (command: "plan" | "transfer") => string }> = [
-  { key: "dryrun", flag: "--dryrun", what: () => "the permission preflight: opencode-auto run <dir> --dryrun" },
-  { key: "wait-between", flag: "--wait-between", what: (command) => `the pause between tasks, and ${command} runs none` },
-  { key: "max-sessions", flag: "--max-sessions", what: () => "concurrent sessions of the task loop" },
-  { key: "repair", flag: "--repair", what: () => "the bounded repair budget for FAIL verdicts" },
-  { key: "stop-after", flag: "--stop-after", what: () => "the task whose completion ends the run" },
-  {
-    key: "boundary",
-    flag: "--boundary",
-    what: (command) =>
-      command === "plan"
-        ? "run's phase-boundary shape (stop, the default, or flow); plan stops at its own boundary — the reviewed plan task"
-        : "run's phase-boundary shape; transfer is itself the boundary command",
-  },
-]
 
 // close (auto-core plans/0053 D22): the ref is required, so it comes first —
 // positional[0] is the unit ref (R-NN | R-NN.P<nn> | T-NNN, closeUnit's
@@ -1283,7 +1195,7 @@ const syncDryrun = command === "sync" && flags.has("dryrun") && flags.get("dryru
 // retired its legacy-layout exemption ended: `fix --dryrun`, the gate that
 // replaced it, refuses the layout like every other live command. Only reset
 // stays available, so an old tree can still be de-initialized.
-if (command === "init" || command === "amend" || command === "plan" || command === "transfer" || command === "close" || command === "land" || command === "fork" || command === "remove-fork" || command === "fix" || command === "sync" || command === "status" || command === "release" || command === "driver-helper" || command === "clarify" || command === "run") {
+if (command === "init" || command === "amend" || command === "close" || command === "land" || command === "fork" || command === "remove-fork" || command === "fix" || command === "sync" || command === "status" || command === "release" || command === "driver-helper") {
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
@@ -1309,85 +1221,12 @@ if (command === "init" || command === "amend" || command === "plan" || command =
 // "one atomic check" claim — nothing was atomic about a check-then-act).
 // (`continue` and `check` used to refuse here too; both retired ahead of
 // every check, their notices above.)
-if (command === "init" || command === "amend" || command === "reset" || command === "clarify" || (command === "sync" && !syncDryrun) || (command === "fix" && !fixDryrun)) {
+if (command === "init" || command === "amend" || command === "reset" || (command === "sync" && !syncDryrun) || (command === "fix" && !fixDryrun)) {
   const holder = liveRunLock(directory)
   if (holder) {
     for (const line of lockLines(directory, holder)) console.error(line)
     process.exit(1)
   }
-}
-
-if (command === "run") {
-  refuseFrozenFlags("run")
-  refusePlanInputFlags("run")
-  refuseCloseFamilyFlags("run")
-  refuseLaneValueFlags("run")
-  const session = parseSessionFlags()
-  const waitBetween = parseMinutes(flags.get("wait-between"))
-  if (waitBetween === null) {
-    console.error("--wait-between takes 1..60 (minutes); defaults to 1 when given without a value")
-    process.exit(1)
-  }
-  // --max-sessions (auto-core plans/0046 D9; live since plans/0068 S3/D10;
-  // activation decoupled by auto-core plans/0125 D1): concurrent AI sessions
-  // of the task loop. Width alone activates the scheduler — no parallel
-  // level required; the level stays planning guidance and the
-  // landing-conflict posture. Unrelated to --agent.
-  const maxSessions = parseMaxSessions(flags.get("max-sessions"))
-  if (maxSessions === null) {
-    console.error("--max-sessions takes a positive integer (concurrent AI sessions, unrelated to --agent); defaults to 1")
-    process.exit(1)
-  }
-  // --repair (auto-core plans/0079 §4): the bounded repair budget — how many
-  // automatic repair rounds a FAIL verdict (a task report's Result line)
-  // or a held verdict gate (a gate-evidence append) may drive
-  // before blocking for the human. Absent = none: the first FAIL blocks,
-  // today's behavior.
-  const repair = parseRepairBudget(flags.get("repair"))
-  if (repair === null) {
-    console.error("--repair takes 1..10 (automatic repair rounds before blocking for the human); defaults to none")
-    process.exit(1)
-  }
-  // --boundary (auto-core plans/0101 D1): run's phase-boundary shape. stop
-  // (the default, flag omitted) ends the run at each clean phase end — before
-  // the handover — naming transfer as the advance command; flow restores
-  // today's continuous crossing of the boundaries, for trusted unattended
-  // stretches.
-  const boundary = flags.get("boundary")
-  if (boundary !== undefined && boundary !== "stop" && boundary !== "flow") {
-    console.error("--boundary takes stop or flow (stop ends the run at each clean phase end, the default; flow crosses the boundaries continuously as before)")
-    process.exit(1)
-  }
-  // --stop-after (auto-core plans/0128): the task whose completion ends this
-  // run — the retry's guardrail in a fork environment. The task loop owns
-  // the semantics (the stop itself, the index check, the serial-path
-  // confinement); the shell validates the shape alone.
-  const stopAfter = flags.get("stop-after")
-  if (stopAfter !== undefined && !/^T-\d{3,}$/.test(stopAfter)) {
-    console.error("--stop-after takes a task id (T-NNN): the task whose completion ends this run")
-    process.exit(1)
-  }
-  // A never-initialized directory is refused here, before the banner and the
-  // preflight session (plans/0239 D5): loadRunConfig's missing-file floor
-  // would print a defaults config banner over a directory with no config and
-  // the run would stop two refusals later at the missing agent contract
-  // teaching fix — which itself teaches init. The root cause is the missing
-  // config; plan's block holds the same check (its comment states the
-  // principle) and requireConfigFile is the one teaching home.
-  await requireConfigFile("run", true, true)
-  startRunLog(directory, session)
-  const { config, mode } = await loadRunConfig(directory)
-  await logRunBanner(directory, config)
-  const code = await runAll(directory, {
-    ...runOptions(config, mode, session),
-    waitBetween,
-    dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
-    maxSessions,
-    repair,
-    ...(stopAfter !== undefined ? { stopAfter } : {}),
-    ...(boundary === "flow" ? { boundary: "flow" as const } : {}),
-  })
-  process.exit(code)
 }
 
 // `_lane <dir> --unit <id> [--merge <branch>]` (hidden, auto-core plans/0068
@@ -1401,30 +1240,6 @@ if (command === "run") {
 // beyond them rides the copied scaffolding and the inherited environment.
 // --merge (D7's conflict path) rides only a conflict repair's re-dispatch:
 // the parent's current main branch the lane merges into its branch first.
-if (command === "_lane") {
-  const unit = flags.get("unit")
-  if (!unit) {
-    console.error("_lane requires --unit <task id> (the unit this lane worker runs); it is the entry the parent run's lane launcher invokes")
-    process.exit(1)
-  }
-  // The retired extras and frozen config flags are refused here too
-  // (0165-056/S26-04's _lane half): _lane is a run-shaped entry sharing the
-  // option vocabulary, and a silently ignored retired flag on it is the same
-  // defect run/plan/transfer's refusal family already refuses.
-  refuseFrozenFlags("_lane")
-  // The strict machine-entry allowlist (plans/0195 D4): every known flag
-  // beyond --unit, --merge and the session flags is refused — the entry
-  // reads nothing else, so anything more is launcher drift, never a
-  // person's option.
-  refuseLaneForeignFlags()
-  const merge = flags.get("merge")
-  const session = parseSessionFlags()
-  startRunLog(directory, session)
-  const { config, mode } = await loadRunConfig(directory)
-  await logRunBanner(directory, config)
-  process.exit(await runLaneWorker(directory, { ...runOptions(config, mode, session), lane: { unit, ...(merge !== undefined ? { merge } : {}) } }))
-}
-
 // plan (auto-core plans/0053 D14, D23, D28; --new-task plans/0058): plan the
 // current phase and stop before execution, for review. It is run with a stop
 // condition: the same options (the builder is shared), preceded by the prelude
@@ -1439,246 +1254,6 @@ if (command === "_lane") {
 // re-enters it), the prelude, and runAll.
 // A prelude stop prints its lines and exits with its code; runAll's exit
 // codes are run's.
-if (command === "plan") {
-  refuseFrozenFlags("plan")
-  // run's options for the task loop: plan stops before any task runs.
-  refuseRunOptions("plan")
-  // The lane value flags are _lane's (the hidden machine surface): plan
-  // shares run and transfer's refusal — each swallows the next token as its
-  // value, so the directory would be eaten (0159 closed the gap where plan
-  // silently dropped them).
-  refuseLaneValueFlags("plan")
-  // --force-close <ref> (auto-core plans/0053 D28): close a unit, then keep
-  // planning in this process — replace a task (--force-close T-005 --reason
-  // "…" --append -p "do X instead") or skip a phase into the next one
-  // (--force-close R-01.P02 --reason "…"). The argument checks mirror close's
-  // (D22) so both commands validate the same flag set: the three canonical
-  // ref shapes — a subtask-shaped ref stops here as a usage error naming the
-  // shapes, like close, keeping closeUnit's friendlier "close the task
-  // instead" refusal for core-level callers — the required non-empty
-  // one-line --reason, and the mutually exclusive change pair. They fire
-  // before the lock and before the input is read.
-  const forceClose = flags.get("force-close")
-  if (forceClose !== undefined) {
-    if (!forceClose) {
-      console.error("--force-close requires a unit reference: a round R-NN, a phase R-NN.P<nn> or a task T-NNN (usage: opencode-auto plan <dir> --force-close <ref> --reason <text>)")
-      process.exit(1)
-    }
-    if (!CLOSE_REF.test(forceClose)) {
-      console.error(`${forceClose}: not a unit reference; expected a round R-NN, a phase R-NN.P<nn> or a task T-NNN (usage: opencode-auto plan <dir> --force-close <ref> --reason <text>)`)
-      process.exit(1)
-    }
-    const reason = flags.get("reason")
-    if (reason === undefined) {
-      console.error("--force-close requires --reason <text>: the one-line reason recorded in the Closed: field, the close commit and the phase handover")
-      process.exit(1)
-    }
-    if (!reason.trim()) {
-      console.error("--reason requires non-empty text (the close reason; the explicit ref and the reason are the confirmation — neither command asks for another)")
-      process.exit(1)
-    }
-    if (reason.includes("\n")) {
-      console.error("--reason must be one line (it is the Closed: value and the close commit subject's tail); longer context belongs in the round brief or the plan")
-      process.exit(1)
-    }
-    if (flagOn("commit-changes") && flagOn("stash-changes")) {
-      console.error("--commit-changes and --stash-changes are mutually exclusive: pick one way to handle the uncommitted changes (folded into the close commit, or stashed)")
-      process.exit(1)
-    }
-  } else {
-    // AUTO-RESOLVE: should plan accept the close-family flags
-    // (--reason/--cascade/--commit-changes/--stash-changes) without
-    // --force-close, silently ignoring them as it did before D28? -> no:
-    // they are usage errors pointing at --force-close (silently ignoring a
-    // close attempt would let a person believe a unit was closed when
-    // nothing happened; "validate both commands' flag sets" only makes sense
-    // when the group is meaningful, which is under --force-close alone).
-    for (const key of ["reason", "cascade", "commit-changes", "stash-changes"]) {
-      if (flags.has(key)) {
-        console.error(
-          `--${key} is a close option of "plan --force-close <ref> --reason <text>": pass --force-close <ref> to close a unit and keep planning, ` +
-            `or close only with opencode-auto close <ref> [dir] --reason <text>`,
-        )
-        process.exit(1)
-      }
-    }
-  }
-  const input = await parsePlanInput()
-  // --new-task (auto-core plans/0058): add one task the person names, with no
-  // session. It takes the one-line title alone — the title becomes the index
-  // line and the task document's title, longer context belongs in the
-  // document after the add — and it excludes the planning input (a session
-  // plans from that) and --append (a session appends from it).
-  const newTask = flags.get("new-task")
-  if (newTask !== undefined) {
-    if (!newTask.trim()) {
-      console.error("--new-task requires a one-line task title (it becomes the index line and the task document's title)")
-      process.exit(1)
-    }
-    if (newTask.includes("\n")) {
-      console.error("--new-task must be one line (it becomes the task's index line); longer context belongs in the task document — add the task, then edit its docs/T-NNN/todo.md")
-      process.exit(1)
-    }
-    if (input) {
-      console.error("--new-task and -p | --file are mutually exclusive: --new-task adds the task you name with no session; a planning input has one plan tasks from it")
-      process.exit(1)
-    }
-  }
-  // --scaffold (plans/0081 D12.2) takes no other option: it only prints the
-  // planning-input template and exits.
-  if (flagOn("scaffold") && (input || newTask !== undefined || forceClose !== undefined || flags.has("append") || flags.has("export") || flags.has("adopt") || flags.has("round") || flags.has("phase"))) {
-    console.error("--scaffold takes no other option: it prints the planning-input template to stdout and exits — complete it into a file and pass it with -p <text> | --file <path>")
-    process.exit(1)
-  }
-  // --append (auto-core plans/0053 D23) rides a planning input: it appends
-  // the tasks planned from the input to the current phase. In m mode the
-  // input implies the append on a non-empty index, so the flag is redundant
-  // there; the prelude and planPrelude repeat the check for other shells.
-  const append = flags.has("append") && flags.get("append") !== "false"
-  if (newTask !== undefined && append) {
-    console.error("--new-task and --append are mutually exclusive: --new-task adds the task directly, no session appends anything (drop --append, or plan from an input instead)")
-    process.exit(1)
-  }
-  if (append && !input) {
-    console.error("--append requires a planning input: pass -p <text> | --file <path>; it appends the tasks planned from the input to the current phase")
-    process.exit(1)
-  }
-  // --export / --adopt <T-NNN> (plans/0076, T-137): the standalone work-order
-  // routes. The unit of a work order is a task; the two flags are mutually
-  // exclusive (one renders, one closes), and neither plans from an input,
-  // appends, hand-adds a task or closes a unit — the exclusions mirror
-  // --new-task's, checked here before the lock; planPrelude backstops other
-  // shells and direct callers.
-  const exportRef = flags.get("export")
-  const adoptRef = flags.get("adopt")
-  if (exportRef !== undefined || adoptRef !== undefined) {
-    for (const [flag, value] of [
-      ["export", exportRef],
-      ["adopt", adoptRef],
-    ] as const) {
-      if (value === undefined) continue
-      if (!/^T-\d+$/.test(value)) {
-        console.error(`--${flag} requires a task id (usage: opencode-auto plan <dir> --${flag} T-NNN); a work order is rendered for one task unit of the current phase`)
-        process.exit(1)
-      }
-    }
-    if (exportRef !== undefined && adoptRef !== undefined) {
-      console.error("--export and --adopt are mutually exclusive: --export renders a ready unit's work order for a standalone session, --adopt closes one out — run them one at a time")
-      process.exit(1)
-    }
-    if (input) {
-      console.error("--export / --adopt and -p | --file are mutually exclusive: a standalone work order is rendered for an existing task, no session plans from the input")
-      process.exit(1)
-    }
-    if (append) {
-      console.error("--export / --adopt and --append are mutually exclusive: appending plans tasks with a session; a work order neither plans nor appends")
-      process.exit(1)
-    }
-    if (newTask !== undefined) {
-      console.error("--export / --adopt and --new-task are mutually exclusive: --new-task adds a task with no session; --export / --adopt render or close one that exists")
-      process.exit(1)
-    }
-    if (forceClose !== undefined) {
-      console.error("--export / --adopt and --force-close are mutually exclusive: --force-close closes a unit and keeps planning in this process; a work order route does neither")
-      process.exit(1)
-    }
-  }
-  // --round / --phase (auto-core plans/0084): the assisted preparation stops —
-  // plan points the AGENTS.md guidance at the round brief (--round) or the
-  // next phase's planning input (--phase) and the person works with their own
-  // coding agent on the document. Mutually exclusive with each other and with
-  // every other route option, checked here before the lock; planPrelude
-  // backstops other shells and direct callers.
-  const prepRound = flagOn("round")
-  const prepPhase = flagOn("phase")
-  if (prepRound && prepPhase) {
-    console.error("--round and --phase are mutually exclusive: --round prepares the round brief of the round at hand, --phase the planning input of the next phase to plan — run them one at a time")
-    process.exit(1)
-  }
-  if ((prepRound || prepPhase) && (input || append || newTask !== undefined || forceClose !== undefined || exportRef !== undefined || adoptRef !== undefined)) {
-    console.error("--round / --phase take no other option: no planning input, no --append, no --new-task, no --force-close, no --export / --adopt — pass the flag alone (opencode-auto plan <dir> --round | --phase)")
-    process.exit(1)
-  }
-  const session = parseSessionFlags()
-  // plan writes the round setup, which follows the config (phases): a
-  // directory init never configured is refused rather than planned with the
-  // defaults.
-  await requireConfigFile("plan", true)
-  // --scaffold (plans/0081 D12.2): print the active pack's planning-input
-  // scaffold to stdout and exit 0 — nothing written into the target, the
-  // verbatim-input contract untouched (no stub file a git clean or a planning
-  // step could mistake for input). The person completes it into a file and
-  // runs plan --file <path>. Read-only, so it runs before the lock.
-  if (flagOn("scaffold")) {
-    const { config: scaffoldConfig } = await loadRunConfig(directory)
-    const scaffold = planningInputScaffold(loadIntents(directory), scaffoldConfig.intent ?? "default")
-    if (scaffold === undefined) {
-      console.error("no planning-input scaffold: neither the active intent pack nor the default pack carries a ## planning-input section")
-      process.exit(1)
-    }
-    console.log(scaffold)
-    process.exit(0)
-  }
-  const { config, mode } = await loadRunConfig(directory)
-  const lock = takeRunLock("plan")
-  // --force-close (auto-core plans/0053 D28): one lock held across the close
-  // and the planning — the lock above, not a second one. closeUnit's lines
-  // print first (stdout when closed, stderr otherwise); a refused close exits
-  // 1 with nothing done (closeUnit refuses before writes), a failed close
-  // commit or close-out check exits 2, and a successful close falls through
-  // to the normal plan flow (prelude → runAll), whose exit code is plan's.
-  if (forceClose !== undefined) {
-    const changes: CloseChanges | undefined = flagOn("commit-changes") ? "commit" : flagOn("stash-changes") ? "stash" : undefined
-    const closed = await closeUnit(directory, forceClose, {
-      reason: flags.get("reason")!,
-      cascade: flagOn("cascade"),
-      changes,
-      phases: config.phases,
-      acceptanceGate: config.acceptanceGate,
-    })
-    for (const line of closed.lines) (closed.type === "closed" ? console.log : console.error)(line)
-    if (closed.type !== "closed") {
-      lock.release()
-      process.exit(closed.type === "refused" ? 1 : 2)
-    }
-  }
-  const prelude = await planPrelude(directory, {
-    phases: config.phases,
-    build: config.build,
-    scanExempt: config.scanExempt,
-    isolate: config.isolate,
-    input,
-    append,
-    newTask,
-    autoNumber: config.autoNumber,
-    // The work-order routes (plans/0076): the render inputs from the config
-    // (the same fields runOptions threads into a run), plus the script
-    // watchdog adopt's test handover runs under.
-    export: exportRef,
-    adopt: adoptRef,
-    // The assisted-preparation routes (auto-core plans/0084) and the intent
-    // pack's name --phase's scaffold lookup reads.
-    round: prepRound,
-    phase: prepPhase,
-    intent: config.intent,
-    mode,
-    testByDriver: config.testByDriver,
-    handoverTest: config.handoverTest,
-    idleMs: config.idleTime * 60_000,
-    maxMs: config.idleMax > 0 ? config.idleMax * 60_000 : undefined,
-  })
-  if (prelude.type === "stop") {
-    for (const line of prelude.lines) (prelude.code === 0 ? console.log : console.error)(line)
-    lock.release()
-    process.exit(prelude.code)
-  }
-  startRunLog(directory, session)
-  await logRunBanner(directory, config)
-  const code = await runAll(directory, { ...runOptions(config, mode, session), stopBefore: "execute", planInput: input, append })
-  lock.release()
-  process.exit(code)
-}
-
 // transfer (auto-core plans/0101 D2): the single advance command — the
 // person-bracketed boundaries, one advance per invocation, resolved by
 // state: the project start (the assisted analysis flow of plans/0084, re-homed
@@ -1694,28 +1269,6 @@ if (command === "plan") {
 // planning and execution keep the plan/run shapes). Exit codes: the review,
 // round-open and exhausted stops 0; the gate-held and nothing-to-advance
 // refusals 2; usage and state errors 1.
-if (command === "transfer") {
-  refuseFrozenFlags("transfer")
-  // run's execution options: transfer executes no task.
-  refuseRunOptions("transfer")
-  // The planning input is plan's (the dispatch half of the boundary): the
-  // fix-inputs channel of a rejected plan task edits the documents
-  // (round.md, plan-input.md, the brief, the roadmap line) and re-runs
-  // transfer — never rides the command.
-  refusePlanInputFlags("transfer")
-  refuseCloseFamilyFlags("transfer")
-  refuseLaneValueFlags("transfer")
-  const session = parseSessionFlags()
-  const { config, mode } = await loadRunConfig(directory)
-  startRunLog(directory, session)
-  await logRunBanner(directory, config)
-  // --resynthesize (auto-core plans/0101 D3): bypass the digest keep of a
-  // standing plan task — the synthesis pipeline re-voices the sources and the
-  // reconstruct lands the new todo for review (the rejected-ledger channel;
-  // the inputs-fixed channel needs no flag, the plain re-run absorbs it).
-  process.exit(await runTransfer(directory, { ...runOptions(config, mode, session), ...(flagOn("resynthesize") ? { resynthesize: true } : {}) }))
-}
-
 // close (auto-core plans/0053 D22): close a unit — a task T-NNN, a phase
 // R-NN.P<nn> or a round R-NN — without completing it: done for scheduling,
 // never delivered, the reason recorded in a Closed: field, the close commit
@@ -1771,21 +1324,6 @@ if (command === "close") {
 // unreadable phase index); 2 held — nothing awaiting, problems holding the
 // release, bare Fork: lines, a dirty tree beyond the target, or a failed
 // commit (the mark is written, the manual commit named).
-if (command === "clarify") {
-  if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
-    const legacy = await legacyModeFallback(directory)
-    console.error(
-      `nothing to clarify: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory} first` +
-        (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
-    )
-    process.exit(1)
-  }
-  const { config } = await loadRunConfig(directory)
-  const result = await clarifyGate(directory, { phases: config.phases })
-  for (const line of result.lines) (result.type === "released" ? console.log : console.error)(line)
-  process.exit(result.type === "released" ? 0 : result.type === "error" ? 1 : 2)
-}
-
 // land (plans/0074 §2.3, U-L2, ruled 2026-10-04 §5; plans/0192): the
 // person-invoked return path of branch isolation — land each designated
 // nested repository's
@@ -1919,45 +1457,16 @@ function flagOn(key: string): boolean {
 }
 
 // The run-only options plan and transfer refuse (RUN_OPTION_REFUSALS above).
-function refuseRunOptions(command: "plan" | "transfer"): void {
-  for (const refusal of RUN_OPTION_REFUSALS) {
-    if (!flags.has(refusal.key)) continue
-    console.error(`${refusal.flag} is a run option (${refusal.what(command)}); ${command} does not accept it`)
-    process.exit(1)
-  }
-}
 
 // The planning input is plan's (auto-core plans/0053 D14): run never reads it
 // and transfer's rejected-plan-task channel edits the documents and re-runs —
 // neither takes it, so it is refused rather than silently ignored.
-function refusePlanInputFlags(command: "run" | "transfer"): void {
-  for (const key of ["prompt", "file"]) {
-    if (!flags.has(key)) continue
-    console.error(
-      `${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option: ${command} takes no planning input. ` +
-        (command === "run"
-          ? "Plan with opencode-auto plan <dir> -p <text> | --file <path>, then run"
-          : "A rejected plan task is fixed through its inputs — the documents — and transfer re-runs on them"),
-    )
-    process.exit(1)
-  }
-}
 
 // The close-family flags are close's and plan --force-close's (auto-core
 // plans/0053 D22/D28): neither run nor transfer closes anything, and silently
 // ignoring a close attempt would let a person believe a unit was closed when
 // nothing happened (the AUTO-RESOLVE rationale of plan's own refusal of the
 // group without --force-close).
-function refuseCloseFamilyFlags(command: "run" | "transfer"): void {
-  for (const key of ["reason", "cascade", "commit-changes", "stash-changes"]) {
-    if (!flags.has(key)) continue
-    console.error(
-      `--${key} is a close option: ${command} closes nothing. Close a unit with opencode-auto close <ref> [dir] --reason <text>, ` +
-        `or close and keep planning with opencode-auto plan <dir> --force-close <ref> --reason <text>`,
-    )
-    process.exit(1)
-  }
-}
 
 // The lane value flags are _lane's alone (hidden, auto-core plans/0068 §6.4):
 // the parent run's lane launcher re-invokes this CLI with `_lane <dir> --unit
@@ -1967,16 +1476,6 @@ function refuseCloseFamilyFlags(command: "run" | "transfer"): void {
 // (0159): it shared their option machinery but not this check, so
 // `plan <dir> --unit T-001` sailed into a real planning dispatch with the
 // flag silently dropped.
-function refuseLaneValueFlags(command: "run" | "plan" | "transfer"): void {
-  for (const key of ["unit", "merge"]) {
-    if (!flags.has(key)) continue
-    console.error(
-      `--${key} is a value flag of the hidden _lane entry (the lane worker the parent run's launcher invokes; a person never passes it)${key === "merge" ? " — land's --merge is the landing-mode boolean (opencode-auto land <dir> --merge)" : ""}; ` +
-        `${command} takes no --${key}`,
-    )
-    process.exit(1)
-  }
-}
 
 // _lane's machine-entry policy (plans/0195 D4, ruling 0193 D5's named
 // residual): the hidden entry takes exactly what its block reads — --unit,
@@ -1994,17 +1493,6 @@ function refuseLaneValueFlags(command: "run" | "plan" | "transfer"): void {
 // models' and install-prompts' flags the OWNED_FLAGS ladder above already
 // refuses). It sits after refuseFrozenFlags("_lane") so the shared
 // vocabulary keeps its specific notices (0193 D5's layer, unchanged).
-function refuseLaneForeignFlags(): void {
-  const laneFlags = new Set(["unit", "merge", "server", "verbose", "interactive", "wait-answer", "permission", "new-session"])
-  for (const key of flags.keys()) {
-    if (laneFlags.has(key)) continue
-    console.error(
-      `--${key} is not a _lane option: the hidden lane-worker entry takes only --unit <id>, --merge <branch> and the session flags (--server, --verbose, --interactive, --wait-answer, --permission, --new-session) — ` +
-        `its argv is the parent run's lane launcher's own; the public commands' options belong to their own invocations`,
-    )
-    process.exit(1)
-  }
-}
 
 // The missing-config refusal of the commands that need an initialized project
 // (plan, close, land, the amend command and — plans/0239 D5 — run): the verb
@@ -2115,7 +1603,7 @@ function refuseFrozenFlags(command: "run" | "plan" | "transfer" | "_lane") {
   // the round-close checks and opens the next round.
   if (flags.has("continue")) {
     console.error(
-      `--continue is not an option: the next round opens with transfer — once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} transfer <dir> (it runs the round-close checks and opens the next round)`,
+      `--continue is not an option: the next round opens with the transfer operation of a daemon (POST /projects/<project>/transfer) — once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and advance (it runs the round-close checks and opens the next round)`,
     )
     process.exit(1)
   }
@@ -2123,34 +1611,6 @@ function refuseFrozenFlags(command: "run" | "plan" | "transfer" | "_lane") {
 
 // The session flags of run and plan (auto-core plans/0053 §2): they shape this
 // run's sessions, not the project.
-type SessionFlags = { verbose: boolean; interactive: boolean; waitAnswer: number; permission: PermissionMode; newSession: boolean }
-
-function parseSessionFlags(): SessionFlags {
-  const verbose = flags.has("verbose") && flags.get("verbose") !== "false"
-  // --interactive/-i: foreground interactive mode (mutually exclusive with
-  // --verbose); the log file keeps the full verbose-level record while the
-  // foreground hides the verbose detail, and a resident stdin feeds human input
-  // into the current session as a steer.
-  const interactive = flags.has("interactive") && flags.get("interactive") !== "false"
-  if (interactive && verbose) {
-    console.error("--interactive/-i and --verbose are mutually exclusive; pick one")
-    process.exit(1)
-  }
-  const waitAnswer = parseMinutes(flags.get("wait-answer"))
-  if (waitAnswer === null) {
-    console.error("--wait-answer takes 1..60 (minutes); defaults to 1 when given without a value")
-    process.exit(1)
-  }
-  const permission = parsePermission(flags.get("permission"))
-  if (permission === null) {
-    console.error("--permission takes auto-allow|ask-allow|ask-deny|ask-fail; defaults to ask-deny")
-    process.exit(1)
-  }
-  // --new-session: when resuming from an interruption, do not reuse the
-  // interrupted session (it only skips reuse; exact phase re-entry is
-  // unaffected).
-  return { verbose, interactive, waitAnswer, permission, newSession: flags.has("new-session") && flags.get("new-session") !== "false" }
-}
 
 // A text-or-file pair flag — plan's -p/--prompt | --file planning input
 // (auto-core plans/0053 D14) and init/amend's --brief | --brief-file seed
@@ -2201,13 +1661,6 @@ async function parseTextOrFile(spec: TextOrFileSpec, textKey: string, fileKey: s
 }
 
 // plan's planning input: the -p/--prompt text or the --file contents.
-function parsePlanInput(): Promise<PlanInput | undefined> {
-  return parseTextOrFile(
-    { textFlag: "-p/--prompt", fileFlag: "--file", what: "planning input", textWhy: "the planning input", fileWhy: "planning input", namesWhy: "planning input", emptyWhy: "planning input must not be empty" },
-    "prompt",
-    "file",
-  )
-}
 
 // init/amend's --brief/--brief-file: the project brief's seed (init) or
 // revision (amend), the text verbatim.
@@ -2222,11 +1675,6 @@ function parseBriefSeed(): Promise<string | undefined> {
 // Every run (and every plan that enters the loop) starts a fresh log file
 // under the target directory's .auto/logs/, recording all output
 // synchronously.
-function startRunLog(directory: string, session: SessionFlags) {
-  setVerbose(session.verbose)
-  if (session.interactive) setInteractive()
-  log(`📝 log file: ${setLogFile(directory)}`)
-}
 
 // The project config (.opencode/auto/config.json) is the only source of the
 // constitutional options; a broken file is an environment error with exit 1
@@ -2257,46 +1705,18 @@ async function loadRunConfig(directory: string): Promise<{ config: ProjectConfig
 // the config summary and, when phased, the phase progress line — the core's
 // one emitter family (auto-core src/banner.ts, plans/0193 D1), rendered here
 // through the log sink.
-async function logRunBanner(directory: string, config: ProjectConfig) {
-  for (const line of await runBannerLines(directory, config)) log(line)
-}
 
 // The runAll options run and plan share (auto-core plans/0053 D14): the config
 // init froze (threaded by the core's one configRunOptions, plans/0193 D1)
 // plus this run's session flags. run adds --wait-between, --dryrun
 // and --max-sessions; plan adds its stop condition and planning input.
-function runOptions(config: ProjectConfig, mode: ModeSpec, session: SessionFlags): RunAllOpts {
-  return {
-    // The coding agent, context budget etc. come from the config file (written
-    // by init); OPENCODE_AUTO_AGENT still overrides the agent.
-    ...configRunOptions(config, mode),
-    server: flags.get("server"),
-    // interactive implies the verbose log level (the watch/change-file
-    // monitoring runs as usual and writes to the log).
-    verbose: session.verbose || session.interactive,
-    waitAnswer: session.waitAnswer,
-    permission: session.permission,
-    interactive: session.interactive,
-    newSession: session.newSession,
-  }
-}
 
 // --max-sessions defaults to 1; must be a positive integer — null marks an
 // invalid value.
-function parseMaxSessions(raw: string | undefined): number | null {
-  if (raw === undefined) return 1
-  const value = Number(raw)
-  return /^\d+$/.test(raw) && value >= 1 ? value : null
-}
 
 // --repair defaults to 0 (no automatic repair: a FAIL verdict blocks for the
 // human, today's behavior); 1..10 rounds when given — null marks an invalid
 // value (a bare flag among them: the budget is never implied).
-function parseRepairBudget(raw: string | undefined): number | null {
-  if (raw === undefined) return 0
-  const value = Number(raw)
-  return /^\d+$/.test(raw) && value >= 1 && value <= 10 ? value : null
-}
 
 // --subtask absent/bare = off (the default since 2026-10-04; auto was
 // plans/0059 D1's original default); null marks an invalid value. The four
@@ -2310,21 +1730,9 @@ function parseSubtask(raw: string | undefined): SubtaskMode | null {
 }
 
 // --permission absent/bare = ask-deny; null marks an invalid value.
-function parsePermission(raw: string | undefined): PermissionMode | null {
-  if (raw === undefined || raw === "") return "ask-deny"
-  if (raw === "auto-allow" || raw === "ask-allow" || raw === "ask-deny" || raw === "ask-fail") return raw
-  return null
-}
 
 // --wait-answer/--wait-between absent (no flag) = 0 (no wait); bare = the
 // default 1 minute; null marks an invalid value.
-function parseMinutes(raw: string | undefined): number | null {
-  if (raw === undefined) return 0
-  if (raw === "") return 1
-  const minutes = Number(raw)
-  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 60) return null
-  return minutes
-}
 
 // --context-limit absent/bare = 64 (k tokens); null marks an invalid value.
 function parseContextLimit(raw: string | undefined): number | null {
@@ -2572,7 +1980,7 @@ if (command === "init" || command === "amend") {
   // leaves config.json, the templates, AGENTS.md and docs/ untouched.
   if (command === "init" && flags.has("continue")) {
     console.error(
-      `--continue is not an option: the next round opens with transfer — once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} transfer <dir> (it runs the round-close checks and opens the next round)`,
+      `--continue is not an option: the next round opens with the transfer operation of a daemon (POST /projects/<project>/transfer) — once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and advance (it runs the round-close checks and opens the next round)`,
     )
     process.exit(1)
   }
@@ -2603,7 +2011,7 @@ if (command === "init" || command === "amend") {
   // (whose own -p is retired — the brief is edited by hand) nor amend takes a
   // planning input, so --file is refused rather than ignored.
   if (flags.has("file")) {
-    console.error(`--file is a plan option (the planning input: opencode-auto plan <dir> --file <path>); ${command} does not accept it`)
+    console.error(`--file is retired with the plan command (plans/0283 — the planning input is the phase's plan-input.md); ${command} does not accept it`)
     process.exit(1)
   }
   if (flags.has("commit-subtask")) {
@@ -2642,25 +2050,25 @@ if (command === "init" || command === "amend") {
   if (command === "init") {
     const pointers: Record<string, string> = {
       dryrun:
-        "--dryrun is a run option (the permission preflight: opencode-auto run <dir> --dryrun); init does not accept it — there is no dry-run init, and the refusal comes before any write",
+        "--dryrun is retired with the run command (plans/0283): init does not accept it — there is no dry-run init, and the refusal comes before any write",
       server:
-        "--server is a run option (reuse a running opencode server: opencode-auto run <dir> --server <url>); init does not accept it — init starts no session",
+        "--server is retired with the run command (plans/0283); init does not accept it — init starts no session",
       verbose:
-        "--verbose is a run option (the session log level: opencode-auto run <dir> --verbose); init does not accept it — init starts no session",
+        "--verbose is retired with the run command (plans/0283); init does not accept it — init starts no session",
       interactive:
-        "--interactive/-i is a run option (the foreground interactive mode: opencode-auto run <dir> -i); init does not accept it — init starts no session",
+        "--interactive/-i is retired with the run command (plans/0283); init does not accept it — init starts no session",
       "wait-answer":
-        "--wait-answer is a run option (the wait for a human answer inside a session); init does not accept it — init starts no session",
+        "--wait-answer is retired with the run command (plans/0283); init does not accept it — init starts no session",
       permission:
-        "--permission is a run option (the session permission preset: opencode-auto run <dir> --permission <mode>); init does not accept it — init starts no session",
+        "--permission is retired with the run command (plans/0283); init does not accept it — init starts no session",
       "new-session":
-        "--new-session is a run option (skip reusing an interrupted session on resume); init does not accept it — init starts no session",
+        "--new-session is retired with the run command (plans/0283); init does not accept it — init starts no session",
       "wait-between":
-        "--wait-between is a run option (the pause between tasks: opencode-auto run <dir> --wait-between <minutes>); init does not accept it — init runs no task",
+        "--wait-between is retired with the run command (plans/0283); init does not accept it — init runs no task",
       boundary:
-        "--boundary is a run option (run's phase-boundary shape: opencode-auto run <dir> --boundary stop|flow); init does not accept it — init runs no phase",
+        "--boundary is retired with the run command (plans/0283); init does not accept it — init runs no phase",
       "stop-after":
-        "--stop-after is a run option (the task whose completion ends that run: opencode-auto run <dir> --stop-after <T-NNN>); init does not accept it — init runs no task",
+        "--stop-after is retired with the run command (plans/0283); init does not accept it — init runs no task",
       reason:
         "--reason is a close option (opencode-auto close <ref> [dir] --reason <text>, likewise plan --force-close <ref>); init does not accept it — init closes nothing",
       cascade:
@@ -2797,7 +2205,9 @@ if (command === "init" || command === "amend") {
       // (plans/0084; the parenthetical is dropped over an established round,
       // where it would state a falsehood).
       initClosing: (phased, established, round) => {
-        const opener = `opencode-auto ${phased ? "transfer" : "plan"} ${directory}`
+        // plans/0283: the opener is the daemon's operation (transfer phased,
+        // plan m mode) — the local commands are retired.
+        const opener = phased ? "the transfer operation of a daemon (POST /projects/<project>/transfer)" : "the plan operation of a daemon (POST /projects/<project>/plan)"
         return established
           ? `next: ${opener}`
           : `next: ${opener} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round ${roundDirName(round)} opens on its release)`

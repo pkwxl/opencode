@@ -18,7 +18,7 @@ import { earlierHandovers } from "./formulate-parts"
 import { dirtyStopLines, log, unreadableStopLines } from "./log"
 import { taskNumber, taskNumberFloor } from "./numbering"
 import { sessionOpts } from "./opts"
-import { admissionWarn, planDuties, planFacts, verifyPlanStep } from "./plan-gate"
+import { planDuties, planFacts } from "./plan-gate"
 import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { phaseHandoverDoc, phaseKey, phaseState, phaseTitle, type PhaseUnit } from "./phases"
@@ -240,9 +240,6 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
     if (saved.type === "saved") {
       log(`✓ planning input saved to ${planInputPath(phase)}`)
       restart = "the planning input changed"
-      // The admission warn (plans/0082 §10 D14b): the same charter check over
-      // the person's text, warn-and-record, never refuse.
-      await admissionWarn(ctx, phase, text, `phase-append ${phaseKey(phase).id}`)
     }
   }
   let input = (await readPlanInput(directory, phase))?.trim() || undefined
@@ -320,19 +317,10 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
     ]
     return { prompt, blocks }
   }
-  let prompt = ""
-  let verified: number | "remediate" = 0
-  for (let pass = 0; ; pass++) {
-    const composed = await compose()
-    prompt = composed.prompt
-    verified = await verifyPlanStep(ctx, phase, `phase-append ${phaseKey(phase).id}`, prompt, composed.blocks)
-    if (verified !== "remediate") break
-    if (pass >= 1) {
-      log("⏸ the step re-blocked after two inline remediations; stopping — the diagnosis gate suspends further attempts")
-      return 2
-    }
-  }
-  if (verified !== 0) return verified
+  // The charter verifier is off (plans/0283): the append step is
+  // deterministic — no verifier session, no blockage diagnosis over its
+  // verdict; the collect's mechanical checks judge what the session writes.
+  const prompt = (await compose()).prompt
   let problems: string[] = []
   log(`▶ starting the task-append session to append to ${taskIndex}`)
   const appended = await requireArtifact(

@@ -84,10 +84,10 @@ describe("phaseToRole / roleOf (pipeline and bypass roles)", () => {
   })
 
   test("roleOf: explicit role first > phase-derived > bypass fallback", () => {
-    expect(roleOf({ pct: 100, used: 0, at: 0, role: "knowledge" })).toBe("knowledge")
+    expect(roleOf({ pct: 100, used: 0, at: 0, role: "diagnose" })).toBe("diagnose")
     expect(
-      roleOf({ pct: 100, used: 0, at: 0, role: "knowledge", phase: { kind: "wrapup" } }),
-    ).toBe("knowledge")
+      roleOf({ pct: 100, used: 0, at: 0, role: "diagnose", phase: { kind: "wrapup" } }),
+    ).toBe("diagnose")
     expect(roleOf({ pct: 100, used: 0, at: 0, phase: { kind: "wrapup" } })).toBe("wrapup")
     expect(roleOf({ pct: 100, used: 0, at: 0 })).toBe("bypass")
   })

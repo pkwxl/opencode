@@ -38,24 +38,6 @@ export function planDutyText(facts: PromptFacts, entry: PhaseEntry, ctx: Ctx = {
   return renderText(own ?? `{{> plan-duties-${entry.dutiesRef}}}`, ctx).trimEnd()
 }
 
-// The repair round's discipline (plans/0080 §6): the active pack's `##
-// governance` / `### repair` text, appended to the repair append's input —
-// the boundary that keeps a repair from re-architecting (fix the named
-// finding, minimal change, regression check, re-run the verification).
-// Absent section ⇒ undefined and the input stays as the core composes it
-// (the zero-intent floor; before 0080 the section existed with no consumer
-// at all).
-export function repairDutiesText(facts: PromptFacts): string | undefined {
-  return intentText(facts, "governance", "repair", {})
-}
-
-// Join an optional intent paragraph onto a driver-composed input text: a
-// leading blank line and a framing clause when present, nothing at all when
-// absent (the zero-intent floor keeps the input byte-identical).
-export function withIntentParagraph(text: string | undefined): string {
-  return text === undefined ? "" : `\n\nRepair discipline (the project's intent declares it):\n${text}`
-}
-
 // The task fields the append prompt's existing-task lines read (the task
 // store's Task satisfies the shape structurally).
 type ExistingTask = { id: string; title: string; status: string; closed?: string }

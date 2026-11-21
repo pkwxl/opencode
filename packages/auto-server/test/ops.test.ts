@@ -589,9 +589,9 @@ describe("the lifecycle operations (P1d)", () => {
     await withOps(async (h) => {
       // The project start (row 0, plans/0101 D4): a phased project with no
       // round established refuses — the analysis, the establishment and the
-      // first plan task's construction are transfer's, and the core's own
-      // refusal names this shell's transfer command (made true by the
-      // transfer operation + the CLI subcommand of this binary).
+      // first plan task's construction are the transfer operation's, and
+      // the core's own refusal names it through the surface seam (the
+      // subcommand itself is retired, plans/0283).
       const dir = await phasedProject("auto-ops-establish-", "am")
       await rm(join(dir, "docs"), { recursive: true, force: true })
       await gitOf(dir)("add", "-A")
@@ -601,7 +601,7 @@ describe("the lifecycle operations (P1d)", () => {
       expect(refusedStart.status).toBe(409)
       expect(refusedStart.body.code).toBe(1)
       expect(has(refusedStart.body, "is transfer's")).toBe(true)
-      expect(has(refusedStart.body, "run: opencode-auto-server transfer")).toBe(true)
+      expect(has(refusedStart.body, "the transfer operation (POST /projects/<p>/transfer)")).toBe(true)
       expect(await Bun.file(join(dir, "docs", "R-01", "phases.md")).exists()).toBe(false)
       // Re-establish through the core (the fixture's own writer — the
       // daemon-side establishment flow is the transfer operation's, below),
@@ -617,9 +617,10 @@ describe("the lifecycle operations (P1d)", () => {
       expect(has(listed.body, "lists 1 task(s) (1 pending)")).toBe(true)
       // The served surface (plans/0193 D3 / 0165-056's S30-04): the next-act
       // line names this shell's true channels — the daemon's run and plan
-      // operations — never `opencode-auto-server run <dir>`, the subcommand
-      // this binary refuses with its usage error.
-      expect(has(listed.body, "the run operation (POST /runs)")).toBe(true)
+      // protocol — never `opencode-auto-server run <dir>`, the subcommand
+      // this binary refuses with its usage error (the run operation itself
+      // retired with POST /runs, plans/0282; execute grants run the phase).
+      expect(has(listed.body, "the executor protocol (POST /projects/<p>/executor/claim — execute grants)")).toBe(true)
       expect(has(listed.body, "the plan operation (POST /projects/<p>/plan)")).toBe(true)
       expect(has(listed.body, "opencode-auto-server run")).toBe(false)
       await rm(join(manual, "docs", "R-01", "P01-implement", "tasks.md"))
@@ -644,7 +645,7 @@ describe("the lifecycle operations (P1d)", () => {
       expect(refusedDrift.body.code).toBe(1)
       expect(has(refusedDrift.body, "the phase index of round R-01 differs from the roadmap of docs/analysis.md")).toBe(true)
       expect(has(refusedDrift.body, "transfer re-derives the unstarted tail on its own commit")).toBe(true)
-      expect(has(refusedDrift.body, `run: opencode-auto-server transfer ${dir}`)).toBe(true)
+      expect(has(refusedDrift.body, "the transfer operation (POST /projects/<p>/transfer)")).toBe(true)
       // nothing written: the index keeps its established shape byte-for-byte
       // and no widened-phase directory or moved open-todo seed appears
       expect(await Bun.file(join(dir, "docs", "R-01", "phases.md")).text()).toBe(established)
@@ -662,7 +663,7 @@ describe("the lifecycle operations (P1d)", () => {
       expect(complete.status).toBe(409)
       expect(complete.body.code).toBe(1)
       expect(has(complete.body, "complete and no plan task awaits dispatch")).toBe(true)
-      expect(has(complete.body, "run: opencode-auto-server transfer")).toBe(true)
+      expect(has(complete.body, "the transfer operation (POST /projects/<p>/transfer)")).toBe(true)
       expect(await Bun.file(join(closing, "docs", "R-02", "phases.md")).exists()).toBe(false)
       // an unconfigured directory refuses outright (the CLI's own rule)
       const blank = await gitBlank("auto-ops-planblank-")
@@ -683,10 +684,16 @@ describe("the lifecycle operations (P1d)", () => {
       const name = h.register(dir)
       expect((await h.call("POST", `/projects/${name}/plan`, h.control, { prompt: "plan this" })).status).toBe(400)
       expect((await h.call("POST", `/projects/${name}/plan`, h.control, { file: "/tmp/input.txt" })).status).toBe(400)
+      // 0283: the append field is retired — the task-append session no
+      // longer runs; the refusal teaches task-add and re-formulation.
       const bareAppend = await h.call("POST", `/projects/${name}/plan`, h.control, { append: true })
       expect(bareAppend.status).toBe(400)
-      expect(String(bareAppend.body.error)).toContain("append")
-      expect(String(bareAppend.body.error)).toContain("input")
+      expect(String(bareAppend.body.error)).toContain("append\" is retired (plans/0283)")
+      expect(String(bareAppend.body.error)).toContain("one task at a time")
+      expect(String(bareAppend.body.error)).toContain("/tasks")
+      const appendWithInput = await h.call("POST", `/projects/${name}/plan`, h.control, { append: true, input: "some input" })
+      expect(appendWithInput.status).toBe(400)
+      expect(String(appendWithInput.body.error)).toContain("append\" is retired (plans/0283)")
       const badInput = await h.call("POST", `/projects/${name}/plan`, h.control, { input: { text: "nested" } })
       expect(badInput.status).toBe(400)
       expect(String(badInput.body.error)).toContain('"input" takes the planning input text')

@@ -33,7 +33,6 @@ export const REPO_LANE: readonly string[] = [
   // The 0082 consented-remediation family: the executor and the diagnosis
   // suites drive real git repositories (remediation commits, the loop
   // harness's freshRepo fixtures); the pure halves stay in the unit lane.
-  "test/blockage-diagnosis.test.ts",
   "test/blockage-executor.test.ts",
   // run's boundary stop (plans/0101 D1): the loop harness over real git
   // repositories — the boundary state's commits and handover documents.
@@ -235,7 +234,6 @@ export const UNIT_LANE: readonly string[] = [
   "test/formulate-synthesis.test.ts",
   // The plan verifier's routing and activation surface (plans/0113): pure
   // registry walks and skip reasons over temp directories, no spawn.
-  "test/prompt-verify.test.ts",
   "test/golden.test.ts",
   "test/handover.test.ts",
   "test/hibernate.test.ts",

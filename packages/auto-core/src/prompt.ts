@@ -774,48 +774,6 @@ export function renderPhaseHandover(facts: PromptFacts, input: {
   })
 }
 
-// The knowledge-extraction session of the k (knowledge distillation) phase
-// (plans/0006-phases-design.md P4, wholesale adoption of
-// plans/0002-fixme-knowledge-design.md §D.3): a one-shot bypass session
-// that reads through the phase index and every phase handover document
-// (inside this round's round directory docs/R-NN/) and distills the
-// finally verified migration-knowledge document (permanent path: kb.md
-// inside the knowledge phase directory). file is the output path (relative
-// to the target directory); mode.exec is injected as scenario background
-// (reusing ModeSpec's existing fields, adding no registration surface).
-// The quality hard constraints (M2.1) come from `## quality` / `### knowledge`.
-export function renderKnowledge(facts: PromptFacts, input: { file: string; mode?: ModeSpec }): string {
-  const ctx = { file: input.file, ...modeCtx(input.mode) }
-  return renderPrompt(facts, "knowledge", { ...ctx, qualityRules: intentText(facts, "quality", "knowledge", ctx) })
-}
-
-// Prior-knowledge extraction session (the shell's second-migration
-// orchestration, src/knowledge.ts extractPriorKnowledge): a one-shot
-// bypass session that reads through the existing migration results (not
-// limited to prior rounds — the whole docs/ tree, past rounds' round
-// directories docs/R-NN/, produced code and git history) and distills the
-// prior-knowledge document (docs/R-NN/prior-kb.md within the round) as
-// input to the second migration and parameter inference. file is the
-// output path of the intermediate artifact temp-kb.md (relative to the
-// target directory; only after the driver confirms the finish marker is it
-// renamed into place — the completion-verdict protocol is in
-// knowledge.ts); brief is the project brief verbatim (may be empty);
-// distilled is the list of existing distillation artifact paths
-// (knowledge.ts existingDistilledDocs; when non-empty the template injects
-// a reference-style conditional block: already-covered knowledge points
-// are referenced, not restated, and the distillation effort focuses on the
-// differential increment of new objects).
-// The quality hard constraints (M2.1) come from `## quality` / `### prior-knowledge`.
-export function renderPriorKnowledge(facts: PromptFacts, input: { file: string; brief?: string; mode?: ModeSpec; distilled?: string[] }): string {
-  const distilled = input.distilled?.filter(Boolean) ?? []
-  const ctx = {
-    file: input.file,
-    brief: input.brief?.trim() || undefined,
-    distilled: distilled.length ? distilled.map((path) => `- ${path}`).join("\n") : undefined,
-    ...modeCtx(input.mode),
-  }
-  return renderPrompt(facts, "prior-knowledge", { ...ctx, qualityRules: intentText(facts, "quality", "prior-knowledge", ctx) })
-}
 
 // The hard-wall steer the driver inserts while a session is running (usage
 // reached the wall, testrun.ts steerWall: 2x contextLimit, raised to a quarter

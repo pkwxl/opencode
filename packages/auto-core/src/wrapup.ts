@@ -22,9 +22,9 @@
 // lows), never on a round count alone. The round is session-unbounded (plans/0146 D5): gaps are the
 // natural handover boundaries, and a context-wall handover may land mid-gap
 // with no gap closed — progress is measured per round, so such sessions
-// cost nothing against it. Past the block today's ladder
-// continues verbatim — block with the repair fact (--repair: closeUnit +
-// append) or exit 2 for the person.
+// cost nothing against it. Past the block the ladder
+// continues verbatim — block with the remedy or exit 2 for the person
+// (the repair-append budget is retired, plans/0283).
 // Before 0083 the wrap-up session narrated: the only verdict (plans/0044
 // §3) was written by that narrative session with no verification charter,
 // and the first FAIL jumped straight to the heavyweight path. The verdict
@@ -86,10 +86,10 @@ import { commitBlocked, wrapupResolves } from "./unit-commit"
 // blocks — so a loop starting from N gaps runs at most 2N + 2 rounds
 // before it blocks or passes (in fact at most 2N on the FAIL path, where
 // every measured list carries at least one countable heading). Then the
-// escalation ladder of plans/0079 §4 unchanged
-// (block with the repair fact → `--repair` → the human). No CLI flag, no
-// config key; width, if ever needed, arrives run-side the way `--repair`'s
-// did.
+// ladder of plans/0079 §4 ends in the block unchanged
+// (the FAIL verdict surfaced as state → the human; the repair-append budget
+// is retired, plans/0283). No CLI flag, no
+// config key; width, if ever needed, arrives run-side the way width facts do.
 const FIX_ROUNDS = 2
 
 // report.md shape problems (empty = pass): the path is fixed and known to the
@@ -617,8 +617,7 @@ function laneGapList(task: Task, runs: readonly LaneRun[], gate: { reason: strin
 // solo is the off/auto/ondemand whole-task mode, every mode but the true
 // pipeline (the report is an output summary rather than an index).
 // undefined = verification passed; the only non-blocked other exit never
-// happens (the loop's blocked carries the repair fact for the --repair
-// ladder, an Outcome field).
+// happens (the loop's blocked carries its remedy in the question).
 export async function runWrapup(
   client: ClientSource,
   plan: Plan,
@@ -694,9 +693,9 @@ export async function runWrapup(
     bestGaps = bestGaps === undefined ? gapsNow : Math.min(bestGaps, gapsNow)
     if (round >= FIX_ROUNDS && noProgress >= FIX_ROUNDS) {
       // No progress across the last two fix rounds (plans/0146 D3): today's
-      // ladder verbatim (plans/0079 §4) — the
-      // repair fact carries the verdict to a `--repair` round, else the block
-      // waits for the person; the message names the rounds spent and the
+      // ladder verbatim (plans/0079 §4) — the block waits for the person,
+      // the FAIL verdict surfaced as state (the repair-append budget is
+      // retired, plans/0283); the message names the rounds spent and the
       // stalled count (D5) and its source (a red lane gate or the
       // verification itself).
       const { bin } = shellProfile()
@@ -706,7 +705,6 @@ export async function runWrapup(
           : `the verification of ${task.id} concluded Result: FAIL${reason ? ` (${reason})` : ""}`
       return {
         type: "blocked",
-        repair: { reason },
         question:
           `${lead} and the last two fix rounds closed no gap (${round} fix rounds spent, the gap list still counts ${gapsNow} gap${gapsNow === 1 ? "" : "s"}); the remaining gaps are listed in ${taskDoc(task.id, "gaps")}. ` +
           `The work and the gap list are committed; accept the result with ${bin} close ${task.id} --reason <text>; ` +

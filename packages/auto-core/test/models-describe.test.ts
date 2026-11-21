@@ -173,16 +173,19 @@ describe("candidate lists (model-route)", () => {
     expect(routeFor(routes, undefined, "wrapup")).toBeUndefined()
   })
 
-  test("a key that is a role word routes the role only: the knowledge type goes by its letter", () => {
-    const knowledge = phaseType("knowledge")!
+  test("a key that is a role word routes the role only: the diagnose side channel goes by its letter", () => {
+    // plans/0283: the knowledge routing word retired with the extraction —
+    // the diagnose side channel (the read-only one-artifact session) is the
+    // shape's remaining role.
+    const analysisPhase = phaseType("analysis")!
     const routes = new Map([
-      ["knowledge", { key: "knowledge", layer: "operator" as const, tier: "deep" as const }],
-      ["k", { key: "k", layer: "operator" as const, names: ["glm"] }],
+      ["diagnose", { key: "diagnose", layer: "operator" as const, tier: "deep" as const }],
+      ["a", { key: "a", layer: "operator" as const, names: ["glm"] }],
     ])
-    expect(routeFor(routes, analysis, "knowledge")?.key).toBe("knowledge")
-    expect(routeFor(routes, knowledge, "wrapup")?.key).toBe("k")
-    routes.delete("k")
-    expect(routeFor(routes, knowledge, "wrapup")).toBeUndefined()
+    expect(routeFor(routes, analysisPhase, "diagnose")?.key).toBe("diagnose")
+    expect(routeFor(routes, analysisPhase, "wrapup")?.key).toBe("a")
+    routes.delete("a")
+    expect(routeFor(routes, analysisPhase, "wrapup")).toBeUndefined()
   })
 })
 
@@ -609,14 +612,14 @@ describe("formatModels", () => {
       [
         "  analysis (a) · builtin · execute tier deep",
         "    decompose, whole, subtask, phase-plan, implement-scan: deep → opus ✗ · opus-b ✗ · k3 ✓",
-        "    wrapup, knowledge, prior-knowledge, diagnose, bypass: simple → glm ✗ · k2 ✓ | opus ✗ · opus-b ✗ · k3 ✓",
+        "    wrapup, diagnose, bypass: simple → glm ✗ · k2 ✓ | opus ✗ · opus-b ✗ · k3 ✓",
         "    phase-handover: route phase-handover [operator] → k2 ✓",
       ].join("\n"),
     )
     expect(text).toContain(
       [
         "  acceptance (v) · builtin · execute tier deep",
-        "    decompose, whole, subtask, wrapup, phase-plan, knowledge, prior-knowledge, implement-scan, diagnose, bypass: deep · route acceptance [operator] → opus ✗ · opus-b ✗ · k3 ✓",
+        "    decompose, whole, subtask, wrapup, phase-plan, implement-scan, diagnose, bypass: deep · route acceptance [operator] → opus ✗ · opus-b ✗ · k3 ✓",
         "    phase-handover: route phase-handover [operator] → k2 ✓",
       ].join("\n"),
     )
@@ -640,7 +643,7 @@ describe("formatModels", () => {
     expect(text).toContain(
       "    wrapup: override OPENCODE_AUTO_MODEL → zhipuai/glm-4.6 ✗ (filtered out by the agent filter claude (OPENCODE_AUTO_AGENT); a raw provider/model on the default agent opencode, without window, ring or steps)",
     )
-    expect(text).toContain("    knowledge, prior-knowledge, diagnose, bypass: simple → (none) | opus ✗")
+    expect(text).toContain("    diagnose, bypass: simple → (none) | opus ✗")
     expect(text).toContain("ℹ unused models (no tier, route list or classifier names them): opus-b, k3, glm")
     expect(lines.at(-1)).toBe("5 problem(s): run and plan refuse to start until they are fixed (exit 1)")
     expect(lines.at(-2)).toStartWith("⚠ model registry, operator layer")

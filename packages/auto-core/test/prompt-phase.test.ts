@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle } from "../src/bundle"
-import { renderKnowledge, renderPhaseHandover, renderPriorKnowledge } from "../src/prompt"
+import { renderPhaseHandover } from "../src/prompt"
 import { existingTaskList, planDutyText, renderFormulationTodo, renderPhaseAppend } from "../src/prompt-plan"
 import { planDuties } from "../src/plan-gate"
 import { formulationAcceptance } from "../src/formulate"
@@ -464,83 +464,6 @@ describe("renderPhaseHandover (phase handover distillation session, F.1)", () =>
     expect(plain).toContain("phases.md).\n\n## Artifact\n")
     expect(renderPhaseHandover(facts, { ...base, closedTasks: [] })).toBe(plain)
     expect(renderPhaseHandover(facts, { ...base, closedTasks: undefined })).toBe(plain)
-  })
-})
-
-describe("renderKnowledge (k-phase knowledge extraction session, P4 claims --extract-knowledge)", () => {
-  const FILE = "docs/R-01/P03-knowledge/kb.md"
-
-  test("injects the output path, source list and section skeleton; read-only analysis, the only writable file is the output path", () => {
-    const text = renderKnowledge(facts, { file: FILE })
-    expect(text).toContain(FILE)
-    // Source pointers (the phase index inside this round's directory and each phase directory's handover document; the phase directories also hold the PLAN snapshot)
-    expect(text).toContain("docs/R-NN/phases.md")
-    expect(text).toContain("docs/R-NN/P<nn>-<type>/handover.md")
-    expect(text).toContain("docs/R-NN/P<nn>-<type>/")
-    expect(text).toContain("git log")
-    // Section skeleton (this repository's take on spec §13; Design Deviations instead sources AUTO-DECISION) —
-    // work-type-neutral since plans/0081 D7.
-    for (const section of ["## Work summary", "## API and type mapping", "## Implementation patterns", "## Pitfalls and edge cases", "## Reusable rules", "## Design deviations and key decisions", "## Verification evidence", "## References"]) {
-      expect(text).toContain(section)
-    }
-    expect(text).toContain("AUTO-DECISION")
-    // Quality constraints (spec §14)
-    expect(text).toContain("Final state first")
-    expect(text).toContain("Deduplicate")
-    expect(text).toContain("Do not copy session dialogue")
-    expect(text).toContain("verifiable anchor")
-    expect(text).toContain('labelled "rejected"')
-    expect(text).toContain(`the only file(s) you may write this time are ${FILE}; do not`)
-    expect(text).not.toContain("[re:")
-    // 0072 U-B/T-131: the state-rule restatement (state files / commits)
-    // retired from the prompt; the AGENTS.md block owns both wordings
-    expect(text).not.toContain("maintained by the DRIVER")
-    expect(text).not.toContain("git commit")
-    expect(text).toContain("Distil only")
-  })
-
-  test("injects the mode.exec scenario background; without a mode the whole block disappears", () => {
-    const text = renderKnowledge(facts, { file: FILE, mode: migrate })
-    expect(text).toContain("Scenario mode notes (migrate)")
-    expect(text).toContain("Migration/upgrade mode notes")
-    expect(renderKnowledge(facts, { file: FILE })).not.toContain("Scenario mode notes")
-  })
-
-  test("renders with no leftover template tags", () => {
-    for (const text of [renderKnowledge(facts, { file: FILE }), renderKnowledge(facts, { file: FILE, mode: migrate })]) {
-      expect(text).not.toMatch(/\{\{|\}\}/)
-    }
-  })
-})
-
-describe("renderPriorKnowledge (prior knowledge extraction session)", () => {
-  test("referencing two states: a non-empty distilled list injects the list and the no-restating demand; empty/default, the whole block disappears (same behavior as full distillation)", () => {
-    usePromptLibrary(undefined)
-    const withList = renderPriorKnowledge(facts, {
-      file: "docs/prior-kb/R2-prior-x.md",
-      brief: "intent",
-      distilled: ["docs/R-01/P02-implement/handover.md", "docs/R-01/P03-knowledge/kb.md"],
-    })
-    expect(withList).toContain("## Input: existing distilled artifacts (reference, do not restate)")
-    expect(withList).toContain("must not be restated in this")
-    expect(withList).toContain("- docs/R-01/P02-implement/handover.md")
-    expect(withList).toContain("- docs/R-01/P03-knowledge/kb.md")
-    // Referencing's same constraint: already-covered knowledge points are replaced by a one-line reference instead of an excerpt
-    expect(withList).toContain("a one-line reference (`see <path>: <one sentence>`)")
-    const bare = renderPriorKnowledge(facts, { file: "docs/prior-kb/R1-prior-x.md" })
-    expect(bare).not.toContain("## Input: existing distilled artifacts")
-    expect(bare).not.toContain("must not be restated")
-    expect(renderPriorKnowledge(facts, { file: "docs/prior-kb/R1-prior-x.md", distilled: [] })).not.toContain("## Input: existing distilled artifacts")
-  })
-
-  test("closing-marker protocol: the intermediate-artifact path note + a final \"DONE\" alone on its own line + never written before everything is complete", () => {
-    usePromptLibrary(undefined)
-    const text = renderPriorKnowledge(facts, { file: "docs/R-01/temp-kb.md" })
-    expect(text).toContain("intermediate artifact path")
-    expect(text).toContain("put the line `DONE` on a line of its own at the very end of the document")
-    expect(text).toContain("DRIVER-parsed protocol string: write it verbatim, do not translate it")
-    expect(text).toContain("never write that line before every section is complete")
-    expect(text).toContain("promote the file to the official prior-knowledge document")
   })
 })
 

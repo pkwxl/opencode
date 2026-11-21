@@ -61,7 +61,7 @@ import { emitStatus } from "./run-status"
 import { statsLaneUsage, type LaneUsageDetail } from "./stats"
 import { splitTaken } from "./split"
 import { taskDoc, taskDir } from "./docpaths"
-import { defaultLaneLauncher, shellProfile, type LaneMergeInstruction, type LaneWorker } from "./shell"
+import { shellProfile, type LaneMergeInstruction, type LaneWorker } from "./shell"
 import { begin, checklistTitle, clearLane, laneRecords, setLane, setParked, setSplit, syncChecklistTicks, taskIndexPath, UNITS_FILE, withParked, type Plan, type PlanPhase, type Task } from "./tasks"
 
 // —— Activation and policy (D10 as amended by plans/0125; D21) ——
@@ -942,7 +942,19 @@ export async function dispatchLane(
       await Bun.write(join(park, UNITS_FILE), `${JSON.stringify({ tasks: { [seed.task]: { split: reRootSplit(seed.split, dir, park) } } }, null, 2)}\n`)
     }
   }
-  const launch = shellProfile().laneLauncher ?? defaultLaneLauncher
+  // The launcher seam (plans/0283): the default lane launcher is retired
+  // with the push lane workers — no shell registers one, so a dispatch that
+  // reaches here without a host-registered launcher fails loudly, never
+  // spawns. Production concurrency rides the executor protocol's scoped/doc
+  // lease tiers; the lane scheduler this serves is the push path's own.
+  const launch = shellProfile().laneLauncher
+  if (launch === undefined) {
+    if (fresh) {
+      await gitOps.removeWorktree(dir, park)
+      await deleteBranch(dir, branch)
+    }
+    return { type: "failed", error: "no lane launcher registered: the push lane workers are retired (plans/0283) — concurrency rides the executor protocol's scoped/doc tiers; a host that owns worker processes registers its launcher through the shell profile" }
+  }
   const worktree = fresh ? park : join(dir, record!.worktree)
   // Tier 1's cache homes (plans/0096 D9): resolved against this dispatch's
   // worktree and created ahead of the spawn — a shared-safe home points every

@@ -76,7 +76,7 @@ import { environmentBootReport } from "./env-boot"
 import { OP_DEFINITIONS, type OpOutcome } from "./ops"
 import { DaemonStore, type RegisteredProject, type Scope } from "./store"
 import { applyServerProfile } from "./profile"
-import { BRIDGE_TOKEN_ENV, CONFIG_KEYS, HAND_EDITED_KEYS, frozenRefusal, parseOptions, parseSwitches, parsePlan, REQUEST_BYTE_LIMIT, requestTooLarge, RequestError, type PlanPayload, type RunOptions, type TransferPayload, type TransportPayload } from "./request"
+import { BRIDGE_TOKEN_ENV, REQUEST_BYTE_LIMIT, requestTooLarge, RequestError, type TransportPayload } from "./request"
 import { executorRoutes, PROTOCOL_VERSION, type ExecutorRoute } from "./ws-protocol"
 import { ExecutorBridge, freshRunSecret, type SocketData } from "./executor-bridge"
 import { parseExecutorRequest, readExecutorBody } from "./executor-request"
@@ -186,7 +186,6 @@ type RunRecord = {
   pid: number | null
   started: string
   ended: string | null
-  request: { options: RunOptions; switches: Record<string, string> }
   proc: Bun.Subprocess | undefined
   tail: string
   watcher: ReturnType<typeof setInterval> | undefined
@@ -477,7 +476,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       pid: null,
       started: new Date().toISOString(),
       ended: null,
-      request: { options: parseOptions(undefined), switches: {} },
       proc: undefined,
       tail: "",
       watcher: undefined,

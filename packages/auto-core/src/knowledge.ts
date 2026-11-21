@@ -1,29 +1,20 @@
-import { readdir, rename, rm } from "node:fs/promises"
+// The knowledge documents' read halves: the paths, the completion marks and
+// the digest readers the planning sessions and the formulation assembly
+// consume. The extraction sessions themselves — the k phase's one-shot
+// distiller and the round's prior-knowledge extraction — are retired
+// (plans/0283, confirming 0277's residual): no session writes these
+// documents anymore; what earlier rounds committed stays the durable record
+// the digests read (P18).
+
+import { readdir } from "node:fs/promises"
 import { join } from "node:path"
-import { priorKnowledgeDoc, roundDirName, tempPriorKnowledgeDoc } from "./docpaths"
+import { priorKnowledgeDoc, roundDirName } from "./docpaths"
 import { PRIOR_KB_DONE } from "./document/roles"
 import { parsePhaseDir } from "./document/unit"
-import { gitOf } from "./git-ops"
-import { formatTokens, log } from "./log"
-import { currentRound, phaseHandoverDoc, phaseArtifacts, readPhases, roundKnowledgeDocs, roundRoot, type PhaseUnit } from "./phases"
-import { renderKnowledge, renderPriorKnowledge } from "./prompt"
-import { promptFacts } from "./prompt-facts"
+import { formatTokens } from "./log"
 import { renderTemplate } from "./template"
-import { statsKnowledgePhase } from "./stats"
+import { currentRound, phaseArtifacts, phaseHandoverDoc, readPhases, roundKnowledgeDocs, roundRoot, type PhaseUnit } from "./phases"
 import { estimateTokens } from "./usage"
-import type { ClientSource, Opts, UnitStop } from "./opts"
-import { requireArtifact } from "./artifact"
-
-// The k (knowledge distillation) phase claims the whole --extract-knowledge
-// design (plans/0002-fixme-knowledge-design.md §D + plans/0006-phases-design.md
-// P4): after each phase completes, a one-shot bypass session distills the
-// finally verified migration experience into a structured knowledge document.
-// The output is the phase type's standard artifact inside the knowledge phase
-// directory docs/R-NN/P<nn>-knowledge/kb.md (M3.3, plans/0047 §5), never moved
-// once settled. Extraction failure does not pollute the exit code — a blocked
-// session or two failures to produce merely return failed; the caller prints a
-// ⚠ warning and proceeds with the phase handover as usual (migration success is
-// not reversely polluted by document-generation failure).
 
 // Output path: the knowledge phase's standard artifact (registry phaseArtifacts,
 // kb.md inside the phase directory).
@@ -48,99 +39,6 @@ export async function existingKnowledge(dir: string, phase: PhaseUnit): Promise<
   const file = knowledgeFile(phase)
   if (!(await Bun.file(join(dir, file)).text().catch(() => "")).trim()) return undefined
   return file
-}
-
-// Knowledge extraction orchestration (mirrors the requireArtifact skeleton of
-// final.ts generateFinalTask; the pseudo task PLAN does not enter the task
-// chain, writes no progress record): collect is lenient — a file that exists
-// and is non-empty counts as produced (section completeness is a prompt-level
-// requirement; over-structural validation would create meaningless retries);
-// the output goes through the unified commit with the session (stage=knowledge),
-// a permanent path inside the phase directory, not moved at handover (R2).
-// The completion condition includes the commit (plans/0021-commit-boundary-design.md
-// ③④ generalized): ③ the idempotent entry finds this round's document already
-// produced but still on the uncommitted list → backfill commit, then complete;
-// ④ document missing and the worktree dirty (the site of a previous half-finished
-// extraction or manual changes) → return dirty for a person to handle, then
-// re-run — against the k phase's existing semantics that "extraction failure is
-// a ⚠ only and does not pollute the exit code", dirty is the exception (an
-// unclean worktree pollutes the start baseline of every later unit, it must
-// stop first). A commit failure (requireArtifact's blocked) is likewise thrown
-// up under the dirty convention, and the caller halts. (The round report as a
-// k-final round's second artifact retired with the report's mandate,
-// plans/0109 D4.)
-export async function extractKnowledge(
-  client: ClientSource,
-  dir: string,
-  opts: Opts,
-  phase: PhaseUnit,
-): Promise<
-  { type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "unreadable"; files: string[] } | { type: "failed"; question: string }
-> {
-  const task = { id: "PLAN", title: "migration knowledge distillation (k phase)", status: "in_progress" as const, attempts: 0, body: "" }
-  const commit = { stage: "knowledge", subject: "PLAN knowledge migration knowledge distillation" }
-  // The run's git service (git-ops.ts gitOf, the seam's one resolution
-  // point: the opts carrier the loop filled, else the holderless production
-  // fallback; a test wanting committing off installs the no-commit double
-  // on the carrier).
-  const git = gitOf(opts)
-  const existing = await existingKnowledge(dir, phase)
-  if (existing) {
-    // ③ Backfill commit: the document is on disk but still on the uncommitted
-    // changes list → commit, then complete.
-    const pending = await git.commitPending(dir, opts, task, commit, [existing])
-    if (pending !== "clean") {
-      log(pending.ok ? `✓ knowledge document was produced but not committed; committed now: ${existing}` : `⚠ knowledge document make-up commit failed: ${pending.failures.map((f) => `${f.rel}: ${f.error}`).join("; ")}`)
-      if (!pending.ok) return { type: "dirty", files: [existing] }
-    }
-    await statsKnowledgePhase(dir)
-    return { type: "skipped", file: existing }
-  }
-  // ④ Half-finished-site detection: artifact missing + worktree dirty → hand
-  // to a person to clean up, no proactive git action.
-  if (!opts.dryrun) {
-    const dirty = await git.changedFiles(dir)
-    if (dirty.length) return { type: "dirty", files: dirty }
-  }
-  const file = knowledgeFile(phase)
-  const produced = await requireArtifact(
-    client,
-    task,
-    renderKnowledge(promptFacts(opts), { file, mode: opts.mode }),
-    opts,
-    {
-      kind: "knowledge extraction",
-      role: "knowledge",
-      // Independent hidden task unit: entry clean gate + SHA baseline + close-out check (plans/0021-commit-boundary-design.md).
-      unitStart: true,
-      artifact: `a non-empty knowledge document ${file}`,
-      detail: "missing or empty",
-      requirement:
-        `write the knowledge document to ${file} (fill in the full section skeleton given in the prompt; when information is scarce, still write the skeleton and say why).`,
-      commit,
-      reset: async () => {
-        await rm(join(dir, file), { force: true })
-      },
-      collect: async () => {
-        const text = await Bun.file(join(dir, file)).text().catch(() => "")
-        if (!text.trim()) return undefined
-        return true
-      },
-    },
-  )
-  if (produced === true) {
-    // Knowledge-phase use (plans/0061 R3/A7): the distillation completed.
-    await statsKnowledgePhase(dir)
-    return { type: "ok", file }
-  }
-  if (produced.type === "dirty" || produced.type === "unreadable") return { type: produced.type, files: produced.files }
-  // If the worktree is already dirty after a blocked session / no output
-  // (typically: commit failure), likewise halt as dirty.
-  if (!opts.dryrun) {
-    const dirty = await git.changedFiles(dir)
-    if (dirty.length) return { type: "dirty", files: dirty }
-  }
-  return { type: "failed", question: produced.question }
 }
 
 // —— Prior-knowledge extraction (specialized secondary migration tool, docs/specialized-tool-design.md §3) ——
@@ -188,114 +86,6 @@ export async function existingDistilledDocs(dir: string, round: number): Promise
     }
   }
   return [...found].sort()
-}
-
-// Prior-knowledge extraction orchestration (the same requireArtifact skeleton
-// as extractKnowledge).
-//
-// Completion condition (2026-09-13 robustness rework, specialized-tool-design
-// §3 — root cause: when the AI service errored, the old criterion "session
-// ended + file non-empty" misjudged a half-finished site as complete): the
-// phase completes ⟺ the formal knowledge document prior-kb.md is on disk and
-// committed. Protocol:
-// ① the AI writes only the intermediate artifact temp-kb.md (same directory
-//    as the formal artifact); once the whole text is written it puts `DONE` on
-//    a line of its own at the very end as the closing mark; collect recognizes
-//    only documents carrying the closing mark, its absence counts as not
-//    produced (retry with feedback);
-// ② after the closing mark is confirmed the driver renames it to the formal
-//    artifact and unified-commits — both the rename and the commit are driver
-//    actions, AI self-reports do not count;
-// ③ on a re-run the artifact already exists but is not yet committed (last
-//    time interrupted after the rename / before the commit, or left over by a
-//    commit failure) → the driver backfill-commits, then it is complete;
-// ④ artifact missing and the worktree has uncommitted changes = the site of a
-//    previous half-finished extraction (or manual changes): the driver does
-//    not clean up proactively (the say over git state belongs to a person),
-//    returns dirty and the caller asks a person to handle it, then re-runs.
-// ③④ take git as the authority and apply only while the run commits (the
-// git seam's production instance; the no-commit double answers empty from
-// changedFiles and "clean" from commitPending, keeping the old
-// committing-off semantics: document exists = complete, dirty check
-// skipped).
-// ⑤ The clean baseline this relies on is the round-start commit, which a human
-//    makes after init/continue — no shell commits it (plans/0048 R1).
-// failed (blocked session / two failures to produce) is converted by the
-// caller into a blocked halt; after a person handles it, a re-run restarts
-// this phase.
-export async function extractPriorKnowledge(
-  client: ClientSource,
-  dir: string,
-  opts: Opts,
-  brief?: string,
-): Promise<{ type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "unreadable"; files: string[] } | { type: "failed"; question: string }> {
-  const round = await currentRound(dir)
-  const task = { id: "PLAN", title: "prior-knowledge extraction (retrospective of existing migration results)", status: "in_progress" as const, attempts: 0, body: "" }
-  const commit = { stage: "prior-knowledge", subject: "PLAN prior-kb prior-knowledge extraction" }
-  // The run's git service (git-ops.ts gitOf, the seam's one resolution
-  // point), as in extractKnowledge above.
-  const git = gitOf(opts)
-  const existing = await existingPriorKnowledge(dir, round)
-  if (existing) {
-    // ③ Backfill commit: the document is on disk but still on the uncommitted
-    // changes list → commit, then complete (same protocol as every hidden
-    // task, helper see git.ts commitPending).
-    const pending = await git.commitPending(dir, opts, task, commit, [existing])
-    if (pending !== "clean") {
-      if (pending.ok) {
-        log(`✓ prior-knowledge document was produced but not committed; committed now: ${existing}`)
-      } else {
-        log(`⚠ prior-knowledge document make-up commit failed: ${pending.failures.map((f) => `${f.rel}: ${f.error}`).join("; ")}`)
-        return { type: "dirty", files: [existing] }
-      }
-    }
-    return { type: "skipped", file: existing }
-  }
-  const file = priorKnowledgeFile(round)
-  const temp = tempPriorKnowledgeDoc(file)
-  // ④ Half-finished-site detection: artifact missing + worktree dirty → hand
-  // to a person to clean up, no proactive git action (the no-commit double's
-  // changedFiles answers empty, so a run on it keeps the old semantics).
-  {
-    const dirty = await git.changedFiles(dir)
-    if (dirty.length) return { type: "dirty", files: dirty }
-  }
-  const distilled = await existingDistilledDocs(dir, round)
-  log(`▶ opening prior-knowledge extraction session (writes ${temp}, renamed to ${file} once the closing mark is confirmed${distilled.length ? "; existing distilled artifacts referenced, not restated" : ""})`)
-  const produced = await requireArtifact(client, task, renderPriorKnowledge(promptFacts(opts), { file: temp, brief, mode: opts.mode, distilled }), opts, {
-    kind: "prior-knowledge extraction",
-    role: "prior-knowledge",
-    // Independent hidden task unit (plans/0021-commit-boundary-design.md). The unified
-    // commit is deliberately not hooked here: closing-mark check → rename → commit must
-    // run in order, and committing at session end would book an unclosed temp-kb.md
-    // first; the driver commits after the rename, below.
-    unitStart: true,
-    artifact: `a knowledge document ${temp} with its closing mark`,
-    detail: `missing, empty, or lacking the closing \`${PRIOR_KB_DONE}\` mark at the end`,
-    requirement:
-      `write the knowledge document to ${temp} (fill in the full section skeleton given in the prompt; when existing migration results are scarce, still write the skeleton and say why), ` +
-      `and once the whole document is written put the line \`${PRIOR_KB_DONE}\` on a line of its own at the very end as the closing mark (a driver protocol string, write it verbatim) — without it the document always counts as unfinished.`,
-    reset: () => rm(join(dir, temp), { force: true }),
-    collect: async () => {
-      const text = await Bun.file(join(dir, temp)).text().catch(() => "")
-      return priorKnowledgeComplete(text) ? true : undefined
-    },
-  })
-  if (produced !== true) {
-    if (produced.type === "dirty" || produced.type === "unreadable") return { type: produced.type, files: produced.files }
-    return { type: "failed", question: produced.question }
-  }
-  // ② Closing mark confirmed → rename to the formal artifact and unified
-  // commit (on the no-commit double the rename still happens, the commit
-  // is a silent ok); a commit failure → dirty for a person (completion
-  // condition = artifact on disk and committed, plans/0021-commit-boundary-design.md).
-  await rename(join(dir, temp), join(dir, file))
-  const committed = await git.afterSession(dir, opts, task, commit)
-  if (committed.type === "failed") {
-    log(`⚠ prior-knowledge document was promoted but the commit failed: ${committed.question}`)
-    return { type: "dirty", files: [file] }
-  }
-  return { type: "ok", file }
 }
 
 // Closing-mark check (pure, exported for tests): the document is non-empty and

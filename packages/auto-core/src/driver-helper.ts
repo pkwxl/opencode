@@ -72,7 +72,7 @@
 //   | 6  round-close gate held (roundCloseProblems)            | ## Close of docs/R-NN/round.md (filled and committed by the person)| run, then transfer    |
 //   |                                                          |                                                                      |                       |
 //   | 7  roadmap-exhausted stop (releasedRoadmapRounds)        | extend ## Roadmap of docs/analysis.md with the next round's line    | transfer              |
-//   | 8  task FAIL / blocked (blocked status or gaps.md)       | docs/T-NNN/gaps.md — read, then accept or rework                    | close; run --repair   |
+//   | 8  task FAIL / blocked (blocked status or gaps.md)       | docs/T-NNN/gaps.md — read, then accept or rework                    | close; rework by hand |
 //   | 9  blockage dossier held (readBlockageDocs + choiceMark) | one Choice: line in docs/R-NN/blockage-<seq>.md                     | the next advance      |
 //   | 10 config / provenance findings (planFix,                | amend --<key> <value>; sync; fix                                    | themselves            |
 //   |    provenanceComparison)                                 |                                                                      |                       |
@@ -146,7 +146,7 @@ import { provenanceFindings } from "./provenance"
 import { peekProgress } from "./resume"
 import { roundBriefText } from "./round-brief"
 import { roundCloseProblems } from "./round-close"
-import { shellProfile } from "./shell"
+import { shellProfile, surfaceOf } from "./shell"
 import { autoSwitches } from "./switches"
 import { usePromptLibrary } from "./template"
 import { loadPlan } from "./tasks"
@@ -232,7 +232,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
   const roundBriefChannel = (n: number): string =>
     `${roundBriefPath(n)} — the round brief: \`## Goal\`, \`## Acceptance criteria\`, \`## Release criteria\` (\`## Close\` stays empty until the round ends); the person's own writing for the new round — they write it and commit it (the commit is the review act); the drafting can travel the released analysis instead: a \`### R-NN\` proposal under \`## Round briefs\` of ${ANALYSIS_DOC}, committed, installs verbatim when the round opens — this hand-written file is the round's own when no proposal covers it; the pen discusses on request and never fills or commits it`
   const planInputChannel = (phase: PhaseUnit): string =>
-    `${planInputPath(phase)} — the phase's planning input, free-form markdown (the active pack's scaffold: ${bin} plan ${dir} --scaffold prints it); written by the person, committed unchanged by the driver; a changed text restarts the open construction`
+    `${planInputPath(phase)} — the phase's planning input, free-form markdown (the active intent pack's ## planning-input section carries its scaffold); written by the person, committed unchanged by the driver; a changed text restarts the open construction`
   // Row 6's renderer: the close checks (minus the build — `buildSkipped`
   // tells roundCloseProblems so a configured build renders neither the
   // build-less warning nor a silent pass, and the caveat names it; detection
@@ -259,7 +259,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
     const close = await roundCloseProblems(dir, closed, { scanExempt: opts.scanExempt, buildSkipped: opts.build !== undefined })
     if (!close.problems.length) return false
     stopLines.push(...roundCloseRefusalLines(dir, closed, closed + 1, close, "transfer"))
-    if (opts.build) stopLines.push(`ℹ this brief did not run the config build (\`${opts.build}\`) — the close gate runs it on the next ${bin} transfer`)
+    if (opts.build) stopLines.push(`ℹ this brief did not run the config build (\`${opts.build}\`) — the close gate runs it on the next ${surfaceOf().transfer(dir)}`)
     channels.push(
       `${roundBriefPath(closed)} — fill its \`## Close\` section: each restated decision named with where it landed in the target's own documentation, each accepted loss with what it cost; then commit`,
     )
@@ -275,7 +275,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
         `recorded containment references — always inside a destination repository, enforced at release alone: restate what each anchored in place when the destination ships, never delete the record it anchored (the working directory's own files are the process workspace, never scanned); a destination file whose grammar legitimately names process paths has its own channel: ${bin} amend ${dir} --scan-exempt <path> records the exemption in the config`,
       )
     }
-    recovery.push(`then: ${bin} transfer ${dir}`)
+    recovery.push(`then: ${surfaceOf().transfer(dir)}`)
     return true
   }
 
@@ -357,7 +357,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
     if (route?.type === "blocked") {
       stopLines.push(phaseFlowBlockedLine(route.reason))
       channels.push("none until the index is fixed by hand — the blocked line above names what and how")
-      recovery.push(`fix what the blocked line names, then re-run this brief or: ${bin} run ${dir}`)
+      recovery.push(`fix what the blocked line names, then re-run this brief or: ${surfaceOf().run(dir)}`)
     } else if (manual && route) {
       // m mode keeps its own shapes (plans/0101 D8): plan/run alone.
       if (route.type === "plan") {
@@ -366,40 +366,40 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
         // uncommitted for the person's review commit.
         uncommittedByDesign = true
         channels.push(
-          `the planning input — pass it with ${bin} plan ${dir} -p <text> | --file <path> (the pack's scaffold prints with ${bin} plan ${dir} --scaffold; ${bin} plan ${dir} --phase points the AGENTS.md guidance at it)`,
+          `the planning input — write the phase's plan-input.md (the intent pack's ## planning-input section carries the scaffold)`,
         )
-        recovery.push(`${bin} plan ${dir} -p <text> | --file <path>`, `then: ${bin} run ${dir}`)
+        recovery.push(`write the phase's plan-input.md, commit`, `then: ${surfaceOf().run(dir)}`)
       } else if (route.type === "execute" || route.type === "handover") {
         const failed = await failedTasks(dir, route.plan.tasks)
         if (failed.length) failedRow(dir, failed, channels, recovery)
         else {
           stopLines.push(...executeNotice(dir, route, true))
           channels.push("none — the next act is execution")
-          recovery.push(`${bin} run ${dir}`)
+          recovery.push(`${surfaceOf().run(dir)}`)
         }
       }
     } else if (route && (await roundIsOpen(dir))) {
       // An open round (plans/0243 B): the light kind's rhythm — tasks absorb
-      // with --new-task / --append, run executes, and the person's filled
+      // with task-add, execution runs, and the person's filled
       // ## Close plus transfer closes the round. The loop's and transfer's
       // own lines verbatim (the brief renders the same bytes the terminal
       // prints, D3).
       if (route.type === "plan") {
         stopLines.push(...(await openRoundEmptyLines(dir, route.plan.index)))
-        channels.push(`tasks — add one with ${bin} plan ${dir} --new-task "<title>" (or --append -p <text> once one exists); the round stays open`)
-        recovery.push(`${bin} plan ${dir} --new-task "<title>"`, `then: ${bin} run ${dir}`)
+        channels.push(`tasks — add one at a time (the task-add channel); the round stays open`)
+        recovery.push(`${surfaceOf().tasks(dir, "--new-task \"<title>\"")}`, `then: ${surfaceOf().run(dir)}`)
       } else if (route.type === "execute") {
         const failed = await failedTasks(dir, route.plan.tasks)
         if (failed.length) failedRow(dir, failed, channels, recovery)
         else {
           stopLines.push(...executeNotice(dir, route, true))
           channels.push("none — the next act is execution")
-          recovery.push(`${bin} run ${dir}`)
+          recovery.push(`${surfaceOf().run(dir)}`)
         }
       } else {
         stopLines.push(...(await openRoundWrapLines(dir)))
-        channels.push(`${roundBriefPath(round)} — fill its \`## Close\` section when the round's work is done, then commit; until then more work absorbs with plan --new-task / --append`)
-        recovery.push(`${bin} transfer ${dir} — closes the open round (its round-close checks gate the close)`)
+        channels.push(`${roundBriefPath(round)} — fill its \`## Close\` section when the round's work is done, then commit; until then more work absorbs one task at a time (task-add)`)
+        recovery.push(`${surfaceOf().transfer(dir)} — closes the open round (its round-close checks gate the close)`)
       }
     } else if (route?.type === "complete") {
       if (await roundCloseRow(round)) {
@@ -410,7 +410,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
           // Row 7 — roadmap-exhausted: transfer's own stop lines verbatim.
           stopLines.push(...roadmapExhaustedLines(dir, round))
           channels.push(`${ANALYSIS_DOC} — extend its \`## Roadmap\` with the next round's line (\`- ${roundDirName(round + 1)} <phases> — <goal>\`, its phases value the round establishes under)`)
-          recovery.push(`${bin} transfer ${dir}`)
+          recovery.push(`${surfaceOf().transfer(dir)}`)
         } else {
           // Plans/0209 D4: the checks this brief ran are the checks it
           // names — a configured build was skipped, so the pass line says
@@ -420,7 +420,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
           )
           uncommittedByDesign = true
           channels.push(`after that transfer: ${roundBriefChannel(round + 1)}`)
-          recovery.push(`${bin} transfer ${dir}`)
+          recovery.push(`${surfaceOf().transfer(dir)}`)
         }
       }
     } else if (route) {
@@ -436,7 +436,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
           channels.push(roundBriefChannel(round))
         }
         channels.push(planInputChannel(phase))
-        recovery.push(`${bin} transfer ${dir} — it constructs the plan task and stops for review`, `then: ${bin} plan ${dir} (dispatch), ${bin} run ${dir} (execute)`)
+        recovery.push(`${surfaceOf().transfer(dir)} — it constructs the plan task and stops for review`, `then: the formulate grant dispatches it, execute grants run the phase (the executor protocol)`)
       } else if (route.type === "execute") {
         const awaiting = awaitingFormulation(route.plan.tasks, phase)
         const failed = await failedTasks(dir, route.plan.tasks.filter((task) => task !== awaiting))
@@ -446,9 +446,9 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
           if (!briefFilled) channels.push(roundBriefChannel(round))
           channels.push(planInputChannel(phase))
           recovery.push(
-            `${bin} transfer ${dir} — its idempotent reconstruct absorbs changed inputs and stops for review again`,
-            `${bin} plan ${dir} — dispatches the reviewed todo (the formulation session, the collect checks, the wrap-up)`,
-            `then: ${bin} run ${dir}`,
+            `${surfaceOf().transfer(dir)} — its idempotent reconstruct absorbs changed inputs and stops for review again`,
+            `the formulate grant dispatches the reviewed todo (the formulation session, the collect checks, the wrap-up) over the executor protocol`,
+            `then: ${surfaceOf().run(dir)}`,
           )
         } else if (failed.length) {
           failedRow(dir, failed, channels, recovery)
@@ -456,7 +456,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
           // Row 13 — the rhythm brief: transfer's own refusal line verbatim.
           stopLines.push(nothingToAdvanceLine(dir, phase, route.plan.tasks.filter((task) => task.status !== "done").length))
           channels.push("none — the next act is execution (`run` executes; the boundary follows)")
-          recovery.push(`${bin} run ${dir}`)
+          recovery.push(`${surfaceOf().run(dir)}`)
         }
       } else if (route.type === "handover") {
         // Rows 4 and 5: the gates first, else the boundary stop — run's own
@@ -473,9 +473,9 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
             defaults.push("the held forks' `Recommend:` defaults — `Clarified: yes` accepts them all")
           }
           if (acceptance) {
-            channels.push(`${acceptance} — review the phase's case, then add the whole line \`Accepted: yes\` and commit, or write rework notes for an append (\`plan --append\`)`)
+            channels.push(`${acceptance} — review the phase's case, then add the whole line \`Accepted: yes\` and commit, or write rework notes for the tasks you add (task-add, one at a time)`)
           }
-          recovery.push(`${bin} transfer ${dir}`)
+          recovery.push(`${surfaceOf().transfer(dir)}`)
         } else {
           stopLines.push(...(await phaseBoundaryLines(dir, phase)))
           // The next phase of the same index read (id-keyed: the route's
@@ -485,7 +485,7 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
           channels.push(
             `review the completed phase — its task reports (\`docs/T-NNN/report.md\` of its tasks)${next ? `; ahead: ${planInputPath(next)} may be written now (the next transfer's construct reads it)` : ""}`,
           )
-          recovery.push(`${bin} transfer ${dir}`)
+          recovery.push(`${surfaceOf().transfer(dir)}`)
         }
       }
     }
@@ -554,11 +554,11 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
     if ((await peekProgress(dir))?.active === true) {
       facts.push("⚠ the worktree holds uncommitted changes — an interrupted unit's resumable progress (an active progress record): run resumes it, and its close commits the changes or a strict-resume rollback stashes them (git stash list shows where)")
       channels.push("the worktree — the interrupted unit's in-flight batch; no manual git work needed, run continues it")
-      recovery.push(`${bin} run ${dir} — the start clean gate exempts an active record's unit and resumes it (plans/0149)`)
+      recovery.push(`${surfaceOf().run(dir)} — the start clean gate exempts an active record's unit and resumes it (plans/0149)`)
     } else {
       facts.push(`⚠ the worktree holds uncommitted changes — a start gate refuses them (driver-exclusive leftovers self-heal)`)
       channels.push("the worktree — commit or clean the changes you own; driver-exclusive state files (.auto/, the index ticks, the renames) self-heal at the next start gate")
-      recovery.push(`${bin} run ${dir} — it self-heals the driver-exclusive leftovers and names anything else`)
+      recovery.push(`${surfaceOf().run(dir)} — it self-heals the driver-exclusive leftovers and names anything else`)
     }
   }
 
@@ -648,5 +648,5 @@ function failedRow(dir: string, failed: readonly string[], channels: string[], r
     channels.push(`docs/${id}/gaps.md — the verification's gap list: read it, then accept the failure or plan the rework (the task stays blocked until one of the two)`)
   }
   recovery.push(`${bin} close <T-NNN> ${dir} --reason "<text>" — accept the failed task (done for scheduling, never delivered)`)
-  recovery.push(`${bin} run ${dir} --repair <n> — bounded rework rounds over the report's evidence (the first FAIL blocks without it)`)
+  recovery.push(`rework: over the executor protocol a FAIL verdict opens the fix grant's repair round (a worker claims it); locally, fix the gap list's findings by hand and re-verify (the repair budget is retired, plans/0283)`)
 }

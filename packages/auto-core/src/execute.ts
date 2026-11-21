@@ -330,8 +330,8 @@ function parkFeedback(task: Task, file: string, problems: string[]): string {
 }
 
 // The release note (D7): the resumed task's first dispatch carries the
-// blocker's id, how it ended (a `Closed:` record — person-closed or a
-// --repair FAIL-closure — names its reason; anything else completed), and
+// blocker's id, how it ended (a `Closed:` record names its reason;
+// anything else completed), and
 // the re-merge surface — the blocker's changed paths ∩ this task's
 // `Touches:` (everything it changed when the task declares nothing): the
 // files the successor must re-read first, since they moved under a task

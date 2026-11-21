@@ -99,7 +99,7 @@ import {
 } from "./plan"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { closeStep } from "./resume"
-import { shellProfile } from "./shell"
+import { shellProfile, surfaceOf } from "./shell"
 import { autoSwitches } from "./switches"
 import { loadPlan, type Plan } from "./tasks"
 import { validHandover } from "./document/roles"
@@ -149,9 +149,10 @@ async function transferAdvance(directory: string, opts: RunAllOpts, deterministi
   // — no boundary vocabulary applies, so transfer refuses rather than
   // pretending one.
   if ((opts.phases ?? "m") === "m") {
+    const surface = surfaceOf()
     log(
       `⏸ transfer applies to phased projects: this one runs m mode (the single implicit phase), whose planning and execution keep their shapes — ` +
-        `plan with ${bin} plan ${directory} -p <text> | --file <path>, execute with ${bin} run ${directory}`,
+        `plan with ${surface.plan(directory, "-p <text> | --file <path>")}, execute with ${surface.run(directory)}`,
     )
     return 1
   }
@@ -514,6 +515,7 @@ async function openRoundAdvance(
   opts: RunAllOpts,
 ): Promise<number> {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   const pending = route.type === "execute" ? route.plan.tasks.filter((task) => task.status !== "done").length : 0
   // The close intent: the filled `## Close` restatement — the same section
   // the round-close gate reads below (the seed's hint comments strip to
@@ -524,7 +526,7 @@ async function openRoundAdvance(
     if (closing) {
       log(
         `⏸ open round ${roundDirName(round)} still holds ${pending} pending task(s) and does not close on them: ` +
-          `execute them with: ${bin} run ${directory} — or close the ones that will not run (${bin} close <ref> ${directory} --reason <text>), then re-run: ${bin} transfer ${directory}`,
+          `execute them with: ${surface.run(directory)} — or close the ones that will not run (${bin} close <ref> ${directory} --reason <text>), then re-run: ${surface.transfer(directory)}`,
       )
       return 2
     }
@@ -555,12 +557,13 @@ async function openRoundAdvance(
 // own commit ahead of the transition, every kill point re-derivable.
 async function openRoundClose(directory: string, round: number, phase: PhaseUnit, opts: RunAllOpts): Promise<number> {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   for (const line of closeAuditStopLines(await ensureCloseAudit(directory, round))) log(line)
   const close = await roundCloseProblems(directory, round, { build: opts.build, scanExempt: opts.scanExempt })
   if (close.problems.length) {
     log(`⏸ round ${roundDirName(round)} does not pass its round-close checks, so the open round cannot close yet — nothing was closed`)
     for (const line of roundCloseLines(close, "transfer")) log(line)
-    log(`next: fix them, commit, then re-run: ${bin} transfer ${directory}`)
+    log(`next: fix them, commit, then re-run: ${surface.transfer(directory)}`)
     return 2
   }
   // Green cover set ⇒ the table's memory updates before the close proceeds
@@ -597,7 +600,7 @@ async function openRoundClose(directory: string, round: number, phase: PhaseUnit
   }
   for (const line of roundCloseLines(close)) log(line)
   log(`✓ open round ${roundDirName(round)} closed`)
-  log(`next: open the next round with: ${bin} transfer ${directory}`)
+  log(`next: open the next round with: ${surface.transfer(directory)}`)
   return 0
 }
 
@@ -671,6 +674,7 @@ async function projectStart(directory: string, round: number, opts: RunAllOpts):
 // construction.
 async function establishStop(directory: string, round: number, opts: RunAllOpts, before: string[]): Promise<number> {
   const { bin } = shellProfile()
+  const surface = surfaceOf()
   const setup = await establishRoundSetup(directory, round, { phases: opts.phases!, isolate: opts.isolate, testByDriver: opts.testByDriver })
   const ok = setup.type === "ok" ? setup : undefined
   const name = roundDirName(round)
@@ -717,8 +721,8 @@ async function establishStop(directory: string, round: number, opts: RunAllOpts,
           `revise the brief in place any time, every planning session reads the current file`,
       )
       log(
-        `next: the round is open — add tasks with: ${bin} plan ${directory} --new-task "<title>" (or --append -p <text> once one exists), ` +
-          `execute them with: ${bin} run ${directory}; close the round by filling the ## Close of ${roundBriefPath(round)}, committing, and re-running: ${bin} transfer ${directory}`,
+        `next: the round is open — add tasks with: ${surface.tasks(directory, "--new-task \"<title>\"")} (one at a time), ` +
+          `execute them with: ${surface.run(directory)}; close the round by filling the ## Close of ${roundBriefPath(round)}, committing, and re-running: ${surface.transfer(directory)}`,
       )
       return 0
     }
@@ -752,10 +756,10 @@ async function establishStop(directory: string, round: number, opts: RunAllOpts,
     ok
       ? openGoal !== undefined
         ? `next (round-start gate): review the round setup and the pre-seeded ${roundBriefPath(round)} (its ## Goal carries the roadmap line's goal — revise or accept it), and commit it; ` +
-          `then add tasks with: ${bin} plan ${directory} --new-task "<title>" (or --append -p <text> once one exists), execute them with: ${bin} run ${directory} — ` +
-          `the round stays open until you fill its ## Close and re-run: ${bin} transfer ${directory}`
+          `then add tasks with: ${surface.tasks(directory, "--new-task \"<title>\"")} (one at a time), execute them with: ${surface.run(directory)} — ` +
+          `the round stays open until you fill its ## Close and re-run: ${surface.transfer(directory)}`
         : `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it; ` +
-          `then run: ${bin} transfer ${directory} — it constructs ${phaseRefText(ok.units[0]!)}'s plan task and stops for your review (plan dispatches it, run executes the phase)`
+          `then run: ${surface.transfer(directory)} — it constructs ${phaseRefText(ok.units[0]!)}'s plan task and stops for your review (the formulate grant dispatches it, execute grants run the phase)`
       : "",
   )
   // A released near-miss heading naming this round (plans/0158 D3): the

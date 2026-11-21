@@ -64,7 +64,6 @@ import {
 } from "./lanes"
 import { recallProgress } from "./resume"
 import { regressionBoundary } from "./regression"
-import { repairDutiesText, withIntentParagraph } from "./prompt-plan"
 import { promptFacts } from "./prompt-facts"
 import { emitStatus } from "./run-status"
 import { runTask } from "./runner"
@@ -138,11 +137,6 @@ export type LoopCtx = {
   // it: a declared wall's close refuses under such a fleet. Absent = the
   // fleet carries it (the byte-identical floor for every existing ctx).
   externalDirectory?: false
-  // The repair rounds this run has driven (plans/0079 §4): incremented as a
-  // round opens, read against opts.repair (the budget). Run state only,
-  // nothing persists it — an interrupted or re-run process starts a fresh
-  // budget, like every other run-side width fact.
-  repairs: number
   // --stop-after's stop flag (plans/0128): set by the serial task loop when
   // the target task completes — or is already complete at the loop's start —
   // and read where the loop returns: a plain 0 from runTaskLoop means "phase
@@ -406,86 +400,6 @@ async function handleLaneExit(ctx: LoopCtx, phase: PhaseUnit, task: Pick<Task, "
   return outcome.kind === "land" ? { kind: "land", report: outcome.report } : { kind: "orphan" }
 }
 
-// The repair round's shared mechanics (plans/0079 §4; the 0102 complexity-3
-// dedup): the budget check, the counter bump, the site's log/status lines,
-// and the append input carrying the evidence with the pack's repair
-// discipline (plans/0080 §6) as its intent paragraph — one home where four
-// repair sites used to keep hand-maintained copies (runSerialUnit's blocked
-// arm and the doc loop's finishBlocked below, loop-phase's regression hold
-// and verdict-gate repair). What stays caller-side: the eligibility that
-// names the evidence a repair may trade on (a blocked outcome's repair fact,
-// a verdict-prefixed gate problem) and, on the two gate sites, the append
-// driving itself (appendPlan lives in loop-append, above this module in
-// the import direction — the input this helper sets is what that append
-// consumes).
-//   "task": closeUnit the failed task (done for scheduling, the Closed:
-// field recording the round), then hand the phase loop the evidence as an
-// append input (ctx.append — the loop's re-route drives the append).
-// `quiet` is the doc loop's waitQuiet: closeUnit refuses a dirty tree, so
-// the round first waits for the sibling lanes' pipelines to settle — only
-// after the budget check passed, exactly where the serial copy never had it.
-//   "regression"/"verdict": log the gate hold (the site selects the wording)
-// and set the input over the caller's evidence text, a function of the round
-// number — the verdict evidence quotes it, and the number exists only once
-// the counter bumped.
-// Returns "appended" = the round opened (task site: the task is closed and
-// the input set; gate sites: the hold logged and the input set); "block" =
-// a stop condition holds, the budget is spent, or closeUnit refused (the
-// refusal logged) — the caller falls through to today's block or gate stop.
-export async function repairRoundAppend(
-  ctx: LoopCtx,
-  site:
-    | { kind: "task"; task: Pick<Task, "id">; reason?: string; quiet?: () => Promise<void> }
-    | { kind: "regression" | "verdict"; title: string; text: (round: number) => string },
-): Promise<"appended" | "block"> {
-  const { directory, opts } = ctx
-  if (opts.stopBefore !== undefined || (opts.repair ?? 0) <= ctx.repairs) return "block"
-  if (site.kind === "task") {
-    if (site.quiet) await site.quiet()
-    // The round number is derived and the counter takes it only once the
-    // close landed (plans/0213 D3d): a refused close (a dirty tree, a
-    // cascade refusal) never opened a round, and consuming budget there
-    // silently shrank the next FAIL's — 0079 §4's "each round consumes
-    // budget" means a round that opened. The header's invariant holds:
-    // the number the reason quotes is the number the counter holds once
-    // the round opens.
-    const round = ctx.repairs + 1
-    const reason = `repair round ${round}: the task report concluded Result: FAIL${site.reason ? ` (${site.reason})` : ""}`
-    const closed = await closeUnit(directory, site.task.id, { reason, phases: ctx.phases, acceptanceGate: opts.acceptanceGate })
-    for (const line of closed.lines) log(`  ${line}`)
-    if (closed.type !== "closed") {
-      log(`⏸ the repair round could not close ${site.task.id}; blocking as usual`)
-      return "block"
-    }
-    ctx.repairs = round
-    emitStatus({ type: "task-end", task: site.task.id, outcome: "blocked", detail: `${reason}; a repair round appends rework tasks (${round}/${opts.repair})` })
-    log(`↻ ${site.task.id}: ${reason}; the phase loop appends repair tasks over the report's evidence (round ${round} of ${opts.repair})`)
-    ctx.input = {
-      text:
-        `Repair round ${round}: the task ${site.task.id} was closed — its report docs/${site.task.id}/report.md concluded ` +
-        `Result: FAIL${site.reason ? ` (${site.reason})` : ""}. Read that report and the task's documents for what it ` +
-        `left unfinished or broken, then append repair tasks that finish the work: cover the remaining acceptance, fix what the report found, ` +
-        `and have the last task re-verify so the phase's verdict is rewritten honestly.` +
-        // The pack's repair discipline (plans/0080 §6): the boundary that
-        // keeps a repair from re-architecting.
-        withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
-    }
-    ctx.append = true
-    ctx.ran++
-    return "appended"
-  }
-  ctx.repairs++
-  log(`↻ repair round ${ctx.repairs}/${opts.repair}: the ${site.kind === "regression" ? "regression" : "verdict"} gate holds ${site.title} — appending repair tasks over the ${site.kind === "regression" ? "red receipts" : "gate evidence"}`)
-  ctx.input = {
-    text:
-      site.text(ctx.repairs) +
-      // The pack's repair discipline (plans/0080 §6): the boundary that
-      // keeps a repair from re-architecting.
-      withIntentParagraph(repairDutiesText(promptFacts({ dir: directory, intent: opts.intent }))),
-  }
-  return "appended"
-}
-
 // One unit through today's serial path (the main-tree execution the task loop
 // has always run, and D4's serial degrade for a unit that cannot be isolated
 // — a lane-ineligible `Touches` declaration under the scheduler). Pure move
@@ -537,10 +451,10 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
   // The unit's close-out audit over its start baseline (plans/0021 P3: the
   // commit range must be all driver commits). The done arm's own check, run
   // at every unit landing (plans/0211 D2): the parked arm (the park commit
-  // is the unit's landing while it waits) and the repair-appended arm (the
-  // closeUnit commit is its close) owed it the same — a foreign commit made
-  // during a parked unit's session was never checked. Returns 2 when
-  // violated, undefined when clean (or no baseline: dryrun / non-git).
+  // is the unit's landing while it waits) owed it the same — a foreign
+  // commit made during a parked unit's session was never checked. Returns
+  // 2 when violated, undefined when clean (or no baseline: dryrun /
+  // non-git).
   const closeOutAudit = async (): Promise<number | undefined> => {
     if (!taskBaseline) return undefined
     const violations = await unitViolations(directory, taskBaseline)
@@ -595,28 +509,10 @@ export async function runSerialUnit(ctx: LoopCtx, phase: PhaseUnit, plan: Plan, 
     return 0
   }
   if (outcome.type === "blocked") {
-    // The repair round (plans/0079 §4): a FAIL verdict with budget left
-    // automates the person's documented rework path — closeUnit the failed
-    // task (done for scheduling, the Closed: field recording the round), then
-    // hand the phase loop the evidence as an append input: its append branch
-    // (the same one plan --append drives) adds the repair tasks, which run in
-    // index order after the remaining work and re-verify. Every judgment
-    // stays the driver's — the verdict was parsed from the report, the close
-    // is the driver's own mechanism, and the appended tasks are planned work.
-    // Any refusal (explicit dependents without cascade, a dirty tree) or a
-    // spent budget falls through to today's block (repairRoundAppend's
-    // "block" above).
-    const repaired = outcome.repair !== undefined ? await repairRoundAppend(ctx, { kind: "task", task, reason: outcome.repair.reason }) : "block"
-    if (repaired === "appended") {
-      // The repair round's close (plans/0211 D2): the closeUnit commit is
-      // this unit's landing — the done arm's audit and boundary hooks, so a
-      // pending /exit, a step pause or a hibernate window lands here instead
-      // of waiting through the appended tasks' whole run.
-      const repairAudit = await closeOutAudit()
-      if (repairAudit !== undefined) return repairAudit
-      await taskBoundary(ctx, `task ${task.id} ${task.title}`)
-      return 0
-    }
+    // The repair-append budget is retired (plans/0283): a FAIL verdict
+    // surfaces as state — the block's question carries its own remedy (the
+    // person closes, replaces or re-tasks by hand; the executor protocol's
+    // fix grant repairs verify FAILs on the pull path).
     await block(directory, task.id)
     log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${outcome.question}`)
     // the proxy-answer highlight block (plans/0020-auto-resolve-design.md
@@ -1145,14 +1041,13 @@ type LiveDocLane = {
 
 // What one doc unit's pipeline came back with: done = the unit closed
 // (completed or parked — scheduling continues); blocked = runTask concluded
-// blocked with the repair fact riding along — the loop's landing
-// continuation finishes it (the repair block mutates the loop's single-slot
-// ctx state, so it runs serialized at the landing: D3's "the repair append
-// runs in the landing window"); stop = a finished failure arm (a dirty start
+// blocked (the question carries its own remedy; the repair-append budget is
+// retired, plans/0283) — the loop's landing continuation finishes it;
+// stop = a finished failure arm (a dirty start
 // gate, an incomplete unit) — scheduling stops, the in-flight lanes drain,
 // the loop exits with the code. A doc unit's committed work is already in
 // the main tree, so the stop is honest with nothing landing late (D3).
-type DocUnitResult = { kind: "done" } | { kind: "blocked"; question: string; repair?: { reason?: string } } | { kind: "stop"; code: number }
+type DocUnitResult = { kind: "done" } | { kind: "blocked"; question: string } | { kind: "stop"; code: number }
 
 // The doc scheduler's task loop (D3): runLaneLoop's shape with the worker
 // process replaced by an in-process pipeline. Slots = maxSessions; the free
@@ -1231,12 +1126,12 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       }
     }
 
-    // The repair round's quiet wait (the landing window's other half):
-    // closeUnit refuses a dirty tree, so the repair path first waits for
-    // every other lane's pipeline to resolve — a resolved-but-unlanded lane
-    // is already committed (its landing bookkeeping runs after this one
-    // returns), so a settled pipeline is a quiet tree. The loop is parked
-    // here, so nothing dispatches meanwhile.
+    // The quiet wait (the landing window's other half, the repair round's
+    // own guard kept for the strict close paths): waits for every other
+    // lane's pipeline to resolve — a resolved-but-unlanded lane is already
+    // committed (its landing bookkeeping runs after this one returns), so a
+    // settled pipeline is a quiet tree. The loop is parked here, so nothing
+    // dispatches meanwhile.
     const waitQuiet = async (): Promise<void> => {
       for (;;) {
         const pending = [...inFlight.values()].filter((other) => !other.resolved)
@@ -1307,16 +1202,10 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     }
 
     // The blocked outcome's finisher, in the loop's single-threaded landing
-    // continuation: runSerialUnit's two arms — the repair round through the
-    // shared repairRoundAppend (its task site, the quiet wait handed in as
-    // the drain: closeUnit refuses a dirty tree, so the round first waits
-    // the other lanes' pipelines to settle), then today's block. Any refusal
-    // or a spent budget falls through to the block exactly as the serial
-    // world's does. Returns true when scheduling may continue (the repair
-    // round), false when the run stops.
-    const finishBlocked = async (task: Task, blocked: { question: string; repair?: { reason?: string } }): Promise<boolean> => {
-      const repaired = blocked.repair !== undefined ? await repairRoundAppend(ctx, { kind: "task", task, reason: blocked.repair.reason, quiet: waitQuiet }) : "block"
-      if (repaired === "appended") return true
+    // continuation: today's block alone (the repair-append budget is
+    // retired, plans/0283 — a FAIL verdict surfaces as state, the question
+    // carrying its remedy). Always stops the run.
+    const finishBlocked = async (task: Task, blocked: { question: string }): Promise<boolean> => {
       await block(directory, task.id)
       log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${blocked.question}`)
       // the proxy-answer highlight block (plans/0020 §H-②, H5), pinned above
@@ -1347,22 +1236,10 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     const land = async (lane: LiveDocLane, result: DocUnitResult): Promise<void> => {
       const task = lane.task
       if (result.kind === "blocked") {
-        const keep = await finishBlocked(task, result)
+        await finishBlocked(task, result)
         registry.live.delete(task.id)
-        if (keep) {
-          await regressionBoundary(ctx, opts, phase)
-          // The boundary hooks in probe form beside it (plans/0211 D2): the
-          // repair round's close is this unit's landing — the keep arm owed
-          // the landing's hooks (a /exit seen here stops dispatching and
-          // takes effect after the drain, the landing's own rule).
-          await taskBoundary(ctx, `task ${task.id} ${task.title}`, () => {
-            scheduling = false
-            exitLabel = `task ${task.id} ${task.title}`
-          })
-        } else {
-          scheduling = false
-          if (stop === undefined) stop = 2
-        }
+        scheduling = false
+        if (stop === undefined) stop = 2
         return
       }
       registry.live.delete(task.id)
@@ -1414,9 +1291,8 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     // rollbackRefused, D10): the ladder's tree-wide stash would sweep their
     // state — the refusal arrives as this loop's own blocked outcome and
     // finishes exactly like a landing's (the block, the logged question, the
-    // interrupted-scene commit riding the unit's still-live scope; no
-    // repair arm fires mid-flatten, a rollback verdict carries no repair
-    // fact and nothing else has run yet). The declared-but-unwritten
+    // interrupted-scene commit riding the unit's still-live scope; nothing
+    // else has run yet). The declared-but-unwritten
     // siblings are never driven here: only an active record says the run
     // was inside the unit.
     const flattenPlan = await loadPlan(directory, phase)
@@ -1562,7 +1438,7 @@ async function runDocLaneLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
 // the decorator ctx.git wraps for the loop's duration), the scoped evidence
 // (D7: runTask's input scope threads the wrap-up's path-limited charter
 // range, and the close-out check excludes the live sibling scopes and the
-// quarantine), and the repair deferral (the blocked outcome returns to the
+// quarantine), and the blocked deferral (the blocked outcome returns to the
 // loop's landing continuation — the landing window). The wait-between pause
 // and the boundary hooks are the loop's, at the landing (the probe form);
 // nothing here runs them.
@@ -1648,7 +1524,7 @@ async function runDocUnit(
     return { kind: "done" }
   }
   if (outcome.type === "blocked") {
-    return { kind: "blocked", question: outcome.question, ...(outcome.repair !== undefined ? { repair: outcome.repair } : {}) }
+    return { kind: "blocked", question: outcome.question }
   }
   if (outcome.type === "incomplete") {
     log(`⏸ ${task.id} incomplete, reverted to pending. Improve this task's description in docs/${task.id}/todo.md and re-run:\n${outcome.reason}`)

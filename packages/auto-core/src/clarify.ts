@@ -68,7 +68,7 @@ import {
 import { loadPhaseTypes } from "./phases/custom"
 import { phaseRefText } from "./plan"
 import { roadmapRounds } from "./roadmap"
-import { shellProfile } from "./shell"
+import { shellProfile, surfaceOf } from "./shell"
 import { loadPlan } from "./tasks"
 
 export type ClarifyResult = { type: "released" | "held" | "error"; lines: string[] }
@@ -256,7 +256,7 @@ async function surveyGate(
             type: "held",
             lines: [
               `⏸ ${doc} is released in the worktree but the release is not committed — commit it by hand (git add ${doc} && git commit), ` +
-                `then continue: ${bin} transfer ${directory} — the phase completes on the next advance`,
+                `then continue: ${surfaceOf().transfer(directory)} — the phase completes on the next advance`,
             ],
           },
           refusal: false,
@@ -265,7 +265,7 @@ async function surveyGate(
       return {
         result: {
           type: "held",
-          lines: [`⏸ ${doc} is already released — the phase completes on the next advance: ${bin} transfer ${directory}`],
+          lines: [`⏸ ${doc} is already released — the phase completes on the next advance: ${surfaceOf().transfer(directory)}`],
         },
         refusal: false,
       }
@@ -311,7 +311,7 @@ async function surveyGate(
             `\`${CLARIFIED_MARK}\` accepts every \`Fork:\` line's \`Recommend:\` default — your own answers sit beside the lines (written now or later: a later answer is a plain committed edit the planners read)`,
           ],
           `PLAN clarify ${phaseRefText(route.phase)} (release the recorded forks)`,
-          `next: ${bin} transfer ${directory} — the phase completes, the approved \`${BRIEF_PROPOSAL_HEADING}\` section installs, and the next phase's plan task is constructed for your review`,
+          `next: ${surfaceOf().transfer(directory)} — the phase completes, the approved \`${BRIEF_PROPOSAL_HEADING}\` section installs, and the next phase's plan task is constructed for your review`,
         ),
         refusal: false,
       }
@@ -330,7 +330,7 @@ async function surveyGate(
           text,
           [`the release of ${doc} approves the proposed \`${BRIEF_PROPOSAL_HEADING}\` section — it installs as the project brief on the next advance:`],
           `PLAN clarify ${phaseRefText(route.phase)} (release the proposed brief)`,
-          `next: ${bin} transfer ${directory} — the phase completes, the approved \`${BRIEF_PROPOSAL_HEADING}\` section installs, and the next phase's plan task is constructed for your review`,
+          `next: ${surfaceOf().transfer(directory)} — the phase completes, the approved \`${BRIEF_PROPOSAL_HEADING}\` section installs, and the next phase's plan task is constructed for your review`,
         ),
         refusal: false,
       }
@@ -341,7 +341,7 @@ async function surveyGate(
       result: {
         type: "held",
         lines: [
-          `⏸ ${phaseRefText(route.phase)} still holds ${pending} pending task(s) — the clarification gate follows the phase's completion; execute them first: ${bin} run ${directory}`,
+          `⏸ ${phaseRefText(route.phase)} still holds ${pending} pending task(s) — the clarification gate follows the phase's completion; execute them first: ${surfaceOf().run(directory)}`,
         ],
       },
       refusal: false,

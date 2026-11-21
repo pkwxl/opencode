@@ -238,4 +238,5 @@ scopes: answer, person, person-questions, person-releases — the person grants 
 worker payloads: options, switches, plan, transfer, lane — the push run carriage (plans/0282); the executor coordinator is the only spawn, its payload {executor, directory, transport}
 POST /runs — the plain push run starter (plans/0282); the executor route is the only run starter
 GET /, /app.js, /session — the web client (plans/0282); the daemon serves coding agents only
+cli commands: run, plan, transfer, clarify, _lane (opencode-auto) and transfer <dir> (opencode-auto-server) — the push CLI commands (plans/0283): their channels are the daemon's operations and the protocol's grants, and each binary answers the word with a permanent usage tombstone naming the surface
 ```

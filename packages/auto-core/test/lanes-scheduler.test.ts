@@ -788,7 +788,6 @@ function schedulerCtx(server: AgentHost, opts: Partial<RunAllOpts>): LoopCtx {
     phases: "m",
     manual: true,
     ran: 0,
-    repairs: 0,
     // The execution tier in force (plans/0096 D10): these suites drive the
     // scheduler as 0068 ran it — the full worktree per lane, now tier 2.
     // Under the stage-5 default (tier 0) runTaskLoop's scheduler branch does
@@ -1688,7 +1687,6 @@ describe("recoverOrphanLanes (D14)", () => {
       phases: "m",
       manual: true,
       ran: 0,
-      repairs: 0,
       router: holder.router,
       control: holder.control,
       git: createGitOps(),

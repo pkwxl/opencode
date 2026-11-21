@@ -156,7 +156,9 @@ describe("clarify: the analysis release (plans/0116 D1/D4)", () => {
     expect(body).toContain("Changes folded into this release commit:")
     expect(body).toContain("- .opencode/auto/config.json")
     expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
-    expect(result.lines.some((line) => line.includes("next: opencode-auto transfer"))).toBe(true)
+    // The release's next line renders transfer through the surface seam
+    // (re-keyed by plans/0283): the command with its directory.
+    expect(result.lines.some((line) => line.includes(`next: opencode-auto transfer ${dir} — the approved brief installs`))).toBe(true)
     // The consumer: the release the hand edit would have made is in force —
     // the next transfer installs the brief and establishes R-01.
     const advance = await captureAdvance(() => runTransfer(dir, { phases: "mt" }))
@@ -461,7 +463,7 @@ describe("clarify: the survey release (plans/0116 D1/D4)", () => {
     await git(released, "commit", "-qm", "hand-released")
     const alreadyOut = (await capture(() => clarifyGate(released, { phases: "survey,implement" }))).result
     expect(alreadyOut.type).toBe("held")
-    expect(alreadyOut.lines.some((line) => line.includes("already released — the phase completes on the next advance: opencode-auto transfer"))).toBe(true)
+    expect(alreadyOut.lines.some((line) => line.includes(`already released — the phase completes on the next advance: opencode-auto transfer ${released}`))).toBe(true)
 
     // Pending execute work: the gate follows the phase's completion.
     const pending = await repo()

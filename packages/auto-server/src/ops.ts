@@ -85,7 +85,7 @@ import { phasesProblem, PRESET_FORM } from "@opencode-ai/auto-core/phases/regist
 import { roundDirName } from "@opencode-ai/auto-core/docpaths"
 import { SUBTASK_MODES } from "@opencode-ai/auto-core/opts"
 import type { RegisteredProject, Scope } from "./store"
-import { RequestError, type PlanPayload, type TransferPayload } from "./request"
+import { RequestError } from "./request"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 
 // The canonical unit refs closeUnit takes (the CLI's CLOSE_REF): a round
@@ -886,9 +886,10 @@ async function runTaskAdd(request: OpRequest): Promise<OpOutcome> {
 // the loop route spawns the agent planning session as a run over
 // `spawnPlanningRun`. The request fields are the planning surface:
 //   "input"  the planning input text (the CLI's plan -p) — carried to the
-//            planning step, which persists it to the phase's plan-input.md;
-//   "append" true = append the tasks planned from the input to the current
-//            phase (the CLI's --append; rides an input).
+//            planning step, which persists it to the phase's plan-input.md.
+//   The "append" field is retired (plans/0283): the task-append session no
+//   longer runs — task-add (the tasks operation) adds one task at a time,
+//   a changed input re-formulates the plan.
 // `--file` is the CLI's local-file spelling of the input; the API takes the
 // text itself (the daemon reads no request-named files). `--new-task` is
 // the task-add operation (the pointer says so). `plan --force-close`'s
@@ -907,24 +908,20 @@ async function runPlan(request: OpRequest): Promise<OpOutcome> {
   const { project, body } = request
   const dir = project.directory
   const input = body?.input
-  const append = body?.append
   for (const key of Object.keys(body ?? {})) {
-    if (key === "input" || key === "append") continue
+    if (key === "input") continue
+    if (key === "append") {
+      return bad(`"append" is retired (plans/0283): the task-append session no longer runs — add one task at a time with the task-add operation (POST ${route(project, "tasks")} with {"title": …}), or re-formulate the phase's plan through its inputs (the plan-input.md the formulation reads)`)
+    }
     if (key === "prompt") return bad('"prompt" is the CLI flag spelling; the API takes the planning input as "input": { "input": "<text>" } (the CLI\'s plan -p <text>)')
     if (key === "file") return bad('"file" is the CLI\'s local-file spelling; the API takes the planning input text itself: read the file client-side and send { "input": "<text>" } (the daemon reads no request-named files)')
     if (key === "newTask") {
       return bad(`"newTask" is the task-add operation, served as its own unit op: POST ${route(project, "tasks")} with {"title": …} (the CLI's plan --new-task route)`)
     }
-    return bad(`unknown plan field "${key}" (the plan operation takes "input" — the planning input text, the CLI's plan -p — and "append" — append to the current phase; the no-agent routes take neither)`)
+    return bad(`unknown plan field "${key}" (the plan operation takes "input" — the planning input text, the CLI's plan -p; the no-agent routes take neither)`)
   }
   if ("input" in (body ?? {}) && (typeof input !== "string" || !input.trim())) {
     return bad('"input" takes the planning input text (the CLI\'s plan -p <text>; the whole document, not a file path)')
-  }
-  if ("append" in (body ?? {}) && typeof append !== "boolean") {
-    return bad('"append" takes true|false (append the tasks planned from the input to the current phase; requires input)')
-  }
-  if (append === true && (typeof input !== "string" || !input.trim())) {
-    return bad('"append" rides a planning input: pass "input" with it — appending adds the tasks planned from the input (the CLI\'s --append without -p is the same usage error)')
   }
   const legacy = await legacyLayoutProblem(dir)
   if (legacy) return refused(1, [legacy])
@@ -944,7 +941,6 @@ async function runPlan(request: OpRequest): Promise<OpOutcome> {
       autoNumber: loaded.config.autoNumber,
       testByDriver: loaded.config.testByDriver,
       ...(typeof input === "string" && input.trim() ? { input: { text: input } } : {}),
-      ...(append === true ? { append: true } : {}),
     })
   } finally {
     lock.release()

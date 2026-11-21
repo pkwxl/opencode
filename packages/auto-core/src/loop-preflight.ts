@@ -81,7 +81,7 @@ import { findWallCommit, finishInterruptedRetirement, wallDeclared } from "./wal
 import type { AgentHost } from "./agent/types"
 import { routingFacts, dispatchCoverageProblems, type DispatchNeed } from "./routing"
 import { createServices, type RunServices } from "./services"
-import { shellProfile } from "./shell"
+import { shellProfile, surfaceOf } from "./shell"
 import { autoSwitches, modelTypeProblems, phaseTypeRoleProblems, setSwitchModelRegistry, type AgentChoice } from "./switches"
 import { loadStats } from "./stats"
 import { promptTemplateNames, usePromptLibrary } from "./template"
@@ -205,32 +205,11 @@ export type RunAllOpts = {
   // the parallel level). At 1 (the default) nothing changes for any project
   // whatever the level — the serial floor.
   maxSessions?: number
-  // --repair (plans/0079 §4; the boundary restated by plans/0211 D3): the
-  // bounded repair budget of this run — how many automatic repair rounds a
-  // FAIL verdict (a task report's Result line) or a held verdict gate may
-  // drive before blocking for the human, modeled on the bounded-recovery
-  // precedents (/exit, failover). Absent/0 = today's behavior: the first
-  // FAIL blocks (exit 2). Run-side width, never a config key; in force
-  // wherever the FAIL or held gate is judged with no lane in flight — the
-  // serial path, both lane loops' serial degrades (after the lanes drained),
-  // the doc loop's finishBlocked (after the quiet wait; plans/0099 D3) and
-  // the two phase-level gates (after the task loop returned; plans/0079 §6)
-  // — and never under a stop condition (plan and transfer carry no budget,
-  // and since plans/0101 D1 the verdict gates they meet sit past run's
-  // boundary stop). A lane worker's own blocked exit never opens a round
-  // (the parent lands the committed work and stops for the person, 0068's
-  // matrix); the append itself — the index the lanes schedule from — is
-  // mutated only after the task loop returned, so no scheduler ever reads a
-  // mid-flight change (0079 §4's stated hazard, structurally absent at
-  // every site; the former "never under worktree lanes or branch isolation"
-  // confinement described a boundary the code never had).
-  repair?: number
   // --stop-after (plans/0128): the task id whose completion ends this run —
   // the retry's guardrail in a fork environment, usable anywhere the serial
   // loop runs. Run-side width, never a config key, never persisted; refused
   // under the lane scheduler and the doc lanes (a stop mid-flight would
-  // strand in-flight work) — the serial path alone, a tighter confinement
-  // than --repair's (the doc loop repairs but cannot stop mid-drain).
+  // strand in-flight work) — the serial path alone.
   stopAfter?: string
   // plan's stop condition (plans/0053 D6): the run stops once a planning step
   // has succeeded, or where an execute route would start, and prints what to
@@ -649,7 +628,7 @@ export async function preflight(
     const executed = await executeBlockageChoices(directory, await currentRound(directory))
     if (executed.type === "reblocked" && !executed.stale) {
       log(`⏸ remediation re-blocked: ${executed.reason}`)
-      log(`next: resolve what it names, then re-run: ${bin} run ${directory}`)
+      log(`next: resolve what it names, then re-run: ${surfaceOf().run(directory)}`)
       return stopBlocked(2)
     }
     for (const line of executionLines(executed)) log(line)
@@ -738,9 +717,9 @@ export async function preflight(
       }
       for (const file of gate.files) log(`  ${file}`)
       // The driver's own record-less writes named per family (plans/0236
-      // D5, 0165-078): the two kill windows no progress record and no
-      // re-derivation guard covers — the knowledge extraction (its
-      // idempotence is a non-empty test, so a committed partial would be
+      // D5, 0165-078): the kill windows no progress record and no
+      // re-derivation guard covers — a retired extraction's interrupted
+      // knowledge write (0283: delete it; a committed partial must not be
       // ratified as the phase's knowledge) and the background regression
       // receipt (committed only at the next boundary). Teaching lines only
       // — the person's moment enforces (P8); the generic line above stays
@@ -866,16 +845,16 @@ export async function preflight(
 // `subtask` in every mode — a checklist a person wrote dispatches too —,
 // and the merged understand/decompose session in the true mode, the planned
 // pipeline), and the wrap-up session runs unless
-// wrapup is off; a type without tasks runs its own knowledge session.
+// wrapup is off; a type without tasks runs no session at all (the
+// knowledge extraction retired, plans/0283 — its route goes straight to the
+// handover).
 // Run-level: the bypass one-offs in every mode (confirm turns, context-base
 // rebuilds, the dryrun precheck), the phased loop's planning and handover
 // sessions, and m mode's planning: the formulation task's session routes
 // the planning word (plans/0217 D1), so the phase-plan need — phased and m
 // mode alike — is the dispatched planning session's own coverage;
 // `implement-scan` has dispatched nothing since 0095 retired the planning
-// session. prior-knowledge
-// (shell-orchestrated outside runAll) stays off the list: a simple session,
-// so the bypass need keeps its tier covered.
+// session.
 // AUTO-RESOLVE: does the default m mode need the deep tier? -> only under subtask: true, through the decompose sessions of its implicit implement phase (the pipeline runs the merged understand/decompose session, a deep role of that phase; §6.3 makes an emptied needed list a preflight error rather than a mid-run wait, and the previous trigger — deep only when the run plans or scans — would leave those dispatches waiting silently). The default subtask mode auto runs a lead whole-task session instead (plans/0059 D2, §11: the lead takes the whole role's tier), so like off and ondemand it takes the implement type's execute tier and the default m mode needs no deep tier unless it plans (the formulation task's planning-word route, plans/0217 D1).
 function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[], phases: string): DispatchNeed[] {
   // An invalid phases value fails at its own validation (config load, the
@@ -887,7 +866,9 @@ function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[], phase
   else if (opts.planInput !== undefined) needs.push({ role: "phase-plan" })
   for (const entry of entries) {
     if (!entry.hasTasks) {
-      needs.push({ role: "knowledge", entry })
+      // A task-less phase (the k type) runs no session since plans/0283
+      // retired the knowledge extraction: its route goes straight to the
+      // handover, nothing dispatches.
       continue
     }
     if ((opts.subtask ?? "auto") === "true") needs.push({ role: "decompose", entry })
@@ -982,7 +963,7 @@ export function driverLeftoverLines(files: readonly string[]): string[] {
   const lines: string[] = []
   for (const file of files) {
     if (isKnowledgeDoc(file)) {
-      lines.push(`  ${file} is the driver's interrupted knowledge write — delete it and re-run (the extraction writes it anew; a partial document must not become the phase's committed knowledge)`)
+      lines.push(`  ${file} is a retired extraction's interrupted knowledge write (plans/0283: the session no longer runs) — delete it (a partial document must not become the phase's committed knowledge)`)
     } else if (roleOf(file) === "regression") {
       lines.push(`  ${file} is the driver's background regression receipt — safe to commit as-is (the run's record is the evidence); deleted, the lane re-runs at the next boundary`)
     }

@@ -15,14 +15,13 @@ import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLin
 import { acceptanceMark, ACCEPTED_MARK, constraintPitfallResolves, HANDOVER_SECTIONS, validHandover } from "./document/roles"
 import { ANALYSIS_DOC, reportForUserPath, roundDirName } from "./docpaths"
 import { hibernatePause } from "./hibernate"
-import { extractKnowledge } from "./knowledge"
 import { awaitingFormulation } from "./formulate"
 import { closeAuditStopLines, ensureCloseAudit, updateAssuranceBaselines } from "./close-audit"
 import { banner, dirtyStopLines, log, unreadableStopLines } from "./log"
 import { sessionOpts } from "./opts"
-import { appendPlan, appendWithStep } from "./loop-append"
+import { appendWithStep } from "./loop-append"
 import { planWithStep } from "./loop-plan"
-import { repairRoundAppend, runTaskLoop, type LoopCtx } from "./loop-task"
+import { runTaskLoop, type LoopCtx } from "./loop-task"
 import {
   CLARIFIED_MARK,
   completePhase,
@@ -45,9 +44,8 @@ import { emptyIndexNotice, executeNotice, gateStopLines, openRoundEmptyLines, op
 import { planInputPath, readPlanInput } from "./plan-input"
 import { openBlockage } from "./blockage-diagnose"
 import { clampLine, clampedItemsOf } from "./charter-clamp"
-import { ensureRegressionGreen, regressionHoldLines, regressionRepairInput } from "./regression"
+import { ensureRegressionGreen, regressionHoldLines } from "./regression"
 import { renderPhaseHandover } from "./prompt"
-import { appendAudit, verifyAuditEntry, verifyPlanPrompt } from "./prompt-verify"
 import { promptFacts } from "./prompt-facts"
 import { emitStatus } from "./run-status"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
@@ -68,11 +66,9 @@ import { wallBoundary } from "./wall"
 // idempotent: after an interruption the phase is still incomplete and its
 // tasks all done, the route is handover as before, and with the handover
 // document already complete the distillation is skipped and ②③ are made up
-// directly (C.2). Returns 0 = handover complete, or a repair round appended
-// under a --repair budget (plans/0079 §4 — the phase is not done; the loop
-// re-derives the execute route for the appended tasks and hands over again
-// when they close); 2 = the distillation session implicitly blocked, or a
-// gate holds with no budget or a refused repair.
+// directly (C.2). Returns 0 = handover complete; 2 = the distillation
+// session implicitly blocked, or a gate holds (the held gate surfaces as
+// state, plans/0283 — the repair-append budget is retired).
 async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const { directory, opts, server: serverHandle } = ctx
   const state = await phaseState(directory)
@@ -114,40 +110,18 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   // still reuse the original session to continue writing.
   const distillTask = { id: "PLAN", title: `phase handover distillation (${phaseTitle(phase)})`, status: "in_progress" as const, attempts: 0, body: "" }
   const distillCommit = { stage: "phase-handover", subject: `PLAN handover ${phaseTitle(phase)}` }
-  // The handover collect's two mechanical gates (plans/0082 §10 D13/D14a):
-  // the OPEN-status lint (an AUTO-RESOLVE marker under "Constraints and
+  // The handover collect's mechanical gate (plans/0082 §10 D13): the
+  // OPEN-status lint (an AUTO-RESOLVE marker under "Constraints and
   // pitfalls" is status laundering — the item is an open decision, never a
-  // constraint) and the write-time charter check (one verifier call over the
-  // charter and the handover, the prompt-destined text; INCONSISTENT or
-  // FAILED re-dists once with the verdict, then fails closed — where the
-  // blockage machinery owns the person's decision).
+  // constraint). The write-time charter check (D14a) is retired with the
+  // charter verifier (plans/0283): the handover collect is deterministic —
+  // no verifier session inside it.
   let collectIssue: string | undefined
   const lintHandover = constraintPitfallResolves
-  const writeTimeGate = async (text: string): Promise<string | undefined> => {
-    const outcome = await verifyPlanPrompt({ pool: ctx.server, routing: ctx.routing, facts: promptFacts(sessionOpts(ctx, { site: "handover" })), step: `handover ${phaseKey(phase).id}`, prompt: text })
-    if (outcome.kind === "inactive" || outcome.kind === "skipped" || outcome.kind === "consistent") return undefined
-    // Record the verdict beside the plan-step verdicts it precedes (the
-    // audit's charter covers every composition judgment of the round).
-    // The round's audit sits beside the phase directory (plan-gate's
-    // convention): dirname(phase.dir) is the round root docs/R-NN.
-    const audit = join(dirname(phase.dir), "prompt-audit.md")
-    await appendAudit(
-      directory,
-      audit,
-      verifyAuditEntry(`handover ${phaseKey(phase).id}`, outcome),
-      ctx.git.commitTree,
-      `handover verification (${phaseTitle(phase)})`,
-      `handover ${phaseKey(phase).id}`,
-      (failures) => `⚠ the handover charter-check record could not be committed: ${failures}; commit ${audit} manually`,
-    )
-    return outcome.kind === "inconsistent"
-      ? `the charter check found the handover inconsistent with the intent charter: ${outcome.evidence}`
-      : `the charter check could not judge the handover: ${outcome.reason}`
-  }
   if (validHandover(await Bun.file(handoverFile).text().catch(() => "")) && !(await draftProblem(false))) {
     const skipText = await Bun.file(handoverFile).text().catch(() => "")
     const skipLint = validHandover(skipText) && !(await draftProblem(false)) ? lintHandover(skipText) : undefined
-    collectIssue = skipLint ?? (await writeTimeGate(skipText)) ?? undefined
+    collectIssue = skipLint ?? undefined
     if (collectIssue !== undefined) {
       // A complete-looking handover that fails the write-time check (D14a):
       // the phase stays on its handover route and the blockage machinery
@@ -216,8 +190,7 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
           const text = await Bun.file(handoverFile).text().catch(() => "")
           draftIssue = await draftProblem(true)
           const lint = validHandover(text) && !draftIssue ? lintHandover(text) : undefined
-          const writeTime = lint === undefined && validHandover(text) && !draftIssue ? await writeTimeGate(text) : undefined
-          collectIssue = lint ?? writeTime
+          collectIssue = lint
           return (validHandover(text) && !draftIssue && collectIssue === undefined) || undefined
         },
       },
@@ -264,11 +237,9 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   // The regression hold (plans/0098 D5): between the distillation commit and
   // the completion rename — the one window the full gate may still block.
   // Covered lanes pass through (the background slot's receipts), a stale one
-  // runs now in the tree, a red holds the phase: under a --repair budget the
-  // remediation wave appends over the receipts (the held-verdict shape, the
-  // loop re-derives the execute route and the hold re-checks after they
-  // run), else the gate stop names the receipts, the suspects and the
-  // person's ways.
+  // runs now in the tree, a red holds the phase: the gate stop names the
+  // receipts, the suspects and the person's ways (the held gate surfaces as
+  // state, plans/0283 — the repair-append budget is retired).
   {
     const plan = await loadPlan(directory, phase).catch(() => undefined)
     const hold = await ensureRegressionGreen(ctx, opts, phase, plan?.tasks.map((task) => ({ id: task.id, title: task.title })) ?? [])
@@ -277,17 +248,9 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       return 2
     }
     if (hold.kind === "held") {
-      // Under a --repair budget the shared repairRoundAppend opens the round
-      // (the hold logged, the receipts' remediation input set with the pack's
-      // repair discipline) and the append runs here; without one — or when
-      // the append did not complete — the gate stop below names the receipts,
-      // the suspects and the person's ways.
-      if ((await repairRoundAppend(ctx, { kind: "regression", title: phaseTitle(phase), text: () => regressionRepairInput(phase, hold.lanes) })) === "appended") {
-        const code = await appendPlan(ctx, phase)
-        ctx.input = undefined
-        if (code === 0) return 0
-        log(`⏸ the repair append did not complete (exit ${code}); the regression gate stop follows`)
-      }
+      // The repair-append budget is retired (plans/0283): the held gate
+      // surfaces as state — the gate stop below names the receipts, the
+      // suspects and the person's ways.
       for (const line of regressionHoldLines(directory, phase, hold.lanes)) log(line)
       return 2
     }
@@ -339,31 +302,9 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   // report's mandate, plans/0109 D3).
   const gated = await completePhase(directory, phase, gates)
   if (gated.length) {
-    // The repair round (plans/0079 §4): a held verdict gate with budget left
-    // appends repair tasks over the gate evidence instead of stopping — the
-    // shared repairRoundAppend opens the round (verdict problems only;
-    // acceptance gates never repair — `Accepted: yes` is the human's alone)
-    // and the appending session runs here (appendPlan: the stale handover
-    // this distillation just wrote is removed per 0053 D25); the loop then
-    // re-derives the execute route for the appended tasks, and when they are
-    // done the phase distills again and the gate re-checks the rewritten
-    // verdict. A failed append falls through to the gate stop.
-    if (
-      gated.some((problem) => problem.startsWith("verdict")) &&
-      (await repairRoundAppend(ctx, {
-        kind: "verdict",
-        title: phaseTitle(phase),
-        text: (round) =>
-          `Repair round ${round}: the phase ${phaseTitle(phase)} is held by its verdict gate — ${gated.join("; ")}. ` +
-          `The verdict document docs/${phaseVerdictDoc(phase)} records why. Read it, then append repair tasks that fix what it found and ` +
-          `re-run the verification so the verdict document is rewritten with an honest Result line; the phase is distilled again after they run.`,
-      })) === "appended"
-    ) {
-      const code = await appendPlan(ctx, phase)
-      ctx.input = undefined
-      if (code === 0) return 0
-      log(`⏸ the repair append did not complete (exit ${code}); the gate stop follows`)
-    }
+    // The repair-append budget is retired (plans/0283): a held gate surfaces
+    // as state — the gate stop names the problems and the person's ways (the
+    // executor protocol's fix grant repairs verify FAILs on the pull path).
     await logGateStop(directory, phase, gated, acceptance)
     return 2
   }
@@ -784,33 +725,14 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       // knowledge has no tasks, custom types always have tasks (M3.6,
       // src/phases/custom.ts), so the session choice needs no generalization.
       if (!route.phase.entry.hasTasks) {
-        banner("k knowledge distillation: migration knowledge capture")
-        // The report duty of a k-final round retired with the report's
-        // mandate (plans/0109 D4): the session writes kb.md alone, and an
-        // extraction failure warns again.
-        const extracted = await extractKnowledge(serverHandle, directory, sessionOpts(ctx, { site: "knowledge" }), route.phase)
-        if (extracted.type === "ok") log(`✓ migration knowledge document produced: ${extracted.file}`)
-        else if (extracted.type === "skipped") log(`↻ migration knowledge document already produced (${extracted.file}); skipping extraction, going straight to handover`)
-        else if (extracted.type === "dirty" || extracted.type === "unreadable") {
-          // dirty (plans/0021-commit-boundary-design.md ④ generalization): an
-          // unclean worktree (leftover from an abandoned extraction, make-up
-          // commit failure or unified commit failure) must stop for the
-          // human — handing over anyway would start the next unit on an
-          // unclean baseline, breaking the commit boundary. The unreadable
-          // arm (plans/0236 D4) teaches investigation, never commit/clean.
-          for (const line of extracted.type === "unreadable"
-            ? unreadableStopLines("migration knowledge extraction could not read the repository", extracted.files)
-            : dirtyStopLines("migration knowledge extraction could not complete or post on a clean baseline", extracted.files)) log(line)
-          return 2
-        } else {
-          log(
-            `⚠ migration knowledge capture incomplete (knowledge_extraction_error); exit code unaffected, the k phase hands over as usual; ` +
-              `fix the issue, then retry separately per the manual rollback procedure (rename the knowledge phase's done.md back to todo.md and delete its kb.md). Block details:\n${extracted.question}`,
-          )
-        }
-        // The boundary stop (plans/0101 D1) lands after the phase's work —
-        // here the knowledge extraction — and before its handover: the
-        // distillation is transfer's.
+        // The knowledge extraction is retired (plans/0283, confirming
+        // 0277's residual): a task-less phase runs no session — its route
+        // goes straight to the boundary stop and the handover (an existing
+        // kb.md from a retired run stays what it is, the committed record
+        // the digest readers read).
+        banner(`${phaseTitle(route.phase)} phase: no session (the knowledge extraction retired, plans/0283)`)
+        // The boundary stop (plans/0101 D1) lands after the phase's work
+        // and before its handover: the distillation is transfer's.
         if (boundaryHolds(opts)) return await boundaryStop(ctx, route.phase)
         const code = await handoverWithStep(ctx, route.phase)
         if (code !== 0) return code

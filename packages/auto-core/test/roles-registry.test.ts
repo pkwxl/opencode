@@ -39,15 +39,15 @@ const ROLE_TABLE: Record<ModelRole, Tier | "execute"> = {
   subtask: "execute",
   wrapup: "simple",
   "phase-handover": "simple",
-  knowledge: "simple",
-  "prior-knowledge": "simple",
   diagnose: "simple",
   bypass: "simple",
 }
 
 describe("the session-role registry (U-R5, plans/0060 §5.6)", () => {
   test("the seven work kinds each hold exactly one descriptor", () => {
-    expect(SESSION_ROLES).toEqual(["decompose", "whole", "subtask", "wrapup", "planning", "handover", "knowledge"])
+    // plans/0283: the knowledge role retired with the extraction sessions;
+    // the read-only side channel stands as its own kind (diagnose).
+    expect(SESSION_ROLES).toEqual(["decompose", "whole", "subtask", "wrapup", "planning", "handover", "diagnose"])
     expect(SESSION_ROLE_DESCRIPTORS.map((entry) => entry.role).sort()).toEqual([...SESSION_ROLES].sort())
     for (const role of SESSION_ROLES) {
       expect(sessionRole(role).role).toBe(role)
@@ -135,7 +135,7 @@ describe("the session-role registry (U-R5, plans/0060 §5.6)", () => {
     // session kind runs none.
     expect(sessionRole("whole").usage).toEqual({ handover: true, testHandover: true, forkGuard: false, splitGuard: true })
     expect(sessionRole("subtask").usage).toEqual({ handover: true, testHandover: true, forkGuard: true, splitGuard: false })
-    for (const role of ["decompose", "wrapup", "planning", "handover", "knowledge"] as const) {
+    for (const role of ["decompose", "wrapup", "planning", "handover", "diagnose"] as const) {
       expect(sessionRole(role).usage).toEqual({ handover: false, testHandover: false, forkGuard: false, splitGuard: false })
     }
   })
@@ -171,8 +171,10 @@ describe("the session-role registry (U-R5, plans/0060 §5.6)", () => {
     expect(roleOf({ pct: 100, used: 0, at: 0 })).toBe(ROUTING_FALLBACK)
   })
 
-  test("the knowledge family's variants and the planning variants all route inside their descriptors", () => {
-    expect(sessionRole("knowledge").routing).toEqual(["knowledge", "prior-knowledge", "diagnose"])
+  test("the side channel and the planning variants all route inside their descriptors", () => {
+    // plans/0283: the knowledge family's extraction variants retired; the
+    // diagnose side channel stands as the descriptor's own kind.
+    expect(sessionRole("diagnose").routing).toEqual(["diagnose"])
     expect(sessionRole("planning").routing).toEqual(["phase-plan", "implement-scan"])
     expect(sessionRole("decompose").templates).toEqual(["decompose"])
     expect(sessionRole("subtask").templates).toEqual(["subtask", "fanout"])

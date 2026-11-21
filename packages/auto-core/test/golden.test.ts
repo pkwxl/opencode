@@ -23,9 +23,7 @@ import {
   renderFanout,
   renderFix,
   renderHandoffSteer,
-  renderKnowledge,
   renderPhaseHandover,
-  renderPriorKnowledge,
   renderSplitRejected,
   renderStuckHint,
   renderSubtask,
@@ -395,11 +393,6 @@ describe("golden render snapshots", () => {
         inputPath: "docs/R-01/P01-implement/plan-input.md",
         existingTasks,
       }),
-    )
-    golden("knowledge", renderKnowledge(facts, { file: "docs/R-01/P04-knowledge/kb.md", mode: migrate }))
-    golden(
-      "prior-knowledge",
-      renderPriorKnowledge(facts, { file: "docs/R-01/temp-kb.md", brief: "Second-pass migration intent.", mode: migrate, distilled: ["docs/R-00/prior-kb.md"] }),
     )
     // The capped digest's index form (plans/0061 R3/A7): what fills the
     // phase-plan prevRound slot when the joined digest exceeds the cap.

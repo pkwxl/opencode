@@ -18,8 +18,6 @@ const ROLE_TABLE: Record<string, Tier | "execute"> = {
   subtask: "execute",
   wrapup: "simple",
   "phase-handover": "simple",
-  knowledge: "simple",
-  "prior-knowledge": "simple",
   diagnose: "simple",
   bypass: "simple",
 }
@@ -62,8 +60,10 @@ describe("defaultTier", () => {
     }
   })
 
-  test("report, distillation, extraction and one-off sessions are simple in every phase type", () => {
-    const roles: ModelRole[] = ["wrapup", "phase-handover", "knowledge", "prior-knowledge", "diagnose", "bypass"]
+  test("report, distillation and one-off sessions are simple in every phase type", () => {
+    // plans/0283: the knowledge/prior-knowledge extraction roles retired;
+    // the read-only diagnose side channel keeps the simple tier.
+    const roles: ModelRole[] = ["wrapup", "phase-handover", "diagnose", "bypass"]
     for (const role of roles) {
       for (const entry of [undefined, ...BUILTIN_PHASE_TYPES, custom(), custom("deep")]) expect(defaultTier(entry, role)).toBe("simple")
     }

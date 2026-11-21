@@ -52,12 +52,10 @@ in parallel — each in its own worker child, each under its own
 `.auto/run.lock`. Combine with `--launch` (below) and each project's runs
 land in that project's own confined environment.
 
-At width ≥ 2 the worker itself spawns **lane children** — workers of this
-same binary carrying a lane payload (the profile's `laneLauncher`
-self-spawns them), one per schedulable unit in its own git worktree. The
-whole lane family runs on this shell: a lane child holds its worktree's own
-lock, writes the lane report the parent lands, and inherits the parent's
-environment (its applied switch layer included).
+The push lane children are retired (plans/0283): the worker serves
+executor coordinators only, and concurrency rides the executor protocol's
+scoped/doc lease tiers — external coding agents claim grants in their own
+worktrees.
 
 The daemon's own duties around that: the whitelist and token stores, run
 supervision and the exit-code mapping, the REST lifecycle operations (run in
@@ -302,12 +300,9 @@ shell), stated plainly: `clarify` (the one-command release act — the
 daemon's texts teach the manual path, "add the line and commit yourself"),
 `sync` (the intent-bundle upgrade), `land` (branch isolation's return
 path), `fork`/`remove-fork` (the retry experiment environment) and
-`driver-helper` (the person-proxy brief). The `transfer` subcommand of this
-binary exists (`opencode-auto-server transfer <dir>`) — every core text
-naming it points at a runnable command — but it is the headless form: its
-questions degrade the hand-spawned worker's way (a permission question
-blocks, exit 2); answer questions over the daemon's transfer operation
-instead, which attaches the interactive transport.
+`driver-helper` (the person-proxy brief). The `transfer` subcommand of
+this binary is retired (plans/0283) — the advance is the daemon's transfer
+operation (`POST /projects/<project>/transfer`), a deterministic apply.
 
 ## Verification
 

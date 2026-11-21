@@ -275,7 +275,7 @@ describe("parsing", () => {
     const routes = { decompose: "deep", implement: "deep", m: ["k2"], "security-review": "deep", bypass: ["k2", "k3"] }
     await writeOperator({ ...EXAMPLE, routes })
     expect((await problems())[0]).toBe(
-      `${OPERATOR()}: routes.security-review: is not a role word (decompose, whole, subtask, wrapup, phase-plan, phase-handover, knowledge, prior-knowledge, implement-scan, diagnose, bypass), a phase type id (analysis, design, implement, test, acceptance, knowledge) or a preset letter (a, d, m, t, v, k)`,
+      `${OPERATOR()}: routes.security-review: is not a role word (decompose, whole, subtask, wrapup, phase-plan, phase-handover, implement-scan, diagnose, bypass), a phase type id (analysis, design, implement, test, acceptance, knowledge) or a preset letter (a, d, m, t, v, k)`,
     )
     const registry = await loaded({ phaseTypes: [...TYPES, "security-review"] })
     expect([...registry.routes.keys()]).toEqual(Object.keys(routes))
@@ -621,7 +621,9 @@ describe("strict errors name the field and the layer", () => {
       `${OPERATOR()}: routes."*": * is not a route key: the tier lists already are the default`,
       `${OPERATOR()}: routes.decompose: "k2" is not a tier (deep, simple); a list of models is written as ["k2"]`,
       `${OPERATOR()}: routes.wrapup: names no model: "k3" is not defined (defined: k2)`,
-      `${OPERATOR()}: routes.knowledge: must list at least one of model names (leave the field out for none)`,
+      // plans/0283: the knowledge routing word is a retired-role tombstone —
+      // the refusal names the retirement and the remedy.
+      `${OPERATOR()}: routes.knowledge: is a retired role word (the knowledge extraction was removed (plans/0283); remove the route entry); remove the route entry`,
       `${OPERATOR()}: routes.implement: must be a list of model names`,
     ])
   })

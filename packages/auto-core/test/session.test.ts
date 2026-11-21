@@ -672,10 +672,10 @@ describe("attempt wiring: runSession includes/omits model per the injected polic
     expect(calls.prompts[0]!.model).toEqual({ providerID: "anthropic", modelID: "c-4" })
   })
 
-  test("bypass role: chain.role=knowledge → role overrides the wildcard", async () => {
+  test("bypass role: chain.role=diagnose → role overrides the wildcard", async () => {
     const { client, calls } = fakeClient()
-    const chain: SessionChain = { pct: 100, used: 0, at: 0, role: "knowledge" }
-    await runSession(client, task, "prompt text", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "knowledge=kimi/k2-lite,*=kimi/k2" }))
+    const chain: SessionChain = { pct: 100, used: 0, at: 0, role: "diagnose" }
+    await runSession(client, task, "prompt text", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "diagnose=kimi/k2-lite,*=kimi/k2" }))
     expect(calls.prompts[0]!.model).toEqual({ providerID: "kimi", modelID: "k2-lite" })
   })
 

@@ -196,9 +196,12 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     await git(dir, "commit", "-qm", "review stop")
     const lines = await renderHelperBrief(dir, { phases: "mt" })
     expect(lines).toContain("- the formulation task T-001 stands constructed and reviewed (docs/T-001/todo.md — driver-owned: fix its inputs, never the todo)")
-    expect(lines.some((line) => line.startsWith("- docs/R-01/P01-implement/plan-input.md — the phase's planning input"))).toBe(true)
+    // The plan-input channel teaches writing the document itself — the
+    // intent pack's ## planning-input section carries the scaffold (the
+    // `plan --scaffold`/`--phase` teachings retired, plans/0283).
+    expect(lines).toContain("- docs/R-01/P01-implement/plan-input.md — the phase's planning input, free-form markdown (the active intent pack's ## planning-input section carries its scaffold); written by the person, committed unchanged by the driver; a changed text restarts the open construction")
     expect(lines).toContain(`- opencode-auto transfer ${dir} — its idempotent reconstruct absorbs changed inputs and stops for review again`)
-    expect(lines).toContain(`- opencode-auto plan ${dir} — dispatches the reviewed todo (the formulation session, the collect checks, the wrap-up)`)
+    expect(lines).toContain("- the formulate grant dispatches the reviewed todo (the formulation session, the collect checks, the wrap-up) over the executor protocol")
     expect(lines).toContain(`- then: opencode-auto run ${dir}`)
   })
 
@@ -262,7 +265,7 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     expect(lines).toContain("- reading the stop lines below: a `next:` or `then re-run:` line names the person's act at the stop it printed — never this session's mandate to continue (ROLE's bound)")
     // A configured build is named as deliberately not run by the brief.
     const built = await renderHelperBrief(dir, { phases: "mt", build: "make check" })
-    expect(built).toContain("ℹ this brief did not run the config build (`make check`) — the close gate runs it on the next opencode-auto transfer")
+    expect(built).toContain(`ℹ this brief did not run the config build (\`make check\`) — the close gate runs it on the next opencode-auto transfer ${dir}`)
     // 0209 D4 (0165-105): the skip is named once, by the brief's own ℹ line —
     // the checks the brief ran never borrow the build-less project's warning
     // (pre-0209 the ⚠ "no build command configured" rode beside it, a
@@ -444,7 +447,7 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     expect((await renderHelperBrief(dir, { phases: "mt" })).join("\n")).toBe(floor)
   })
 
-  test("row 8 — a failed task: the gaps channel, the close/run --repair recovery", async () => {
+  test("row 8 — a failed task: the gaps channel, the close/rework recovery (the repair budget retired, plans/0283)", async () => {
     const dir = await repo()
     const phases = await established(dir, "mt")
     await task(dir, phases[0]!, "T-001", false, (taskDir) => writeFileSync(join(taskDir, "gaps.md"), "# Gaps\n\n- criterion 1 unmet\n"))
@@ -453,7 +456,10 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     const lines = await renderHelperBrief(dir, { phases: "mt" })
     expect(lines.some((line) => line.startsWith("- docs/T-001/gaps.md — the verification's gap list"))).toBe(true)
     expect(lines).toContain(`- opencode-auto close <T-NNN> ${dir} --reason "<text>" — accept the failed task (done for scheduling, never delivered)`)
-    expect(lines).toContain(`- opencode-auto run ${dir} --repair <n> — bounded rework rounds over the report's evidence (the first FAIL blocks without it)`)
+    // The rework arm names the fix grant over the executor protocol and the
+    // by-hand alternative — `run --repair` is gone (the repair-append
+    // budget retired, plans/0283).
+    expect(lines).toContain("- rework: over the executor protocol a FAIL verdict opens the fix grant's repair round (a worker claims it); locally, fix the gap list's findings by hand and re-verify (the repair budget is retired, plans/0283)")
   })
 
   test("row 9 — a held blockage dossier: the Choice: channel, the next advance's executor", async () => {
@@ -574,12 +580,16 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     expect(lines).toContain(`⏸ nothing to advance: R-01.P01 implement still holds 1 pending task(s) — execute them first: opencode-auto run ${dir}; the boundary follows their completion`)
     expect(lines).toContain("- none — the next act is execution (`run` executes; the boundary follows)")
     expect(lines).toContain(`- opencode-auto run ${dir}`)
-    // m mode keeps its own rhythm: plan's notice, run the recovery.
+    // m mode keeps its own rhythm: plan's notice, the plan-input channel
+    // and its write-commit recovery (the `plan -p` teaching retired with
+    // the append family, plans/0283), run the execution.
     const manual = await repo("m")
     await establishRound(manual, { phases: "m", round: 1 })
     const mLines = await renderHelperBrief(manual, { phases: "m" })
     expect(mLines.some((line) => line.startsWith("ℹ no tasks listed in docs/R-01/P01-implement/tasks.md yet"))).toBe(true)
-    expect(mLines).toContain(`- opencode-auto plan ${manual} -p <text> | --file <path>`)
+    expect(mLines).toContain("- the planning input — write the phase's plan-input.md (the intent pack's ## planning-input section carries the scaffold)")
+    expect(mLines).toContain("- write the phase's plan-input.md, commit")
+    expect(mLines).toContain(`- then: opencode-auto run ${manual}`)
   })
 
   test("row 14 — a live run lock: reported in STATE, the wait channel first, never a refusal", async () => {

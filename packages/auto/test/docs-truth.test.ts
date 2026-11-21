@@ -28,9 +28,10 @@ const TRUTH_PINS: [name: string, doc: string, needle: string][] = [
   ["README section intro", readme, "width alone activates concurrent execution, auto-core plans/0125"],
   ["README tier-0 bullet", readme, "as **doc lanes** in the main tree (auto-core plans/0099"],
   ["README lane branch grammar", readme, "auto-lane/<task-id>-<digest>` (the digest is the first 8 hex of the target"],
-  // The repair boundary (0211 D3 — no lane in flight, never serial-only).
-  ["README --repair row", readme, "Not serial-only (auto-core plans/0211 D3): repair rounds open wherever the FAIL or held gate is judged with no lane in flight"],
-  ["CLI --repair help", index, "with no lane in flight (the serial path, the lane loops' post-drain degrades, the doc loop's finishBlocked"],
+  // The repair budget retired with run (plans/0283): FAIL verdicts surface as
+  // state, the fix grant repairs verify FAILs — both surfaces state it.
+  ["README repair retirement", readme, "FAIL verdicts surface as state, the fix grant repairs verify FAILs"],
+  ["CLI push-retired paragraph", index, "The task-append session (plan --append), the repair budget (run --repair) and the charter verifier are retired with them"],
   ["CLI --tree-lanes help", index, "documentation-scoped task sessions run side by side as doc lanes"],
   // The human surface at width (0068 D11 — no /exit channel; step mode a pause).
   ["README human-surface bullet", readme, "There is no `/exit` channel at width"],
@@ -41,15 +42,16 @@ const TRUTH_PINS: [name: string, doc: string, needle: string][] = [
   ["CLI reset summary", index, "(the project brief and a materialized intent bundle's landed files are kept)"],
   ["CLI reset completion line", index, "✓ config layer removed (docs/, .auto/ runtime state and tmp/ untouched"],
   ["MANUAL reset row", manual, "the project brief and a materialized bundle's landed files are kept"],
-  // The retirement pointer (the continue notice names transfer).
-  ["README retirement row", readme, "(pointing at `transfer` — it runs the round-close checks and opens the next round)"],
+  // The retirement pointer (the continue notice names the daemon's transfer
+  // operation, plans/0283).
+  ["README retirement row", readme, "(pointing at the transfer operation of a daemon — `POST /projects/<project>/transfer` — it runs the round-close checks and opens the next round)"],
   // The 18-command enumerations and the brief's channels.
   ["AGENTS.md command list", agents, "land/fork/remove-fork/fix/sync/release/reset/status/models/install-prompts/driver-helper subcommands"],
   ["AGENTS.md amend brief channels", agents, "plus the project brief's manual revision (`--brief`/`--brief-file`, plans/0081 D11's channel"],
   ["MANUAL fork row", manual, "| `fork <T-NNN \\| sha> <worktree-path> [dir]` |"],
   ["MANUAL remove-fork row", manual, "| `remove-fork <worktree-path> [dir] [--force]` |"],
   ["MANUAL driver-helper row", manual, "| `driver-helper [dir]` |"],
-  ["CLI eighteen comment", index, "the public eighteen plus `_lane`"],
+  ["CLI command-words comment", index, "The words that name a command: the public surface minus the retired"],
   ["CLI -f refusal owner set", index, "-f/--force is an init/reset/fix/sync option"],
 ]
 
@@ -177,8 +179,8 @@ describe("the switch census (0229)", () => {
   })
 
   test("the registry and the census agree on the counts", () => {
-    expect(parsedSwitches.length).toBe(24)
-    expect(retiredSwitches.length).toBe(4)
+    expect(parsedSwitches.length).toBe(23)
+    expect(retiredSwitches.length).toBe(5)
   })
 })
 

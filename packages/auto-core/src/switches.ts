@@ -42,11 +42,6 @@ export const SWITCH_ENV = {
   laneIsolation: "OPENCODE_AUTO_LANE_ISOLATION",
   // Plan-step consistency verification (plans/0080 §5, default off since
   // plans/0113): the AI verifier that judges each composed planning prompt
-  // against the active intent's charter — opt-in, running on the deep
-  // planning route when on. The mechanical layers (the render gate, the
-  // precedence blocks) keep running either way; only the semantic check
-  // goes away.
-  planVerify: "OPENCODE_AUTO_PLAN_VERIFY",
   // Consented remediation (plans/0082 §5 D8): the blockage dossier's
   // diagnosis session, the blockage document and the prelude executor — the
   // machinery that turns a residual blockage into one consented `Choice:`
@@ -143,6 +138,11 @@ export const RETIRED_SWITCHES: Readonly<Record<string, string>> = {
   // pinned at 200 lines in the prompt layer.
   // AUTO-DECISION: the acceptance's "grep for TASK_CONTEXT returns nothing" reads as the live plumbing (types, parsing, pass-through, reports); this registry entry and its test must name the variable to produce the notice, and the registry's own contract forbids removing entries again.
   OPENCODE_AUTO_TASK_CONTEXT: "the wording knob was removed; the suggested line count is fixed at 200",
+  // The charter verifier's master switch (plans/0283): the verifier session
+  // is retired — the plan and append steps are deterministic, no semantic
+  // charter check runs ahead of them (the guarantees' mechanical asserts and
+  // the settlement's checks judge).
+  OPENCODE_AUTO_PLAN_VERIFY: "the charter verifier was removed; the plan and append steps are deterministic",
 }
 
 // The notice lines the retired switches produce for an environment (pure;
@@ -182,8 +182,6 @@ export const MODEL_ROLES = [
   "wrapup",
   "phase-plan",
   "phase-handover",
-  "knowledge",
-  "prior-knowledge",
   "implement-scan",
   // The blockage diagnosis session (plans/0082 §4 D4): the read-only
   // side-channel that proposes a remediation plan over the dossier.
@@ -224,6 +222,10 @@ export type SwitchModelRegistry = { names: ReadonlySet<string>; tiers: string }
 // either — a tombstoned id never returns with a new meaning (P13). Entries are
 // never removed; a future retirement lands its row in the same lockstep change.
 export const RETIRED_MODEL_ROLES: Readonly<Record<string, string>> = {
+  // The knowledge extraction's routing words (plans/0283: the k-phase and
+  // prior-knowledge sessions retired — no session dispatches on them).
+  knowledge: "the knowledge extraction was removed (plans/0283); remove the route entry",
+  "prior-knowledge": "the prior-knowledge extraction was removed (plans/0283); remove the route entry",
   // plans/0030 D12 (M1.0): the understand/decompose sessions merged into one.
   understand: "plans/0030 D12 — the understand session merged into decompose",
   // plans/0044 D1 (M2.2): the verify/review/final-review mechanisms were removed.
@@ -390,14 +392,6 @@ export type Switches = {
   // protocol, still strictly serially. The isolation rollout stage of the
   // lanes design: full machinery, zero concurrency, per-run only.
   laneIsolation: boolean
-  // Plan-step consistency verification (default off since plans/0113, the
-  // ruling recorded there; plans/0080 §5 the mechanism): before a planning
-  // session runs, a verifier session judges the composed prompt against the
-  // active pack's `### verify-plan` charter (fail-closed: a verifier that
-  // cannot answer blocks the step) on the deep planning route. No charter
-  // declared ⇒ no verifier, whatever the switch says — the switch only
-  // enables the check for a pack that declares one, never adds a charter.
-  planVerify: boolean
   // Consented remediation (default on, plans/0082 §5 D8): the blockage
   // dossier's diagnosis session, the `docs/R-NN/blockage-<seq>.md` document
   // and the prelude row that executes `Choice:` marks. off returns today's
@@ -463,7 +457,6 @@ const SWITCH_DEFAULTS: Switches = {
   hibernate: undefined,
   agent: undefined,
   laneIsolation: false,
-  planVerify: false,
   remediate: true,
   analysis: true,
   park: true,
@@ -706,7 +699,6 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     recoveryWait: minutes(SWITCH_ENV.recoveryWait, env[SWITCH_ENV.recoveryWait], SWITCH_DEFAULTS.recoveryWait),
     strictResume: onOff(SWITCH_ENV.strictResume, env[SWITCH_ENV.strictResume], SWITCH_DEFAULTS.strictResume),
     hibernate: parseHibernate(env[SWITCH_ENV.hibernate]),
-    planVerify: onOff(SWITCH_ENV.planVerify, env[SWITCH_ENV.planVerify], SWITCH_DEFAULTS.planVerify),
     remediate: onOff(SWITCH_ENV.remediate, env[SWITCH_ENV.remediate], SWITCH_DEFAULTS.remediate),
     analysis: onOff(SWITCH_ENV.analysis, env[SWITCH_ENV.analysis], SWITCH_DEFAULTS.analysis),
     park: onOff(SWITCH_ENV.park, env[SWITCH_ENV.park], SWITCH_DEFAULTS.park),
@@ -753,7 +745,6 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.hibernate === undefined ? undefined : `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
     switches.agent === undefined ? undefined : `${SWITCH_ENV.agent}=${switches.agent}`,
     switches.laneIsolation === SWITCH_DEFAULTS.laneIsolation ? undefined : `${SWITCH_ENV.laneIsolation}=${switches.laneIsolation ? "on" : "off"}`,
-    switches.planVerify === SWITCH_DEFAULTS.planVerify ? undefined : `${SWITCH_ENV.planVerify}=${switches.planVerify ? "on" : "off"}`,
     switches.remediate === SWITCH_DEFAULTS.remediate ? undefined : `${SWITCH_ENV.remediate}=${switches.remediate ? "on" : "off"}`,
     switches.analysis === SWITCH_DEFAULTS.analysis ? undefined : `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
     switches.park === SWITCH_DEFAULTS.park ? undefined : `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
@@ -786,7 +777,6 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
     `${SWITCH_ENV.agent}=${switches.agent ?? ""}`,
     `${SWITCH_ENV.laneIsolation}=${switches.laneIsolation ? "on" : "off"}`,
-    `${SWITCH_ENV.planVerify}=${switches.planVerify ? "on" : "off"}`,
     `${SWITCH_ENV.remediate}=${switches.remediate ? "on" : "off"}`,
     `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
     `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,

@@ -1036,7 +1036,7 @@ export async function runTask(
 // 0083's verification loop; the 0102 complexity-13 extraction): the wrap-up
 // session (the FIX_ROUNDS fix loop lives inside runWrapup), then the task
 // report's result line and the outcome mapping — the FAIL block with its
-// repair fact, or markDone and the completed outcome. Pure move: the
+// remedy, or markDone and the completed outcome. Pure move: the
 // sequencing, the comments and every string are the tail verbatim; only what
 // the tail read as runTask closures became parameters (dir, the resume
 // marker, the resolved mode's solo fact, the stage persister, the charter
@@ -1124,11 +1124,9 @@ async function runCloseout(
     enterPhase(chain, { kind: "wrapup" })
     return {
       type: "blocked",
-      // The repair fact (plans/0079 §4): this block is a FAIL verdict —
-      // the one block a run with a --repair budget may trade for a bounded
-      // repair round (the task loop closes the task and appends rework)
-      // instead of stopping for the human.
-      repair: { reason: result.reason },
+      // A FAIL verdict surfaced as state (the repair-append budget that
+      // once traded it for an appended round is retired, plans/0283): the
+      // question carries its own remedy.
       question:
         `the task report concluded Result: FAIL${result.reason ? ` (${result.reason})` : ""}. The report and the work are committed; ` +
         `accept the result with ${bin} close ${task.id} --reason <text>; ` +

@@ -16,8 +16,6 @@ import {
   renderDryrun,
   renderFanout,
   renderHandoffSteer,
-  renderKnowledge,
-  renderPriorKnowledge,
   renderStepUp,
   renderSubtask,
   renderTestContinue,
@@ -65,8 +63,8 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> question-rule}}"))
     .sort()
 
-  test("exactly 14 templates reference the partial (survey conclusion §J-3; M1.0 merging understand -1, M2.2 retiring six -6, plans/0052 D5 deleting infer-source -1, plans/0053 D27 adding phase-append +1, plans/0068 S5 adding fanout's cold delta +1, plans/0095 retiring phase-plan and implement-plan -2, plans/0150 retiring number-recovery -1; a new reference needs the design document updated in step)", () => {
-    expect(consumers.length).toBe(14)
+  test("exactly 12 templates reference the partial (survey conclusion §J-3; M1.0 merging understand -1, M2.2 retiring six -6, plans/0052 D5 deleting infer-source -1, plans/0053 D27 adding phase-append +1, plans/0068 S5 adding fanout's cold delta +1, plans/0095 retiring phase-plan and implement-plan -2, plans/0150 retiring number-recovery -1, plans/0283 retiring knowledge and prior-knowledge -2; a new reference needs the design document updated in step)", () => {
+    expect(consumers.length).toBe(12)
     expect(consumers).toContain("decompose-m.md")
     expect(consumers).toContain("whole.md")
     expect(consumers).toContain("subtask.md")
@@ -87,7 +85,7 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
   // History-marker reader templates: they ask the session to compile the decisions marked
   // AUTO-DECISION in existing documents, unrelated to "whether to leave a record this time"
   // (history markers persist in git forever), so under the on setting the wording appears as usual.
-  const historyReaders = ["knowledge.md", "prior-knowledge.md", "phase-handover.md"]
+  const historyReaders = ["phase-handover.md"]
 
   test("off setting (default): keeps the current no-questions basis, and demands both annotation classes by the ownership criteria", () => {
     const off = fragment(false)
@@ -414,10 +412,6 @@ describe("Template render completeness", () => {
       renderTestResult(facts(), { script: "/s", code: 0, ms: 9, timedOut: false, out: "/o", seq: 1 }),
       renderTestWrapup(facts(), { handoffFile: "/h" }),
       renderTestContinue(facts(), { handoffFile: "docs/T-002/testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", seq: 2 }, stuck: 11 }),
-      renderKnowledge(facts(), { file: "docs/R-01/P03-knowledge/kb.md", mode: migrate }),
-      renderPriorKnowledge(facts(), { file: "docs/prior-kb/prior-x.md", brief: "intent", mode: migrate }),
-      renderPriorKnowledge(facts(), { file: "docs/prior-kb/prior-x.md" }),
-      renderPriorKnowledge(facts(), { file: "docs/prior-kb/prior-x.md", distilled: ["docs/R-01/P02-implement/handover.md"] }),
       renderDryrun(facts()),
       decOf(plan, solo),
       renderHandoffSteer(facts(), taskDocPaths(solo.id)),

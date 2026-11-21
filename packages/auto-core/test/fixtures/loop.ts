@@ -393,7 +393,6 @@ export async function loopFixture(
         phases,
         manual: phases === "m",
         ran: 0,
-        repairs: 0,
         input: planInput,
         // The interactive sideband (0082 §6 D9's fast path): a case that
         // needs one passes it per run; absent = the detached protocol.

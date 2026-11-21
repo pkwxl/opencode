@@ -1,25 +1,22 @@
 import { describe, expect, spyOn, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
-import { homedir, hostname, tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs"
+import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { hostname, tmpdir } from "node:os"
+import { join } from "node:path"
 import { loadPlan, taskStatePaths } from "@opencode-ai/auto-core/tasks"
-import { subtaskDoc, taskDoc } from "@opencode-ai/auto-core/docpaths"
 import { RUN_LOCK_FILE } from "@opencode-ai/auto-core/lock"
-import { laneBranch } from "@opencode-ai/auto-core/lanes"
 import { CONFIG_DEFAULTS } from "@opencode-ai/auto-core/config"
 import { runAll } from "@opencode-ai/auto-core/loop"
 import { createServices, installServices, services } from "@opencode-ai/auto-core/services"
-import { completePhase, establishRound, readPhases, type PhaseUnit } from "@opencode-ai/auto-core/phases"
+import { completePhase, establishRound, readPhases } from "@opencode-ai/auto-core/phases"
+import { establishRoundSetup } from "@opencode-ai/auto-core/plan"
 import { renderText } from "@opencode-ai/auto-core/template"
 import { opencodeHost, manage } from "@opencode-ai/auto-core/agent/opencode/server"
 import { stepUpPoint } from "@opencode-ai/auto-core/model-step"
 import { askClassifier, classifierFor } from "@opencode-ai/auto-core/classify"
-import type { AgentClient, AgentEvent, AgentHost } from "@opencode-ai/auto-core/agent/types"
+import type { AgentClient, AgentEvent } from "@opencode-ai/auto-core/agent/types"
 import { bundleFileMap, parseIntentBundle, resolveIntentBundle } from "@opencode-ai/auto-core/bundle"
 import { provenanceStampOf, renderProvenanceStamp } from "@opencode-ai/auto-core/provenance"
-import { setShellProfile } from "@opencode-ai/auto-core/shell"
-import { setSwitchModelRegistry } from "@opencode-ai/auto-core/switches"
 import type { RoutingFacts } from "@opencode-ai/auto-core/routing"
 import { estimateTokens } from "@opencode-ai/auto-core/usage"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
@@ -673,6 +670,18 @@ async function commitFixture(dir: string) {
   }
 }
 
+// Establish the current round in-process, the way the daemon's transfer
+// operation does (plans/0283: the local plan/transfer commands are retired —
+// establishRoundSetup is the one establishment home both advanced through,
+// now the daemon's alone). The setup is left uncommitted exactly as the CLI
+// commands left it: the person's round-start review commits it (the fixtures'
+// commitFixture/git commits below).
+async function establish(dir: string, phases: string, isolate: string[] = []) {
+  const result = await establishRoundSetup(dir, 1, { phases, ...(isolate.length ? { isolate } : {}) })
+  if (result.type !== "ok") throw new Error(`the in-process round establishment refused: ${JSON.stringify(result).slice(0, 400)}`)
+  return result
+}
+
 // A git helper over a fixture dir: asserts exit 0 and returns stdout. The
 // close / --force-close / new-project-flow fixtures all commit through it.
 // The env is passed explicitly: Bun's default spawn env is the snapshot from
@@ -689,22 +698,12 @@ const gitOf = (dir: string) => {
   }
 }
 
-// The fake agent's environment (the B6/C5 convention): a PATH with the fake
-// `claude` first, plus the adapter selection. runCli's scrubbed base keeps the
-// ambient OPENCODE_AUTO_* switches out, so the subprocess's experiment
-// switches are deterministic.
-// `extra` goes into the same environment (the fake's own FAKE_CLAUDE_* knobs).
-async function fakeClaude(extra: Record<string, string> = {}) {
-  const binDir = await mkdtemp(join(tmpdir(), "auto-cli-agent-"))
-  await Bun.write(
-    join(binDir, "claude"),
-    `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "..", "..", "auto-core", "test", "fixtures", "fake-claude.ts"))} "$@"\n`,
-  )
-  await chmod(join(binDir, "claude"), 0o755)
-  const env: Record<string, string> = { PATH: `${binDir}:${process.env.PATH ?? ""}`, OPENCODE_AUTO_AGENT: "claude", ...extra }
-  const run = (args: string[]) => runCli(args, env)
-  return { run, done: () => rm(binDir, { recursive: true, force: true }) }
-}
+// The fake agent's helper retired with the run/plan/transfer fixtures
+// (plans/0283): every suite that drove sessions through the fake `claude` on
+// PATH (the lane isolation/scheduler/stream families, the append/new-project
+// flows, the subtask-auto split, the branch-isolation round trip, the sealed
+// wall) is demolished with its commands — the executor protocol's grants are
+// claimed by external coding agents, and the shell drives no session.
 
 describe("CLI parsing: run-side options and the config", () => {
   // The frozen-key case was ONE test looping every row of the families
@@ -720,7 +719,11 @@ describe("CLI parsing: run-side options and the config", () => {
   // the TEST COUNT, never one test's runtime. The server's own frozen-key
   // case is the precedent form (packages/auto-server/test/worker.test.ts,
   // 0233 D2 enacting 0224 D4's deferred half).
-  test("run refuses the options frozen by init (exit code 1 + the amend revision hint)", async () => {
+  // plans/0283 re-keyed the frozen-key family to close (and land — the strict
+  // ladder the two share): run's own refusal is its retirement notice now,
+  // pinned in the push-retired describe below, and the frozen-key texts the
+  // revision table renders still need their live consumer.
+  test("close refuses the options frozen by init (exit code 1 + the amend revision hint)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-frozen-"))
     try {
       const fixed = [
@@ -744,12 +747,19 @@ describe("CLI parsing: run-side options and the config", () => {
         ["--scan-exempt", "test/fixtures/**"],
       ]
       for (const extra of fixed) {
-        const run = await runCli(["run", dir, ...extra])
-        expect(run.code).toBe(1)
-        expect(run.err).toContain("was frozen by init")
-        expect(run.err).toContain(".opencode/auto/config.json")
-        expect(run.err).toContain("opencode-auto amend <dir>")
+        const refused = await runCli(["close", "T-001", dir, "--reason", "r", ...extra])
+        expect(refused.code).toBe(1)
+        expect(refused.err).toContain("was frozen by init")
+        expect(refused.err).toContain(".opencode/auto/config.json")
+        expect(refused.err).toContain("opencode-auto amend <dir>")
+        expect(refused.err).toContain("close takes no config options")
       }
+      // run answers its retirement notice ahead of the whole flag policy
+      // (the notice carries no flag vocabulary at all)
+      const run = await runCli(["run", dir, "--mode", "migrate"])
+      expect(run.code).toBe(1)
+      expect(run.err).toContain("run is retired (plans/0283):")
+      expect(run.err).not.toContain("was frozen by init")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -761,7 +771,7 @@ describe("CLI parsing: run-side options and the config", () => {
       // plans/0193 D2, 0165-056/S29-07: the old hint taught
       // `opencode-auto amend --phases`, which answers with its own
       // retirement refusal — one more round trip away from the true channel.
-      const phasesFrozen = await runCli(["run", dir, "--phases", "admtvk"])
+      const phasesFrozen = await runCli(["close", "T-001", dir, "--reason", "r", "--phases", "admtvk"])
       expect(phasesFrozen.code).toBe(1)
       expect(phasesFrozen.err).toContain("--phases was frozen by init")
       expect(phasesFrozen.err).toContain("a round's phases reshape by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md")
@@ -775,10 +785,10 @@ describe("CLI parsing: run-side options and the config", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-frozen-pairs-"))
     try {
       // The auto-numbering pair's revision hint takes the paired form
-      const numbering = await runCli(["run", dir, "--auto-number"])
+      const numbering = await runCli(["close", "T-001", dir, "--reason", "r", "--auto-number"])
       expect(numbering.err).toContain("--auto-number (use --no-auto-number to turn off)")
       // The wrapup pair's revision hint takes the paired form
-      const wrapup = await runCli(["run", dir, "--wrapup"])
+      const wrapup = await runCli(["close", "T-001", dir, "--reason", "r", "--wrapup"])
       expect(wrapup.err).toContain("--wrapup (use --no-wrapup to turn off)")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -788,7 +798,7 @@ describe("CLI parsing: run-side options and the config", () => {
   test("-m/--mode's message has the same shape (the short form carries the revision hint)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-frozen-shortform-"))
     try {
-      expect((await runCli(["run", dir, "-m", "migrate"])).err).toContain("-m/--mode was frozen by init")
+      expect((await runCli(["close", "T-001", dir, "--reason", "r", "-m", "migrate"])).err).toContain("-m/--mode was frozen by init")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -800,12 +810,12 @@ describe("CLI parsing: run-side options and the config", () => {
       // --commit is no longer a frozen config flag: the flag went with the
       // config key (committing cannot be turned off), so any form of it gets
       // the retirement notice instead of the amend guidance
-      const retiredCommit = await runCli(["run", dir, "--commit", "true"])
+      const retiredCommit = await runCli(["init", dir, "--commit", "true"])
       expect(retiredCommit.code).toBe(1)
       expect(retiredCommit.err).toContain("--commit is retired")
       expect(retiredCommit.err).not.toContain("was frozen by init")
       // The --commit-subtask removal message is kept
-      const removed = await runCli(["run", dir, "--commit-subtask"])
+      const removed = await runCli(["init", dir, "--commit-subtask"])
       expect(removed.code).toBe(1)
       expect(removed.err).toContain("--commit-subtask removed")
     } finally {
@@ -816,7 +826,7 @@ describe("CLI parsing: run-side options and the config", () => {
   test("the watchdog's old names get the rename hint", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-frozen-renamed-"))
     try {
-      const renamed = await runCli(["run", dir, "--verify-idle", "10"])
+      const renamed = await runCli(["init", dir, "--verify-idle", "10"])
       expect(renamed.code).toBe(1)
       expect(renamed.err).toContain("was renamed to --idle-time")
       expect((await runCli(["init", dir, "--verify-max", "30"])).err).toContain("was renamed to --idle-max")
@@ -831,33 +841,6 @@ describe("CLI parsing: run-side options and the config", () => {
       const lonely = await runCli(["init", dir, "--handover-test"])
       expect(lonely.code).toBe(1)
       expect(lonely.err).toContain("--handover-test requires --test-by-driver")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("run keeps accepting valid option combinations, with no false usage errors; a never-initialized directory is refused teaching init directly (plans/0239 D5)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      const combos = [
-        ["--permission", "ask-allow", "--wait-answer", "5", "--wait-between", "2"],
-        ["--dryrun"],
-      ]
-      for (const extra of combos) {
-        const run = await runCli(["run", dir, ...extra])
-        // The combination is valid: parsing passes with no usage error.
-        // Since plans/0239 D5 the never-initialized directory is refused
-        // before the run log, the banner and the preflight session (plan's
-        // requireConfigFile home, stderr like every command refusal),
-        // naming the missing config — the root cause — and the one-hop
-        // remedy init (the old chain taught fix first, which itself taught
-        // init).
-        expect(run.code).toBe(1)
-        expect(run.out).toBe("")
-        expect(run.err).toContain(`nothing to run: ${dir} has no .opencode/auto/config.json`)
-        expect(run.err).toContain(`run opencode-auto init ${dir} first`)
-        expect(run.err).not.toContain("fix")
-      }
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -891,17 +874,15 @@ describe("CLI parsing: run-side options and the config", () => {
     }
   })
 
-  test("the three completion-side mechanisms retired: the five flags are usage errors on init and run alike (exit code 1)", async () => {
+  test("the three completion-side mechanisms retired: the five flags are usage errors on init (exit code 1)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const retired = [["--verify"], ["--verify=false"], ["--review", "3"], ["--early"], ["--early-review", "2"], ["--final-review", "2"]]
-      for (const command of ["init", "run"]) {
-        for (const extra of retired) {
-          const run = await runCli([command, dir, ...extra])
-          expect(run.code).toBe(1)
-          expect(run.err).toContain(`${extra[0]!.split("=")[0]} is retired`)
-          expect(run.err).toContain("Result: FAIL")
-        }
+      for (const extra of retired) {
+        const run = await runCli(["init", dir, ...extra])
+        expect(run.code).toBe(1)
+        expect(run.err).toContain(`${extra[0]!.split("=")[0]} is retired`)
+        expect(run.err).toContain("Result: FAIL")
       }
       // The refusal happens before any write
       expect(await readdir(dir)).toEqual([])
@@ -910,17 +891,15 @@ describe("CLI parsing: run-side options and the config", () => {
     }
   })
 
-  test("migration parameters retired (plans/0052 D1): --source-dir/--source-path/--dest-dir are usage errors on init/run, pointing to brief.md", async () => {
+  test("migration parameters retired (plans/0052 D1): --source-dir/--source-path/--dest-dir are usage errors on init, pointing to brief.md", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const retired = [["--source-dir", "legacy"], ["--source-path", "src/mod.ts"], ["--dest-dir=target"], ["--source-dir", "legacy", "--source-path", "pkg"]]
-      for (const command of ["init", "run"]) {
-        for (const extra of retired) {
-          const run = await runCli([command, dir, ...extra])
-          expect(run.code).toBe(1)
-          expect(run.err).toContain(`${extra[0]!.split("=")[0]} is retired`)
-          expect(run.err).toContain("state them in the project analysis's `## Project brief` proposal (or opencode-auto amend <dir> --brief <text> | --brief-file <path>) or in the planning input")
-        }
+      for (const extra of retired) {
+        const run = await runCli(["init", dir, ...extra])
+        expect(run.code).toBe(1)
+        expect(run.err).toContain(`${extra[0]!.split("=")[0]} is retired`)
+        expect(run.err).toContain("state them in the project analysis's `## Project brief` proposal (or opencode-auto amend <dir> --brief <text> | --brief-file <path>) or in the planning input")
       }
       // The refusal happens before any write
       expect(await readdir(dir)).toEqual([])
@@ -929,7 +908,7 @@ describe("CLI parsing: run-side options and the config", () => {
     }
   })
 
-  test("legacy layout retired (M3.7): a root PLAN.md or a docs/R-NN without phase directories → init/status/run/fix are usage errors with exit 1, nothing written", async () => {
+  test("legacy layout retired (M3.7): a root PLAN.md or a docs/R-NN without phase directories → init/status/fix are usage errors with exit 1, nothing written", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       await Bun.write(join(dir, "PLAN.md"), "# plan\n")
@@ -937,7 +916,7 @@ describe("CLI parsing: run-side options and the config", () => {
       // fix refuses alike — including --dryrun: the legacy-layout exemption
       // that let the retired `check` run on an old tree ended with the
       // command, and the read-only listing keeps fix's other refusals
-      for (const args of [["init", dir], ["status", dir], ["run", dir], ["fix", dir], ["fix", dir, "--dryrun"]]) {
+      for (const args of [["init", dir], ["status", dir], ["fix", dir], ["fix", dir, "--dryrun"]]) {
         const run = await runCli(args)
         expect(run.code, args.join(" ")).toBe(1)
         expect(run.err).toContain("legacy layout: start a new project")
@@ -950,27 +929,14 @@ describe("CLI parsing: run-side options and the config", () => {
     }
   })
 
-  test("legacy project fallback: when only .auto/config.json holds mode, run notes it keeps the legacy location", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      await Bun.write(join(dir, ".auto/config.json"), JSON.stringify({ mode: "migrate" }))
-      const run = await runCli(["run", dir])
-      expect(run.out).toContain("mode taken from the legacy persisted value in .auto/config.json")
-      expect(run.out).toContain("agent contract file missing")
-      expect(run.err).toBe("")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("bad config values → run exits 1, the message carrying the key name and the expected range", async () => {
+  test("bad config values → amend exits 1, the message carrying the key name and the expected range", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ idleTime: 999 }))
-      const run = await runCli(["run", dir])
-      expect(run.code).toBe(1)
-      expect(run.err).toContain("idleTime")
-      expect(run.err).toContain("1..120")
+      const amend = await runCli(["amend", dir, "--wrapup"])
+      expect(amend.code).toBe(1)
+      expect(amend.err).toContain("idleTime")
+      expect(amend.err).toContain("1..120")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -994,18 +960,19 @@ describe("CLI: init freezes the project config", () => {
     return JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
   }
 
-  test("init writes the full config (all keys at their defaults) and prints the summary; writes the config layer only, the closing line points at plan", async () => {
+  test("init writes the full config (all keys at their defaults) and prints the summary; writes the config layer only, the closing line points at the daemon's plan operation", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
       expect(init.out).toContain("⚙ project config (.opencode/auto/config.json)")
       expect(init.out).toContain("auto-number on")
-      // config-only init (auto-core plans/0053 D31): plan owns the rounds, so
-      // init writes nothing under docs/ and points at plan — the fresh-project
-      // pointer naming the assisted analysis (plans/0084; with the suite's
-      // OPENCODE_AUTO_ANALYSIS=off the pointed-at plan establishes directly).
-      expect(init.out).toContain(`next: opencode-auto plan ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
+      // config-only init (auto-core plans/0053 D31, the opener re-keyed by
+      // plans/0283): the rounds' opening act is the daemon's plan operation —
+      // the fresh-project pointer naming the assisted analysis (plans/0084).
+      expect(init.out).toContain(
+        `next: the plan operation of a daemon (POST /projects/<project>/plan) (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`,
+      )
       expect(init.out).not.toContain("list tasks in")
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
       // init writes no brief (plans/0133 D9 — the seed channel retired, the
@@ -1170,7 +1137,7 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
-  test("stored retired keys (plans/0052 D3/D4): run and --amend fail strictly; a full-overwrite init drops them and names each with its value", async () => {
+  test("stored retired keys (plans/0052 D3/D4): a strict load (land, --amend) fails; a full-overwrite init drops them and names each with its value", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--context-limit", "128"])).code).toBe(0)
@@ -1178,11 +1145,13 @@ describe("CLI: init freezes the project config", () => {
       const file = join(dir, ".opencode/auto/config.json")
       const stored = { ...(await readConfig(dir)), source: { dir: "legacy", path: "pkg" }, destDir: "app", commit: false }
       await Bun.write(file, JSON.stringify(stored, null, 2) + "\n")
-      const run = await runCli(["run", dir])
-      expect(run.code).toBe(1)
-      expect(run.err).toContain("commit: false is retired")
+      // land loads the config strictly (plans/0283 re-keyed run's strict-load
+      // witness to it — run's own answer is its retirement notice now)
+      const land = await runCli(["land", dir])
+      expect(land.code).toBe(1)
+      expect(land.err).toContain("commit: false is retired")
       // a key rule repairs it, so the strict failure names fix (plans/0052 D11)
-      expect(run.err).toContain(`fix: opencode-auto fix ${dir}`)
+      expect(land.err).toContain(`fix: opencode-auto fix ${dir}`)
       delete (stored as { commit?: boolean }).commit
       await Bun.write(file, JSON.stringify(stored, null, 2) + "\n")
       const status = await runCli(["status", dir])
@@ -1313,15 +1282,15 @@ describe("CLI: init freezes the project config", () => {
       expect(named.err).toContain("--agent takes opencode|claude")
       // a pre-M6.1 config holding a contract name fails loading with a hint
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ agent: "auto" }))
-      const run = await runCli(["run", dir])
-      expect(run.code).toBe(1)
-      expect(`${run.out}${run.err}`).toContain("looks like an agent contract name")
+      const land = await runCli(["land", dir])
+      expect(land.code).toBe(1)
+      expect(`${land.out}${land.err}`).toContain("looks like an agent contract name")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("init --parallel freezes the planning level; none drops the key; --max-sessions parses as run's width (plans/0046 D8; activation decoupled by auto-core plans/0125)", async () => {
+  test("init --parallel freezes the planning level; none drops the key; --max-sessions is refused outside the retired run (plans/0046 D8; activation decoupled by auto-core plans/0125)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       // default: no key written, no summary mention
@@ -1352,12 +1321,6 @@ describe("CLI: init freezes the project config", () => {
       const initSessions = await runCli(["init", dir, "--max-sessions", "1"])
       expect(initSessions.code).toBe(1)
       expect(initSessions.err).toContain("--max-sessions is a run option")
-      // a non-integer width is a usage error (the shell guard on the level
-      // itself is gone — plans/0125 D2; width alone is legal, its own
-      // preflight gates carrying the rest)
-      const zero = await runCli(["run", dir, "--max-sessions", "0"])
-      expect(zero.code).toBe(1)
-      expect(zero.err).toContain("--max-sessions takes a positive integer")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1499,8 +1462,9 @@ describe("CLI: init freezes the project config", () => {
       expect(missing.err).toContain("does not exist under")
       await mkdir(join(dir, "plain"))
       expect((await runCli(["amend", dir, "--isolate", "plain"])).err).toContain("holds no .git")
-      // run refuses the flag as frozen by init, pointing at amend
-      const frozen = await runCli(["run", dir, "--isolate", "pkg"])
+      // close refuses the flag as frozen by init, pointing at amend (plans/0283
+      // re-keyed run's frozen-flag witness to the strict ladder)
+      const frozen = await runCli(["close", "T-001", dir, "--reason", "r", "--isolate", "pkg"])
       expect(frozen.code).toBe(1)
       expect(frozen.err).toContain("--isolate was frozen by init")
       expect(frozen.err).toContain("opencode-auto amend <dir> --isolate <value>")
@@ -1514,18 +1478,22 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
-  test("plan establishing a round isolates each designated repository on auto/R-NN; a dirty one blocks exit 2 naming the repository and its paths (plans/0074 U-L1)", async () => {
+  // plans/0283 re-keyed the establishment vehicle: the local plan command is
+  // retired, so the round establishment (branch isolation and all — the one
+  // home the daemon's transfer operation advances through) is driven
+  // in-process here; the daemon renders these outcomes, and auto-core's
+  // transfer suites pin that rendering.
+  test("the round establishment isolates each designated repository on auto/R-NN; a dirty one is the dirty refusal naming the repository and its paths (plans/0074 U-L1)", async () => {
     const { dir, nested } = await isolateFixture("auto-cli-iso-plan-")
     try {
       const original = (await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()
       const setup = (await nested("rev-parse", "--short", original)).trim()
       expect((await runCli(["init", dir, "--isolate", "pkg"])).code).toBe(0)
       await commitFixture(dir)
-      // clean: the round opens with the repository switched onto auto/R-01
-      const plan = await runCli(["plan", dir])
-      expect(plan.code).toBe(0)
-      expect(plan.out).toContain("✓ round R-01 established")
-      expect(plan.out).toContain("✓ branch isolation: pkg on auto/R-01")
+      // clean: the establishment switches the repository onto auto/R-01
+      const made = await establish(dir, "m", ["pkg"])
+      expect(made.round).toBe(1)
+      expect(made.isolated).toEqual(["pkg"])
       expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
       expect((await nested("rev-parse", "--short", original)).trim()).toBe(setup)
     } finally {
@@ -1536,11 +1504,10 @@ describe("CLI: init freezes the project config", () => {
       expect((await runCli(["init", dirty.dir, "--isolate", "pkg"])).code).toBe(0)
       await commitFixture(dirty.dir)
       await Bun.write(join(dirty.dir, "pkg", "wip.txt"), "uncommitted\n")
-      const blocked = await runCli(["plan", dirty.dir])
-      expect(blocked.code).toBe(2)
-      expect(blocked.err).toContain("a repository designated by config isolate is not clean")
-      expect(blocked.err).toContain("pkg:")
-      expect(blocked.err).toContain("pkg/wip.txt")
+      const blocked = await establishRoundSetup(dirty.dir, 1, { phases: "m", isolate: ["pkg"] })
+      expect(blocked).toMatchObject({ type: "dirty" })
+      expect(JSON.stringify(blocked)).toContain("pkg")
+      expect(JSON.stringify(blocked)).toContain("pkg/wip.txt")
       // nothing was established and no branch was touched
       expect(await Bun.file(join(dirty.dir, "docs", "R-01", "phases.md")).exists()).toBe(false)
       expect((await dirty.nested("branch", "--list", "auto/*")).trim()).toBe("")
@@ -1564,7 +1531,7 @@ describe("CLI: init freezes the project config", () => {
       const setup = (await nested("rev-parse", "HEAD")).trim()
       expect((await runCli(["init", dir, "--isolate", "pkg"])).code).toBe(0)
       await commitFixture(dir)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      await establish(dir, "m", ["pkg"])
       const roundCommit = async (file: string, n: number) => {
         await Bun.write(join(dir, "pkg", file), `${file}\n`)
         await nested("add", "-A")
@@ -1607,7 +1574,7 @@ describe("CLI: init freezes the project config", () => {
       const original = (await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()
       expect((await runCli(["init", moved.dir, "--isolate", "pkg"])).code).toBe(0)
       await commitFixture(moved.dir)
-      expect((await runCli(["plan", moved.dir])).code).toBe(0)
+      await establish(moved.dir, "m", ["pkg"])
       await Bun.write(join(moved.dir, "pkg", "one.txt"), "one\n")
       await nested("add", "-A")
       await nested("commit", "-qm", "T-001 implement the migration: execute 1", "-m", "Auto-Stage: execute")
@@ -1633,7 +1600,7 @@ describe("CLI: init freezes the project config", () => {
     try {
       expect((await runCli(["init", dirty.dir, "--isolate", "pkg"])).code).toBe(0)
       await commitFixture(dirty.dir)
-      expect((await runCli(["plan", dirty.dir])).code).toBe(0)
+      await establish(dirty.dir, "m", ["pkg"])
       await Bun.write(join(dirty.dir, "pkg", "wip.txt"), "uncommitted\n")
       const unclean = await runCli(["land", dirty.dir])
       expect(unclean.code).toBe(2)
@@ -1659,7 +1626,7 @@ describe("CLI: init freezes the project config", () => {
       const original = (await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()
       expect((await runCli(["init", dir, "--isolate", "pkg"])).code).toBe(0)
       await commitFixture(dir)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      await establish(dir, "m", ["pkg"])
       await Bun.write(join(dir, "pkg", "one.txt"), "one\n")
       await nested("add", "-A")
       await nested("commit", "-qm", "T-001 implement the migration: execute 1", "-m", "Auto-Stage: execute")
@@ -1690,7 +1657,7 @@ describe("CLI: init freezes the project config", () => {
       const setup = (await nested("rev-parse", "HEAD")).trim()
       expect((await runCli(["init", dir, "--isolate", "pkg"])).code).toBe(0)
       await commitFixture(dir)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      await establish(dir, "m", ["pkg"])
       await Bun.write(join(dir, "pkg", "one.txt"), "one\n")
       await nested("add", "-A")
       await nested("commit", "-qm", "T-001 implement the migration: execute 1", "-m", "Auto-Stage: execute")
@@ -1725,9 +1692,9 @@ describe("CLI: init freezes the project config", () => {
       const swallowed = await runCli(["land", "--merge", usage.dir])
       expect(swallowed.code).toBe(1)
       expect(swallowed.err).toContain("land's landing-mode flag and takes no value")
-      const elsewhere = await runCli(["run", usage.dir, "--keep"])
+      const elsewhere = await runCli(["close", "T-001", usage.dir, "--reason", "r", "--keep"])
       expect(elsewhere.code).toBe(1)
-      expect(elsewhere.err).toContain("--keep and --abandon are land options: run takes neither")
+      expect(elsewhere.err).toContain("--keep and --abandon are land options: close takes neither")
     } finally {
       await rm(usage.dir, { recursive: true, force: true })
     }
@@ -1808,8 +1775,9 @@ describe("CLI: init freezes the project config", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
-      // init no longer establishes the round (plans/0053 D31); plan does
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      // init no longer establishes the round (plans/0053 D31); the daemon's
+      // opening operation does — driven here through the establishment home
+      await establish(dir, "m")
       await Bun.write(join(dir, "docs/R-01/P01-implement/tasks.md"), "# Tasks\n\n- [ ] T-001 sample task\n")
       await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: sample task\nPhase: R-01.P01\n\n## Goal\n\nSample.\n")
       const status = await runCli(["status", dir])
@@ -1850,18 +1818,20 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
     }
   })
 
-  test("init --phases valid values freeze into the config (the summary carrying no phases — init-stamped machinery, plans/0137); the closing line points at transfer (the phased opener)", async () => {
+  test("init --phases valid values freeze into the config (the summary carrying no phases — init-stamped machinery, plans/0137); the closing line points at the daemon's transfer operation (the phased opener)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir, "--phases", "admtvk"])
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
       expect(init.out).not.toContain("· phases")
-      // config-only init (plans/0053 D31, re-keyed by plans/0101 D4): the
-      // closing line names the rounds' opening command — transfer on a phased
-      // project, plan in m mode (which transfer refuses); nothing is written
-      // under docs/
-      expect(init.out).toContain(`next: opencode-auto transfer ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
+      // config-only init (plans/0053 D31, the opener re-keyed by plans/0101 D4
+      // and plans/0283): the closing line names the rounds' opening act — the
+      // daemon's transfer operation on a phased project, its plan operation
+      // in m mode; nothing is written under docs/
+      expect(init.out).toContain(
+        `next: the transfer operation of a daemon (POST /projects/<project>/transfer) (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`,
+      )
       expect(init.out).not.toContain("to start analysis")
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
       // An amend without --phases keeps the existing value; an explicit init
@@ -1885,9 +1855,9 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "adm"])).code).toBe(0)
-      // init establishes no round: only after transfer establishes the current
-      // round is there a phase index to judge
-      expect((await runCli(["transfer", dir])).code).toBe(0)
+      // init establishes no round: only after the opening operation
+      // establishes the current round is there a phase index to judge
+      await establish(dir, "adm")
       await completeLetters(dir, ["a"])
       // A value starting with "d" would drop the completed P01-analysis →
       // refused (plannedPhaseUnits' read-only check, before any write)
@@ -1912,7 +1882,7 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 analysis\n- [ ] P02 design\n- [ ] P03 implement\n")
       // An overwrite init (round established) ends with the plain transfer
       // pointer (the phased opener), no longer claiming to establish R-01
-      expect(ok.out).toContain(`next: opencode-auto transfer ${dir}`)
+      expect(ok.out).toContain(`next: the transfer operation of a daemon (POST /projects/<project>/transfer)`)
       expect(ok.out).not.toContain("establishes round")
       // The guard judges this run's effective value: a bare full-overwrite
       // init would fall phases back to "m", incompatible with the completed
@@ -1946,135 +1916,6 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
     }
   })
 
-  test("roadmap-driven establishment, the round-brief proposal channel, and the amend --phases coverage refusal (auto-core plans/0101 D5, 0114 D3, 0115)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    // The analysis flow is the opt-in half (CLI_ENV_BASE pins the switch off
-    // for the direct-establishment flows); this walkthrough pins the
-    // person-facing default, analysis on.
-    const on = { OPENCODE_AUTO_ANALYSIS: "on" as const }
-    try {
-      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      // The first transfer opens the assisted analysis (default on): the stub
-      // (the project-start shape is transfer's since plans/0101 D2).
-      const stubbed = await runCli(["transfer", dir], on)
-      expect(stubbed.code).toBe(0)
-      expect(stubbed.out).toContain("the project analysis is open")
-      // The person's review-and-commit between the gated commands: init's
-      // config layer and the opened stub stay uncommitted until the person
-      // commits them here — the release consumptions commit exactly their
-      // own write surface (plans/0207 D1), never the person's dirt, so the
-      // review stop's start-clean gate names these files and stops (exit 2)
-      // without this step. The released analysis below then stays
-      // uncommitted by hand: it rides the brief-install commit as its
-      // evidence (0207 D1's uncommitted-hand-release arm).
-      await commitFixture(dir)
-      // The person releases an analysis whose R-01 roadmap line (amt)
-      // differs from config (am), carrying a round-brief proposal for R-01
-      // (plans/0115): the release approves both the phase list and the brief.
-      // The proposal re-frames the line's goal with no reconciliation block
-      // first (auto-core plans/0244 D6): the gate holds the release naming
-      // the proposal — a narrowing must become a block the person reads,
-      // never a sentence riding inside the drafted line.
-      const analysis = (askVsCharter: readonly string[]): string =>
-        [
-          "# Project analysis",
-          "",
-          "## Analysis",
-          "",
-          "A CLI tool of three modules; the retry ladder is the risk area.",
-          "",
-          "## Goals",
-          "",
-          "Ship the port with the protocol intact.",
-          "",
-          "## Project brief",
-          "",
-          "A faithful port of the core into the monorepo, tests included.",
-          "",
-          "## Roadmap",
-          "",
-          "- R-01 amt — port the core and its tests",
-          "",
-          "## Round briefs",
-          "",
-          "### R-01",
-          "",
-          "Port the retry ladder and the protocol strings with their tests.",
-          "",
-          "- Acceptance: the suite passes on the ported core.",
-          "",
-          ...askVsCharter,
-          "Clarified: yes",
-          "",
-        ].join("\n")
-      await Bun.write(join(dir, "docs/analysis.md"), analysis([]))
-      const held = await runCli(["transfer", dir], on)
-      expect(held.code).toBe(2)
-      expect(held.out).toContain("docs/analysis.md has problems that hold its release")
-      expect(held.out).toContain(
-        "round-brief proposals that re-frame their roadmap line's goal with no `#### Ask vs charter` block: `### R-01`",
-      )
-      // The person adds the block (D6): the ask restated beside the drafted
-      // charter, the difference named with where the work goes — the release
-      // then approves the narrowing as a decision, not a drafted sentence.
-      await Bun.write(
-        join(dir, "docs/analysis.md"),
-        analysis([
-          "#### Ask vs charter",
-          "",
-          "The line asks the core and its tests ported; this charter takes the retry ladder",
-          "and the protocol strings with their tests — the remaining modules wait for the",
-          "next round's roadmap line, this round taking the risk area first.",
-          "",
-        ]),
-      )
-      const established = await runCli(["transfer", dir], on)
-      expect(established.code).toBe(0)
-      expect(established.out).toContain("approved project brief installed")
-      // The roadmap's line wins over config: three phases, the stop naming
-      // source and value — no amend detour, no advice to transcribe.
-      expect(established.out).toContain(
-        '✓ round R-01 established: P01-analysis, P02-implement, P03-test — phases from the roadmap of docs/analysis.md (R-01 line "port the core and its tests"; config default was "am")',
-      )
-      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("P03 test")
-      // The released round brief passes the round-start gate (plans/0115):
-      // installed verbatim on the driver's round-start commit, and the same
-      // invocation continues into the construction's review stop — the
-      // person's release was the review, no hand transcription left.
-      expect(established.out).toContain("installs verbatim — the round-start gate passes (your release was its review)")
-      expect(established.out).toContain("✓ round brief installed verbatim: docs/analysis.md `### R-01` → docs/R-01/round.md (the round-start commit; your release approved it)")
-      expect(established.out).toContain("review stop: the formulation todo")
-      expect(established.out).not.toContain("round-start gate): review the round setup")
-      const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
-      expect(round).toContain("Port the retry ladder and the protocol strings with their tests.")
-      // The reconciliation block rides the verbatim install (the body keeps
-      // every sub-heading, 0115's law) — the person's approved difference is
-      // part of the round's own record.
-      expect(round).toContain("#### Ask vs charter")
-      expect(round).toContain("## Close")
-      // The coverage refusal retired with the channel itself (plans/0137,
-      // absorbing 0114 D3): amend --phases refuses outright whatever the
-      // value and whatever the coverage — the roadmap line the one reshape
-      // channel, the config key init-stamped machinery.
-      const diverged = await runCli(["amend", dir, "--phases", "am"])
-      expect(diverged.code).toBe(1)
-      expect(diverged.err).toContain("--phases is retired on amend: a round's phases reshape by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md")
-      expect(await readConfig(dir)).toMatchObject({ phases: "am" })
-      const agreeing = await runCli(["amend", dir, "--phases", "amt"])
-      expect(agreeing.code).toBe(1)
-      expect(agreeing.err).toContain("--phases is retired on amend")
-      // The status tree names the divergence (the config default the roadmap
-      // rode over): one ℹ line, both values, the line-move channel.
-      const status = await runCli(["status", dir])
-      expect(status.out).toContain(
-        'ℹ phases (config "am"): R-01\'s line establishes "amt" under the roadmap of docs/analysis.md — the config value never applies to this round; reshape by moving its `R-01 <phases> — <goal>` line there',
-      )
-      expect(status.out).toContain("P03-test")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
   test("init --phases type-id list: custom types from .opencode/auto/phases, repeats allowed, prefix guard by type", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
@@ -2090,10 +1931,10 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       const init = await runCli(["init", dir, "--phases", "analysis, security-review ,implement,security-review"])
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "analysis,security-review,implement,security-review" })
-      expect(init.out).toContain(`next: opencode-auto transfer ${dir} (opens the assisted project analysis`)
-      // After transfer establishes the round, status prints the phase tree
-      // (per the index)
-      expect((await runCli(["transfer", dir])).code).toBe(0)
+      expect(init.out).toContain(`next: the transfer operation of a daemon (POST /projects/<project>/transfer) (opens the assisted project analysis`)
+      // After the opening operation establishes the round, status prints the
+      // phase tree (per the index)
+      await establish(dir, "analysis,security-review,implement,security-review")
       expect((await runCli(["status", dir])).out).toContain(
         "  [▶] P01-analysis\n  [ ] P02-security-review\n  [ ] P03-implement\n  [ ] P04-security-review\n",
       )
@@ -2170,10 +2011,12 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(await Bun.file(brief).text()).toBe("Migrate legacy to bun.\n")
       expect((await runCli(["amend", dir, "--brief", "Second intent."])).code).toBe(0)
       expect(await Bun.file(brief).text()).toBe("Second intent.\n")
-      // The revision channel and the planning input are exclusive to their
-      // commands.
-      expect((await runCli(["run", dir, "--brief", "x"])).code).toBe(1)
-      expect((await runCli(["run", dir, "--brief", "x"])).err).toContain("--brief is an amend option (the project brief's manual revision: opencode-auto amend <dir> --brief <text or path>)")
+      // The revision channel is amend's alone: close's strict ladder names
+      // the pair a non-option (plans/0283 re-keyed the run/plan refusal
+      // family to the strict ladder).
+      const onClose = await runCli(["close", "T-001", dir, "--reason", "r", "--brief", "x"])
+      expect(onClose.code).toBe(1)
+      expect(onClose.err).toContain("--brief is not a close option")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2186,7 +2029,8 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       const file = join(dir, ".opencode/auto/config.json")
       const config = await readConfig(dir)
       await Bun.write(file, JSON.stringify({ ...config, verify: true }, null, 2) + "\n")
-      const on = await runCli(["run", dir])
+      // a strict load refuses it (plans/0283 re-keyed run's witness to land)
+      const on = await runCli(["land", dir])
       expect(on.code).toBe(1)
       expect(on.err).toContain("verify is retired")
       await Bun.write(file, JSON.stringify({ ...config, verify: false }, null, 2) + "\n")
@@ -2238,204 +2082,161 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
 
 })
 
-// transfer and run --boundary (auto-core plans/0101 D1/D2): the CLI surface
-// of the person-bracketed boundaries — the command's usage refusals and its
-// session-free project-start shapes; the boundary flag's parse and its
-// exclusions. The advance's session halves are the core suites' (the loop
-// under stopBefore "formulate").
-describe("CLI: transfer and run --boundary (auto-core plans/0101 D1/D2)", () => {
-  test("transfer refuses m mode, run's execution options and the planning input; an uninitialized directory refuses", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await runCli(["init", dir])).code).toBe(0)
-      const manual = await runCli(["transfer", dir])
-      expect(manual.code).toBe(1)
-      expect(manual.out).toContain("transfer applies to phased projects")
-      expect(manual.out).toContain("execute with opencode-auto run")
-      for (const args of [["--dryrun"], ["--boundary", "flow"]] as const) {
-        const refused = await runCli(["transfer", dir, ...args])
-        expect(refused.code).toBe(1)
-        expect(refused.err).toContain("transfer does not accept it")
-      }
-      const input = await runCli(["transfer", dir, "--file", "x.md"])
-      expect(input.code).toBe(1)
-      expect(input.err).toContain("transfer takes no planning input")
-      // --resynthesize is transfer's alone (plans/0101 D3): every other
-      // command refuses it with the transfer pointer, the --round/--phase
-      // pattern.
-      for (const command of ["run", "plan", "init", "close"] as const) {
-        const refused = await runCli([command, dir, "--resynthesize"])
-        expect(refused.code).toBe(1)
-        expect(refused.err).toContain(`--resynthesize is a transfer option: ${command} takes no --resynthesize`)
-        expect(refused.err).toContain("opencode-auto transfer <dir> --resynthesize")
-      }
-      // An uninitialized directory loads the config defaults (m mode), so
-      // the m-mode refusal answers it — exit 1 either way, nothing written.
-      const fresh = await mkdtemp(join(tmpdir(), "auto-cli-"))
-      try {
-        const uninit = await runCli(["transfer", fresh])
-        expect(uninit.code).toBe(1)
-        expect(uninit.out).toContain("transfer applies to phased projects")
-        expect(await Bun.file(join(fresh, "docs/analysis.md")).exists()).toBe(false)
-      } finally {
-        await rm(fresh, { recursive: true, force: true })
-      }
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
+// The push commands retired (plans/0283, the pull-only program's CLI
+// tombstones): run, plan, transfer and clarify — and the hidden `_lane` lane
+// worker with them — answer their one-line retirement notice on every
+// invocation, ahead of the flag refusals, the unknown-option scan, --help,
+// the arity check, the legacy-layout check and the run-lock refusal (a
+// retired command has no flags, directory or lock semantics left to honor).
+// The corpus convention — every removed surface pinned by a test answering a
+// usage error — lives here: the five notices byte-identical, the daemon
+// surfaces that replaced each kind of work named, and the plan/transfer flag
+// remedies re-keyed onto the live commands that still refuse them.
+describe("CLI: the push commands retired (plans/0283)", () => {
+  const NOTICES: Record<string, string> = {
+    run: "run is retired (plans/0283): the protocol does nothing via push — a phase's tasks are execute grants external coding agents claim over the executor protocol (a daemon's POST /projects/<project>/executor/claim; opencode-auto-server serve registers the project)\n",
+    plan:
+      "plan is retired (plans/0283): the no-agent planning routes are the daemon's plan operation (POST /projects/<project>/plan), the planning session the formulate grant's over the executor protocol, and one task at a time the task-add operation's (POST /projects/<project>/tasks)\n",
+    transfer:
+      "transfer is retired (plans/0283): the person-bracketed advance is the daemon's transfer operation (POST /projects/<project>/transfer) — a deterministic apply (git and document writes only), the distillation and the construction the distill/synthesize grants' over the executor protocol\n",
+    clarify:
+      "clarify is retired (plans/0283): the person's release act is the daemon's clarify operation (POST /projects/<project>/clarify) — or the document edit itself (the whole-line `Clarified: yes`) plus its commit\n",
+    _lane: "_lane is retired (plans/0283): the push lane workers are demolished — concurrency rides the executor protocol's scoped/doc lease tiers (external workers claim grants in their own worktrees)\n",
+  }
 
-  test("close-family and lane flags are refused on run, plan and transfer; --from-bundle points at sync on every other command; init refuses every foreign option outright (nothing written)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+  test("each retired command answers its exact one-line notice with exit 1 — ahead of flags, --help, the arity check and the run lock; nothing is written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-dead-"))
     try {
-      // init's whitelist (the amend pattern): run's, close's and _lane's
-      // flags are refused with a pointer at the owning command, and the
-      // refusal comes before any write — `init --dryrun` used to write
-      // everything.
-      const dryrun = await runCli(["init", dir, "--dryrun"])
-      expect(dryrun.code).toBe(1)
-      expect(dryrun.err).toContain("--dryrun is a run option")
-      expect(dryrun.err).toContain("there is no dry-run init")
+      for (const [command, notice] of Object.entries(NOTICES)) {
+        // The bare call
+        const bare = await runCli([command, dir])
+        expect(bare.code, command).toBe(1)
+        expect(bare.err, command).toBe(notice)
+        // Ahead of the flag refusals and the unknown-option scan: any flag
+        // combination (frozen keys, retired flags, planning input, garbage)
+        // gets this one answer only — a retired command has no flags left
+        const flagged = await runCli([command, dir, "--phases", "admtvk", "-p", "input", "--verbose", "--frobnicate"])
+        expect(flagged.code, command).toBe(1)
+        expect(flagged.err, command).toBe(notice)
+        // Ahead of --help: a retired command has no help view
+        const helped = await runCli([command, "--help"])
+        expect(helped.code, command).toBe(1)
+        expect(helped.err, command).toBe(notice)
+        // Ahead of the positional-arity check
+        const extra = await runCli([command, "dir-a", "dir-b"])
+        expect(extra.code, command).toBe(1)
+        expect(extra.err, command).toBe(notice)
+      }
+      // Zero writes to the directory throughout
       expect(await readdir(dir)).toEqual([])
-      const server = await runCli(["init", dir, "--server", "http://localhost:1"])
-      expect(server.code).toBe(1)
-      expect(server.err).toContain("--server is a run option")
-      expect(server.err).toContain("init starts no session")
-      const lane = await runCli(["init", dir, "--unit", "T-001"])
+      // The hidden lane worker's own invocation shape answers the same way
+      const lane = await runCli(["_lane", dir, "--unit", "T-001", "--merge", "auto-lane/T-001"])
       expect(lane.code).toBe(1)
-      expect(lane.err).toContain("--unit is _lane's value flag")
-      expect(await readdir(dir)).toEqual([])
-      // init's --from-bundle pointer names the consumer and the
-      // materialization channel (owned-flag refusal, 0159 — before it the
-      // flag passed init's whitelist but run/plan/transfer never refused it).
-      const initBundle = await runCli(["init", dir, "--from-bundle"])
-      expect(initBundle.code).toBe(1)
-      expect(initBundle.err).toContain("--from-bundle is a sync option")
-      expect(initBundle.err).toContain("opencode-auto sync <dir> --from-bundle")
-      expect(initBundle.err).toContain("materialized by init --intent alone")
-      expect(await readdir(dir)).toEqual([])
-      // run/plan/transfer: the close-family flags point at close / plan
-      // --force-close; the lane value flags name the hidden _lane entry
-      // (each swallows the next token as its value, so the directory would
-      // be eaten — the refusal keeps the token meaningless instead). plan
-      // shared run and transfer's option machinery but not the lane
-      // refusal until 0159: `plan <dir> --unit T-001` used to dispatch a
-      // real planning session with the flag silently dropped.
-      const runReason = await runCli(["run", dir, "--reason", "x"])
-      expect(runReason.code).toBe(1)
-      expect(runReason.err).toContain("--reason is a close option: run closes nothing")
-      expect(runReason.err).toContain("opencode-auto close <ref> [dir] --reason <text>")
-      const runMerge = await runCli(["run", dir, "--merge", "auto-lane/T-001"])
-      expect(runMerge.code).toBe(1)
-      expect(runMerge.err).toContain("hidden _lane entry")
-      expect(runMerge.err).toContain("run takes no --merge")
-      const runUnit = await runCli(["run", dir, "--unit", "T-001"])
-      expect(runUnit.code).toBe(1)
-      expect(runUnit.err).toContain("run takes no --unit")
-      // _lane refuses the retired extras like the run-shaped entry it is
-      // (0165-056/S26-04's _lane half: before 0193 D5 the hidden entry waved
-      // them through its KNOWN_FLAGS membership and ran on, the flag silently
-      // ignored — the same defect run/plan/transfer's family refuses).
-      const laneExtras = await runCli(["_lane", dir, "--unit", "T-001", "--commit-subtask"])
-      expect(laneExtras.code).toBe(1)
-      expect(laneExtras.err).toContain("--commit-subtask removed")
-      const laneRenamed = await runCli(["_lane", dir, "--unit", "T-001", "--verify-idle", "5"])
-      expect(laneRenamed.code).toBe(1)
-      expect(laneRenamed.err).toContain("--verify-idle was renamed to --idle-time")
-      const transferCascade = await runCli(["transfer", dir, "--cascade"])
-      expect(transferCascade.code).toBe(1)
-      expect(transferCascade.err).toContain("--cascade is a close option: transfer closes nothing")
-      const transferUnit = await runCli(["transfer", dir, "--unit", "T-001"])
-      expect(transferUnit.code).toBe(1)
-      expect(transferUnit.err).toContain("transfer takes no --unit")
-      const planUnit = await runCli(["plan", dir, "--unit", "T-001"])
-      expect(planUnit.code).toBe(1)
-      expect(planUnit.err).toContain("hidden _lane entry")
-      expect(planUnit.err).toContain("plan takes no --unit")
-      const planMerge = await runCli(["plan", dir, "--merge", "auto-lane/T-005"])
-      expect(planMerge.code).toBe(1)
-      expect(planMerge.err).toContain("plan takes no --merge")
-      // --from-bundle on the three session commands: same pointer, exit 1
-      // (before 0159 `run <dir> --from-bundle` started a full run with the
-      // flag silently ignored — the owned-flag row answers every command
-      // but sync now).
-      for (const command of ["run", "plan", "transfer"] as const) {
-        const refused = await runCli([command, dir, "--from-bundle"])
-        expect(refused.code).toBe(1)
-        expect(refused.err).toContain(`--from-bundle is a sync option`)
-        expect(refused.err).toContain(`${command} does not accept it`)
-        expect(refused.err).toContain("opencode-auto sync <dir> --from-bundle")
+      expect(lane.err).toBe(NOTICES._lane)
+      // A live run lock does not change the answer either (ahead of the
+      // run-lock refusal), and the lock file is neither taken nor removed
+      await mkdir(join(dir, ".auto"), { recursive: true })
+      await Bun.write(join(dir, ".auto/run.lock"), JSON.stringify({ pid: process.pid, host: hostname(), command: "transfer", started: "2026-11-21T10:00:00.000Z" }))
+      const locked = await runCli(["transfer", dir])
+      expect(locked.code).toBe(1)
+      expect(locked.err).toBe(NOTICES.transfer)
+      expect(await readdir(dir)).toEqual([".auto"])
+      expect(await readdir(join(dir, ".auto"))).toEqual(["run.lock"])
+      // An initialized project answers identically (the retirement outranks
+      // every behavioral check)
+      const made = await mkdtemp(join(tmpdir(), "auto-cli-dead-init-"))
+      try {
+        expect((await runCli(["init", made, "--phases", "am"])).code).toBe(0)
+        for (const command of ["run", "plan", "transfer", "clarify"]) {
+          const refused = await runCli([command, made])
+          expect(refused.code, command).toBe(1)
+          expect(refused.err, command).toBe(NOTICES[command])
+        }
+        // and the config layer the initialized project carries is untouched
+        expect(await Bun.file(join(made, ".opencode/auto/config.json")).exists()).toBe(true)
+      } finally {
+        await rm(made, { recursive: true, force: true })
       }
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("transfer on a fresh phased project opens the assisted analysis itself, the stop naming transfer's rhythm", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    // The analysis flow is the suite's opt-in half (CLI_ENV_BASE pins
-    // OPENCODE_AUTO_ANALYSIS=off for the direct-establishment flows): this
-    // test passes the default on per invocation, the grammar a person's
-    // fresh project actually meets.
-    const on = { OPENCODE_AUTO_ANALYSIS: "on" as const }
+  test("the retired commands are gone from the help surface and never suggested", async () => {
+    // The full usage carries the push-retired paragraph and no row for any
+    // of the five commands
+    const usage = await runCli(["--help"])
+    expect(usage.code).toBe(0)
+    expect(usage.out).toContain("run, plan, transfer, clarify (and the hidden _lane lane worker) are retired (plans/0283): the protocol does nothing via push, ever again")
+    expect(usage.out).toContain("the person's acts — the boundary advance, the release, the task add — are the daemon's transfer/clarify/tasks operations")
+    expect(usage.out).toContain("The task-append session (plan --append), the repair budget (run --repair) and the charter verifier are retired with them")
+    for (const command of ["run", "plan", "transfer", "clarify"]) {
+      expect(usage.out).not.toContain(`\n  opencode-auto ${command} `)
+    }
+    // An unknown command is refused naming the closest commands — a retired
+    // name never suggests (its notice is its one answer), so the near-miss
+    // of a dead command falls back to the plain pointer
+    const typo = await runCli(["pla"])
+    expect(typo.code).toBe(1)
+    expect(typo.err).toContain("'pla' is not a command")
+    expect(typo.err).not.toContain("did you mean")
+    const rune = await runCli(["rune"])
+    expect(rune.err).not.toContain("'run'")
+    // A live near-miss still suggests
+    const clos = await runCli(["clos"])
+    expect(clos.err).toContain("did you mean 'close'?")
+  })
+
+  test("the plan/transfer flag remedies re-keyed to the daemon surfaces on every live command (plans/0283)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-dead-flags-"))
     try {
-      expect((await runCli(["init", dir, "--phases", "mt"])).code).toBe(0)
-      const stubbed = await runCli(["transfer", dir], on)
-      expect(stubbed.code).toBe(0)
-      expect(stubbed.out).toContain("the project analysis is open")
-      expect(stubbed.out).toContain("re-run: opencode-auto transfer")
-      expect(await Bun.file(join(dir, "docs/analysis.md")).exists()).toBe(true)
-      expect(await Bun.file(join(dir, "docs/R-01")).exists().catch(() => false)).toBe(false)
-      // A complete but unreleased analysis awaits the person through
-      // transfer too (the release-gate stop, plans/0084 row 0c's shape).
-      await Bun.write(
-        join(dir, "docs/analysis.md"),
+      const refusals: [string[], string][] = [
+        // --append: the task-append session no longer runs — one task at a
+        // time is the daemon's task-add operation
         [
-          "# Project analysis",
-          "",
-          "## Analysis",
-          "",
-          "A CLI tool of three modules; the retry ladder is the risk area.",
-          "",
-          "## Goals",
-          "",
-          "Ship the port with the protocol intact.",
-          "",
-          "## Project brief",
-          "",
-          "A faithful port of the core into the monorepo, tests included.",
-          "",
-          "## Roadmap",
-          "",
-          "- R-01 mt — port the core and its tests",
-          "",
-        ].join("\n"),
-      )
-      const awaiting = await runCli(["transfer", dir], on)
-      expect(awaiting.code).toBe(2)
-      expect(awaiting.out).toContain("the project analysis awaits you")
-      expect(awaiting.out).toContain("re-run: opencode-auto transfer")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("run --boundary takes stop or flow (bare and invalid refuse); plan refuses the flag", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await runCli(["init", dir, "--phases", "mt"])).code).toBe(0)
-      for (const value of ["crossing", "1"]) {
-        const invalid = await runCli(["run", dir, "--boundary", value])
-        expect(invalid.code).toBe(1)
-        expect(invalid.err).toContain("--boundary takes stop or flow")
+          ["init", dir, "--append"],
+          "--append is retired with plan (plans/0283: the task-append session no longer runs): init takes no --append. Add one task at a time with the task-add operation of a daemon (POST /projects/<project>/tasks), or re-formulate the phase's plan through its inputs",
+        ],
+        [
+          ["close", "T-001", dir, "--reason", "r", "--append"],
+          "--append is retired with plan (plans/0283: the task-append session no longer runs): close takes no --append.",
+        ],
+        // --force-close: close-then-continue over the daemon is the close
+        // operation then the plan operation
+        [
+          ["init", dir, "--force-close", "T-001"],
+          "--force-close is retired with plan (plans/0283): init takes no --force-close. Close a unit with opencode-auto close <ref> [dir] --reason <text> — close-then-continue over the daemon is the close operation then the plan operation",
+        ],
+        // --scaffold: the intent pack's ## planning-input section carries it
+        [["init", dir, "--scaffold"], "--scaffold is retired with plan (plans/0283): init takes no --scaffold. The active intent pack's ## planning-input section carries the planning-input scaffold"],
+        // --new-task: one task at a time is the daemon's task-add operation
+        [["init", dir, "--new-task", "a task"], "--new-task is retired with plan (plans/0283): init takes no --new-task. One task at a time is the task-add operation of a daemon (POST /projects/<project>/tasks with the one-line title)"],
+        // --export/--adopt: the standalone work-order routes retired with
+        // their command — the executor protocol's grants carry the work
+        [["init", dir, "--export", "T-001"], "--export is retired with plan (plans/0283): init takes no --export. The standalone work-order routes retired with their command — the executor protocol's grants carry the work to external agents"],
+        [["init", dir, "--adopt", "T-001"], "--adopt is retired with plan (plans/0283): init takes no --adopt. The standalone work-order routes retired with their command — the executor protocol's grants carry the work to external agents"],
+        // --round/--phase: the documents are the person's own channel
+        [["init", dir, "--round"], "--round is retired with plan (plans/0283): init takes no --round. The documents are the person's own channel — fill the round brief (docs/R-NN/round.md) or the planning input (docs/R-NN/P<nn>-<type>/plan-input.md) with your coding agent directly"],
+        [["init", dir, "--phase"], "--phase is retired with plan (plans/0283): init takes no --phase. The documents are the person's own channel"],
+        // --resynthesize: the daemon's transfer operation carries the field
+        [["status", dir, "--resynthesize"], "--resynthesize is retired with transfer (plans/0283): status takes no --resynthesize. The transfer operation of a daemon (POST /projects/<project>/transfer) carries the resynthesize request field"],
+        // The planning input pair: the phase's plan-input.md, read by the
+        // formulation
+        [["init", dir, "--file", "f.md"], "--file is retired with the plan command (plans/0283 — the planning input is the phase's plan-input.md); init does not accept it"],
+        [["close", "T-001", dir, "--reason", "r", "-p", "text"], "-p/--prompt is retired with the plan command (plans/0283 — the planning input is the phase's plan-input.md, read by the formulation); close takes no planning input"],
+        // Run's session flags keep their pointers on init (the flags went
+        // with their command)
+        [["init", dir, "--dryrun"], "--dryrun is retired with the run command (plans/0283): init does not accept it — there is no dry-run init, and the refusal comes before any write"],
+        [["init", dir, "--server", "http://localhost:1"], "--server is retired with the run command (plans/0283); init does not accept it — init starts no session"],
+        [["init", dir, "--max-sessions", "1"], "--max-sessions is a run option (concurrent AI sessions for this run); init does not accept it"],
+        [["init", dir, "--stop-after", "T-001"], "--stop-after is a run option (the task whose completion ends that run, per run and never persisted); init does not accept it"],
+      ]
+      for (const [args, notice] of refusals) {
+        const refused = await runCli(args)
+        expect(refused.code, args.join(" ")).toBe(1)
+        expect(refused.err, args.join(" ")).toContain(notice)
       }
-      const bare = await runCli(["run", dir, "--boundary"])
-      expect(bare.code).toBe(1)
-      expect(bare.err).toContain("--boundary takes stop or flow")
-      const plan = await runCli(["plan", dir, "--boundary", "flow"])
-      expect(plan.code).toBe(1)
-      expect(plan.err).toContain("--boundary is a run option")
-      expect(plan.err).toContain("plan does not accept it")
+      expect(await readdir(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2483,7 +2284,7 @@ describe("CLI: init's git bootstrap and identity (plans/0073)", () => {
       for (const entry of ["tmp/", ".auto/", "/.env", "/AGENTS.md", "/.opencode/auto/models.json"]) {
         expect(gitignore).toContain(`${entry}\n`)
       }
-      expect(init.out).toContain(`next: opencode-auto plan ${dir}`)
+      expect(init.out).toContain(`next: the plan operation of a daemon (POST /projects/<project>/plan)`)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2543,7 +2344,7 @@ describe("CLI: init's git bootstrap and identity (plans/0073)", () => {
     }
   })
 
-  test("--name/--email also serve an existing repository without identity (in-repo init unchanged otherwise); a partial pair is a usage error; run refuses the flags", async () => {
+  test("--name/--email also serve an existing repository without identity (in-repo init unchanged otherwise); a partial pair is a usage error", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     const home = await mkdtemp(join(tmpdir(), "auto-cli-home-"))
     try {
@@ -2563,10 +2364,6 @@ describe("CLI: init's git bootstrap and identity (plans/0073)", () => {
       const lonely = await runCli(["init", dir, "-f", "--name", "x"], noIdentityEnv(home))
       expect(lonely.code).toBe(1)
       expect(lonely.err).toContain("--name requires its pair --email")
-      // run never writes git config: the flags are refused there
-      const onRun = await runCli(["run", dir, "--name", "x", "--email", "y@z"])
-      expect(onRun.code).toBe(1)
-      expect(onRun.err).toContain("--name is an init option")
     } finally {
       await rm(dir, { recursive: true, force: true })
       await rm(home, { recursive: true, force: true })
@@ -2575,10 +2372,12 @@ describe("CLI: init's git bootstrap and identity (plans/0073)", () => {
 })
 
 
-// The init shortcut retired with auto-core's implement.ts (plans/0053 D13): its
-// planning session is plan's now (-p | --file). The flags stay value-parsed and
-// every command refuses them with the retired notice before it writes anything.
-describe("CLI: --implement-file/--implement-prompt retired (plans/0053 D13)", () => {
+// The init shortcut retired with auto-core's implement.ts (plans/0053 D13)
+// and the plan command with it (plans/0283): the planning input is the
+// phase's plan-input.md, the planning session the formulate grant's over the
+// executor protocol. The flags stay value-parsed and every live command
+// refuses them with the retired notice before it writes anything.
+describe("CLI: --implement-file/--implement-prompt retired (plans/0053 D13; plans/0283)", () => {
   test("every command refuses them with the retired notice; nothing is written", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
@@ -2587,14 +2386,18 @@ describe("CLI: --implement-file/--implement-prompt retired (plans/0053 D13)", ()
         ["implement-file", ["init", dir, "--phases", "am", "--implement-file", "plan.md"]],
         ["implement-prompt", ["init", dir, "--amend", "--implement-prompt", "do something"]],
         ["implement-file", ["amend", dir, "--phases", "m", "--implement-file", "plan.md"]],
-        ["implement-prompt", ["run", dir, "--implement-prompt", "do something"]],
       ] as const) {
         const refused = await runCli([...args])
         expect(refused.code).toBe(1)
         expect(refused.err).toContain(
-          `--${flag} is retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)`,
+          `--${flag} is retired (and with it the plan command itself, plans/0283): the planning input is the phase's plan-input.md, the planning session the formulate grant's over the executor protocol`,
         )
       }
+      // run answers its own retirement notice ahead of the flag's (the one
+      // answer whatever follows a dead command)
+      const onRun = await runCli(["run", dir, "--implement-prompt", "do something"])
+      expect(onRun.code).toBe(1)
+      expect(onRun.err).toContain("run is retired (plans/0283):")
       expect(await readdir(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -2618,22 +2421,20 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
       const flag = await runCli(["init", dir, "--amend"])
       expect(flag.code).toBe(1)
       expect(flag.err).toBe("--amend is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>\n")
-      // plan's -p parses as usual (the planning input)
-      expect((await runCli(["plan", dir, "-p", "text", "--file", "f.md"])).err).toContain("-p/--prompt and --file are mutually exclusive")
       expect(await readdir(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("init writes the config layer only (fresh and overwrite) and prints the opening-command closing line (plan in m mode, transfer phased)", async () => {
+  test("init writes the config layer only (fresh and overwrite) and prints the opening-operation closing line (the daemon's plan operation in m mode, its transfer operation phased)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
-      expect(init.out).toContain(`next: opencode-auto plan ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
+      expect(init.out).toContain(`next: the plan operation of a daemon (POST /projects/<project>/plan) (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
       // The config layer only: nothing lands under docs/ (no round directory,
-      // no round.md stub — round artifacts are all the opening command's), and
+      // no round.md stub — round artifacts are all the opening act's), and
       // no brief is written without --brief (plans/0081 D11)
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
       expect(await stat(join(dir, "docs/R-01")).catch(() => undefined)).toBeUndefined()
@@ -2641,22 +2442,22 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
       expect(await Bun.file(join(dir, "docs/R-01/AGENTS.md.bak")).exists()).toBe(false)
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
       // An overwrite init turning the project phased (no round established):
-      // the closing line names transfer (the phased opener, plans/0101 D4),
-      // still no round established
+      // the closing line names the transfer operation (the phased opener,
+      // plans/0101 D4, re-keyed by plans/0283), still no round established
       await commitFixture(dir)
       const overwrite = await runCli(["init", dir, "--phases", "amt"])
       expect(overwrite.code).toBe(0)
-      expect(overwrite.out).toContain(`next: opencode-auto transfer ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
+      expect(overwrite.out).toContain(`next: the transfer operation of a daemon (POST /projects/<project>/transfer) (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
-      // Once transfer has established the round, an overwrite init's closing
-      // line is the plain opener pointer (no longer claiming to establish
-      // R-01) — and a bare overwrite falls phases back to "m", so its opener
-      // is plan's again
-      expect((await runCli(["transfer", dir])).code).toBe(0)
+      // Once the opening operation has established the round, an overwrite
+      // init's closing line is the plain opener pointer (no longer claiming
+      // to establish R-01) — and a bare overwrite falls phases back to "m",
+      // so its opener is the plan operation's again
+      await establish(dir, "amt")
       await commitFixture(dir)
       const again = await runCli(["init", dir])
       expect(again.code).toBe(0)
-      expect(again.out).toContain(`next: opencode-auto plan ${dir}`)
+      expect(again.out).toContain(`next: the plan operation of a daemon (POST /projects/<project>/plan)`)
       expect(again.out).not.toContain("establishes round")
       // The existing round survives untouched
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 analysis\n- [ ] P02 implement\n- [ ] P03 test\n")
@@ -2667,18 +2468,19 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
 })
 
 describe("CLI: phased flow P2 (round directories / empty templates / phase lines / ledger preflight)", () => {
-  test("init --phases amt writes the config layer only; transfer establishes R-01 at round start (phase index + phase directories, no PLAN.md); status prints the phase tree", async () => {
+  test("init --phases amt writes the config layer only; the opening operation establishes R-01 at round start (phase index + phase directories, no PLAN.md); status prints the phase tree", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir, "--phases", "amt"])
       expect(init.code).toBe(0)
       // init establishes no round (plans/0053 D31): docs/ does not exist, the
-      // closing line points at transfer (the phased opener, plans/0101 D4)
+      // closing line points at the transfer operation (the phased opener,
+      // plans/0101 D4, re-keyed by plans/0283)
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
-      expect(init.out).toContain(`next: opencode-auto transfer ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
-      const made = await runCli(["transfer", dir])
-      expect(made.code).toBe(0)
-      expect(made.out).toContain("✓ round R-01 established: P01-analysis, P02-implement, P03-test")
+      expect(init.out).toContain(`next: the transfer operation of a daemon (POST /projects/<project>/transfer) (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
+      const made = await establish(dir, "amt")
+      expect(made.round).toBe(1)
+      expect((await Bun.file(join(dir, "docs/R-01/phases.md")).text()).length).toBeGreaterThan(0)
       // The task unit layout (M3.4): no root or in-round PLAN.md anymore
       expect(await Bun.file(join(dir, "PLAN.md")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "docs/R-01/PLAN.md")).exists()).toBe(false)
@@ -2706,13 +2508,13 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      await establish(dir, "m")
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 implement\n")
       expect(await Bun.file(join(dir, "docs/R-01/P01-implement/todo.md")).exists()).toBe(true)
       // The unstarted implicit phase directory is still there (no tasks, no
       // done): init --phases am is allowed (a compatible value), but the index
-      // is never rewritten — the difference surfaces as a drift for plan to
-      // handle (D31/D34)
+      // is never rewritten — the difference surfaces as a drift for the
+      // advance to reconcile (D31/D34)
       await commitFixture(dir)
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 implement\n")
@@ -2732,49 +2534,11 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
     }
   })
 
-  test("run prints the phase progress line; an invalid phase index is an environment error with exit 1 (before the server starts)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      expect((await runCli(["transfer", dir])).code).toBe(0)
-      await commitFixture(dir)
-      const index = await Bun.file(join(dir, "docs/R-01/phases.md")).text()
-      // An invalid index line → preflight exits 1, the message pointing a
-      // person at the fix
-      await Bun.write(join(dir, "docs/R-01/phases.md"), "- [ ] P01 nonsense\n")
-      await commitFixture(dir)
-      const broken = await runCli(["run", dir])
-      expect(broken.code).toBe(1)
-      expect(broken.out).toContain("phase flow blocked")
-      expect(broken.out).toContain("docs/R-01/phases.md")
-      // A phase directory's state file missing (neither) → the same
-      // environment error
-      await Bun.write(join(dir, "docs/R-01/phases.md"), index)
-      await rm(join(dir, "docs/R-01/P03-test/todo.md"))
-      await commitFixture(dir)
-      const missing = await runCli(["run", dir])
-      expect(missing.code).toBe(1)
-      expect(missing.out).toContain("P03-test/ has neither todo.md nor done.md")
-      // A valid index passes preflight; the phase progress line prints after
-      // the config summary (deleting the agent contract file makes run exit
-      // before the server starts — only the banner is asserted)
-      await Bun.write(join(dir, "docs/R-01/P03-test/todo.md"), "# R-01.P03: test\n")
-      await completeLetters(dir, ["a"])
-      await rm(join(dir, ".opencode/agent/auto.md"))
-      await commitFixture(dir)
-      const banner = await runCli(["run", dir])
-      expect(banner.out).toContain("phases: P01-analysis✓ P02-implement▶ P03-test")
-      expect(banner.out).toContain("agent contract file missing")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
   test("status only notes an invalid ledger without blocking; phases = m prints no phase progress line (the phase tree prints as usual)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      expect((await runCli(["transfer", dir])).code).toBe(0)
+      await establish(dir, "amt")
       await Bun.write(join(dir, "docs/R-01/phases.md"), "an arbitrary line\n")
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
@@ -2784,7 +2548,7 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
       const plain = await mkdtemp(join(tmpdir(), "auto-cli-"))
       try {
         expect((await runCli(["init", plain])).code).toBe(0)
-        expect((await runCli(["plan", plain])).code).toBe(0)
+        await establish(plain, "m")
         const out = (await runCli(["status", plain])).out
         expect(out).not.toContain("phases: ")
         expect(out).toContain("[▶] P01-implement")
@@ -2796,30 +2560,26 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
     }
   })
 
-  // The missing-index remedy is phased-aware through the shell binary
-  // (0165-167, pinned here over 0193 D1's one emitter family): the line's
-  // only banner context is phased projects (config.phases !== "m"), exactly
-  // where plan refuses naming transfer — before 0193 D1 the shells'
-  // hand-maintained phasesLine taught plan unconditionally, so the person
-  // ran the taught command and was refused once before the right one
-  // appeared. The unstarted phased project needs no fake agent: the banner
-  // prints and run stops at the phase routing, nothing established.
-  test("the missing-index remedy is phased-aware: the phased run banner teaches transfer, m mode's status line teaches plan (0165-167)", async () => {
+  // The missing-index remedy is phased-aware through the one emitter family
+  // (0165-167, pinned over 0193 D1; plans/0283 re-keyed the run-banner arm to
+  // the status view — the emitter's surviving caller — with the taught
+  // commands rendered through the shell profile's surface seam): the phased
+  // project's line names the transfer operation, m mode's the plan operation.
+  test("the missing-index remedy is phased-aware in the status view: the phased line teaches the transfer operation, m mode's the plan operation (0165-167; plans/0283)", async () => {
     const phased = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", phased, "--phases", "dm"])).code).toBe(0)
-      const run = await runCli(["run", phased])
-      expect(run.out).toContain("⚠ phase index (docs/R-01/phases.md) is missing; run opencode-auto transfer to establish the round")
-      expect(run.out).not.toContain("run opencode-auto plan to establish the round")
-      // m mode's split (the default single-phase project): plan establishes
-      // the round, and the status view — the emitter's other caller —
-      // agrees with the banner's teaching
+      const status = await runCli(["status", phased])
+      expect(status.out).toContain("⚠ phase index (docs/R-01/phases.md) is missing; run the transfer operation of a daemon (POST /projects/<project>/transfer — opencode-auto-server serve) to establish the round")
+      expect(status.out).not.toContain("the plan operation of a daemon")
+      // m mode's split (the default single-phase project): the plan operation
+      // establishes the round
       const mode = await mkdtemp(join(tmpdir(), "auto-cli-"))
       try {
         expect((await runCli(["init", mode])).code).toBe(0)
-        const status = await runCli(["status", mode])
-        expect(status.out).toContain("⚠ phase index (docs/R-01/phases.md) is missing; run opencode-auto plan to establish the round")
-        expect(status.out).not.toContain("run opencode-auto transfer to establish the round")
+        const out = (await runCli(["status", mode])).out
+        expect(out).toContain("⚠ phase index (docs/R-01/phases.md) is missing; run the plan operation of a daemon (POST /projects/<project>/plan — opencode-auto-server serve) to establish the round")
+        expect(out).not.toContain("the transfer operation of a daemon")
       } finally {
         await rm(mode, { recursive: true, force: true })
       }
@@ -2836,28 +2596,30 @@ describe("CLI: phased flow P2 (round directories / empty templates / phase lines
 // the command; the routes it used to serve (the previous round's completeness
 // re-check, the round-close gate, establishing the next round) are covered by
 // the plan and transfer describes.
-describe("CLI: continue retired (auto-core plans/0053 D33)", () => {
+describe("CLI: continue retired (auto-core plans/0053 D33; the advance re-keyed by plans/0283)", () => {
   const NOTICE =
-    "continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run opencode-auto transfer <dir> — it runs the round-close checks and opens the next round\n"
+    "continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and advance with the transfer operation of a daemon (POST /projects/<project>/transfer) — it runs the round-close checks and opens the next round\n"
 
-  test("--continue is not an option: appearing on init/run/plan points at plan", async () => {
+  test("--continue is not an option: init points at the daemon's transfer operation; the retired commands answer their own notices", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir, "--continue"])
       expect(init.code).toBe(1)
       expect(init.err).toContain("--continue is not an option")
-      expect(init.err).toContain("run opencode-auto transfer <dir> (it runs the round-close checks and opens the next round)")
+      expect(init.err).toContain(
+        "the next round opens with the transfer operation of a daemon (POST /projects/<project>/transfer) — once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and advance (it runs the round-close checks and opens the next round)",
+      )
       expect(init.err).not.toContain("continue is retired")
+      // run and plan answer their retirement notices ahead of the flag (a
+      // retired command has no flags left to refuse)
       const run = await runCli(["run", dir, "--continue"])
       expect(run.code).toBe(1)
-      expect(run.err).toContain("--continue is not an option")
-      expect(run.err).toContain("run opencode-auto transfer <dir> (it runs the round-close checks and opens the next round)")
-      // plan shares run's option machinery (refuseFrozenFlags), so its
-      // --continue message names transfer the same way.
+      expect(run.err).toContain("run is retired (plans/0283):")
+      expect(run.err).not.toContain("--continue is not an option")
       const plan = await runCli(["plan", dir, "--continue"])
       expect(plan.code).toBe(1)
-      expect(plan.err).toContain("--continue is not an option")
-      expect(plan.err).toContain("run opencode-auto transfer <dir> (it runs the round-close checks and opens the next round)")
+      expect(plan.err).toContain("plan is retired (plans/0283):")
+      expect(plan.err).not.toContain("--continue is not an option")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2888,11 +2650,11 @@ describe("CLI: continue retired (auto-core plans/0053 D33)", () => {
     }
   })
 
-  test("an initialized project gets the retirement message too; transfer's route for opening the next round is unchanged", async () => {
+  test("an initialized project gets the retirement message too, the previous round complete or not (the daemon's transfer operation opens the next round now)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      expect((await runCli(["transfer", dir])).code).toBe(0)
+      await establish(dir, "am")
       // Even with the previous round complete (where continue's old semantics
       // would have applied), the retirement outranks every behavioral check
       await completeLetters(dir, ["a", "m"])
@@ -2900,21 +2662,17 @@ describe("CLI: continue retired (auto-core plans/0053 D33)", () => {
       const cont = await runCli(["continue", dir])
       expect(cont.code).toBe(1)
       expect(cont.err).toBe(NOTICE)
-      // transfer still opens the next round as usual (the retirement took the
-      // subcommand, not the round capability); its G1 stop names transfer's
-      // follow-up (the construct), plans/0101 D2
-      const opened = await runCli(["transfer", dir])
-      expect(opened.code).toBe(0)
-      expect(opened.out).toContain("✓ round R-02 established: P01-analysis, P02-implement")
-      expect(opened.out).toContain(
-        `then run: opencode-auto transfer ${dir} — it constructs R-02.P01 analysis's plan task and stops for your review (plan dispatches it, run executes the phase)`,
-      )
-      // run's startup banner carries the round annotation on the phase
-      // progress line (deleting the agent contract file makes run exit before
-      // the server)
-      await rm(join(dir, ".opencode/agent/auto.md"))
-      const banner = await runCli(["run", dir])
-      expect(banner.out).toContain("phases (round 2): P01-analysis▶ P02-implement")
+      // The round capability retired with the subcommand's replacement, not
+      // with the subcommand: the next round opens through the daemon's
+      // transfer operation (the round-close checks then the establishment,
+      // auto-core's transfer suites pin that rendering); transfer itself
+      // answers its notice here
+      const transfer = await runCli(["transfer", dir])
+      expect(transfer.code).toBe(1)
+      expect(transfer.err).toContain("transfer is retired (plans/0283): the person-bracketed advance is the daemon's transfer operation")
+      // and the completed round's documents stand untouched by either refusal
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 analysis\n- [x] P02 implement\n")
+      expect(await Bun.file(join(dir, "docs/R-01/round.md")).text()).toContain("## Close")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -3009,32 +2767,38 @@ describe("CLI: help and unknown commands", () => {
   })
 
   test("<command> --help / -h prints that command's row only — synopsis, summary, its option paragraphs — and outranks the option refusals", async () => {
-    const plan = await runCli(["plan", "--help"])
-    expect(plan.code).toBe(0)
-    expect(plan.out).toContain("opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append]")
-    expect(plan.out).toContain("plan — plan the current phase and stop before execution")
-    expect(plan.out).toContain("plan --force-close <ref> --reason <text> closes a unit")
-    expect(plan.out).toContain("run 'opencode-auto --help' for all commands")
-    // The view carries its command's row alone, never another command's
-    expect(plan.out).not.toContain("opencode-auto init [dir]")
-    expect(plan.out).not.toContain("opencode-auto close <ref> [dir]")
-    const close = await runCli(["close", "-h"])
+    const close = await runCli(["close", "--help"])
     expect(close.code).toBe(0)
     expect(close.out).toContain("opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]")
-    expect(close.out).not.toContain("opencode-auto plan [dir]")
+    expect(close.out).toContain("close — close a unit (task T-NNN, phase R-NN.P<nn>, round R-NN) without completing it")
+    expect(close.out).toContain("run 'opencode-auto --help' for all commands")
+    // The view carries its command's row alone, never another command's
+    expect(close.out).not.toContain("opencode-auto init [dir]")
+    expect(close.out).not.toContain("opencode-auto land [dir]")
+    const land = await runCli(["land", "-h"])
+    expect(land.code).toBe(0)
+    expect(land.out).toContain("opencode-auto land [dir] [--keep] [--abandon] [--merge] [--onto <branch>]")
+    expect(land.out).not.toContain("opencode-auto close <ref> [dir]")
     // --help outranks the unknown-option refusal: a person asking for help
-    // is answered, whatever else rides the line
-    const flagged = await runCli(["run", "--frobnicate", "--help"])
+    // is answered, whatever else rides the line (a retired command answers
+    // its notice ahead of help instead — pinned in the push-retired
+    // describe)
+    const flagged = await runCli(["close", "--frobnicate", "--help"])
     expect(flagged.code).toBe(0)
-    expect(flagged.out).toContain("opencode-auto run [dir]")
+    expect(flagged.out).toContain("opencode-auto close <ref> [dir]")
   })
 
-  test("an unknown command is a one-line refusal with the closest command named — never the usage dump", async () => {
-    const typo = await runCli(["pla"])
+  test("an unknown command is a one-line refusal with the closest command named — never the usage dump; a retired name never suggests", async () => {
+    const typo = await runCli(["clos"])
     expect(typo.code).toBe(1)
-    expect(typo.err).toContain("'pla' is not a command")
-    expect(typo.err).toContain("did you mean 'plan'?")
+    expect(typo.err).toContain("'clos' is not a command")
+    expect(typo.err).toContain("did you mean 'close'?")
     expect(typo.err).not.toContain("usage:")
+    // The retired commands never suggest (plans/0283): the near-miss of a
+    // dead command falls back to the plain pointer, its notice its one answer
+    const pla = await runCli(["pla"])
+    expect(pla.err).toContain("'pla' is not a command")
+    expect(pla.err).not.toContain("did you mean")
     const unknown = await runCli(["frobnicate"])
     expect(unknown.code).toBe(1)
     expect(unknown.err).toContain("'frobnicate' is not a command")
@@ -3057,14 +2821,14 @@ describe("CLI: help and unknown commands", () => {
     expect(check.err).toContain("check is retired")
     const lane = await runCli(["_lane", "--help"])
     expect(lane.code).toBe(1)
-    expect(lane.err).toContain("unknown option --help")
+    expect(lane.err).toContain("_lane is retired (plans/0283)")
   })
 
   test("the unknown-option refusal points at the command's own --help view", async () => {
-    const refused = await runCli(["run", "some-dir", "--frobnicate"])
+    const refused = await runCli(["init", "some-dir", "--frobnicate"])
     expect(refused.code).toBe(1)
     expect(refused.err).toContain("unknown option --frobnicate")
-    expect(refused.err).toContain("run 'opencode-auto run --help' to see this command's usage")
+    expect(refused.err).toContain("run 'opencode-auto init --help' to see this command's usage")
   })
 })
 
@@ -3076,11 +2840,16 @@ describe("CLI: help and unknown commands", () => {
 // every command while only sync consumed it). The vocabulary is derived from
 // the parser's own constants in src/index.ts — read from source, never
 // hand-copied, so a flag added there joins this enumeration without anyone
-// remembering it — and each of run/plan/transfer must either CONSUME the flag
-// (the consumed sets below are the commands' public option policy, changed
-// only in the same change as the parser) or refuse it with exit 1 naming it.
-// The refusals fire in argument policy, before any directory work or run
-// start, so the cases share one empty directory and never write.
+// remembering it — and each command that still accepts the known vocabulary
+// must either CONSUME the flag (the consumed sets below are the commands'
+// public option policy, changed only in the same change as the parser) or
+// refuse it with exit 1 naming it. plans/0283 narrowed the open-vocabulary
+// commands to init and amend: run/plan/transfer/_lane answer their retirement
+// notices ahead of every flag (pinned in the push-retired describe), the
+// strict and narrow commands enumerate their own ladders elsewhere, and the
+// two config commands carry the guard now. The refusals fire in argument
+// policy, before any directory work or write, so the cases share one empty
+// directory and never write.
 describe("CLI: the option policy's enumeration guard (0159)", () => {
   // The parser constants, extracted from the source the binary runs: the
   // flag tokens of VALUE_FLAGS and BOOLEAN_FLAGS (comments stripped first —
@@ -3094,7 +2863,7 @@ describe("CLI: the option policy's enumeration guard (0159)", () => {
     const end = source.indexOf(endMark, start)
     return source.slice(start, end)
   }
-  const noComments = (text: string): string => text.replace(/^[ \t]*\/\/.*$/gm, "")
+  const noComments = (text: string): string => text.replace(/^[ \t]*\/\/..*$/gm, "")
   const VALUE_FLAGS = new Set([...noComments(blockOf("VALUE_FLAGS", "// Repeatable value flags")).matchAll(/"([^"]+)"/g)].map(([, token]) => token))
   const BOOLEAN_FLAGS = new Set([...blockOf("BOOLEAN_FLAGS", "\nfor (let i = 1").matchAll(/"([^"]+)"/g)].map(([, token]) => token))
   const RETIRED_KEYS = new Set([...blockOf("RETIRED_FLAGS", "const KNOWN_FLAGS").matchAll(/^ {2}(?:"([A-Za-z0-9-]+)"|([A-Za-z0-9-]+)):/gm)].map(([, quoted, bare]) => quoted ?? bare))
@@ -3115,45 +2884,25 @@ describe("CLI: the option policy's enumeration guard (0159)", () => {
     }
   })
 
-  // What each command consumes — the public option policy (only a conscious
-  // policy change edits these rows; everything else in the vocabulary must be
-  // refused). run: the session flags and run's own execution shaping; plan:
-  // the same session flags plus its routes and the close family under
-  // --force-close; transfer: the session flags and --resynthesize alone.
-  const CONSUMED: Record<"run" | "plan" | "transfer", ReadonlySet<string>> = {
-    run: new Set(["server", "verbose", "interactive", "wait-answer", "permission", "new-session", "dryrun", "wait-between", "max-sessions", "boundary", "repair", "stop-after"]),
-    plan: new Set([
-      "server",
-      "verbose",
-      "interactive",
-      "wait-answer",
-      "permission",
-      "new-session",
-      "prompt",
-      "file",
-      "append",
-      "force-close",
-      "reason",
-      "cascade",
-      "commit-changes",
-      "stash-changes",
-      "new-task",
-      "scaffold",
-      "export",
-      "adopt",
-      "round",
-      "phase",
-    ]),
-    transfer: new Set(["server", "verbose", "interactive", "wait-answer", "permission", "new-session", "resynthesize"]),
+  // What each open-vocabulary command consumes — the public option policy
+  // (only a conscious policy change edits these rows; everything else in the
+  // vocabulary must be refused). init: its config flags, the brief pair, the
+  // identity pair and -f; amend: the config flags, the retired rename pair,
+  // --commit-subtask and the brief pair (their own notices fire inside the
+  // block, each naming the flag).
+  const CONFIG_FLAG_KEYS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt", "isolate", "intent", "tree-lanes"] as const
+  const CONSUMED: Record<"init" | "amend", ReadonlySet<string>> = {
+    init: new Set([...CONFIG_FLAG_KEYS, "brief", "brief-file", "name", "email", "force"]),
+    amend: new Set([...CONFIG_FLAG_KEYS, "verify-idle", "verify-max", "commit-subtask", "brief", "brief-file"]),
   }
 
-  test("every known flag is consumed or refused with exit 1 naming it — run, plan and transfer each", async () => {
+  test("every known flag is consumed or refused with exit 1 naming it — init and amend each", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-enum-"))
     try {
-      for (const command of ["run", "plan", "transfer"] as const) {
+      for (const command of ["init", "amend"] as const) {
         const refusedFlags = [...KNOWN_FLAGS].filter((flag) => !CONSUMED[command].has(flag))
-        // The refusals exit in argument policy, before any run starts, so
-        // the cases are independent and run concurrently in small batches.
+        // The refusals exit in argument policy, before any write, so the
+        // cases are independent and run concurrently in small batches.
         const failures: string[] = []
         for (let index = 0; index < refusedFlags.length; index += 12) {
           await Promise.all(
@@ -3168,50 +2917,15 @@ describe("CLI: the option policy's enumeration guard (0159)", () => {
         }
         expect(failures, `${command}: every flag outside its policy refuses with exit 1 naming it`).toEqual([])
       }
+      expect(await readdir(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   }, 120_000)
 
-  // The hidden `_lane` column (plans/0193 D5, 0165-056/S26-04's _lane half,
-  // widened to the machine-entry allowlist by plans/0195 D4): a run-shaped
-  // machine entry — its argv is the parent's lane launcher's own (`_lane
-  // <dir> --unit <id> [--merge <branch>]`, plus the session flags its block
-  // reads through parseSessionFlags), so its policy owns exactly that
-  // grammar: every other known flag refuses with exit 1 naming it — the
-  // globally retired flags, the frozen config keys and the other commands'
-  // revision pairs by their specific notices (0193 D5; before it the
-  // retired extras were waved through and silently ignored), everything
-  // else by the allowlist line (0195 D4: run's execution shaping, plan's
-  // input pair and the close family passed the entry silently ignored —
-  // the named residual 0193 D5 left this step). Enumerating the whole
-  // derived vocabulary keeps the column fail-loud on launcher drift: a
-  // future flag joining KNOWN_FLAGS lands here automatically.
-  test("the hidden _lane refuses every flag outside its grammar — the whole vocabulary enumerated (0193 D5's shared layer widened by 0195 D4)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-enum-"))
-    try {
-      // What the entry's block genuinely reads: --unit, --merge and the
-      // session flags parseSessionFlags consumes.
-      const laneConsumed = new Set(["unit", "merge", "server", "verbose", "interactive", "wait-answer", "permission", "new-session"])
-      const refusedFlags = [...KNOWN_FLAGS].filter((flag) => !laneConsumed.has(flag))
-      expect(refusedFlags.length).toBeGreaterThan(60)
-      const failures: string[] = []
-      for (let index = 0; index < refusedFlags.length; index += 12) {
-        await Promise.all(
-          refusedFlags.slice(index, index + 12).map(async (flag) => {
-            const args = ["_lane", dir, "--unit", "T-001", `--${flag}`, ...(VALUE_FLAGS.has(flag) ? ["zzz"] : [])]
-            const result = await runCli(args)
-            if (result.code !== 1 || !result.err.includes(`--${flag}`)) {
-              failures.push(`${args.slice(1).join(" ")}: exit ${result.code}, stderr: ${result.err.trim().split("\n")[0]}`)
-            }
-          }),
-        )
-      }
-      expect(failures, "_lane: every flag outside the machine-entry grammar refuses with exit 1 naming it").toEqual([])
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 120_000)
+  // The hidden `_lane` column retired with its entry (plans/0283): the
+  // machine-entry allowlist is gone, the notice its one answer — pinned in
+  // the push-retired describe above.
 
   // The help table's own integrity: renderCommandHelp does OPTION_TEXT.get(key)!
   // non-null-asserted, so an `options` key that is neither "frozen" nor an
@@ -3228,7 +2942,7 @@ describe("CLI: the option policy's enumeration guard (0159)", () => {
     expect(optionHelpKeys.size).toBeGreaterThan(30)
     const commandsBlock = blockOf("COMMANDS", "const OPTION_TEXT")
     const optionLists = [...commandsBlock.matchAll(/options: \[([^\]]*)\]/g)].map(([, inner]) => [...inner.matchAll(/"([^"]+)"/g)].map(([, key]) => key))
-    expect(optionLists.length).toBeGreaterThanOrEqual(18)
+    expect(optionLists.length).toBeGreaterThanOrEqual(14)
     for (const keys of optionLists) {
       for (const key of keys) {
         expect(key === "frozen" || optionHelpKeys.has(key), `the ${key} options row has no OPTION_HELP paragraph`).toBe(true)
@@ -3241,31 +2955,30 @@ describe("CLI: the option policy's enumeration guard (0159)", () => {
 // the 0159 enumeration guard above covers flag tokens per command; these
 // tests cover the token forms outside that frame — positional overflow
 // (0165-166, 0159's own deferred residual: `run dir1 dir2` ran dir1 with
-// dir2 silently swallowed), the =value form of boolean flags (0165-212:
-// the eq branch set any value and every reader is a !== "false"
-// comparison, so --verbose=flase silently meant true), the empty key
-// (0165-211: `--` parsed to "" and similarOptions's startsWith("") matched
-// every name, flooding the refusal with the whole vocabulary) — and the
-// hidden _lane's machine-entry allowlist (plans/0195 D4, ruling 0193 D5's
-// named residual: run's execution shaping, plan's input pair and the close
-// family passed the entry silently ignored). The refusals all fire in
-// argument policy, before any directory work, so most cases need no real
-// directory.
+// dir2 silently swallowed — plans/0283 re-keyed the scene's commands to the
+// live ones, the retired answers its notice ahead of the arity check), the
+// =value form of boolean flags (0165-212: the eq branch set any value and
+// every reader is a !== "false" comparison, so --verbose=flase silently
+// meant true), and the empty key (0165-211: `--` parsed to "" and
+// similarOptions's startsWith("") matched every name, flooding the refusal
+// with the whole vocabulary). The refusals all fire in argument policy,
+// before any directory work, so most cases need no real directory.
 describe("CLI: the parser's token-form refusals (0195)", () => {
   test("extra positionals are usage errors naming the command's positional grammar — never silently ignored (0165-166)", async () => {
     const oneDir = await runCli(["status", "/nonexistent-proj", "extra-word"])
     expect(oneDir.code).toBe(1)
     expect(oneDir.err).toContain('unexpected argument "extra-word"')
     expect(oneDir.err).toContain("status takes at most one directory argument (usage: opencode-auto status [dir])")
-    // 0159's recorded scene: `plan a b --scaffold` used to plan `a` with
-    // `b` swallowed.
-    const plan = await runCli(["plan", "proj-a", "proj-b", "--scaffold"])
-    expect(plan.code).toBe(1)
-    expect(plan.err).toContain('unexpected argument "proj-b"')
-    expect(plan.err).toContain("plan takes at most one directory argument (usage: opencode-auto plan [dir])")
+    const land = await runCli(["land", "proj-a", "proj-b"])
+    expect(land.code).toBe(1)
+    expect(land.err).toContain('unexpected argument "proj-b"')
+    expect(land.err).toContain("land takes at most one directory argument (usage: opencode-auto land [dir])")
+    // The retired commands answer their notices ahead of the arity check
+    // (pinned byte-identical in the push-retired describe; the shape here)
     const run = await runCli(["run", "dir1", "dir2"])
     expect(run.code).toBe(1)
-    expect(run.err).toContain('unexpected argument "dir2"')
+    expect(run.err).not.toContain("unexpected argument")
+    expect(run.err).toContain("run is retired (plans/0283):")
     // The per-command splits keep their own grammars: close <ref> [dir],
     // fork <target> <worktree-path> [dir], remove-fork <worktree-path> [dir]
     // — each refusal quotes the first extra word and the command's shape.
@@ -3290,38 +3003,34 @@ describe("CLI: the parser's token-form refusals (0195)", () => {
   test("boolean flags' =value form is validated — a typo'd value no longer silently means true (0165-212)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-bool-"))
     try {
-      // The floor arm below reaches the run banner, so the directory needs
-      // a config (plans/0239 D5: a never-initialized directory is refused
-      // before the banner, teaching init). The contract is left absent on
-      // purpose — the floor runs end at the contract stop, well short of a
-      // session.
-      await mkdir(join(dir, ".opencode", "auto"), { recursive: true })
-      await Bun.write(join(dir, ".opencode", "auto", "config.json"), '{"mode":"migrate"}\n')
-      const refused = await runCli(["run", dir, "--verbose=flase"])
+      // The fix arm below runs the real command over an initialized project,
+      // so the directory needs a config. fix --dryrun is the validated
+      // boolean with a read-only surface: the typo'd value refuses, the
+      // accepted forms run the listing (exit 0 over a consistent layer).
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await commitFixture(dir)
+      const refused = await runCli(["fix", dir, "--dryrun=yes"])
       expect(refused.code).toBe(1)
-      expect(refused.err).toContain('--verbose takes true or false: "flase" is neither')
-      expect(refused.err).toContain("pass the flag bare for true, or --verbose=false for the explicit opt-out")
+      expect(refused.err).toContain('--dryrun takes true or false: "yes" is neither')
+      expect(refused.err).toContain("pass the flag bare for true, or --dryrun=false for the explicit opt-out")
       // Every command's booleans validate alike (the check sits at the
-      // parser's policy layer): close's pair and fix's --dryrun
+      // parser's policy layer): close's pair
       const close = await runCli(["close", "R-001", dir, "--reason", "x", "--cascade=x"])
       expect(close.code).toBe(1)
       expect(close.err).toContain('--cascade takes true or false: "x" is neither')
-      const fix = await runCli(["fix", dir, "--dryrun=yes"])
-      expect(fix.code).toBe(1)
-      expect(fix.err).toContain('--dryrun takes true or false: "yes" is neither')
       // A retired boolean keeps its retirement notice — the more specific
       // remedy (the check sits after the retirement loop)
-      const amend = await runCli(["run", dir, "--amend=x"])
+      const amend = await runCli(["init", dir, "--amend=x"])
       expect(amend.code).toBe(1)
       expect(amend.err).toContain("--amend is retired")
       expect(amend.err).not.toContain("takes true or false")
       // The accepted forms pass untouched (P10's floor): bare, =false, and
-      // the swallowed true/false space form all reach the run banner —
-      // before the fix the typo'd form did too, silently verbose on
-      for (const argv of [["--verbose"], ["--verbose=false"], ["--verbose", "true"], ["--verbose=false", "--dryrun=false"]]) {
-        const floorRun = await runCli(["run", dir, ...argv])
-        expect(floorRun.err, argv.join(" ")).not.toContain("takes true or false")
-        expect(floorRun.out, argv.join(" ")).toContain("⚙ project config")
+      // the swallowed true/false space form all run the read-only listing —
+      // before the fix the typo'd form did too, silently on
+      for (const argv of [["--dryrun"], ["--dryrun=true"], ["--dryrun", "true"], ["--dryrun=false", "-f"]]) {
+        const floor = await runCli(["fix", dir, ...argv])
+        expect(floor.err, argv.join(" ")).not.toContain("takes true or false")
+        expect(floor.out, argv.join(" ")).toContain("✓ nothing to fix")
       }
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -3329,16 +3038,16 @@ describe("CLI: the parser's token-form refusals (0195)", () => {
   })
 
   test("the -- end-of-options token is a plain one-line unknown-option refusal — no vocabulary flood (0165-211)", async () => {
-    const refused = await runCli(["run", "some-dir", "--"])
+    const refused = await runCli(["init", "some-dir", "--"])
     expect(refused.code).toBe(1)
     expect(refused.err).toContain("unknown option --")
-    expect(refused.err).toContain("run 'opencode-auto run --help' to see this command's usage")
+    expect(refused.err).toContain("run 'opencode-auto init --help' to see this command's usage")
     // No did-you-mean clause at all: the empty key suggests nothing (the
     // pre-fix refusal named ~80 flags, retired ones included)
     expect(refused.err).not.toContain("did you mean")
     expect(refused.err).not.toContain("--agent")
     // The = form of the empty key answers the same way
-    const eq = await runCli(["run", "some-dir", "--=x"])
+    const eq = await runCli(["init", "some-dir", "--=x"])
     expect(eq.code).toBe(1)
     expect(eq.err).toContain("unknown option --")
     expect(eq.err).not.toContain("did you mean")
@@ -3348,124 +3057,20 @@ describe("CLI: the parser's token-form refusals (0195)", () => {
     expect(close.err).toContain("-- is not a close option")
     expect(close.err).not.toContain("did you mean")
     // A non-empty prefix still suggests (only the empty key changed)
-    const near = await runCli(["run", "some-dir", "--verbos"])
+    const near = await runCli(["init", "some-dir", "--inte"])
     expect(near.code).toBe(1)
-    expect(near.err).toContain("did you mean --verbose?")
-  })
-
-  test("the hidden _lane refuses every flag beyond its grammar — run's shaping, plan's input and the close family included (0195 D4)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-"))
-    try {
-      // The twelve flags that passed the entry silently ignored before the
-      // allowlist (plus each layer's shape: the value forms with a value,
-      // the short -p form resolving to --prompt in the refusal).
-      const cases: [string[], string][] = [
-        [["--dryrun"], "--dryrun"],
-        [["--wait-between", "5"], "--wait-between"],
-        [["--max-sessions", "2"], "--max-sessions"],
-        [["--repair", "3"], "--repair"],
-        [["--stop-after", "T-001"], "--stop-after"],
-        [["--boundary", "flow"], "--boundary"],
-        [["-p", "hi"], "--prompt"],
-        [["--file", "f"], "--file"],
-        [["--reason", "x"], "--reason"],
-        [["--cascade"], "--cascade"],
-        [["--commit-changes"], "--commit-changes"],
-        [["--stash-changes"], "--stash-changes"],
-      ]
-      for (const [argv, key] of cases) {
-        const refused = await runCli(["_lane", dir, "--unit", "T-001", ...argv])
-        expect(refused.code, argv.join(" ")).toBe(1)
-        expect(refused.err, argv.join(" ")).toContain(`${key} is not a _lane option`)
-        expect(refused.err, argv.join(" ")).toContain("the hidden lane-worker entry takes only --unit <id>, --merge <branch> and the session flags")
-        expect(refused.err, argv.join(" ")).toContain("its argv is the parent run's lane launcher's own")
-      }
-      // The floor: the launcher's own argv and the session flags the block
-      // genuinely reads pass the policy and reach the banner (the lane
-      // machinery's own next refusal follows — not this test's subject)
-      const floorLane = await runCli(["_lane", dir, "--unit", "T-001", "--merge", "auto-lane/T-001", "--verbose"])
-      expect(floorLane.err).not.toContain("is not a _lane option")
-      expect(floorLane.out).toContain("⚙ project config")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
+    expect(near.err).toContain("did you mean --intent / --interactive?")
   })
 })
 
-// The three public commands the shell suite had never driven (0159's
-// coverage finding): clarify's whole exit mapping through the shell row (the
-// core's clarifyGate — released 0 / held 2 / error 1) beside its flagless,
-// missing-config and live-lock refusals; driver-helper's unloadable-config
-// refusal; install-prompts's uninitialized refusal and its happy path (the
-// never-delete-extra invariant included).
-describe("CLI: clarify, driver-helper and install-prompts (the shell rows of 0116/0105/0093)", () => {
-  test("clarify maps the gate's results — released 0, held 2, error 1 — and refuses options, a missing config and a live lock", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-clarify-"))
-    try {
-      // Uninitialized: close's "nothing to clarify" shape, before the gate.
-      const bare = await runCli(["clarify", dir])
-      expect(bare.code).toBe(1)
-      expect(bare.err).toContain(`nothing to clarify: ${dir} has no .opencode/auto/config.json; run opencode-auto init ${dir} first`)
-      expect((await runCli(["init", dir])).code).toBe(0)
-      // The flagless refusal (the status family): a directory argument only.
-      const flagged = await runCli(["clarify", dir, "--dryrun"])
-      expect(flagged.code).toBe(1)
-      expect(flagged.err).toContain("unknown option --dryrun: clarify only accepts a directory argument, no options")
-      // Beside a live run: the config-command refusal, never a lock of its
-      // own (a planted live lock naming this process — alive, so held).
-      await mkdir(join(dir, ".auto"), { recursive: true })
-      await Bun.write(join(dir, ".auto/run.lock"), JSON.stringify({ pid: process.pid, host: hostname(), command: "run", started: "2026-10-30T10:00:00.000Z" }))
-      const locked = await runCli(["clarify", dir])
-      expect(locked.code).toBe(1)
-      expect(locked.err).toContain(`another opencode-auto process holds the run lock of ${dir}`)
-      await rm(join(dir, ".auto"), { recursive: true, force: true })
-      // Held (exit 2): no analysis and no round — the neither-gate refusal.
-      await commitFixture(dir)
-      const nothing = await runCli(["clarify", dir])
-      expect(nothing.code).toBe(2)
-      expect(nothing.err).toContain("nothing awaits your clarification right now")
-      expect(nothing.err).toContain("no project analysis docs/analysis.md exists")
-      // Held (exit 2): an analysis whose problems hold the release.
-      await Bun.write(
-        join(dir, "docs/analysis.md"),
-        ["# Project analysis", "", "## Analysis", "", "A CLI tool of three modules.", "", "## Goals", "", "Ship the port.", "", "## Project brief", "", "A faithful port.", "", "## Roadmap", "", "- R-01 mm — the decorated nope", ""].join("\n"),
-      )
-      const problems = await runCli(["clarify", dir])
-      expect(problems.code).toBe(2)
-      expect(problems.err).toContain("docs/analysis.md has problems that hold its release")
-      // Released (exit 0): a valid analysis — the review lines first, the
-      // mark written and its commit made (the person's uncommitted fill
-      // folds into the release commit).
-      await Bun.write(
-        join(dir, "docs/analysis.md"),
-        ["# Project analysis", "", "## Analysis", "", "A CLI tool of three modules.", "", "## Goals", "", "Ship the port.", "", "## Project brief", "", "A faithful port of the core.", "", "## Roadmap", "", "- R-01 m — port the core", ""].join("\n"),
-      )
-      const released = await runCli(["clarify", dir])
-      expect(released.code).toBe(0)
-      expect(released.out).toContain("the release of docs/analysis.md puts in force, as written:")
-      expect(released.out).toContain("- R-01 m — port the core")
-      expect(released.out).toContain("✓ `Clarified: yes` written to docs/analysis.md")
-      expect(released.out).toContain("committed: PLAN clarify the analysis release (docs/analysis.md)")
-      expect(await Bun.file(join(dir, "docs/analysis.md")).text()).toContain("Clarified: yes")
-      // Held (exit 2) again: already released — the neither-gate refusal
-      // names the released analysis.
-      const again = await runCli(["clarify", dir])
-      expect(again.code).toBe(2)
-      expect(again.err).toContain("nothing awaits your clarification right now")
-      expect(again.err).toContain("the project analysis docs/analysis.md is released")
-      // Error (exit 1): an unreadable phase index — the environment half of
-      // the mapping (a P-dir beside the index keeps the layout live).
-      await mkdir(join(dir, "docs/R-01/P01-implement"), { recursive: true })
-      await Bun.write(join(dir, "docs/R-01/phases.md"), "# Phases (R-01)\n")
-      const broken = await runCli(["clarify", dir])
-      expect(broken.code).toBe(1)
-      expect(broken.err).toContain("phase flow blocked: phase index")
-      expect(broken.err).toContain("no phases listed")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 60_000)
-
+// The two public commands the shell suite drives beside their retired
+// sibling (0159's coverage finding, re-keyed by plans/0283: clarify's whole
+// exit mapping retired with the command — the person's release act is the
+// daemon's clarify operation, the notice pinned in the push-retired
+// describe): driver-helper's unloadable-config refusal; install-prompts's
+// uninitialized refusal and its happy path (the never-delete-extra invariant
+// included).
+describe("CLI: driver-helper and install-prompts (the shell rows of 0105/0093)", () => {
   test("driver-helper renders the person-proxy brief; an unloadable config refuses (the map is keyed on it)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-helper-"))
     try {
@@ -3498,14 +3103,14 @@ describe("CLI: clarify, driver-helper and install-prompts (the shell rows of 011
       await commitFixture(dir)
       const installed = await runCli(["install-prompts", dir])
       expect(installed.code).toBe(0)
-      expect(installed.out).toContain(`prompt suite resynced into ${dir}/prompts: 12 files`)
-      expect(installed.out).toContain("rewritten: charter.md, executor.md, person.md, plan-append.md, resume-subtasks.md")
+      expect(installed.out).toContain(`prompt suite resynced into ${dir}/prompts: 11 files`)
+      expect(installed.out).toContain("rewritten: charter.md, executor.md, plan-append.md, resume-subtasks.md, run-as-subtasks.md")
       // The never-delete invariant: a person's own file under prompts/ is
       // reported and left alone; an already-current suite re-reports it.
       await Bun.write(join(dir, "prompts/my-own.md"), "# Mine\n\nLocal additions are the person's own.\n")
       const again = await runCli(["install-prompts", dir])
       expect(again.code).toBe(0)
-      expect(again.out).toContain(`prompt suite already current in ${dir}/prompts: 12 files`)
+      expect(again.out).toContain(`prompt suite already current in ${dir}/prompts: 11 files`)
       expect(again.out).toContain("left alone (not in the suite): my-own.md")
       expect(await Bun.file(join(dir, "prompts/my-own.md")).text()).toContain("Mine")
       // plans/0164 — the vintage pin and the drift gate. The install wrote
@@ -3514,7 +3119,7 @@ describe("CLI: clarify, driver-helper and install-prompts (the shell rows of 011
       // resync restores current; anything but --check is refused.
       expect(again.out).toContain("manifest: prompts/MANIFEST pins this suite")
       const manifest = JSON.parse(await Bun.file(join(dir, "prompts/MANIFEST")).text()) as { suite: string; files: Record<string, string> }
-      expect(Object.keys(manifest.files).length).toBe(12)
+      expect(Object.keys(manifest.files).length).toBe(11)
       expect(manifest.suite).toMatch(/^sha256-[0-9a-f]{64}$/)
       const clean = await runCli(["install-prompts", dir, "--check"])
       expect(clean.code).toBe(0)
@@ -3562,7 +3167,7 @@ describe("CLI: amend (plans/0052 D25)", () => {
       expect(none.err).toContain(`opencode-auto fix ${dir}`)
       const refused: [string[], string][] = [
         [["-p", "intent"], "-p/--prompt is not an amend option: the planning input is plan's (-p/--file of opencode-auto plan); the brief is revised with --brief <text> | --brief-file <path>"],
-        [["--implement-prompt", "plan the work"], "--implement-prompt is retired: plan tasks with opencode-auto plan <dir>"],
+        [["--implement-prompt", "plan the work"], "--implement-prompt is retired (and with it the plan command itself, plans/0283)"],
         [["-f", "--context-limit", "128"], "-f/--force is not an amend option"],
         // The --amend flag is retired everywhere (init no longer takes it, so
         // no command does)
@@ -3586,9 +3191,9 @@ describe("CLI: amend (plans/0052 D25)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--context-limit", "32", "--phases", "am", "--parallel", "low", "--agent", "claude"])).code).toBe(0)
-      // transfer establishes the current round; amend writes only the config
-      // layer and no longer re-syncs the phase tail
-      expect((await runCli(["transfer", dir])).code).toBe(0)
+      // the opening operation establishes the current round; amend writes
+      // only the config layer and no longer re-syncs the phase tail
+      await establish(dir, "am")
       await rm(join(dir, "opencode.json"))
       await rm(join(dir, ".opencode/auto/brief.md"), { force: true })
       const amended = await runCli(["amend", dir, "--test-by-driver", "--parallel", "none", "--agent", "opencode"])
@@ -3618,7 +3223,7 @@ describe("CLI: amend (plans/0052 D25)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "adm"])).code).toBe(0)
-      expect((await runCli(["transfer", dir])).code).toBe(0)
+      await establish(dir, "adm")
       await completeLetters(dir, ["a"])
       const config = await readConfig(dir)
       for (const [args, message] of [
@@ -3794,10 +3399,12 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect(brief).toContain("`app`")
       expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(true)
       expect((await runCli(["fix", dir])).out).toContain("✓ nothing to fix")
-      // --server points at a closed port: no local opencode service needed
-      // (the repaired config and contract all load, failing fast only at the
-      // connect), proving run no longer refuses over the retired keys.
-      expect((await runCli(["run", dir, "--dryrun", "--server", "http://127.0.0.1:1"])).err).not.toContain("retired")
+      // The repaired config loads strictly (plans/0283 re-keyed run's
+      // witness to the strict-loading amend: a command that would refuse
+      // over the retired keys no longer does)
+      const loads = await runCli(["amend", dir, "--wrapup"])
+      expect(loads.code).toBe(0)
+      expect(loads.err).not.toContain("retired")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -3823,8 +3430,10 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
   })
 
   // auto-core plans/0055 §4.1: the model registry's project layer is
-  // local-only; a project initialized before init ignored it lacks the entry.
-  test("an older project: run refuses a project layer git does not ignore and names fix; fix adds the entry", async () => {
+  // local-only; a project initialized before init ignored it lacks the entry
+  // (plans/0283 re-keyed the run-start refusal witness to models — the
+  // registry's read-only reader — beside fix's own finding).
+  test("an older project: models refuses a project layer git does not ignore and names fix; fix adds the entry", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
@@ -3834,16 +3443,13 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       await Bun.write(gitignore, older)
       // The registry declares both tier lists on its one model: since
       // selection wires the tiers into every dispatch, a needed tier with no
-      // candidate is a run-start refusal (auto-core plans/0055 §6.3), and
-      // this fixture wants the run to pass the registry checks.
+      // candidate is a start refusal (auto-core plans/0055 §6.3), and this
+      // fixture wants the reader past the tier checks.
       await Bun.write(
         join(dir, ".opencode/auto/models.json"),
         JSON.stringify({ models: { glm: { agent: "opencode", model: "zhipuai/glm-4.6" } }, tiers: { deep: ["glm"], simple: ["glm"] } }),
       )
-      // --server points at a closed port: the run needs no local opencode and
-      // stops at the connection once preflight passes.
-      const run = () => runCli(["run", dir, "--dryrun", "--server", "http://127.0.0.1:1"])
-      const refused = await run()
+      const refused = await runCli(["models", dir])
       expect(refused.code).toBe(1)
       expect(refused.out).toContain(
         `model registry, project layer .opencode/auto/models.json: git does not ignore it, so the unified commit would commit it; run opencode-auto fix ${dir} to add its .gitignore entry, then re-run`,
@@ -3853,14 +3459,12 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect(fix.out).toContain("  fix: .gitignore: lacks the /.opencode/auto/models.json entry (the model registry's project layer is local-only) → append the entry")
       expect(await Bun.file(gitignore).text()).toBe(`${older}/.opencode/auto/models.json\n`)
       expect((await runCli(["fix", dir])).out).toContain("✓ nothing to fix")
-      // After the entry exists the run proceeds past the refusal: the routing
-      // block prints, and the lazily started host (the implied opencode
-      // profile) reaches the closed --server port — the agent pool starts no
-      // host at run start, so the connection stop happens at the first
-      // dispatch, with the adapter's own message.
-      const after = await run()
+      // After the entry exists the reader proceeds past the refusal: the
+      // table prints (the implied opencode profile) and exit 0
+      const after = await runCli(["models", dir])
+      expect(after.code).toBe(0)
       expect(after.out).not.toContain("git does not ignore it")
-      expect(after.out).toContain("◇ agent profile opencode (opencode, implied)")
+      expect(after.out).toContain("zhipuai/glm-4.6")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -3890,7 +3494,7 @@ describe("CLI: the run lock (auto-core plans/0053 D3)", () => {
     await Bun.write(join(dir, ".auto/run.lock"), JSON.stringify({ pid, host: hostname(), command: "plan", started: "2026-09-23T10:00:00.000Z" }))
   }
 
-  test("init, amend, fix, reset and run refuse while another process holds it; status shows it first", async () => {
+  test("init, amend, fix, reset and sync refuse while another process holds it; status shows it first", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
@@ -3902,14 +3506,14 @@ describe("CLI: the run lock (auto-core plans/0053 D3)", () => {
         expect(refused.code).toBe(1)
         expect(refused.err).toContain(refusal)
       }
-      const run = await runCli(["run", dir])
-      expect(run.code).toBe(1)
-      expect(run.out).toContain(refusal)
-      expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
+      // run answers its retirement notice ahead of the lock (pinned in the
+      // push-retired describe); close and land hold the lock themselves and
+      // refuse through its own lines
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
       expect(status.out.split("\n")[0]).toBe(`▶ plan in progress (pid ${process.pid} on ${hostname()}, since 2026-09-23T10:00:00.000Z)`)
       expect(status.out).toContain("⚙ project config")
+      expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
       // fix --dryrun reads and prints only, so it runs beside the live lock
       // (the one write-side gate it skips); the plain fix stays refused above.
       // sync --dryrun is the same read-only shape (plans/0100 D4).
@@ -3942,12 +3546,11 @@ describe("CLI: the run lock (auto-core plans/0053 D3)", () => {
 
 // fork (auto-core plans/0128): the experiment environment — argument checks
 // (the ref-first split, the required worktree path, the no-options refusal),
-// the help rows (fork's own, run's --stop-after), the lock posture (fork
+// the help rows (fork's own; run's row retired with the command), the lock posture (fork
 // takes no run lock, plans/0129 — it builds beside a live run, its only
 // source-tree writes the reserved branch family and worktree registrations),
 // the happy paths of both target forms over a real fixture (the driver's
-// trailer commits made by hand), and --stop-after's own surface (the format
-// check, the plan refusal).
+// trailer commits made by hand); --stop-after's parse retired with run.
 describe("CLI: fork (auto-core plans/0128)", () => {
   async function plantLock(dir: string, pid = process.pid) {
     await Bun.write(join(dir, ".auto/run.lock"), JSON.stringify({ pid, host: hostname(), command: "run", started: "2026-09-23T10:00:00.000Z" }))
@@ -3994,13 +3597,14 @@ describe("CLI: fork (auto-core plans/0128)", () => {
     }
   })
 
-  test("the help rows: fork's synopsis renders, and run's carries --stop-after", async () => {
+  test("the help rows: fork's synopsis renders; run's row is gone with the command (plans/0283)", async () => {
     const forkHelp = await runCli(["fork", "--help"])
     expect(forkHelp.code).toBe(0)
     expect(forkHelp.out).toContain("opencode-auto fork <T-NNN | sha> <worktree-path> [dir]")
     const runHelp = await runCli(["run", "--help"])
-    expect(runHelp.code).toBe(0)
-    expect(runHelp.out).toContain("--stop-after <T-NNN>")
+    expect(runHelp.code).toBe(1)
+    expect(runHelp.err).toContain("run is retired (plans/0283):")
+    expect(runHelp.out).toBe("")
     const usage = await runCli(["--help"])
     expect(usage.out).toContain("fork <T-NNN | sha> <worktree-path>")
   })
@@ -4059,19 +3663,6 @@ describe("CLI: fork (auto-core plans/0128)", () => {
     }
   })
 
-  test("--stop-after's surface: the format check, and plan refuses the run option", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fork-"))
-    try {
-      const bad = await runCli(["run", dir, "--stop-after", "tomorrow"])
-      expect(bad.code).toBe(1)
-      expect(bad.err).toContain("--stop-after takes a task id (T-NNN)")
-      const planRefusal = await runCli(["plan", dir, "--stop-after", "T-001"])
-      expect(planRefusal.code).toBe(1)
-      expect(planRefusal.err).toContain("--stop-after is a run option (the task whose completion ends the run); plan does not accept it")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
 })
 
 // remove-fork (auto-core plans/0139): the teardown of what fork builds —
@@ -4269,8 +3860,8 @@ describe("CLI: models (auto-core plans/0055 §9)", () => {
       expect(lines).toContain("classifier: [operator]  free")
       expect(lines).toContain("  implement (m) · builtin · execute tier simple")
       expect(lines).toContain("    decompose, phase-plan, implement-scan: deep → opus ✓ · k3 ✓")
-      expect(lines).toContain("    whole, subtask, wrapup, phase-handover, knowledge, prior-knowledge, diagnose, bypass: simple → k2 ✓ | opus ✓ · k3 ✓")
-      expect(lines).toContain("    decompose, whole, subtask, wrapup, phase-plan, phase-handover, knowledge, prior-knowledge, implement-scan, diagnose, bypass: deep · route acceptance [operator] → opus ✓ · k3 ✓")
+      expect(lines).toContain("    whole, subtask, wrapup, phase-handover, diagnose, bypass: simple → k2 ✓ | opus ✓ · k3 ✓")
+      expect(lines).toContain("    decompose, whole, subtask, wrapup, phase-plan, phase-handover, implement-scan, diagnose, bypass: deep · route acceptance [operator] → opus ✓ · k3 ✓")
       for (const value of [...Object.values(SECRETS), "127.0.0.1:7890"]) expect(shown.out).not.toContain(value)
       expect(await Bun.file(join(dir, RUN_LOCK_FILE)).exists()).toBe(true)
 
@@ -4357,229 +3948,7 @@ describe("CLI: models (auto-core plans/0055 §9)", () => {
   })
 })
 
-describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
-  test("argument refusals: the input flags, run-only and config options, the unconfigured directory; nothing is written", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      const refusals: [string[], string][] = [
-        [["plan", dir, "-p", "text", "--file", "f.md"], "-p/--prompt and --file are mutually exclusive"],
-        [["plan", dir, "-p", "  "], "-p/--prompt requires non-empty text"],
-        [["plan", dir, "--file"], "--file requires a path"],
-        [["plan", dir, "--file", join(dir, "nope.md")], "no such file"],
-        [["plan", dir, "--phases", "am"], "--phases was frozen by init"],
-        [["plan", dir, "--dryrun"], "--dryrun is a run option"],
-        [["plan", dir, "--wait-between", "2"], "--wait-between is a run option"],
-        [["plan", dir, "--max-sessions", "1"], "--max-sessions is a run option"],
-        [["plan", dir, "-f"], "-f/--force is an init/reset/fix/sync option"],
-        // --append is plan's alone (D23): no input is a usage error; every
-        // other command points at plan.
-        [["plan", dir, "--append"], "--append requires a planning input"],
-        [["run", dir, "--append"], "--append is a plan option"],
-        [["init", dir, "--append"], "--append is a plan option"],
-        [["close", "T-001", dir, "--append"], "--append is a plan option"],
-        [["fix", dir, "--append"], "--append is a plan option"],
-        // No config.json: refuse to plan rather than establish a round with
-        // the defaults
-        [["plan", dir], `nothing to plan: ${dir} has no .opencode/auto/config.json; run opencode-auto init`],
-        [["run", dir, "-p", "text"], "-p/--prompt is a plan option: run takes no planning input"],
-        [["init", dir, "--file", "f.md"], "--file is a plan option"],
-      ]
-      for (const [args, notice] of refusals) {
-        const refused = await runCli(args)
-        expect(refused.code).toBe(1)
-        expect(refused.err).toContain(notice)
-      }
-      expect(await readdir(dir)).toEqual([])
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
 
-  test("establishes a missing round (m) with the round-start gate; input on it is refused before any write; re-runs show the empty-index notice", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await runCli(["init", dir])).code).toBe(0)
-      // init writes the config layer only, so no round exists yet
-      // (config-only init, plans/0053 D31)
-      // D5: input on the round-establishment route is refused first, before
-      // any write
-      const refused = await runCli(["plan", dir, "-p", "input"])
-      expect(refused.code).toBe(1)
-      expect(refused.err).toContain(`round R-01 is not established yet: run opencode-auto plan ${dir} without input to establish it, commit the setup, then pass the input.`)
-      expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
-      const made = await runCli(["plan", dir])
-      expect(made.code).toBe(0)
-      expect(made.out).toContain("✓ round R-01 established: single phase P01-implement")
-      expect(made.out).toContain(`next (round-start gate): review the setup and commit it; then list tasks in docs/R-01/P01-implement/tasks.md by hand, or run: opencode-auto plan ${dir} -p <text> | --file <path>`)
-      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/todo.md")).exists()).toBe(true)
-      // Run again: task index empty, no input → the notice to list tasks by
-      // hand or plan with input (D15)
-      const again = await runCli(["plan", dir])
-      expect(again.code).toBe(0)
-      expect(again.out).toContain(`ℹ no tasks listed in docs/R-01/P01-implement/tasks.md yet: list them there by hand (docs/T-NNN/todo.md per task), or run: opencode-auto plan ${dir} -p <text> | --file <path>`)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("m mode with tasks listed: the run notice without input; --append needs an input, and a mid-pipeline task stops the append (D26)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await runCli(["init", dir])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
-      await listTasks(dir, "docs/R-01/P01-implement", "R-01.P01", [["T-001", "task", "body"]])
-      const notice = await runCli(["plan", dir])
-      expect(notice.code).toBe(0)
-      expect(notice.out).toContain(
-        `ℹ docs/R-01/P01-implement/tasks.md lists 1 task(s) (1 pending); next: opencode-auto run ${dir}, ` +
-          `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`,
-      )
-      // --append rides a planning input (D23): no input is a usage error.
-      const bare = await runCli(["plan", dir, "--append"])
-      expect(bare.code).toBe(1)
-      expect(bare.err).toContain("--append requires a planning input: pass -p <text> | --file <path>")
-      // Input over an index that already lists tasks means append; with T-001
-      // mid-pipeline (a resume point exists), the D26 guard refuses before any
-      // server starts.
-      await Bun.write(join(dir, ".auto/progress.json"), JSON.stringify({ task: "T-001", at: 1, active: true }))
-      for (const args of [["plan", dir, "-p", "add a bit more"], ["plan", dir, "--append", "-p", "add a bit more"]]) {
-        const guarded = await runCli(args)
-        expect(guarded.code).toBe(1)
-        expect(guarded.err).toContain("T-001 is mid-pipeline (its resume point is in .auto/progress.json); finish it with run, or close it, before appending")
-      }
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("phased, execute route: plan refuses naming run and transfer; input is a mistake (D7)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      expect((await runCli(["transfer", dir])).code).toBe(0)
-      await completeLetters(dir, ["a"])
-      await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "task", "body"]])
-      // The dispatch seam (plans/0101 D4): bare plan on an execute route
-      // refuses — the pending task is run's, the boundary transfer's
-      const refused = await runCli(["plan", dir])
-      expect(refused.code).toBe(1)
-      expect(refused.err).toContain(
-        `no reviewed plan task awaits dispatch: R-01.P02 implement holds 1 pending task(s) — execute work for opencode-auto run ${dir}; ` +
-          `the boundary and the next plan task are transfer's (opencode-auto transfer ${dir})`,
-      )
-      // Input is a mistake (D7): an input adds tasks with --append, it never
-      // dispatches — the same refusal carrying the input clause
-      const withInput = await runCli(["plan", dir, "-p", "input"])
-      expect(withInput.code).toBe(1)
-      expect(withInput.err).toContain(`no reviewed plan task awaits dispatch: R-01.P02 implement holds 1 pending task(s)`)
-      expect(withInput.err).toContain(`a planning input adds tasks with --append, it never dispatches`)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a complete round: plan refuses naming transfer; transfer's round-close gate fails with exit 2; passing opens R-02 with the G1 lines", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      expect((await runCli(["transfer", dir])).code).toBe(0)
-      await completeLetters(dir, ["a", "m"])
-      // A phased complete round is transfer's (plans/0101 D4): plan refuses
-      // naming the advance command — bare and with input alike
-      for (const args of [["plan", dir], ["plan", dir, "-p", "input"]]) {
-        const refused = await runCli(args)
-        expect(refused.code).toBe(1)
-        expect(refused.err).toContain(`round R-01 is complete and no plan task awaits dispatch: the round close and the next round's opening are transfer's; run: opencode-auto transfer ${dir}`)
-      }
-      // Round complete: G8 does not pass (`## Close` unfilled) → transfer
-      // exits 2 naming the checks (D2's round-close shape; in the continue
-      // era it was 1)
-      const fail = await runCli(["transfer", dir])
-      expect(fail.code).toBe(2)
-      expect(fail.out).toContain("round R-01 does not pass its round-close checks, so round R-02 cannot open yet")
-      expect(fail.out).toContain("`## Close` is empty")
-      expect(fail.out).toContain(`next: fix them, commit, then re-run: opencode-auto transfer ${dir}`)
-      expect(await stat(join(dir, "docs/R-02")).catch(() => undefined)).toBeUndefined()
-      await fillClose(dir)
-      const pass = await runCli(["transfer", dir])
-      expect(pass.code).toBe(0)
-      expect(pass.out).toContain("✓ round R-02 established: P01-analysis, P02-implement")
-      expect(pass.out).toContain(
-        `then run: opencode-auto transfer ${dir} — it constructs R-02.P01 analysis's plan task and stops for your review (plan dispatches it, run executes the phase)`,
-      )
-      expect(await Bun.file(join(dir, "docs/R-02/phases.md")).text()).toContain("- [ ] P01 analysis")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("plan refuses while another process holds the run lock", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await runCli(["init", dir])).code).toBe(0)
-      await Bun.write(join(dir, ".auto/run.lock"), JSON.stringify({ pid: process.pid, host: hostname(), command: "run", started: "2026-09-23T10:00:00.000Z" }))
-      const refused = await runCli(["plan", dir])
-      expect(refused.code).toBe(1)
-      expect(refused.err).toContain(`⏸ another opencode-auto process holds the run lock of ${dir}: run, pid ${process.pid} on ${hostname()}`)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-// The phase-index drift at CLI level (auto-core plans/0053 D34; the apply
-// re-homed by plans/0206): a hand-edited docs/R-NN/phases.md whose unstarted
-// tail disagrees with config `phases`. run never re-syncs (Q4 — a silent
-// re-sync would start work on a phase list nobody reviewed) and exits 1
-// naming transfer; plan never writes the reshape (phased): it refuses exit 1
-// naming transfer as the apply — the committed re-derivation is the advance's
-// alone (pinned with its mid-phase arm in auto-core's transfer suite). Both
-// stops precede any agent, so no fixture agent is needed.
-describe("CLI: the phase-index drift (auto-core plans/0053 D34; 0206)", () => {
-  test("run exits 1 naming transfer on a hand-edited index and writes nothing; plan refuses before any write naming transfer", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-drift-"))
-    try {
-      expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      expect((await runCli(["transfer", dir])).code).toBe(0)
-      await commitFixture(dir)
-      // A person drops the unstarted test phase from the index by hand (its
-      // directory stays): the index's unstarted tail no longer matches config.
-      const edited = "- [ ] P01 analysis\n- [ ] P02 implement\n"
-      await Bun.write(join(dir, "docs/R-01/phases.md"), edited)
-      await commitFixture(dir)
-      const stopped = await runCli(["run", dir])
-      expect(stopped.code).toBe(1)
-      expect(stopped.out).toContain(
-        `⏸ the phase index of round R-01 (P01-analysis, P02-implement) differs from config phases ` +
-          `(P01-analysis, P02-implement, P03-test): run opencode-auto transfer ${dir} to re-derive its unstarted phases`,
-      )
-      // run wrote nothing: the index keeps the hand edit, the phase directory stays.
-      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toBe(edited)
-      expect(await Bun.file(join(dir, "docs/R-01/P03-test/todo.md")).exists()).toBe(true)
-      // Input on the drift route is refused before any write (D5): the
-      // refusal names the apply and the input's own resumption.
-      const refused = await runCli(["plan", dir, "-p", "input"])
-      expect(refused.code).toBe(1)
-      expect(refused.err).toContain(
-        `the phase index of round R-01 differs from config phases: transfer re-derives the unstarted tail on its own commit ` +
-          `(run: opencode-auto transfer ${dir}), then pass the input.`,
-      )
-      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toBe(edited)
-      // plan without input refuses the same way, nothing written — the
-      // uncommitted re-sync that taught "re-run: plan" is retired, and no
-      // dirty phases.md is left for the advance's own preflight.
-      const bare = await runCli(["plan", dir])
-      expect(bare.code).toBe(1)
-      expect(bare.err).toContain(
-        `the phase index of round R-01 differs from config phases: transfer re-derives the unstarted tail on its own commit — run: opencode-auto transfer ${dir}`,
-      )
-      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toBe(edited)
-      expect(await Bun.file(join(dir, "docs/R-01/P03-test/todo.md")).exists()).toBe(true)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
 
 // close (auto-core plans/0053 D22): the shell half — the argument order (the
 // ref first, the directory second), the flag whitelist, the run lock, and one
@@ -4596,7 +3965,7 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
     const git = gitOf(dir)
     await git("init")
     expect((await runCli(["init", dir])).code).toBe(0)
-    expect((await runCli(["plan", dir])).code).toBe(0)
+    await establish(dir, "m")
     await listTasks(dir, P01.dir, "R-01.P01", [
       ["T-001", "the superseded task", "body"],
       ["T-002", "the implicit dependent", "body"],
@@ -4631,8 +4000,8 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
         [["close", "T-001", dir, "--reason", "r", "-f"], "--force is not a close option"],
         [["close", "T-001", dir, "--reason", "r", "--dryrun"], "--dryrun is not a close option"],
         [["close", "T-001", dir, "--reason", "r", "--phases", "am"], "--phases was frozen by init"],
-        [["close", "T-001", dir, "--reason", "r", "-p", "text"], "-p/--prompt is a plan option"],
-        [["close", "T-001", dir, "--reason", "r", "--file", "f.md"], "--file is a plan option"],
+        [["close", "T-001", dir, "--reason", "r", "-p", "text"], "-p/--prompt is retired with the plan command (plans/0283 — the planning input is the phase's plan-input.md, read by the formulation); close takes no planning input"],
+        [["close", "T-001", dir, "--reason", "r", "--file", "f.md"], "--file is retired with the plan command (plans/0283 — the planning input is the phase's plan-input.md, read by the formulation); close takes no planning input"],
         [["close", "T-001", dir, "--reason", "r", "--verify"], "--verify is retired"],
         // F8: --commit is a value flag, but the ref comes first and parsing
         // matches whole flag names, so it can never swallow the ref — the
@@ -4659,7 +4028,7 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      await establish(dir, "m")
       await listTasks(dir, P01.dir, "R-01.P01", [["T-001", "task", "body"]])
       await Bun.write(join(dir, RUN_LOCK_FILE), JSON.stringify({ pid: process.pid, host: hostname(), command: "run", started: "2026-09-23T10:00:00.000Z" }))
       const refused = await runCli(["close", "T-001", dir, "--reason", "r"])
@@ -4714,7 +4083,7 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
     try {
       await git("init")
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      expect((await runCli(["transfer", dir])).code).toBe(0)
+      await establish(dir, "amt")
       await completeLetters(dir, ["a"])
       await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "the skipped task", "body"]])
       await git("add", "-A")
@@ -4752,688 +4121,10 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
   })
 })
 
-// plan --new-task (auto-core plans/0058): add one task the person names with
-// no session at all. The shell half validated here: the flag's usage errors
-// (plan's alone, the mutual exclusions, the one-line title) and the
-// end-to-end add over a git fixture — establish, commit the round setup,
-// add — with no agent anywhere in the process.
-describe("CLI: plan --new-task (auto-core plans/0058)", () => {
-  // An initialized m-mode git fixture whose round setup is committed, so the
-  // add starts from a clean tree.
-  async function newTaskFixture() {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-nt-"))
-    const git = gitOf(dir)
-    await git("init")
-    expect((await runCli(["init", dir])).code).toBe(0)
-    expect((await runCli(["plan", dir])).code).toBe(0)
-    await git("add", "-A")
-    await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "round setup")
-    return { dir, git }
-  }
 
-  test("argument errors: plan's alone, the exclusions, the one-line title; nothing is written", async () => {
-    const { dir, git } = await newTaskFixture()
-    try {
-      const refusals: [string[], string][] = [
-        // --new-task is plan's alone: every other command points at plan.
-        [["run", dir, "--new-task", "a task"], "--new-task is a plan option: run takes no --new-task"],
-        [["init", dir, "--new-task", "a task"], "--new-task is a plan option"],
-        [["close", "T-001", dir, "--reason", "r", "--new-task", "a task"], "--new-task is a plan option: close takes no --new-task"],
-        // The title: non-empty and one line.
-        [["plan", dir, "--new-task"], "--new-task requires a one-line task title"],
-        [["plan", dir, "--new-task", "  "], "--new-task requires a one-line task title"],
-        [["plan", dir, "--new-task", "two\nlines"], "--new-task must be one line"],
-        // The exclusions: no planning input rides along, and --append is the
-        // session-planned path.
-        [["plan", dir, "--new-task", "a task", "-p", "input"], "--new-task and -p | --file are mutually exclusive"],
-        [["plan", dir, "--new-task", "a task", "--append"], "--new-task and --append are mutually exclusive"],
-      ]
-      for (const [args, notice] of refusals) {
-        const refused = await runCli(args)
-        expect(refused.code, args.join(" ")).toBe(1)
-        expect(refused.err, args.join(" ")).toContain(notice)
-      }
-      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).exists()).toBe(false)
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
 
-  test("m mode end to end: the task lands committed, a second add appends, and the uncommitted round setup is refused first", async () => {
-    const { dir, git } = await newTaskFixture()
-    try {
-      const title = "Harden the retry policy against provider throttling"
-      const added = await runCli(["plan", dir, "--new-task", title])
-      expect(added.code).toBe(0)
-      expect(added.out).toContain(`✓ task T-001 added to docs/R-01/P01-implement/tasks.md (no session: --new-task writes it directly)`)
-      expect(added.out).toContain(`next: review it (sharpen the Goal / Scope / Acceptance of docs/T-001/todo.md if needed), then run: opencode-auto run ${dir}`)
-      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/tasks.md")).text()).toContain(`- [ ] T-001 ${title}`)
-      const doc = await Bun.file(join(dir, "docs/T-001/todo.md")).text()
-      expect(doc.startsWith(`# T-001: ${title}\nPhase: R-01.P01\n`)).toBe(true)
-      expect(doc).toContain("Added by `plan --new-task`")
-      expect((await git("log", "--format=%s")).split("\n")[0]).toBe(`PLAN add T-001 ${title}`)
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-      // A second known task appends after the first.
-      const second = await runCli(["plan", dir, "--new-task", "Second known task"])
-      expect(second.code).toBe(0)
-      expect((await Bun.file(join(dir, "docs/R-01/P01-implement/tasks.md")).text()).endsWith("- [ ] T-002 Second known task\n")).toBe(true)
-      // The round-start gate discipline: on an uncommitted setup the add
-      // waits for the human (exit 2, nothing written).
-      const dirty = await mkdtemp(join(tmpdir(), "auto-cli-nt-"))
-      try {
-        const git2 = gitOf(dirty)
-        await git2("init")
-        expect((await runCli(["init", dirty])).code).toBe(0)
-        expect((await runCli(["plan", dirty])).code).toBe(0)
-        const refused = await runCli(["plan", dirty, "--new-task", title])
-        expect(refused.code).toBe(2)
-        expect(refused.err).toContain("⏸ worktree not clean before adding the task")
-        expect(await Bun.file(join(dirty, "docs/R-01/P01-implement/tasks.md")).exists()).toBe(false)
-      } finally {
-        await rm(dirty, { recursive: true, force: true })
-      }
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
 
-// plan --force-close (auto-core plans/0053 D28): close a unit and continue
-// planning in the same process, under one lock. The shell half validated
-// here: the argument checks (close's flag set on plan), the refusal contract
-// (exit 1, nothing written), and the two deterministic follow-ups — a task
-// force-close whose exit code is plan's notice route, and a phase force-close
-// skipping into the next phase. The loop-level paths (planning after the
-// close, the combined --force-close --append) need an agent and stay with the
-// B6 loop-harness / OPENCODE_AUTO_E2E cases.
-describe("CLI: plan --force-close (auto-core plans/0053 D28)", () => {
-  // An initialized m-mode git fixture with two open tasks, all committed, so
-  // a refused force-close leaves a byte-identical tree.
-  async function forceCloseFixture() {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fc-"))
-    const git = gitOf(dir)
-    await git("init")
-    expect((await runCli(["init", dir])).code).toBe(0)
-    expect((await runCli(["plan", dir])).code).toBe(0)
-    await listTasks(dir, P01.dir, "R-01.P01", [
-      ["T-001", "the superseded task", "body"],
-      ["T-002", "the implicit dependent", "body"],
-    ])
-    await git("add", "-A")
-    await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
-    return { dir, git }
-  }
 
-  test("argument errors: the ref shape, the reason, the change pair, the close-family flags without --force-close, other commands refusing --force-close; nothing is written", async () => {
-    const { dir, git } = await forceCloseFixture()
-    try {
-      const refusals: [string[], string][] = [
-        // The ref is a value: missing (the bare flag) or not one of the three
-        // canonical shapes is a usage error before anything is read.
-        [["plan", dir, "--force-close"], "--force-close requires a unit reference"],
-        [["plan", dir, "--force-close", "T-5"], "T-5: not a unit reference"],
-        [["plan", dir, "--force-close", "T-001.S01", "--reason", "r"], "T-001.S01: not a unit reference"],
-        [["plan", dir, "--force-close", "T-001"], "--force-close requires --reason <text>"],
-        [["plan", dir, "--force-close", "T-001", "--reason", "  "], "--reason requires non-empty text"],
-        [["plan", dir, "--force-close", "T-001", "--reason", "two\nlines"], "--reason must be one line"],
-        [["plan", dir, "--force-close", "T-001", "--reason", "r", "--commit-changes", "--stash-changes"], "--commit-changes and --stash-changes are mutually exclusive"],
-        // The close-family flags belong to the close step only: on plan they
-        // are meaningless without --force-close.
-        [["plan", dir, "--reason", "r"], '--reason is a close option of "plan --force-close <ref> --reason <text>"'],
-        [["plan", dir, "--cascade"], "--cascade is a close option of"],
-        [["plan", dir, "--stash-changes"], "--stash-changes is a close option of"],
-        // --force-close is plan's alone: every other command points at plan
-        // (close keeps its positional ref).
-        [["run", dir, "--force-close", "T-001", "--reason", "r"], "--force-close is a plan option: run takes no --force-close"],
-        [["init", dir, "--force-close", "T-001"], "--force-close is a plan option"],
-        [["fix", dir, "--force-close", "T-001"], "--force-close is a plan option"],
-        [["close", "T-001", dir, "--reason", "r", "--force-close", "T-002"], "--force-close is a plan option: close takes no --force-close"],
-      ]
-      for (const [args, notice] of refusals) {
-        const refused = await runCli(args)
-        expect(refused.code, args.join(" ")).toBe(1)
-        expect(refused.err, args.join(" ")).toContain(notice)
-      }
-      // Nothing was written and nothing committed: both tasks untouched.
-      expect(await Bun.file(join(dir, taskStatePaths("T-001").pending)).exists()).toBe(true)
-      expect(await Bun.file(join(dir, taskStatePaths("T-002").pending)).exists()).toBe(true)
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a refused close exits 1 with nothing written (the dirty tree), and the lock is released with it", async () => {
-    const { dir, git } = await forceCloseFixture()
-    try {
-      await Bun.write(join(dir, "stray.ts"), "export {}\n")
-      const refused = await runCli(["plan", dir, "--force-close", "T-001", "--reason", "superseded"])
-      expect(refused.code).toBe(1)
-      expect(refused.err).toContain("the worktree has changes beyond the driver's own state files")
-      expect(refused.err).toContain("stray.ts")
-      // closeUnit refuses before any write: the task untouched, no close
-      // commit, the stray file kept.
-      expect(await Bun.file(join(dir, taskStatePaths("T-001").pending)).exists()).toBe(true)
-      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).exists()).toBe(false)
-      expect((await git("log", "--oneline")).trim().split("\n")).toHaveLength(1)
-      // The single lock plan took is gone with the process (.auto/ was
-      // created for it alone and removed empty on release).
-      expect(await stat(join(dir, ".auto")).catch(() => undefined)).toBeUndefined()
-      expect(await Bun.file(join(dir, "stray.ts")).text()).toBe("export {}\n")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("force-closes a task and continues planning: the close commit lands and the exit code is plan's (the m notice)", async () => {
-    const { dir, git } = await forceCloseFixture()
-    try {
-      const run = await runCli(["plan", dir, "--force-close", "T-001", "--reason", "superseded by a follow-up"])
-      expect(run.err).toBe("")
-      // Plan's stop (the m-mode notice over the remaining task) is exit 0 —
-      // plan's code, not close's.
-      expect(run.code).toBe(0)
-      // closeUnit's lines print first: the closed task, the implicit
-      // dependent, the undo pointer.
-      expect(run.out).toContain("✓ closed T-001: superseded by a follow-up")
-      expect(run.out).toContain("ℹ T-002 has no Depends: field, so its prerequisite T-001 counts as satisfied; do not assume T-001's deliverables exist")
-      expect(run.out).toMatch(/to undo before anything else runs: git revert [0-9a-f]+/)
-      // Then plan's own stop: the notice over the listed tasks (1 pending).
-      expect(run.out).toContain(
-        `ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (1 pending); next: opencode-auto run ${dir}, ` +
-          `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`,
-      )
-      // The close commit: subject, body and the force-close trailers.
-      const message = await git("log", "-1", "--pretty=%B")
-      expect(message).toContain("T-001 closed: superseded by a follow-up")
-      expect(message).toContain("Units closed:\n- T-001")
-      expect(message).toContain("Auto-Task: T-001")
-      expect(message).toContain("Auto-Stage: force-close")
-      // State: the Closed: field with the rename, the index tick, the other
-      // task still pending, and a clean tree (the close commit took it all).
-      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).text()).toContain("Closed: superseded by a follow-up")
-      expect(await Bun.file(join(dir, taskStatePaths("T-001").pending)).exists()).toBe(false)
-      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain("- [x] T-001")
-      expect(await Bun.file(join(dir, taskStatePaths("T-002").pending)).exists()).toBe(true)
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("force-closes a phase and skips to the next phase: the mechanical handover is written and plan stops on the next phase's dispatch refusal", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fc-phase-"))
-    const git = gitOf(dir)
-    try {
-      await git("init")
-      expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      expect((await runCli(["transfer", dir])).code).toBe(0)
-      // P01 done, P02 current with a task to skip over, P03 already planned
-      // (its tasks listed by hand), so the follow-up prelude stops on the
-      // deterministic dispatch refusal naming P03 (plans/0101 D4: its pending
-      // task is run's).
-      await completeLetters(dir, ["a"])
-      await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "the skipped task", "body"]])
-      await listTasks(dir, "docs/R-01/P03-test", "R-01.P03", [["T-002", "next-phase task", "body"]])
-      await git("add", "-A")
-      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
-      const run = await runCli(["plan", dir, "--force-close", "R-01.P02", "--reason", "skipped this round"])
-      // The close itself succeeded (its lines on stdout, exit 0's half); the
-      // prelude's continuation is the refusal — the close code is plan's.
-      expect(run.code).toBe(1)
-      // The phase's open task closes with it, then the phase itself, with
-      // the mechanical handover close writes for a closed phase.
-      expect(run.out).toContain("✓ closed T-001: skipped this round")
-      expect(run.out).toContain("✓ closed R-01.P02 implement: skipped this round")
-      expect(run.out).toContain("ℹ mechanical handover written: docs/R-01/P02-implement/handover.md")
-      // Plan continues in the same process: the next phase is current now,
-      // and its pending hand-listed task makes the prelude refuse (exit 1)
-      // naming run and transfer.
-      expect(run.err).toContain(
-        `no reviewed plan task awaits dispatch: R-01.P03 test holds 1 pending task(s) — execute work for opencode-auto run ${dir}; ` +
-          `the boundary and the next plan task are transfer's (opencode-auto transfer ${dir})`,
-      )
-      // Phase state: closed done.md, the four handover sections, the index
-      // tick, P03 untouched.
-      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/done.md")).text()).toContain("Closed: skipped this round")
-      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/todo.md")).exists()).toBe(false)
-      const handover = await Bun.file(join(dir, "docs/R-01/P02-implement/handover.md")).text()
-      for (const section of ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]) {
-        expect(handover).toContain(section)
-      }
-      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P02 implement")
-      expect(await Bun.file(join(dir, "docs/R-01/P03-test/todo.md")).exists()).toBe(true)
-      // The close commit covers both units; the tree is clean after it.
-      const message = await git("log", "-1", "--pretty=%B")
-      expect(message).toContain("R-01.P02 closed: skipped this round")
-      expect(message).toContain("Units closed:\n- T-001\n- R-01.P02 (gates skipped:")
-      expect(message).toContain("Auto-Task: R-01.P02")
-      expect(message).toContain("Auto-Stage: force-close")
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-// plan --append end to end (auto-core plans/0053 §8, B6): the leftover CLI
-// loop-level flows, driven deterministically over a fake `claude` CLI on PATH
-// (the one fake at auto-core/test/fixtures/fake-claude.ts; OPENCODE_AUTO_AGENT=claude selects the claude
-// adapter, so plan's appending session runs with no provider credentials).
-// The agent-driving logic itself is auto-core's loop harness
-// (test/append-loop.test.ts); what these cases pin is the shell flow: the
-// input commit → append unit commit → appended tasks with the snapshot prefix
-// unchanged, the combined --force-close --append (replace a task), and the
-// plain phase close (its mechanical handover is closeUnit's, so it needs no
-// agent and lives in the close describe).
-describe("CLI: plan --append end to end (auto-core plans/0053 D23–D25)", () => {
-  // A task document that passes the planning shape checks.
-  const doc = (id: string, phase: string) => `# ${id}: task ${id}\nPhase: ${phase}\n\n## Goal\n\ndeliver it.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nholds.\n\n<!-- auto: eof -->\n`
-
-  test("plan --append on a phased execute route: input commit → append unit commit → tasks appended, the snapshot prefix unchanged", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-append-"))
-    const agent = await fakeClaude()
-    const git = gitOf(dir)
-    try {
-      await git("init")
-      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      expect((await runCli(["transfer", dir])).code).toBe(0)
-      // P01 done, P02 current with one pending task (the execute route).
-      await completeLetters(dir, ["a"])
-      await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "the existing task", "body"]])
-      await git("add", "-A")
-      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
-      const seededIndex = await Bun.file(join(dir, "docs/R-01/P02-implement/tasks.md")).text()
-      const seededDoc = await Bun.file(join(dir, "docs/T-001/todo.md")).text()
-
-      const run = await agent.run(["plan", dir, "--append", "-p", "Add a fix task for the retry policy."])
-      expect(run.err).toBe("")
-      expect(run.code).toBe(0)
-      // The step ran end to end: the input saved on its own commit, the
-      // appending session, the summary over the appended task.
-      expect(run.out).toContain("✓ planning input saved to docs/R-01/P02-implement/plan-input.md")
-      expect(run.out).toContain("▶ starting the task-append session to append to docs/R-01/P02-implement/tasks.md")
-      expect(run.out).toContain("✓ task append complete: docs/R-01/P02-implement/tasks.md gained 1 task(s)")
-      expect(run.out).toContain("✓ planned R-01.P02 implement: 1 task(s) in docs/R-01/P02-implement/tasks.md")
-      // The input commit, then the append unit commit.
-      const subjects = (await git("log", "--format=%s", "-2")).trim().split("\n")
-      expect(subjects).toEqual(["PLAN append P02-implement Implementation", "PLAN plan-input P02-implement Implementation"])
-      const bodies = await git("log", "--format=%B", "-2")
-      expect(bodies).toContain("Auto-Stage: phase-append")
-      expect(bodies).toContain("Auto-Stage: plan-input")
-      // The snapshot prefix is unchanged: the existing line and document are
-      // byte-identical, the new task follows them, the input is verbatim.
-      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/tasks.md")).text()).toBe(`${seededIndex}- [ ] T-002 task T-002\n`)
-      expect(await Bun.file(join(dir, "docs/T-001/todo.md")).text()).toBe(seededDoc)
-      expect(await Bun.file(join(dir, "docs/T-002/todo.md")).text()).toContain("Phase: R-01.P02")
-      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/plan-input.md")).text()).toBe("Add a fix task for the retry policy.\n")
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await agent.done()
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 60_000)
-
-  test("plan --force-close --append replaces a task: the close commit lands, the cleared resume point lets the append run, the exit code is plan's", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fc-append-"))
-    const agent = await fakeClaude()
-    const git = gitOf(dir)
-    try {
-      await git("init")
-      expect((await runCli(["init", dir])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
-      await listTasks(dir, P01.dir, "R-01.P01", [
-        ["T-001", "the superseded task", "body"],
-        ["T-002", "the successor task", "body"],
-      ])
-      // T-001 mid-pipeline: a plain append stops on D26's guard; the
-      // force-close clears the record, so the append runs in the same process.
-      await Bun.write(join(dir, ".auto/progress.json"), JSON.stringify({ task: "T-001", at: 1, active: true }))
-      await git("add", "-A")
-      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
-
-      const run = await agent.run(["plan", dir, "--force-close", "T-001", "--reason", "superseded by the redesign", "--append", "-p", "Do X instead."])
-      expect(run.err).toBe("")
-      expect(run.code).toBe(0)
-      // closeUnit's lines first: the closed task, the implicit dependent, the
-      // undo pointer naming the close commit.
-      expect(run.out).toContain("✓ closed T-001: superseded by the redesign")
-      expect(run.out).toContain("ℹ T-002 has no Depends: field, so its prerequisite T-001 counts as satisfied; do not assume T-001's deliverables exist")
-      expect(run.out).toMatch(/to undo before anything else runs: git revert [0-9a-f]+/)
-      // Then the append: input saved, one replacement task appended (the
-      // closed number is never reused), plan's m-mode summary.
-      expect(run.out).toContain("✓ planning input saved to docs/R-01/P01-implement/plan-input.md")
-      expect(run.out).toContain("✓ task append complete: docs/R-01/P01-implement/tasks.md gained 1 task(s)")
-      expect(run.out).toContain("✓ planned 1 task(s) (T-003) into docs/R-01/P01-implement/tasks.md")
-      // The close commit, then plan's two.
-      const subjects = (await git("log", "--format=%s", "-3")).trim().split("\n")
-      expect(subjects).toEqual(["PLAN append P01-implement Implementation", "PLAN plan-input P01-implement Implementation", "T-001 closed: superseded by the redesign"])
-      // The mid-pipeline record is gone (the close cleared it), the closed
-      // task carries its field, and the replacement task follows the index.
-      expect(await Bun.file(join(dir, ".auto/progress.json")).exists()).toBe(false)
-      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).text()).toContain("Closed: superseded by the redesign")
-      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toBe(
-        "# Tasks\n\n- [x] T-001 the superseded task\n- [ ] T-002 the successor task\n- [ ] T-003 task T-003\n",
-      )
-      expect(await Bun.file(join(dir, "docs/T-003/todo.md")).text()).toContain("Phase: R-01.P01")
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await agent.done()
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 60_000)
-})
-
-// The new-project flow end to end (auto-core plans/0053 §8, C5): the P3c
-// lifecycle in one pass per mode — init writes the config layer only, plan
-// establishes the round and stops at the round-start gate, a person commits
-// the setup, plan -p runs the planning session (over the fake `claude` on
-// PATH, the B6 fixture convention: no provider credentials, the ambient
-// OPENCODE_AUTO_* layer scrubbed) and stops for review, and the follow-up
-// plan lands on the execute-route notice. What these cases pin is the shell
-// flow and the stop lines; the planning logic itself is the core loop
-// harness's (test/plan-loop.test.ts).
-describe("CLI: the new-project flow end to end (auto-core plans/0053 §8, C5)", () => {
-  test("m mode: init → plan establishes R-01 (G1) → commit → plan -p plans T-001 and stops → plan shows the execute notice", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-flow-m-"))
-    const agent = await fakeClaude()
-    const git = gitOf(dir)
-    try {
-      await git("init")
-      // init writes the config layer only; the closing line names plan
-      const init = await runCli(["init", dir])
-      expect(init.code).toBe(0)
-      expect(init.out).toContain(`next: opencode-auto plan ${dir} (opens the assisted project analysis: you and your agent fill docs/analysis.md, guided through AGENTS.md; round R-01 opens on its release)`)
-      expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
-      // plan establishes the round and stops at the round-start gate (G1)
-      const made = await agent.run(["plan", dir])
-      expect(made.code).toBe(0)
-      expect(made.out).toContain("✓ round R-01 established: single phase P01-implement")
-      expect(made.out).toContain(
-        `next (round-start gate): review the setup and commit it; then list tasks in docs/R-01/P01-implement/tasks.md by hand, ` +
-          `or run: opencode-auto plan ${dir} -p <text> | --file <path>`,
-      )
-      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/todo.md")).exists()).toBe(true)
-      // The gate: a person reviews and commits the setup
-      await git("add", "-A")
-      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "round setup")
-      // plan -p: the input is committed on its own, the formulation task is
-      // constructed as the phase's first unit (plans/0095 — its todo the
-      // planning session's single input), the session plans one task past it,
-      // and plan stops for review
-      const planned = await agent.run(["plan", dir, "-p", "Add a hello task."])
-      expect(planned.err).toBe("")
-      expect(planned.code).toBe(0)
-      expect(planned.out).toContain("✓ planning input saved to docs/R-01/P01-implement/plan-input.md")
-      expect(planned.out).toContain("✓ formulation task T-001 constructed: its todo is the planning session's single input (docs/T-001/todo.md)")
-      expect(planned.out).toContain("✓ T-001 formulation output accepted: docs/R-01/P01-implement/tasks.md lists 1 planned task(s)")
-      expect(planned.out).toContain("✓ phase planning complete: docs/R-01/P01-implement/tasks.md lists 1 task(s)")
-      expect(planned.out).toContain("✓ planned 1 task(s) (T-002) into docs/R-01/P01-implement/tasks.md")
-      expect(planned.out).toContain(`next: review them, then run: opencode-auto run ${dir}`)
-      // The artifacts: the input verbatim, the index with the done
-      // formulation line first and the planned task after it (plans/0095),
-      // the task document carrying the phase field — and no numbering
-      // record (plans/0150: the next number is derived, nothing persisted).
-      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/plan-input.md")).text()).toBe("Add a hello task.\n")
-      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/tasks.md")).text()).toBe(
-        "# Tasks (R-01.P01)\n\n- [x] T-001 Formulate the Implementation tasks\n- [ ] T-002 task T-002\n",
-      )
-      expect(await Bun.file(join(dir, "docs/T-002/todo.md")).text()).toContain("Phase: R-01.P01")
-      expect(await Bun.file(join(dir, ".auto/next-task")).exists()).toBe(false)
-      // The input commit, the formulation construction commit, then the
-      // formulation unit's own commits; the tree is clean.
-      const subjects = (await git("log", "--format=%s", "-6")).trim().split("\n")
-      expect(subjects).toEqual([
-        "T-001 done Formulate the Implementation tasks",
-        "T-001 wrapup Formulate the Implementation tasks",
-        "T-001 exec Formulate the Implementation tasks",
-        "PLAN formulate P01-implement Implementation",
-        "PLAN plan-input P01-implement Implementation",
-        "round setup",
-      ])
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-      // The follow-up plan (no input) lands on the execute-route notice —
-      // the index's two lines are the done formulation unit (plans/0095) and
-      // the one pending task
-      const again = await runCli(["plan", dir])
-      expect(again.code).toBe(0)
-      expect(again.out).toContain(
-        `ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (1 pending); next: opencode-auto run ${dir}, ` +
-          `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`,
-      )
-    } finally {
-      await agent.done()
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 60_000)
-
-  test("phased (am): init → transfer establishes R-01 (G1) → fill round.md and commit → transfer constructs the plan task and stops for review → plan dispatches it", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-flow-am-"))
-    const agent = await fakeClaude()
-    const git = gitOf(dir)
-    try {
-      await git("init")
-      const init = await runCli(["init", dir, "--phases", "am"])
-      expect(init.code).toBe(0)
-      expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
-      // transfer establishes the round and stops at the round-start gate (G1);
-      // the follow-up it names is transfer's construct (plans/0101 D2)
-      const made = await agent.run(["transfer", dir])
-      expect(made.code).toBe(0)
-      expect(made.out).toContain("✓ round R-01 established: P01-analysis, P02-implement")
-      expect(made.out).toContain(
-        `next (round-start gate): review the round setup, fill in docs/R-01/round.md (goal, acceptance and release criteria), and commit it; ` +
-          `then run: opencode-auto transfer ${dir} — it constructs R-01.P01 analysis's plan task and stops for your review (plan dispatches it, run executes the phase)`,
-      )
-      // The gate: a person fills in the round brief and commits the setup
-      await Bun.write(join(dir, "docs/R-01/round.md"), "# Round R-01\n\n## Goal\n\nSurvey the target.\n")
-      await git("add", "-A")
-      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "round setup")
-      // transfer constructs the formulation task as P01-analysis's first unit
-      // (plans/0095) and stops at the review seam (plans/0101 D3): the todo is
-      // driver-owned, its inputs the fix channel, dispatch plan's — no
-      // session ran at all on this advance (the default pack carries no
-      // charter, so the construct is driver-side only).
-      const constructed = await agent.run(["transfer", dir])
-      expect(constructed.err).toBe("")
-      expect(constructed.code).toBe(0)
-      expect(constructed.out).toContain("✓ formulation task T-001 constructed: its todo is the planning session's single input (docs/T-001/todo.md)")
-      expect(constructed.out).toContain(
-        "⏸ review stop: the formulation todo of T-001 (docs/T-001/todo.md — driver-owned, fix its inputs, never the todo) awaits your review",
-      )
-      expect(constructed.out).toContain(
-        `next: dispatch it with opencode-auto plan ${dir} (the formulation session runs, the batch review follows), ` +
-          `or fix the inputs (docs/R-01/round.md, docs/R-01/P01-analysis/plan-input.md, the project brief, the roadmap line) and re-run: opencode-auto transfer ${dir}`,
-      )
-      expect(await Bun.file(join(dir, "docs/R-01/prompt-audit.md")).exists()).toBe(false)
-      // plan dispatches the reviewed task: the formulation session runs (the
-      // fake claude plans one task past the formulation line), the collect
-      // checks pass, and the dispatch stops for review
-      const planned = await agent.run(["plan", dir])
-      expect(planned.err).toBe("")
-      expect(planned.code).toBe(0)
-      expect(planned.out).toContain("✓ T-001 formulation output accepted: docs/R-01/P01-analysis/tasks.md lists 1 planned task(s)")
-      expect(planned.out).toContain("✓ phase planning complete: docs/R-01/P01-analysis/tasks.md lists 1 task(s)")
-      expect(planned.out).toContain("✓ planned R-01.P01 analysis: 1 task(s) in docs/R-01/P01-analysis/tasks.md")
-      expect(planned.out).toContain(`next: review them (edit, close, or plan --append), then run: opencode-auto run ${dir}`)
-      // The artifacts: the index with the done formulation line first and the
-      // planned task after it (plans/0095), the task document, the commits.
-      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toBe(
-        "# Tasks (R-01.P01)\n\n- [x] T-001 Formulate the Analysis tasks\n- [ ] T-002 task T-002\n",
-      )
-      expect(await Bun.file(join(dir, "docs/T-002/todo.md")).text()).toContain("Phase: R-01.P01")
-      const subjects = (await git("log", "--format=%s", "-5")).trim().split("\n")
-      expect(subjects).toEqual([
-        "T-001 done Formulate the Analysis tasks",
-        "T-001 wrapup Formulate the Analysis tasks",
-        "T-001 exec Formulate the Analysis tasks",
-        "PLAN formulate P01-analysis Analysis",
-        "round setup",
-      ])
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-      // The follow-up plan (no input) refuses on the execute route
-      // (plans/0101 D4): the one pending task is run's, the boundary
-      // transfer's
-      const again = await runCli(["plan", dir])
-      expect(again.code).toBe(1)
-      expect(again.err).toContain(
-        `no reviewed plan task awaits dispatch: R-01.P01 analysis holds 1 pending task(s) — execute work for opencode-auto run ${dir}; ` +
-          `the boundary and the next plan task are transfer's (opencode-auto transfer ${dir})`,
-      )
-      // The boundary-scoped amend --phases is retired (plans/0137): the
-      // reshape channel is the roadmap line alone, mid-phase or not.
-      const midPhase = await runCli(["amend", dir, "--phases", "amt"])
-      expect(midPhase.code).toBe(1)
-      expect(midPhase.err).toContain("--phases is retired on amend")
-      expect(midPhase.err).toContain("by moving or adding its `- R-NN <phases> — <goal>` line in docs/analysis.md")
-      expect(await JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())).toMatchObject({ phases: "am" })
-    } finally {
-      await agent.done()
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 60_000)
-})
-
-// run under the default --subtask auto, end to end over the claude adapter
-// (auto-core plans/0059 D2–D5): the fake `claude` on PATH plays the lead, its
-// streams, the wrap-up and the phase handover (the one fake at
-// auto-core/test/fixtures/fake-claude.ts),
-// and records every turn with the session arguments of its process. What
-// these cases pin beyond the core's native-fake cases (test/agent-fake.test.ts
-// there) is the real adapter underneath: the lead's usage notice arrives on
-// the live process's stdin mid-turn, and a fork of the lead is a new claude
-// process started with `--resume <lead> --fork-session`. claude has no
-// readable session history, so the second stream's fork guard reads the
-// lead's figure recorded with the split.
-describe("CLI: run under --subtask auto over the claude adapter (auto-core plans/0059)", () => {
-  type Turn = { session?: string; resume?: string; fork: boolean; text: string }
-  const TASK = "T-001"
-  const doc = `# ${TASK}: the widget\nPhase: R-01.P01\n\n## Goal\n\nBuild the widget.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nThe modules read back.\n\n<!-- auto: eof -->\n`
-
-  // A committed project with one pending task under the default config
-  // (--subtask auto explicit since the default flipped to off, wrap-up on); `lead` = the lead's reported context.
-  const setup = async (lead: number) => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-auto-"))
-    const log = join(await mkdtemp(join(tmpdir(), "auto-cli-turns-")), "turns.jsonl")
-    const agent = await fakeClaude({ FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_LEAD_CONTEXT: String(lead) })
-    const git = gitOf(dir)
-    await git("init")
-    expect((await runCli(["init", dir, "--subtask", "auto"])).code).toBe(0)
-    expect((await agent.run(["plan", dir])).code).toBe(0)
-    await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
-    await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
-    await git("add", "-A")
-    await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
-    const turns = async (): Promise<Turn[]> =>
-      (await Bun.file(log).text().catch(() => ""))
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as Turn)
-    const done = async () => {
-      await agent.done()
-      await rm(dirname(log), { recursive: true, force: true })
-      await rm(dir, { recursive: true, force: true })
-    }
-    return { dir, git, agent, turns, done }
-  }
-
-  test("a split the guard takes: the notice reaches the lead mid-turn, and every stream is a claude fork of the lead", async () => {
-    const { dir, git, agent, turns, done } = await setup(70_000)
-    try {
-      const run = await agent.run(["run", dir])
-      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
-      const all = await turns()
-      const leadTurn = all.find((turn) => turn.text.includes("Split rule (adaptive decomposition)"))
-      expect(leadTurn).toBeDefined()
-      const lead = leadTurn!.session!
-      expect(lead).toBeDefined()
-      expect(leadTurn!.fork).toBe(false)
-      expect(leadTurn!.text).toContain("You are the lead session of this task")
-      // The first usage notice (criterion (c)) went into the lead's own
-      // process while its turn ran: 70k of the 128k wall.
-      const notice = all.find((turn) => turn.text.startsWith("[DRIVER] context:"))
-      expect(notice?.session).toBe(lead)
-      expect(run.out).toContain("steering a usage notice")
-      expect(run.out).toContain(`${TASK} the lead split the remaining work into 2 streams (S01, S02); they run next, each a fork of the lead`)
-      // Each stream: a new claude session forked from the lead, sent the
-      // delta alone; the dependent second one names the file the first
-      // changed and runs the task's full verification.
-      const streams = all.filter((turn) => turn.text.startsWith("[DRIVER] Your split was taken"))
-      expect(streams).toHaveLength(2)
-      for (const stream of streams) {
-        expect(stream.resume).toBe(lead)
-        expect(stream.fork).toBe(true)
-        expect(stream.session).not.toBe(lead)
-      }
-      expect(streams[0]!.session).not.toBe(streams[1]!.session)
-      expect(streams[0]!.text).toContain(`runs stream ${TASK}.S01`)
-      expect(streams[1]!.text).toContain(`runs stream ${TASK}.S02`)
-      expect(streams[1]!.text).toContain("Since the split, the streams that ran before this one changed these files")
-      expect(streams[1]!.text).toContain("src/alpha.ts")
-      expect(streams[1]!.text).toContain("This is the last stream")
-      // No history on claude: the second stream's guard read the recorded
-      // figure, so neither stream started cold.
-      expect(run.out.split("\n").filter((line) => line.includes(`lead base: session ${lead} on agent claude (70.0k tokens)`))).toHaveLength(2)
-      expect(run.out).not.toContain("base usage unknown")
-      // The wrap-up is a session of its own, not a fork.
-      const wrapup = all.find((turn) => turn.text.includes("This session only performs the wrap-up"))
-      expect(wrapup?.fork).toBe(false)
-      expect(wrapup?.resume).toBeUndefined()
-      // On disk: the lead's foundation, both streams' modules, the scope
-      // files done, the checklist ticked, the task done; every commit landed.
-      expect(await Bun.file(join(dir, "src/shared.ts")).text()).toBe("export const shared = 1\n")
-      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toBe(`export const alpha = "${TASK}.S01"\n`)
-      expect(await Bun.file(join(dir, "src/beta.ts")).text()).toBe(`export const beta = "${TASK}.S02"\n`)
-      expect(await Bun.file(join(dir, subtaskDoc(TASK, 1, "done"))).exists()).toBe(true)
-      expect(await Bun.file(join(dir, subtaskDoc(TASK, 2, "done"))).exists()).toBe(true)
-      expect(await Bun.file(join(dir, taskDoc(TASK, "subtasks"))).text()).not.toContain("- [ ]")
-      expect(await Bun.file(join(dir, taskStatePaths(TASK).complete)).exists()).toBe(true)
-      const subjects = (await git("log", "--format=%s")).trim().split("\n")
-      expect(subjects.some((subject) => subject.startsWith(`${TASK} exec the widget`))).toBe(true)
-      expect(subjects.some((subject) => subject.startsWith(`${TASK} S1 alpha`))).toBe(true)
-      expect(subjects.some((subject) => subject.startsWith(`${TASK} S2 beta`))).toBe(true)
-      expect(subjects.some((subject) => subject.startsWith(`${TASK} wrapup the widget`))).toBe(true)
-      expect(subjects.indexOf(subjects.find((subject) => subject.startsWith(`${TASK} S1`))!)).toBeGreaterThan(
-        subjects.indexOf(subjects.find((subject) => subject.startsWith(`${TASK} S2`))!),
-      )
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await done()
-    }
-  }, 60_000)
-
-  test("a split the guard rejects (the lead under half the wall): a claude fork of the lead gets the reason and finishes the task, with no streams", async () => {
-    const { dir, git, agent, turns, done } = await setup(100)
-    try {
-      const run = await agent.run(["run", dir])
-      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
-      const all = await turns()
-      const lead = all.find((turn) => turn.text.includes("Split rule (adaptive decomposition)"))?.session
-      expect(lead).toBeDefined()
-      expect(run.out).toContain(`${TASK} the lead's split was not taken (the lead's context`)
-      expect(run.out).toContain("a fork of the lead finishes the task")
-      expect(run.out).not.toContain("steering a usage notice")
-      const rejected = all.filter((turn) => turn.text.startsWith("[DRIVER] The split was not taken"))
-      expect(rejected).toHaveLength(1)
-      expect(rejected[0]!.resume).toBe(lead)
-      expect(rejected[0]!.fork).toBe(true)
-      expect(rejected[0]!.text).toContain("under half the wall")
-      expect(all.some((turn) => turn.text.startsWith("[DRIVER] Your split was taken"))).toBe(false)
-      // The checklist is gone and no scope file was written; the fork did
-      // the work, and the task closed.
-      expect(await Bun.file(join(dir, taskDoc(TASK, "subtasks"))).exists()).toBe(false)
-      expect(await Bun.file(join(dir, subtaskDoc(TASK, 1, "todo"))).exists()).toBe(false)
-      expect(await Bun.file(join(dir, subtaskDoc(TASK, 1, "done"))).exists()).toBe(false)
-      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toBe('export const alpha = "T-001"\n')
-      expect(await Bun.file(join(dir, "src/beta.ts")).text()).toBe('export const beta = "T-001"\n')
-      expect(await Bun.file(join(dir, taskStatePaths(TASK).complete)).exists()).toBe(true)
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await done()
-    }
-  }, 60_000)
-})
 
 describe("CLI: the project brief's channels (plans/0081 D11; init's seed half retired by auto-core plans/0133 D9)", () => {
   test("init writes no brief and refuses --brief; amend --brief revises verbatim; a bare re-init never touches it; reset keeps it; -p stays retired", async () => {
@@ -5492,22 +4183,6 @@ describe("CLI: the project brief's channels (plans/0081 D11; init's seed half re
     }
   })
 
-  test("plan --scaffold prints the active pack's planning-input template and exits 0 (plans/0081 D12.2)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await runCli(["init", dir])).code).toBe(0)
-      const scaffold = await runCli(["plan", dir, "--scaffold"])
-      expect(scaffold.code).toBe(0)
-      expect(scaffold.out).toContain("What this step is for (one sentence, the person's own terms):")
-      expect(scaffold.out).toContain("What would convince you it is done:")
-      expect(await Bun.file(join(dir, "docs")).exists()).toBe(false)
-      // The scaffold takes no other option.
-      expect((await runCli(["plan", dir, "--scaffold", "-p", "text"])).code).toBe(1)
-      expect((await runCli(["run", dir, "--scaffold"])).code).toBe(1)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
 })
 
 describe("CLI: reset de-initialization", () => {
@@ -5515,7 +4190,7 @@ describe("CLI: reset de-initialization", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
+      await establish(dir, "m")
       await mkdir(join(dir, ".auto", "logs"), { recursive: true })
       await writeFile(join(dir, ".auto", "logs", "run.log"), "log\n")
       await mkdir(join(dir, "docs", "T-001"), { recursive: true })
@@ -5724,756 +4399,11 @@ describe("CLI: the worktree cleanliness gate", () => {
     }
   })
 
-  test("run refuses the retired --amend and -f/--force", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      const amend = await runCli(["run", dir, "--amend"])
-      expect(amend.code).toBe(1)
-      expect(amend.err).toContain("--amend is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>")
-      const force = await runCli(["run", dir, "-f"])
-      expect(force.code).toBe(1)
-      expect(force.err).toContain("is an init/reset/fix/sync option")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
 })
 
-// CLI: lane isolation end to end (auto-core plans/0068 §7 S2,
-// OPENCODE_AUTO_LANE_ISOLATION): the whole lane machinery running serially —
-// one lane at a time, per-task worktrees, spawned worker processes through
-// the shell's hidden `_lane` entry, and the landing protocol — over the fake
-// `claude` on PATH. What these cases pin: a task round at isolation-on
-// produces the same unit outcomes as today's serial path (D10's
-// byte-identical floor, at the outcome level); the launcher injection point
-// drives a spawned bootstrap that needs no shell (§6.4); and the kill
-// property — a lane worker killed mid-lane leaves the main tree clean, and
-// the re-dispatched lane resumes in the same worktree from its own progress
-// record (D14's crash-recovery-as-lane-local-resume). `--max-sessions` above
-// 1 still refuses: the concurrency scheduler is S3's.
-describe("CLI: lane isolation (auto-core plans/0068 S2)", () => {
-  const TASK = "T-001"
-  const doc = `# ${TASK}: the widget\nPhase: R-01.P01\n\n## Goal\n\nBuild the widget.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nThe modules read back.\n\n<!-- auto: eof -->\n`
 
-  // A committed project with one pending task under the default config; the
-  // fake claude answers run's lead (a small context figure rejects the
-  // split, a fork of the lead finishes), the wrap-up and nothing else. An
-  // `extra` goes into the fake agent's environment (the isolation switch).
-  const setup = async (prefix: string, extra: Record<string, string> = {}) => {
-    const dir = await mkdtemp(join(tmpdir(), prefix))
-    const agent = await fakeClaude(extra)
-    const git = gitOf(dir)
-    await git("init")
-    expect((await runCli(["init", dir, "--subtask", "auto"])).code).toBe(0)
-    expect((await runCli(["plan", dir])).code).toBe(0)
-    await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
-    await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
-    await git("add", "-A")
-    await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
-    return { dir, agent, git }
-  }
 
-  // The unit-level outcomes a run of this fixture produces (D10: the same
-  // outcomes, not the same logs).
-  const outcomes = async (dir: string, git: ReturnType<typeof gitOf>) => ({
-    alpha: await Bun.file(join(dir, "src", "alpha.ts")).text().catch(() => "missing"),
-    beta: await Bun.file(join(dir, "src", "beta.ts")).text().catch(() => "missing"),
-    report: await Bun.file(join(dir, "docs", TASK, "report.md")).text().catch(() => "missing"),
-    done: await Bun.file(join(dir, taskStatePaths(TASK).complete)).exists(),
-    pendingGone: !(await Bun.file(join(dir, taskStatePaths(TASK).pending)).exists()),
-    index: await Bun.file(join(dir, P01.dir, "tasks.md")).text(),
-    clean: (await git("status", "--porcelain")).trim() === "",
-  })
 
-  test("a task round at isolation-on produces the same unit outcomes as today's serial path, landing through the merge protocol", async () => {
-    const serial = await setup("auto-cli-lane-serial-")
-    const isolated = await setup("auto-cli-lane-iso-", { OPENCODE_AUTO_LANE_ISOLATION: "on" })
-    try {
-      const plain = await serial.agent.run(["run", serial.dir])
-      expect(plain.code, `${plain.out}\n${plain.err}`).toBe(0)
-      const lanes = await isolated.agent.run(["run", isolated.dir])
-      expect(lanes.code, `${lanes.out}\n${lanes.err}`).toBe(0)
-      // Same unit outcomes on both paths.
-      expect(await outcomes(isolated.dir, isolated.git)).toEqual(await outcomes(serial.dir, serial.git))
-      // The isolated round ran through a lane and landed it.
-      expect(lanes.out).toContain(`${TASK} dispatching an isolation lane`)
-      expect(lanes.out).toContain(`${TASK} done (lane landed:`)
-      const log = await isolated.git("log", "--format=%B")
-      expect(log).toContain("Auto-Stage: landing")
-      // The park is torn down and the lane branch deleted after landing
-      // (the digest grammar's own name — an exact pattern without it could
-      // never match, plans/0151 D2).
-      expect(await readdir(join(isolated.dir, ".auto", "worktrees")).catch(() => [])).toEqual([])
-      expect((await isolated.git("branch", "--list", await laneBranch(TASK, isolated.dir))).trim()).toBe("")
-    } finally {
-      await serial.agent.done()
-      await isolated.agent.done()
-      await rm(serial.dir, { recursive: true, force: true })
-      await rm(isolated.dir, { recursive: true, force: true })
-    }
-  }, 120_000)
-
-  test("a spawned lane-worker fixture that needs no shell: the launcher injection point drives the unit end to end", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-boot-"))
-    const binDir = await mkdtemp(join(tmpdir(), "auto-cli-agent-"))
-    const git = gitOf(dir)
-    await Bun.write(join(binDir, "claude"), `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "..", "..", "auto-core", "test", "fixtures", "fake-claude.ts"))} "$@"\n`)
-    await chmod(join(binDir, "claude"), 0o755)
-    // The in-process parent never dispatches a session itself (every unit is
-    // a lane), so its agent is a stub host; the spawned workers run the
-    // bootstrap fixture over the fake claude.
-    const stubHost = {
-      client: { capabilities: { resume: false, fork: "none", steer: false, abort: false, question: false, permission: false, history: false, usage: "none" } },
-      syncContext: async () => {},
-      restart: async () => false,
-      close: () => {},
-    } as unknown as AgentHost
-    try {
-      await git("init")
-      expect((await runCli(["init", dir, "--subtask", "auto"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
-      await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
-      await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
-      await git("add", "-A")
-      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
-
-      // The isolation switch is per-run environment: plant it, and reset the
-      // switch memo so this process parses the planted layer (restored in
-      // the finally; the deliverables' driver-variable pattern).
-      const ambient = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key)))
-      for (const key of Object.keys(ambient)) delete process.env[key]
-      process.env.OPENCODE_AUTO_LANE_ISOLATION = "on"
-      // The scrub above also removed the package preload's hermetic
-      // OPENCODE_AUTO_MODELS pointer (test/preload.ts, plans/0232 D1), and
-      // without it the in-process runAll's preflight falls back to
-      // the operator's real XDG registry ($XDG_CONFIG_HOME/opencode-auto/
-      // models.json), which may reference env keys this process does not carry
-      // (on such hosts preflight refuses and runAll exits 1 — T-127 found this
-      // host growing one mid-round). Re-plant the same no-operator-layer
-      // pointer the lane worker below runs with, so the parent is as hermetic
-      // as its worker.
-      // AUTO-DECISION: the in-process parent keeps the scrubbed no-operator layer for the run (the stub host dispatches nothing itself, so no operator routing is needed; the operator's registry must not gate this case)
-      process.env.OPENCODE_AUTO_MODELS = join(EMPTY_CONFIG_HOME, "no-operator-layer.json")
-      setSwitchModelRegistry(undefined)
-      setShellProfile({
-        laneLauncher: (worktree, unit) =>
-          Bun.spawn([process.execPath, join(import.meta.dir, "fixtures", "lane-worker.ts"), worktree, "--unit", unit], {
-            env: {
-              ...ambient,
-              PATH: `${binDir}:${process.env.PATH ?? ""}`,
-              OPENCODE_AUTO_AGENT: "claude",
-              OPENCODE_AUTO_LANE_ISOLATION: "on",
-              OPENCODE_AUTO_MODELS: join(EMPTY_CONFIG_HOME, "no-operator-layer.json"),
-            },
-            stdout: "pipe",
-            stderr: "pipe",
-          }),
-      })
-      let code: number | undefined
-      try {
-        code = await runAll(dir, { managed: stubHost })
-      } finally {
-        setShellProfile({ laneLauncher: undefined })
-        delete process.env.OPENCODE_AUTO_LANE_ISOLATION
-        delete process.env.OPENCODE_AUTO_MODELS
-        for (const [key, value] of Object.entries(ambient)) process.env[key] = value
-        setSwitchModelRegistry(undefined)
-      }
-      expect(code).toBe(0)
-      // The unit completed through the bootstrap-driven lane and landed.
-      const done = await outcomes(dir, git)
-      expect(done.alpha).toBe('export const alpha = "T-001"\n')
-      expect(done.done).toBe(true)
-      expect(done.index).toContain(`- [x] ${TASK} the widget`)
-      expect(done.clean).toBe(true)
-      expect(await readdir(join(dir, ".auto", "worktrees")).catch(() => [])).toEqual([])
-      expect((await git("log", "--format=%B")).toString()).toContain("Auto-Stage: landing")
-    } finally {
-      await rm(binDir, { recursive: true, force: true })
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 120_000)
-
-  test("kill mid-lane: the main tree stays clean; the re-dispatched lane resumes from its own progress record", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-kill-"))
-    const gateDir = await mkdtemp(join(tmpdir(), "auto-cli-gate-"))
-    const gate = join(gateDir, "go")
-    const turns = join(gateDir, "turns.jsonl")
-    const agent = await fakeClaude({ FAKE_CLAUDE_GATE: gate, FAKE_CLAUDE_GATE_DIE: "1", FAKE_CLAUDE_LOG: turns, OPENCODE_AUTO_LANE_ISOLATION: "on" })
-    const git = gitOf(dir)
-    const units = async () => JSON.parse(await Bun.file(join(dir, ".auto", "units.json")).text().catch(() => '{"tasks":{}}')) as { tasks: Record<string, { pid?: number; attempts?: number }> }
-    const worktree = join(dir, ".auto", "worktrees", TASK)
-    const parkThere = async () => stat(worktree).then(() => true, () => false)
-    try {
-      await git("init")
-      expect((await runCli(["init", dir, "--subtask", "auto"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
-      await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
-      await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
-      await git("add", "-A")
-      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
-
-      // First run: the lane worker parks in its first session turn (the
-      // gate); kill it mid-lane once the registry names its pid.
-      const firstRun = agent.run(["run", dir])
-      // Wait until the worker is mid-lane: the registry names its pid and the
-      // worktree holds the lane's own progress record (the session in flight,
-      // parked at the fake's gate).
-      let pid: number | undefined
-      let progress: { task: string; active: boolean } | undefined
-      for (let i = 0; i < 1200 && (pid === undefined || progress?.active !== true); i++) {
-        await Bun.sleep(50)
-        pid = (await units()).tasks[TASK]?.pid
-        if (pid !== undefined) {
-          const raw = await Bun.file(join(worktree, ".auto", "progress.json")).text().catch(() => undefined)
-          if (raw !== undefined) progress = JSON.parse(raw)
-        }
-      }
-      expect(pid).toBeGreaterThan(0)
-      expect(progress?.task).toBe(TASK)
-      expect(progress?.active).toBe(true)
-      // The fake records the turn before parking at the gate: only a
-      // recorded turn is safely parked (the release then makes it die
-      // without writing, so the killed lane's worktree stays as it was).
-      let parked = false
-      for (let i = 0; i < 600 && !parked; i++) {
-        await Bun.sleep(50)
-        parked = (await Bun.file(turns).text().catch(() => "")).includes("Split rule (adaptive decomposition)")
-      }
-      expect(parked).toBe(true)
-      process.kill(pid!, "SIGKILL")
-      await Bun.write(gate, "released\n")
-      const first = await firstRun
-      expect(first.code, `${first.out}\n${first.err}`).toBe(2)
-      // The kill property: the main tree is clean, the scene kept in the park.
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-      expect(await parkThere()).toBe(true)
-
-      // Re-run: the dispatch reuses the recorded worktree; the worker
-      // resumes from its own progress record (the line lands in the
-      // worktree's own run log before the landing tears it down).
-      const secondRun = agent.run(["run", dir])
-      let resumed = false
-      for (let i = 0; i < 600 && !resumed; i++) {
-        await Bun.sleep(50)
-        const logs = join(worktree, ".auto", "logs")
-        for (const file of await readdir(logs).catch(() => [] as string[])) {
-          if ((await Bun.file(join(logs, file)).text().catch(() => "")).includes("resume after interruption")) resumed = true
-        }
-      }
-      const second = await secondRun
-      expect(second.code, `${second.out}\n${second.err}`).toBe(0)
-      expect(resumed).toBe(true)
-      expect(second.out).toContain("re-dispatching its lane in the existing worktree")
-      // Landed: the unit done, the index ticked, the tree clean, the park
-      // torn down, the branch deleted, both dispatches booked.
-      expect(await Bun.file(join(dir, taskStatePaths(TASK).complete)).exists()).toBe(true)
-      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain(`- [x] ${TASK} the widget`)
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-      expect(await parkThere()).toBe(false)
-      expect((await git("branch", "--list", await laneBranch(TASK, dir))).trim()).toBe("")
-      expect((await units()).tasks[TASK]?.attempts).toBe(2)
-      expect(await git("log", "--format=%B")).toContain("Auto-Stage: landing")
-    } finally {
-      await Bun.write(gate, "released\n").catch(() => {})
-      await agent.done()
-      await rm(gateDir, { recursive: true, force: true })
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 180_000)
-
-  test("--max-sessions above 1 with no parallel level runs (auto-core plans/0125 D1/D2): the width passes the shell and reaches preflight's concurrency gates", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-max-"))
-    try {
-      expect((await runCli(["init", dir])).code).toBe(0)
-      await commitFixture(dir)
-      // No level, and the width is accepted: the run reaches preflight, where
-      // D11's interactive refusal fires (an accepted run would start an
-      // agent; the usage error is the cheap deterministic witness that the
-      // width was accepted — the old shell guard on the level is gone,
-      // plans/0125 D2, and the no-level note rides the run log).
-      const steered = await runCli(["run", dir, "--max-sessions", "2", "--interactive"])
-      expect(steered.code).toBe(1)
-      expect(steered.err).not.toContain("concurrent execution needs a parallel level")
-      // preflight's refusal rides the run log's stdout (the run log is open).
-      expect(steered.out).toContain("one human cannot steer 2 concurrent sessions")
-      expect(steered.out).toContain("with no parallel level: documentation-scoped tasks run side by side as their declared Depends/Touches allow")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-// The lane scheduler live (auto-core plans/0068 S3, D10; the activation
-// decoupled by auto-core plans/0125 — width alone, the fixtures' levels
-// now merely fixture facts): --max-sessions 2 routes the task loop through
-// the readiness scheduler — the
-// lanes spawn through the shell's own `_lane` entry (the default launcher
-// re-invoking this CLI), land through the merge protocol, and the failure
-// matrix and D21's conflict posture drive the run's exit. S4 adds the
-// human-surface cases over a conflict-free two-lane round: the prefix relay
-// (every lane line re-emitted with `[<task-id>]`), the status tree's
-// in-flight lanes section read mid-run, both reports' usage booked into the
-// run stats, and the conclusion's lanes roll-up with its parent-wall note.
-describe("CLI: the lane scheduler (auto-core plans/0068 S3)", () => {
-  const doc = (id: string, title: string, touches: string) =>
-    [`# ${id}: ${title}`, "Phase: R-01.P01", "Depends: none", `Touches: ${touches}`, "", "## Goal", "", `Deliver ${title}.`, "", "## Scope", "", "src only.", "", "## Acceptance", "", "The modules read back.", "", "<!-- auto: eof -->", ""].join("\n")
-
-  // A committed project with one or two pending tasks under a parallel level;
-  // the fake claude answers the lead (a small context figure rejects the
-  // split, a fork of the lead finishes by writing src/alpha.ts and
-  // src/beta.ts), the wrap-up and nothing else.
-  const setup = async (prefix: string, parallel: "low" | "medium", tasks: [string, string, string][]) => {
-    const dir = await mkdtemp(join(tmpdir(), prefix))
-    const agent = await fakeClaude()
-    const git = gitOf(dir)
-    await git("init")
-    // --tree-lanes on (plans/0096 stage 5): these cases pin the worktree
-    // lane machinery itself — the tier default is off (process parallelism,
-    // one tree), so the fixtures opt the round back into the full lanes.
-    expect((await runCli(["init", dir, "--parallel", parallel, "--subtask", "auto", "--tree-lanes", "on"])).code).toBe(0)
-    expect((await runCli(["plan", dir])).code).toBe(0)
-    await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n${tasks.map(([id, title]) => `- [ ] ${id} ${title}\n`).join("")}`)
-    for (const [id, title, touches] of tasks) await Bun.write(join(dir, taskStatePaths(id).pending), doc(id, title, touches))
-    await git("add", "-A")
-    await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
-    return { dir, agent, git }
-  }
-
-  test("a one-lane round at maxSessions 2 runs through the real _lane entry and lands", async () => {
-    const { dir, agent, git } = await setup("auto-cli-lane-s3-one-", "low", [["T-001", "the widget", "src/"]])
-    try {
-      const run = await agent.run(["run", dir, "--max-sessions", "2"])
-      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
-      expect(run.out).toContain("T-001 dispatching a lane")
-      expect(run.out).toContain("T-001 done (lane landed:")
-      expect(run.out).toContain("✓ all tasks complete")
-      // Landed: the unit done, the index ticked, the landing trailers in the
-      // history, the park torn down, the branch gone, the tree clean.
-      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).exists()).toBe(true)
-      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain("- [x] T-001 the widget")
-      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toContain("alpha")
-      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([])
-      expect((await git("branch", "--list", await laneBranch("T-001", dir))).trim()).toBe("")
-      expect((await git("log", "--format=%B")).toString()).toContain("Auto-Stage: landing")
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await agent.done()
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 180_000)
-
-  test("two lanes whose Touches lie conflict at landing; medium's one repair cannot resolve it and the run blocks naming the park", async () => {
-    const { dir, agent, git } = await setup("auto-cli-lane-s3-two-", "medium", [
-      ["T-001", "the alpha module", "src/alpha.ts"],
-      ["T-002", "the beta module", "src/beta.ts"],
-    ])
-    try {
-      const run = await agent.run(["run", dir, "--max-sessions", "2"])
-      expect(run.code, `${run.out}\n${run.err}`).toBe(2)
-      // The two lanes run identical fake work as concurrent workers, and
-      // landings are serial in completion order, so which lane lands first is
-      // scheduling luck, not a guarantee (a probe of the pristine suite
-      // failed the old T-001-first literal 4/8 runs). Whichever it is: the
-      // first lane landed, the second's landing hit the real conflict (both
-      // lanes wrote both modules — the declared Touches lied).
-      const first = run.out.includes("T-001 done (lane landed:") ? "T-001" : "T-002"
-      const second = first === "T-001" ? "T-002" : "T-001"
-      expect(run.out).toContain(`${first} done (lane landed:`)
-      expect(run.out).toContain(`${second} landing conflict`)
-      // D21 at medium: exactly one repair re-dispatch through the merge
-      // instruction. The real conflict is semantic (both lanes rewrote the
-      // same files differently), the repair worker's driver-side merge
-      // cannot resolve it and blocks with its report — the run stops naming
-      // the unit, the report and the park path (a second landing conflict
-      // blocks the same way: the one repair is spent either way).
-      expect(run.out).toContain("re-dispatching the lane with the merge instruction")
-      // `main` is no host luck: the fixture's initial branch is pinned by the
-      // suite's global git config (T-127), so the instruction naming it is the
-      // real main-tree branch, and the literal cannot drift with the host.
-      // The lane branch carries the digest grammar's full name (plans/0151 D2).
-      expect(run.out).toContain(`merge main into ${await laneBranch(second, dir)}`)
-      expect(run.out).toContain(`${second} is blocked`)
-      expect(run.out).toContain("blocked and its landing hit a conflict")
-      expect(await Bun.file(join(dir, taskStatePaths(first).complete)).exists()).toBe(true)
-      expect(await Bun.file(join(dir, taskStatePaths(second).complete)).exists()).toBe(false)
-      // The blocked lane's scene is kept; the main tree is clean.
-      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([second])
-      expect((await git("branch", "--list", await laneBranch(second, dir))).trim()).toContain(await laneBranch(second, dir))
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await agent.done()
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 180_000)
-
-  // S4's acceptance round (plans/0068 §7): two lanes over disjoint files
-  // (the fake's fork-module knob writes one per-task module, so the declared
-  // Touches tell the truth), parked mid-run at the fake's gate so `status`
-  // reads the in-flight lanes section while both lanes are live.
-  test("a two-lane round lands both: the relay prefixes every lane line, status shows both lanes mid-run, both reports' usage books, the conclusion rolls up", async () => {
-    const gateDir = await mkdtemp(join(tmpdir(), "auto-cli-lane-s4-gate-"))
-    const gate = join(gateDir, "go")
-    const agent = await fakeClaude({ FAKE_CLAUDE_GATE: gate, FAKE_CLAUDE_FORK_MODULES: "1" })
-    const { dir, git } = await setup("auto-cli-lane-s4-", "low", [
-      ["T-001", "the alpha module", "src/T-001.ts"],
-      ["T-002", "the beta module", "src/T-002.ts"],
-    ])
-    const units = async () =>
-      JSON.parse(await Bun.file(join(dir, ".auto", "units.json")).text().catch(() => '{"tasks":{}}')) as {
-        tasks: Record<string, { pid?: number }>
-      }
-    try {
-      const running = agent.run(["run", dir, "--max-sessions", "2"])
-      // Wait until both lanes are live: the registry names both workers'
-      // pids (their sessions parked at the fake's gate).
-      let both = false
-      for (let i = 0; i < 1200 && !both; i++) {
-        await Bun.sleep(50)
-        const tasks = (await units()).tasks
-        both = tasks["T-001"]?.pid !== undefined && tasks["T-002"]?.pid !== undefined
-      }
-      expect(both).toBe(true)
-      // The status tree mid-run: the in-flight lanes section, one line per
-      // lane with its park worktree and worker pid — the read-model section
-      // D13 adds, shell-visible beside a live run.
-      const mid = await runCli(["status", dir])
-      expect(mid.code).toBe(0)
-      expect(mid.out).toContain("lanes in flight (2):")
-      expect(mid.out).toContain("[▶] T-001 (worktree .auto/worktrees/T-001, pid ")
-      expect(mid.out).toContain("[▶] T-002 (worktree .auto/worktrees/T-002, pid ")
-      await Bun.write(gate, "released\n")
-      const run = await running
-      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
-      // Both lanes landed their own module; the tree is clean, the park torn
-      // down.
-      expect(await Bun.file(join(dir, "src", "T-001.ts")).text()).toContain("T-001")
-      expect(await Bun.file(join(dir, "src", "T-002.ts")).text()).toContain("T-002")
-      expect(run.out).toContain("T-001 done (lane landed:")
-      expect(run.out).toContain("T-002 done (lane landed:")
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([])
-      // The prefix relay: the workers' own start lines arrived re-emitted
-      // through the parent with their lane's id — and no unprefixed copy.
-      expect(run.out).toContain("[T-001] ▶ T-001 lane worker: running the unit")
-      expect(run.out).toContain("[T-002] ▶ T-002 lane worker: running the unit")
-      expect(run.out).not.toContain("\n▶ T-001 lane worker: running the unit")
-      // Both reports' usage booked: the per-unit lanes entries (marked
-      // booked — the reports carried the detail) and the fold into the round
-      // bucket's usage and sessions.
-      const stats = JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()) as {
-        lanes?: Record<string, { tokens: number; sessions: number; booked?: boolean }>
-        roundB: { sessions: number; usage: { input: number } }
-      }
-      for (const unit of ["T-001", "T-002"]) {
-        expect(stats.lanes?.[unit]?.tokens ?? 0).toBeGreaterThan(0)
-        expect(stats.lanes?.[unit]?.booked).toBe(true)
-      }
-      expect(stats.roundB.sessions).toBeGreaterThanOrEqual(4)
-      expect(stats.roundB.usage.input).toBeGreaterThan(0)
-      // The conclusion's roll-up: the lanes line after the round's tokens
-      // line, claiming the booking and noting parent-wall.
-      expect(run.out).toContain("■ round 1 complete:")
-      expect(run.out).toContain("  lanes: 2 landed / ")
-      expect(run.out).toContain("(booked into the totals above)")
-      expect(run.out).toContain("the time lines mean parent-wall")
-      // After the round no lane is in flight: the section is gone.
-      const after = await runCli(["status", dir])
-      expect(after.out).not.toContain("lanes in flight")
-    } finally {
-      await Bun.write(gate, "released\n").catch(() => {})
-      await agent.done()
-      await rm(gateDir, { recursive: true, force: true })
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 240_000)
-})
-
-// The scheduler's task-internal width (auto-core plans/0068 S5: D3 stage 2,
-// D18, D19, §6.8): a split task at --max-sessions 2 runs its streams as
-// lanes — the lead lane stops at its taken split (the report carries the
-// split to the parent), the parent lands it and schedules the stream lanes
-// T-NNN.S<nn> as cold starts (no fork of the lead: the workers' turns carry
-// no --resume/--fork-session), a dependent stream sees the files changed
-// since the split (the seeded split record, read in its own worktree), the
-// last stream's delta carries the task's full acceptance verification, and
-// its lane runs the wrap-up and closes the task.
-describe("CLI: stream lanes (auto-core plans/0068 S5)", () => {
-  type Turn = { session?: string; resume?: string; fork: boolean; text: string }
-  const TASK = "T-001"
-  const doc = `# ${TASK}: the widget\nPhase: R-01.P01\n\nDepends: none\n\n## Goal\n\nBuild the widget.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nThe modules read back.\n\n<!-- auto: eof -->\n`
-
-  test("a split task at maxSessions 2: the lead lane stops at the split, the streams run as cold-start lanes, the last one carries the full verification and wraps up", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-lane-s5-"))
-    const log = join(await mkdtemp(join(tmpdir(), "auto-cli-s5-turns-")), "turns.jsonl")
-    const agent = await fakeClaude({ FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_LEAD_CONTEXT: "70000" })
-    const git = gitOf(dir)
-    const turns = async (): Promise<Turn[]> =>
-      (await Bun.file(log).text().catch(() => ""))
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as Turn)
-    try {
-      await git("init")
-      // --tree-lanes on: the stream lanes are the worktree machinery's cold
-      // starts (plans/0096 stage 5 made tier 0 the default; these cases pin
-      // the lanes themselves)
-      expect((await runCli(["init", dir, "--parallel", "low", "--subtask", "auto", "--tree-lanes", "on"])).code).toBe(0)
-      expect((await runCli(["plan", dir])).code).toBe(0)
-      await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
-      await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
-      await git("add", "-A")
-      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
-
-      const run = await agent.run(["run", dir, "--max-sessions", "2"])
-      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
-      const all = await turns()
-      // The lead ran inside its lane under D18's guidance: the split clause
-      // names the level the streams will actually get.
-      const lead = all.find((turn) => turn.text.includes("Split rule (adaptive decomposition)"))
-      expect(lead).toBeDefined()
-      expect(lead!.text).toContain("The streams run side by side under this project's parallel level low")
-      // The lead's lane stopped at the taken split; the parent landed it and
-      // scheduled the streams as lanes of their own (the relayed story).
-      expect(run.out).toContain("the lead split the remaining work into 2 streams")
-      expect(run.out).toContain("each as a lane of its own")
-      expect(run.out).toContain("T-001.S01 dispatching a lane")
-      expect(run.out).toContain("T-001.S02 dispatching a lane")
-      // The streams are cold starts (D19): fresh sessions, no --resume, no
-      // --fork-session — nothing of the lead's server survives its process.
-      const streams = all.filter((turn) => turn.text.startsWith("[DRIVER] Your split was taken"))
-      expect(streams).toHaveLength(2)
-      for (const stream of streams) {
-        expect(stream.fork).toBe(false)
-        expect(stream.resume).toBeUndefined()
-        expect(stream.text).toContain("a fresh session that forks nothing")
-      }
-      expect(streams[0]!.text).toContain(`runs stream ${TASK}.S01`)
-      expect(streams[1]!.text).toContain(`runs stream ${TASK}.S02`)
-      // The cold delta carries the task and the stream's own scope file.
-      expect(streams[0]!.text).toContain("The task (its document is docs/T-001/todo.md):")
-      expect(streams[0]!.text).toContain("Your stream's scope file (docs/T-001/S01/todo.md) in full:")
-      // The dependent stream saw the files changed since the split (its
-      // worktree's seeded record), and the last stream carries the task's
-      // full acceptance verification.
-      expect(streams[1]!.text).toContain("Since the split, the streams that ran before this one changed these files")
-      expect(streams[1]!.text).toContain("src/alpha.ts")
-      expect(streams[1]!.text).toContain("This is the last stream")
-      // The wrap-up ran inside the last stream's lane, as a session of its own.
-      const wrapup = all.find((turn) => turn.text.includes("This session only performs the wrap-up"))
-      expect(wrapup).toBeDefined()
-      expect(wrapup!.fork).toBe(false)
-      // On disk: the lead's foundation, both streams' modules, the scope
-      // files done, the checklist fully ticked, the task done and the index
-      // ticked — the lane story ends where the serial one does.
-      expect(await Bun.file(join(dir, "src/shared.ts")).text()).toBe("export const shared = 1\n")
-      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toBe(`export const alpha = "${TASK}.S01"\n`)
-      expect(await Bun.file(join(dir, "src/beta.ts")).text()).toBe(`export const beta = "${TASK}.S02"\n`)
-      expect(await Bun.file(join(dir, subtaskDoc(TASK, 1, "done"))).exists()).toBe(true)
-      expect(await Bun.file(join(dir, subtaskDoc(TASK, 2, "done"))).exists()).toBe(true)
-      expect(await Bun.file(join(dir, taskDoc(TASK, "subtasks"))).text()).not.toContain("- [ ]")
-      expect(await Bun.file(join(dir, taskStatePaths(TASK).complete)).exists()).toBe(true)
-      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain(`- [x] ${TASK} the widget`)
-      expect(await Bun.file(join(dir, taskDoc(TASK, "report"))).text()).toContain("Result: PASS")
-      // The split record travelled: the lead worktree's registry died at
-      // teardown, the parent re-persisted the split at landing, re-rooted
-      // onto the main tree.
-      const units = JSON.parse(await Bun.file(join(dir, ".auto", "units.json")).text()) as { tasks: Record<string, { split?: { root: string; sha: string }[] }> }
-      expect(units.tasks[TASK]?.split?.map((line) => line.root)).toEqual([dir])
-      // Three landings (the lead, both streams), the park and branches torn
-      // down, the tree clean.
-      const bodies = await git("log", "--format=%B")
-      expect(bodies.match(/Auto-Stage: landing\n/g)?.length).toBe(3)
-      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([])
-      expect((await git("branch", "--list", "auto-lane/*")).trim()).toBe("")
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await agent.done()
-      await rm(dirname(log), { recursive: true, force: true })
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 300_000)
-})
-
-// Branch isolation's round trip (plans/0074 §2, U-L3): the e2e the design unit
-// owes — designate → establish (isolate) → run the round's units → `land`,
-// the deliverable's history ending with exactly one commit while its original
-// branch otherwise never moved and auto/R-NN is gone. The lanes interplay
-// (§2.4) rides the same entry: lanes branch and land in the MAIN repository,
-// orthogonal to isolation — the lane park's copy of the nested repository
-// sits on the round branch like the main tree's does — and a unit whose
-// declared Touches reach the nested repository is not lane-eligible
-// (plans/0068 D15) and serializes in the main tree, so its work lands on the
-// isolation branch during the round; `land` then squashes the round into the
-// deliverable's one commit. The fake's fork writes the nested task's module
-// inside pkg (FAKE_CLAUDE_NESTED, the knob beside FAKE_CLAUDE_FORK_MODULES).
-describe("CLI: branch isolation round trip (plans/0074 U-L3)", () => {
-  const doc = (id: string, title: string, touches: string) =>
-    [`# ${id}: ${title}`, "Phase: R-01.P01", "Depends: none", `Touches: ${touches}`, "", "## Goal", "", `Deliver ${title}.`, "", "## Scope", "", "One module, read back.", "", "## Acceptance", "", "The module reads back.", "", "<!-- auto: eof -->", ""].join("\n")
-
-  // A committed project whose nested repository pkg holds one clean commit
-  // (on the pinned init.defaultBranch), ready to be designated by --isolate;
-  // plan establishes the round and isolates pkg on auto/R-01 before the task
-  // documents land (the person's commit that precedes every gated run).
-  // `init` carries extra init flags (the lanes case's parallel level);
-  // `extra` goes into the fake agent's environment (the fixture knobs).
-  const setup = async (prefix: string, tasks: [string, string, string][], init: string[] = [], extra: Record<string, string> = {}) => {
-    const dir = await mkdtemp(join(tmpdir(), prefix))
-    const agent = await fakeClaude(extra)
-    const git = gitOf(dir)
-    await mkdir(join(dir, "pkg"), { recursive: true })
-    const nested = gitOf(join(dir, "pkg"))
-    await Bun.write(join(dir, "pkg", "readme.txt"), "nested\n")
-    await nested("init", "-q")
-    await nested("add", "-A")
-    await nested("commit", "-qm", "nested setup")
-    const original = (await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()
-    const setupSha = (await nested("rev-parse", "HEAD")).trim()
-    await git("init")
-    const mainBranch = (await git("symbolic-ref", "--short", "HEAD")).trim()
-    expect((await runCli(["init", dir, "--isolate", "pkg", "--subtask", "auto", ...init])).code).toBe(0)
-    const plan = await runCli(["plan", dir])
-    expect(plan.code, `${plan.out}\n${plan.err}`).toBe(0)
-    await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n${tasks.map(([id, title]) => `- [ ] ${id} ${title}\n`).join("")}`)
-    for (const [id, title, touches] of tasks) await Bun.write(join(dir, taskStatePaths(id).pending), doc(id, title, touches))
-    await git("add", "-A")
-    await git("commit", "-qm", "baseline")
-    return { dir, agent, git, nested, original, setupSha, mainBranch, plan }
-  }
-
-  test("isolate → establish → run → land: the round's nested work becomes exactly one commit on the original branch, auto/R-01 gone, the trail in the driven root", async () => {
-    const { dir, agent, git, nested, original, setupSha, plan } = await setup("auto-cli-iso-round-", [["T-001", "the nested widget", "pkg/"]], [], {
-      FAKE_CLAUDE_FORK_MODULES: "1",
-      FAKE_CLAUDE_NESTED: "T-001:pkg",
-    })
-    try {
-      // designate → establish: the round opened with pkg isolated on the
-      // round branch, the original tip intact beneath it.
-      expect(plan.out).toContain("✓ branch isolation: pkg on auto/R-01")
-      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
-      expect((await nested("rev-parse", original)).trim()).toBe(setupSha)
-      // run the round: the unit's fork delivers its module inside pkg.
-      const run = await agent.run(["run", dir])
-      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
-      // During the round the deliverable's work lives on the isolation branch
-      // only: the driver's unified commits (Auto-Stage trailers) moved
-      // auto/R-01; the original branch never moved.
-      expect(await Bun.file(join(dir, "pkg", "src", "T-001.ts")).text()).toBe('export const module = "T-001"\n')
-      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
-      expect(await nested("log", "--format=%B", `${original}..auto/R-01`)).toContain("Auto-Stage: execute")
-      expect((await nested("rev-parse", original)).trim()).toBe(setupSha)
-      // The task completed; both trees clean.
-      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).exists()).toBe(true)
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-      expect((await nested("status", "--porcelain")).trim()).toBe("")
-      // land: exactly one commit on the deliverable's branch.
-      const landed = await runCli(["land", dir])
-      expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0)
-      const sha = (await nested("rev-parse", "--short", "HEAD")).trim()
-      expect(landed.out).toContain(`✓ pkg: landed ${sha} on ${original} (1 commit(s) of auto/R-01 as one); auto/R-01 deleted`)
-      expect(landed.out).toContain("the driven root is the process layer of record")
-      expect(Number((await nested("rev-list", "--count", original)).trim())).toBe(2)
-      expect((await nested("rev-parse", "HEAD~1")).trim()).toBe(setupSha)
-      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(original)
-      expect((await nested("branch", "--list", "auto/R-01")).trim()).toBe("")
-      expect(await Bun.file(join(dir, "pkg", "src", "T-001.ts")).text()).toBe('export const module = "T-001"\n')
-      expect((await nested("status", "--porcelain")).trim()).toBe("")
-      // The landing commit is the deliverable's own history entry: no
-      // Auto-Stage trailer.
-      expect(await nested("log", "-1", "--format=%B")).not.toContain("Auto-Stage:")
-      // The full per-unit trail stays in the driven root's git (0064's
-      // record model): its own commits recorded the nested repository's SHAs
-      // along the way.
-      expect(await git("log", "--format=%B")).toContain("Auto-Nested: pkg @")
-    } finally {
-      await agent.done()
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 240_000)
-
-  test("lanes inside isolation: the lane parks and lands in the main repository while pkg rides auto/R-01; the nested unit serializes onto the isolation branch and land squashes the round", async () => {
-    const gateDir = await mkdtemp(join(tmpdir(), "auto-cli-iso-lane-gate-"))
-    const gate = join(gateDir, "go")
-    const { dir, agent, git, nested, original, setupSha, mainBranch } = await setup(
-      "auto-cli-iso-lane-",
-      [
-        ["T-001", "the root module", "src/"],
-        ["T-002", "the nested widget", "pkg/"],
-      ],
-      // --tree-lanes on: the lanes' park-and-land inside isolation is the
-      // worktree machinery (tier 0, the 0096 stage 5 default, runs serially
-      // in one tree and never parks)
-      ["--parallel", "low", "--tree-lanes", "on"],
-      { FAKE_CLAUDE_FORK_MODULES: "1", FAKE_CLAUDE_NESTED: "T-002:pkg", FAKE_CLAUDE_GATE: gate },
-    )
-    const units = async () =>
-      JSON.parse(await Bun.file(join(dir, ".auto", "units.json")).text().catch(() => '{"tasks":{}}')) as {
-        tasks: Record<string, { pid?: number }>
-      }
-    try {
-      const running = agent.run(["run", dir, "--max-sessions", "2"])
-      // Wait until the lane is in flight: the registry names its worker pid
-      // (its lead parked at the fake's gate).
-      let pid: number | undefined
-      for (let i = 0; i < 1200 && pid === undefined; i++) {
-        await Bun.sleep(50)
-        pid = (await units()).tasks["T-001"]?.pid
-      }
-      expect(pid).toBeGreaterThan(0)
-      // §2.4's orthogonality, pinned mid-round: the lane's branch and park
-      // live in the MAIN repository (on its main branch, untouched by
-      // isolation), while the nested repository rides the round branch — the
-      // main tree's pkg and the park's copied pkg both sit on auto/R-01, the
-      // original branch never moved by any of it.
-      expect((await git("branch", "--list", await laneBranch("T-001", dir))).trim()).toContain(await laneBranch("T-001", dir))
-      expect((await git("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(mainBranch)
-      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
-      const parkPkg = gitOf(join(dir, ".auto", "worktrees", "T-001", "pkg"))
-      expect((await parkPkg("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
-      expect((await nested("rev-parse", original)).trim()).toBe(setupSha)
-      await Bun.write(gate, "released\n")
-      const run = await running
-      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
-      // The round ran both ways: T-001 as a lane (the serialized landing in
-      // the main repository), T-002 through D15's serial degrade — alone, in
-      // the main tree, after the lanes drained.
-      expect(run.out).toContain("T-001 dispatching a lane")
-      expect(run.out).toContain("T-001 done (lane landed:")
-      expect(run.out).toContain("T-002 cannot be isolated (its declared Touches reach a nested repository); running it serially in the main tree after the lanes drained (D15)")
-      expect(await Bun.file(join(dir, "src", "T-001.ts")).text()).toBe('export const module = "T-001"\n')
-      expect(await Bun.file(join(dir, "pkg", "src", "T-002.ts")).text()).toBe('export const module = "T-002"\n')
-      // During the round: the lane's serialized landing is in the MAIN
-      // repository's history (park and branch torn down after it), while the
-      // nested unit's work sits on the isolation branch as driver commits —
-      // the original branch still never moved.
-      expect(await git("log", "--format=%B")).toContain("Auto-Stage: landing")
-      expect((await git("branch", "--list", "auto-lane/*")).trim()).toBe("")
-      expect(await readdir(join(dir, ".auto/worktrees")).catch(() => [])).toEqual([])
-      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe("auto/R-01")
-      expect(await nested("log", "--format=%B", `${original}..auto/R-01`)).toContain("Auto-Stage: execute")
-      expect((await nested("rev-parse", original)).trim()).toBe(setupSha)
-      // land squashes the round's nested work into the deliverable's one
-      // commit; the lane's module stays in the main repository's history.
-      const landed = await runCli(["land", dir])
-      expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0)
-      const sha = (await nested("rev-parse", "--short", "HEAD")).trim()
-      expect(landed.out).toContain(`✓ pkg: landed ${sha} on ${original} (1 commit(s) of auto/R-01 as one); auto/R-01 deleted`)
-      expect(Number((await nested("rev-list", "--count", original)).trim())).toBe(2)
-      expect((await nested("rev-parse", "HEAD~1")).trim()).toBe(setupSha)
-      expect((await nested("rev-parse", "--abbrev-ref", "HEAD")).trim()).toBe(original)
-      expect((await nested("branch", "--list", "auto/R-01")).trim()).toBe("")
-      expect(await Bun.file(join(dir, "pkg", "src", "T-002.ts")).text()).toBe('export const module = "T-002"\n')
-      expect(await nested("log", "-1", "--format=%B")).not.toContain("Auto-Stage:")
-      expect((await nested("status", "--porcelain")).trim()).toBe("")
-      expect((await git("status", "--porcelain")).trim()).toBe("")
-    } finally {
-      await Bun.write(gate, "released\n").catch(() => {})
-      await agent.done()
-      await rm(gateDir, { recursive: true, force: true })
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 240_000)
-})
 
 // sync (auto-core plans/0100 D4/D5): the person's upgrade command for a
 // materialized intent bundle, driven through the CLI — the plan/confirm/apply
@@ -6655,217 +4585,6 @@ describe("CLI: release certifies the destination standing alone (auto-core plans
   })
 })
 
-// The sealed reference wall through the real CLI (auto-core plans/0132): the
-// close rides the person's transfer — but this harness's only agent is the
-// fake claude CLI, and under claude the close REFUSES (auto-core plans/0190
-// D1: the adapter carries no external_directory posture into its sessions,
-// so the seal would be a record with no session-side enforcement). The CLI
-// shape pinned here is that refusal — exit 2 ahead of the admission scan,
-// nothing mutated, the remedy line teaching the opencode advance — and the
-// undeclared floor stays behavior. The close itself (the wall commit between
-// the distillation and the transition, repeated closure, the reopened door,
-// the person-authored covering allow, the retrofit close under the sealing
-// phase's name) needs a carrying agent, so it lives at auto-core's wall and
-// transfer-wall suites, which drive the boundary directly.
-describe("CLI: the sealed reference wall (auto-core plans/0132)", () => {
-  // One wall project: the corpus beside the target, the door symlinked and
-  // committed, the sealing type and the divergence lane row as the project's
-  // own fills. wall=false writes the type without the field (the retrofit's
-  // pre-declaration state).
-  async function wallProject(wall: boolean): Promise<{ dir: string; corpus: string }> {
-    const root = await mkdtemp(join(tmpdir(), "auto-cli-wall-"))
-    const dir = join(root, "project")
-    // The corpus lives OUTSIDE /tmp (plans/0147): the knowledge boundary's
-    // receipts allowance covers /tmp, and a reference there cannot seal.
-    const corpus = await mkdtemp(join(homedir(), "auto-cli-wall-corpus-"))
-    await mkdir(dir, { recursive: true })
-    await mkdir(corpus, { recursive: true })
-    await Bun.write(join(corpus, "timer.c"), "void tick(void) {}\n")
-    await symlink(corpus, join(dir, "linux"))
-    await mkdir(join(dir, ".opencode/auto/phases"), { recursive: true })
-    await Bun.write(
-      join(dir, ".opencode/auto/phases/spec-read.md"),
-      ["# Spec read", "", ...(wall ? ["Wall: seal linux"] : []), "Phase-artifacts: spec-notes.md", "Task-artifacts: notes.md", "", "## plan duties", "", "Read the reference, distill the notes.", "", "<!-- auto: eof -->", ""].join("\n"),
-    )
-    await mkdir(join(dir, ".opencode/auto/intents"), { recursive: true })
-    await Bun.write(
-      join(dir, ".opencode/auto/intents/default.md"),
-      [
-        "# default",
-        "",
-        "## quality",
-        "",
-        "### test-lanes",
-        "",
-        "divergence:",
-        "Command: true",
-        "Cost: regression",
-        "Surfaces: .",
-        "Exclusive: no",
-        "",
-        "## acceptance",
-        "",
-        "### result-line",
-        "",
-        "Write it in every report: `Result: PASS` means every acceptance criterion the task asked for was actually observed to pass.",
-        "",
-      ].join("\n"),
-    )
-    return { dir, corpus }
-  }
-
-  // Seed one phase complete the way the driver leaves it: its task index all
-  // ticked with done documents, the sealing artifacts on disk, the phase
-  // renamed done.
-  async function seedPhaseDone(dir: string, unit: PhaseUnit, tasks: string[], artifacts: string[]) {
-    await Bun.write(join(dir, unit.dir, "tasks.md"), `# Tasks\n\n${tasks.map((id) => `- [x] ${id} task ${id}\n`).join("")}`)
-    for (const id of tasks) {
-      await mkdir(join(dir, "docs", id), { recursive: true })
-      await Bun.write(join(dir, "docs", id, "done.md"), `# ${id}: task ${id}\nPhase: R-01.${unit.id}\n\n## Goal\n\nSeeded done.\n`)
-      await Bun.write(join(dir, "docs", id, "notes.md"), `# Notes (${id})\n\nContracts at the boundary.\n\n<!-- auto: eof -->\n`)
-    }
-    for (const file of artifacts) await Bun.write(join(dir, unit.dir, file), `# ${file}\n\nBehavior only.\n\n<!-- auto: eof -->\n`)
-  }
-
-  test("the close refuses under a fleet that carries no external_directory posture — the CLI shape at the seal boundary (auto-core plans/0190 D1)", async () => {
-    const { dir, corpus } = await wallProject(true)
-    const agent = await fakeClaude()
-    const git = gitOf(dir)
-    try {
-      expect((await runCli(["init", dir, "--phases", "spec-read,implement,test"])).code).toBe(0)
-      // init stamped the door's allow (plans/0122): the admitting surface the
-      // wall will retire.
-      const stamped = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      expect(stamped.permission.external_directory[`${corpus}/**`]).toBe("allow")
-      expect((await agent.run(["transfer", dir])).code).toBe(0)
-      await Bun.write(join(dir, "docs/R-01/round.md"), renderRoundBriefText())
-      await commitFixture(dir)
-      // The construct (P01's formulation todo), then the seeded spec room.
-      expect((await agent.run(["transfer", dir])).code).toBe(0)
-      const state = (await readPhases(dir))!
-      await seedPhaseDone(dir, state.phases[0]!, ["T-100"], ["spec-notes.md"])
-      await commitFixture(dir)
-      // The advance at the seal (the distillation commits first, then the
-      // boundary): under this run's claude fleet the close REFUSES ahead of
-      // the admission scan (auto-core plans/0190 D1) — the standing deny the
-      // close would record reaches no claude session, so the seal would be a
-      // record with no session-side enforcement. Nothing mutates: the door
-      // stands, the stamped allow stands, no wall commit, the phase held at
-      // its boundary for a re-run under a carrying agent — the remedy the
-      // refusal itself teaches. (This harness has no carrying agent; the
-      // close's own vocabulary — the wall commit, repeated closure, the
-      // reopen and person-allow blocks — lives at auto-core's wall and
-      // transfer-wall suites, which drive the boundary directly.)
-      const refused = await agent.run(["transfer", dir])
-      expect(refused.code, `${refused.out}\n${refused.err}`).toBe(2)
-      expect(refused.out).toContain("the wall cannot close under this run's agent fleet")
-      expect(refused.out).toContain("the seal would be a record with no session-side enforcement")
-      expect(refused.out).toContain("OPENCODE_AUTO_AGENT=opencode")
-      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(true)
-      const config = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      expect(config.permission.external_directory[`${corpus}/**`]).toBe("allow")
-      expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim()).toBe("")
-      // status renders the same limit over the same agent choice (the env
-      // override the refused run made): one ⚠ row naming the close's
-      // refusal — detection, not a gate (auto-core plans/0190 D1).
-      const rows = await runCli(["status", dir], { OPENCODE_AUTO_AGENT: "claude" })
-      expect(rows.code).toBe(0)
-      expect(rows.out).toContain("translates none of it")
-      expect(rows.out).toContain("the wall's close refuses under it")
-    } finally {
-      await agent.done()
-      await rm(dir, { recursive: true, force: true })
-      await rm(corpus, { recursive: true, force: true })
-    }
-  }, 120_000)
-
-  test("the retrofit trigger: a wall declared a phase late meets the close at the next transfer past the seal — refused under this fleet (auto-core plans/0190 D1)", async () => {
-    const { dir, corpus } = await wallProject(false)
-    const agent = await fakeClaude()
-    const git = gitOf(dir)
-    try {
-      expect((await runCli(["init", dir, "--phases", "spec-read,implement,test"])).code).toBe(0)
-      expect((await agent.run(["transfer", dir])).code).toBe(0)
-      await Bun.write(join(dir, "docs/R-01/round.md"), renderRoundBriefText())
-      await commitFixture(dir)
-      expect((await agent.run(["transfer", dir])).code).toBe(0)
-      const state = (await readPhases(dir))!
-      await seedPhaseDone(dir, state.phases[0]!, ["T-100"], ["spec-notes.md"])
-      await commitFixture(dir)
-      // The advance past the seal with no wall declared: nothing closes, the
-      // door stands — the pre-declaration floor.
-      const undeclared = await agent.run(["transfer", dir])
-      expect(undeclared.code, `${undeclared.out}\n${undeclared.err}`).toBe(0)
-      expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim()).toBe("")
-      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(true)
-      // The person declares the wall a phase late (the field project's sync
-      // or hand fill) and seeds P02: the next transfer past the seal meets
-      // the close — and under this run's claude fleet it refuses
-      // (auto-core plans/0190 D1), the door standing and the stamped allow
-      // untouched. (The retrofit close itself — under the sealing phase's
-      // name, the one-time act — is pinned at auto-core's wall suite, which
-      // drives the boundary directly under a carrying fleet.)
-      await Bun.write(
-        join(dir, ".opencode/auto/phases/spec-read.md"),
-        ["# Spec read", "", "Wall: seal linux", "Phase-artifacts: spec-notes.md", "Task-artifacts: notes.md", "", "## plan duties", "", "Read the reference, distill the notes.", "", "<!-- auto: eof -->", ""].join("\n"),
-      )
-      const advanced = (await readPhases(dir))!
-      await seedPhaseDone(dir, advanced.phases[1]!, ["T-200"], [])
-      await commitFixture(dir)
-      const retrofit = await agent.run(["transfer", dir])
-      expect(retrofit.code, `${retrofit.out}\n${retrofit.err}`).toBe(2)
-      expect(retrofit.out).toContain("the wall cannot close under this run's agent fleet")
-      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(true)
-      const config = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      // The init-stamped allow still stands (the knowledge boundary's pair
-      // beside it, plans/0147): the refusal mutated nothing.
-      expect(config.permission.external_directory).toEqual({ "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "allow" })
-      expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim()).toBe("")
-    } finally {
-      await agent.done()
-      await rm(dir, { recursive: true, force: true })
-      await rm(corpus, { recursive: true, force: true })
-    }
-  }, 120_000)
-
-  test("the undeclared floor as behavior: a project without the Wall: field keeps its door and never grows a wall commit", async () => {
-    const root = await mkdtemp(join(tmpdir(), "auto-cli-floor-"))
-    const dir = join(root, "project")
-    const corpus = join(root, "corpus")
-    await mkdir(dir, { recursive: true })
-    await mkdir(corpus, { recursive: true })
-    await Bun.write(join(corpus, "timer.c"), "void tick(void) {}\n")
-    await symlink(corpus, join(dir, "linux"))
-    const agent = await fakeClaude()
-    const git = gitOf(dir)
-    try {
-      expect((await runCli(["init", dir, "--phases", "mt"])).code).toBe(0)
-      expect((await agent.run(["transfer", dir])).code).toBe(0)
-      await Bun.write(join(dir, "docs/R-01/round.md"), renderRoundBriefText())
-      await commitFixture(dir)
-      expect((await agent.run(["transfer", dir])).code).toBe(0)
-      const state = (await readPhases(dir))!
-      await seedPhaseDone(dir, state.phases[0]!, ["T-100"], [])
-      await commitFixture(dir)
-      const advance = await agent.run(["transfer", dir])
-      expect(advance.code, `${advance.out}\n${advance.err}`).toBe(0)
-      // The floor is no wall MACHINERY, not the bare word: the run-start
-      // external_directory note (plans/0218 D1) names a wall's standing deny
-      // among what a non-carrying fleet misses — a teaching line this fake
-      // claude fleet lawfully prints over the init-stamped section, never a
-      // wall act.
-      for (const marker of ["plan wall close", "wall-door:", "wall-sealed:", "the wall cannot close"]) expect(advance.out.toLowerCase()).not.toContain(marker)
-      expect((await git("log", "--oneline", "--grep=PLAN wall close")).trim()).toBe("")
-      expect(await stat(join(dir, "linux")).then(() => true, () => false)).toBe(true)
-      const config = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      expect(config.permission.external_directory[`${corpus}/**`]).toBe("allow")
-    } finally {
-      await agent.done()
-      await rm(dir, { recursive: true, force: true })
-      await rm(corpus, { recursive: true, force: true })
-    }
-  }, 120_000)
-})
 
 // The filled round brief the round-start gate wants (the stub's comments are
 // not content).

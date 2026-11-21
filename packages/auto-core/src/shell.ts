@@ -30,45 +30,13 @@ export type LaneWorker = {
 // one — so a worker that sees it knows exactly why it was re-dispatched.
 export type LaneMergeInstruction = { merge: string }
 
-// The self-invocation vector (plans/0213 D1, enacting 0165-011 / S06-05):
-// how this process re-invokes its own CLI entry, derived from the process
-// shape rather than assumed a spawnable script path. `argv1` is the entry
-// this process started from (the caller passes process.argv[1]):
-//   - a real path (the source layout `bun src/index.ts`, a bundle under
-//     `bun dist/index.js`) — `{ command: execPath, prefix: [argv1] }`: the
-//     interpreter re-runs the entry, today's vector exactly;
-//   - a Bun-compiled binary's virtual entry (argv[1] = `/$bunfs/root/<name>`
-//     — `bun build --compile` embeds the modules on Bun's virtual $bunfs,
-//     where a script path cannot be spawned; the child would read the
-//     virtual path as its command and refuse) or no entry at all —
-//     `{ command: execPath, prefix: [] }`: process.execPath already IS the
-//     program (the compiled binary), whose argv goes straight to command
-//     dispatch. The structural fact alone is encoded — no shell, no entry
-//     file name (the service shell's own twin, worker-command.ts, probes
-//     its sibling entry instead: a shell fact the core cannot own).
-export function selfInvoke(argv1: string | undefined): { command: string; prefix: string[] } {
-  if (argv1 !== undefined && !argv1.startsWith("/$bunfs/")) return { command: process.execPath, prefix: [argv1] }
-  return { command: process.execPath, prefix: [] }
-}
-
-// The default lane launcher: re-invoke this shell's CLI with the hidden
-// `_lane` subcommand (§6.4 — "re-invoke this shell's CLI with the hidden lane
-// subcommand") through the self-invocation vector above (both shapes — the
-// source layout's entry path and the compiled binary itself, plans/0213 D1).
-// A host that owns its workers differently (a test, a 0067 daemon worker)
-// overrides the profile field.
-// A repair re-dispatch's merge instruction rides along as `--merge <branch>`
-// (the hidden subcommand's own option). The optional env record is tier 1's
-// cache-home injection (plans/0096 D9): the declared cache variables resolved
-// to shared and per-lane paths, merged over the inherited environment —
-// absent on every other dispatch, so the child's env is exactly as before.
-export function defaultLaneLauncher(worktree: string, unit: string, instruction?: LaneMergeInstruction, env?: Record<string, string>): LaneWorker {
-  const self = selfInvoke(process.argv[1])
-  return Bun.spawn(
-    [self.command, ...self.prefix, "_lane", worktree, "--unit", unit, ...(instruction ? ["--merge", instruction.merge] : [])],
-    env === undefined ? { stdout: "pipe", stderr: "pipe" } : { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env } },
-  )
-}
+// The default lane launcher is retired (plans/0283, the push lane workers'
+// demolition): the core spawns no lane workers — concurrency rides the
+// executor protocol's scoped/doc lease tiers, external workers claiming
+// grants in their own worktrees. The `laneLauncher` profile field stays as
+// the seam a host that owns worker processes may still register (a test
+// double); with none registered, the lane dispatch refuses loudly rather
+// than spawning anything (src/lanes.ts).
 
 export type ShellProfile = {
   // The run-time program name: for the message pattern "re-run X"
@@ -98,15 +66,15 @@ export type ShellProfile = {
   // (src/models.ts). OPENCODE_AUTO_MODELS overrides the whole path.
   configDir: string
   // The lane worker launcher (plans/0068 §6.4, D2): spawns the child process
-  // that runs one lane's unit-scoped runAll in its worktree. Absent = the
-  // default — re-invoke this shell's CLI (`_lane <dir> --unit <id>`,
-  // defaultLaneLauncher above); the shell contract's §E item makes that
-  // entry a shell obligation. A host that owns its workers differently (a
-  // 0067 daemon's "register a worker", a test's bootstrap script) injects
-  // its own here; the core never names a shell. The third argument is the
-  // merge instruction of a conflict repair's re-dispatch (S3, D7): present
-  // only there, so a launcher that spawns the ordinary entry forwards it as
-  // the repair dispatch's one extra fact. The fourth is the cache-home
+  // that runs one lane's unit-scoped runAll in its worktree. The default
+  // launcher is retired (plans/0283 — the push lane workers are demolished;
+  // lanes ride the executor protocol's scoped/doc tiers), so no shell
+  // registers one: a host that owns worker processes (a test's bootstrap
+  // script) may inject its own, and with none registered the lane dispatch
+  // refuses loudly (src/lanes.ts). The third argument is the merge
+  // instruction of a conflict repair's re-dispatch (S3, D7): present only
+  // there, so a launcher that spawns the ordinary entry forwards it as the
+  // repair dispatch's one extra fact. The fourth is the cache-home
   // injection of a tier-1 dispatch (plans/0096 D9): a record of environment
   // variables the child should see (the declared shared/per-lane cache
   // paths); absent on every dispatch that is not tier 1.
@@ -134,6 +102,10 @@ export type ShellSurface = {
   run: (dir?: string, flags?: string) => string
   plan: (dir?: string, flags?: string) => string
   transfer: (dir?: string, flags?: string) => string
+  // The task-entry channel (plans/0283, the append's retirement channel):
+  // adding one task the caller names, no session. The default renders the
+  // CLI's plan --new-task route; a daemon renders its tasks operation.
+  tasks: (dir?: string, flags?: string) => string
 }
 
 export type AgentProfile = {
@@ -180,6 +152,7 @@ export function surfaceOf(): ShellSurface {
     run: render("run"),
     plan: render("plan"),
     transfer: render("transfer"),
+    tasks: render("plan"),
     ...profile.surface,
   }
 }

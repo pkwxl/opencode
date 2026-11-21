@@ -23,7 +23,7 @@ import { REQUIRED_TYPE, phaseType } from "./phases/registry"
 import { currentRound, phaseKey, phaseTitle, type PhaseUnit } from "./phases"
 import { ANALYSIS_DOC, roundBriefPath } from "./docpaths"
 import { plannedLines } from "./plan"
-import { admissionWarn, charterPhaseEntry, planDuties, planFacts, recordSynthesisAudit, verifyPlanStep } from "./plan-gate"
+import { charterPhaseEntry, planDuties, planFacts, recordSynthesisAudit } from "./plan-gate"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { existingTaskList, renderFormulationTodo } from "./prompt-plan"
 import { roundBriefText } from "./round-brief"
@@ -77,9 +77,6 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
     ctx.input = undefined
     if (saved.type === "saved") {
       log(`✓ planning input saved to ${planInputPath(phase)}`)
-      // The admission warn (plans/0082 §10 D14b): the same charter check over
-      // the person's text, warn-and-record, never refuse.
-      await admissionWarn(ctx, phase, text, `formulation ${phaseKey(phase).id}`)
     }
   }
   let input = (await readPlanInput(directory, phase))?.trim() || undefined
@@ -365,126 +362,120 @@ async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       landed: false,
     }
   }
-  let verified: number | "remediate" = 0
-  for (let pass = 0; ; pass++) {
+  {
     const composed = await compose()
     // The synthesis audit entries (D6): committed pre-construction (stage
-    // prompt-audit), the same wall-document discipline the verifier's
-    // verdict gets — what the constructor claimed, and every fallback.
+    // prompt-audit) — what the constructor claimed, and every fallback.
     if (composed.audit.length && !(await recordSynthesisAudit(ctx, phase, composed.audit))) return 2
-    verified = await verifyPlanStep(ctx, phase, `formulation ${phaseKey(phase).id}`, composed.document, composed.blocks)
-    if (verified !== "remediate") {
-      if (verified !== 0) return verified
-      // The dispatch discipline (plans/0101 D4): plan dispatches the reviewed
-      // todo exactly as constructed. A standing todo whose floor moved — an
-      // input edited since the review stop, through the document or a
-      // re-passed -p the prelude cannot see — is transfer's idempotent
-      // reconstruct, and plan never rewrites what a person may be reviewing;
-      // the refusal names the re-run (the reconstruct lands the new todo and
-      // stops for review again). A fresh construction under the stop
-      // condition is the loop's own continuation shape (m mode, the
-      // open-step recovery), unchanged.
-      if (opts.stopBefore === "execute" && !ctx.manual && standingAtEntry && !composed.landed) {
-        const { bin } = shellProfile()
-        log(
-          `⏸ the reviewed plan task of ${phaseTitle(phase)} no longer matches its inputs — an input changed since construction; ` +
-            `the reconstruct is transfer's: re-run: ${bin} transfer ${directory}`,
-        )
-        return 1
-      }
-      // Construction (plans/0095 D1): land the verified document as the
-      // phase's first task unit — idempotent, so the remediate loop's final
-      // composition is the one that lands. The digest-hit re-entry (D6)
-      // skips construction: the landed todo stands, byte for byte, and its
-      // recorded digest already matches. The construction record
-      // (plans/0205 D2/D3): the floor digest and the prefix ids travel into
-      // the todo's own field block — the prefix derived from the preview's
-      // field (the one source the floor already rendered), the digest the
-      // keep compares; the .auto/units.json record write retired with the
-      // field (D3).
-      let id: string
-      if (composed.landed && composed.id !== undefined) {
-        id = composed.id
-        log(`✓ the landed formulation todo of ${id} stands — the floor assembly is unchanged (plans/0097 D6)`)
-      } else {
-        const prefix = parseUnitDoc(composed.document).fields.prefix?.split(/[\s,]+/).filter(Boolean)
-        const landed = await constructFormulation(directory, phase, composed.todo, {
-          digest: composed.digest,
-          ...(prefix?.length ? { prefix } : {}),
-        })
-        if (landed.type === "dirty" || landed.type === "unreadable") {
-          // The unreadable arm (plans/0236 D4) teaches investigation, never
-          // commit/clean.
-          for (const line of landed.type === "unreadable"
-            ? unreadableStopLines("the repository state cannot be read before constructing the formulation task", landed.files)
-            : dirtyStopLines("worktree not clean before constructing the formulation task", landed.files)) log(line)
-          return 2
-        }
-        if (landed.type === "failed") {
-          log(`⏸ ${landed.question}`)
-          return 2
-        }
-        id = landed.id
-        log(`✓ formulation task ${landed.id} ${landed.type === "constructed" ? "constructed" : "current"}: its todo is the planning session's single input (docs/${landed.id}/todo.md)`)
-      }
-      // transfer's review stop (plans/0101 D2/D3): construction is the
-      // advance's last write — the formulation session's dispatch is plan's
-      // (the reviewed todo is the seam between the two commands), so under
-      // stopBefore "formulate" the step ends here, exit 0 with the todo
-      // named. A rejected todo is fixed through its inputs by re-running
-      // transfer: construction is idempotent rewrite-on-diff (plans/0095),
-      // and the digest-keep above preserves a pending todo whose floor is
-      // unchanged (plans/0097 D6). The stop's output (D3) names the records
-      // beside the todo — the round's prompt-audit.md, where the plan-verify
-      // verdict and the synthesis:/fidelity:/FALLBACK lines of the
-      // construction live — and the round-brief duty: a round.md still the
-      // untouched stub says so, the fill and the re-run the answer (the
-      // reconstruct absorbs it; plan's dispatch refuses on a stub).
-      if (opts.stopBefore === "formulate") {
-        const { bin } = shellProfile()
-        log(
-          `⏸ review stop: the formulation todo of ${id} (docs/${id}/todo.md — driver-owned, fix its inputs, never the todo) awaits your review`,
-        )
-        const audit = join(dirname(phase.dir), "prompt-audit.md")
-        if (await Bun.file(join(directory, audit)).exists()) {
-          log(`ℹ the construction's records sit beside it in ${audit} (the plan-verify verdict; the synthesis:/fidelity: entries and any FALLBACK of the constructor)`)
-        }
-        const round = await currentRound(directory)
-        if (!(await roundBriefText(directory, round))) {
-          log(
-            `⚠ the round brief ${roundBriefPath(round)} is still the untouched stub — the todo rendered against no round goals; fill it in ` +
-              `(## Goal, ## Acceptance criteria, ## Release criteria), commit, and re-run: ${bin} transfer ${directory} ` +
-              `(the reconstruct absorbs it; plan refuses to dispatch while it stays a stub)`,
-          )
-        }
-        log(
-          `next: dispatch it with ${bin} plan ${directory} (the formulation session runs, the batch review follows), or fix the inputs ` +
-            `(${roundBriefPath(round)}, ${planInputPath(phase)}, the project brief, the roadmap line) and re-run: ${bin} transfer ${directory}`,
-        )
-        return 0
-      }
-      // The formulation task runs as the phase's first ordinary unit — the
-      // serial path by design (plans/0095 D5: a phase's only ready unit, its
-      // Touches everything, ahead of everything it plans).
-      const plan = await loadPlan(directory, phase)
-      const task = plan.tasks.find((entry) => entry.id === id)
-      if (!task) {
-        log(`⏸ the constructed formulation task ${id} is not listed in ${taskIndex}; investigate and re-run`)
+    // The charter verifier is off (plans/0283): the plan step is
+    // deterministic — no verifier session, no blockage diagnosis over its
+    // verdict; the guarantees' mechanical asserts and the synthesize
+    // settlement's checks (0281) judge what the sessions compose.
+    // The dispatch discipline (plans/0101 D4): plan dispatches the reviewed
+    // todo exactly as constructed. A standing todo whose floor moved — an
+    // input edited since the review stop, through the document or a
+    // re-passed -p the prelude cannot see — is transfer's idempotent
+    // reconstruct, and plan never rewrites what a person may be reviewing;
+    // the refusal names the re-run (the reconstruct lands the new todo and
+    // stops for review again). A fresh construction under the stop
+    // condition is the loop's own continuation shape (m mode, the
+    // open-step recovery), unchanged.
+    if (opts.stopBefore === "execute" && !ctx.manual && standingAtEntry && !composed.landed) {
+      const { bin } = shellProfile()
+      log(
+        `⏸ the reviewed plan task of ${phaseTitle(phase)} no longer matches its inputs — an input changed since construction; ` +
+          `the reconstruct is transfer's: re-run: ${bin} transfer ${directory}`,
+      )
+      return 1
+    }
+    // Construction (plans/0095 D1): land the verified document as the
+    // phase's first task unit — idempotent, so the remediate loop's final
+    // composition is the one that lands. The digest-hit re-entry (D6)
+    // skips construction: the landed todo stands, byte for byte, and its
+    // recorded digest already matches. The construction record
+    // (plans/0205 D2/D3): the floor digest and the prefix ids travel into
+    // the todo's own field block — the prefix derived from the preview's
+    // field (the one source the floor already rendered), the digest the
+    // keep compares; the .auto/units.json record write retired with the
+    // field (D3).
+    let id: string
+    if (composed.landed && composed.id !== undefined) {
+      id = composed.id
+      log(`✓ the landed formulation todo of ${id} stands — the floor assembly is unchanged (plans/0097 D6)`)
+    } else {
+      const prefix = parseUnitDoc(composed.document).fields.prefix?.split(/[\s,]+/).filter(Boolean)
+      const landed = await constructFormulation(directory, phase, composed.todo, {
+        digest: composed.digest,
+        ...(prefix?.length ? { prefix } : {}),
+      })
+      if (landed.type === "dirty" || landed.type === "unreadable") {
+        // The unreadable arm (plans/0236 D4) teaches investigation, never
+        // commit/clean.
+        for (const line of landed.type === "unreadable"
+          ? unreadableStopLines("the repository state cannot be read before constructing the formulation task", landed.files)
+          : dirtyStopLines("worktree not clean before constructing the formulation task", landed.files)) log(line)
         return 2
       }
-      const code = await runSerialUnit(ctx, phase, plan, task)
-      if (code !== 0) return code
-      // plan's summary lists the planned batch (the index after the
-      // formulation unit) — the formulation task itself is machinery.
-      const fresh = await loadPlan(directory, phase)
-      ctx.planned = fresh.tasks.filter((entry) => entry.formulate === undefined).map((entry) => entry.id)
-      log(`✓ phase planning complete: ${taskIndex} lists ${ctx.planned.length} task(s)`)
+      if (landed.type === "failed") {
+        log(`⏸ ${landed.question}`)
+        return 2
+      }
+      id = landed.id
+      log(`✓ formulation task ${landed.id} ${landed.type === "constructed" ? "constructed" : "current"}: its todo is the planning session's single input (docs/${landed.id}/todo.md)`)
+    }
+    // transfer's review stop (plans/0101 D2/D3): construction is the
+    // advance's last write — the formulation session's dispatch is plan's
+    // (the reviewed todo is the seam between the two commands), so under
+    // stopBefore "formulate" the step ends here, exit 0 with the todo
+    // named. A rejected todo is fixed through its inputs by re-running
+    // transfer: construction is idempotent rewrite-on-diff (plans/0095),
+    // and the digest-keep above preserves a pending todo whose floor is
+    // unchanged (plans/0097 D6). The stop's output (D3) names the records
+    // beside the todo — the round's prompt-audit.md, where the plan-verify
+    // verdict and the synthesis:/fidelity:/FALLBACK lines of the
+    // construction live — and the round-brief duty: a round.md still the
+    // untouched stub says so, the fill and the re-run the answer (the
+    // reconstruct absorbs it; plan's dispatch refuses on a stub).
+    if (opts.stopBefore === "formulate") {
+      const { bin } = shellProfile()
+      log(
+        `⏸ review stop: the formulation todo of ${id} (docs/${id}/todo.md — driver-owned, fix its inputs, never the todo) awaits your review`,
+      )
+      const audit = join(dirname(phase.dir), "prompt-audit.md")
+      if (await Bun.file(join(directory, audit)).exists()) {
+        log(`ℹ the construction's records sit beside it in ${audit} (the plan-verify verdict; the synthesis:/fidelity: entries and any FALLBACK of the constructor)`)
+      }
+      const round = await currentRound(directory)
+      if (!(await roundBriefText(directory, round))) {
+        log(
+          `⚠ the round brief ${roundBriefPath(round)} is still the untouched stub — the todo rendered against no round goals; fill it in ` +
+            `(## Goal, ## Acceptance criteria, ## Release criteria), commit, and re-run: ${bin} transfer ${directory} ` +
+            `(the reconstruct absorbs it; plan refuses to dispatch while it stays a stub)`,
+        )
+      }
+      log(
+        `next: dispatch it with ${bin} plan ${directory} (the formulation session runs, the batch review follows), or fix the inputs ` +
+          `(${roundBriefPath(round)}, ${planInputPath(phase)}, the project brief, the roadmap line) and re-run: ${bin} transfer ${directory}`,
+      )
       return 0
     }
-    if (pass >= 1) {
-      log("⏸ the step re-blocked after two inline remediations; stopping — the diagnosis gate suspends further attempts")
+    // The formulation task runs as the phase's first ordinary unit — the
+    // serial path by design (plans/0095 D5: a phase's only ready unit, its
+    // Touches everything, ahead of everything it plans).
+    const plan = await loadPlan(directory, phase)
+    const task = plan.tasks.find((entry) => entry.id === id)
+    if (!task) {
+      log(`⏸ the constructed formulation task ${id} is not listed in ${taskIndex}; investigate and re-run`)
       return 2
     }
+    const code = await runSerialUnit(ctx, phase, plan, task)
+    if (code !== 0) return code
+    // plan's summary lists the planned batch (the index after the
+    // formulation unit) — the formulation task itself is machinery.
+    const fresh = await loadPlan(directory, phase)
+    ctx.planned = fresh.tasks.filter((entry) => entry.formulate === undefined).map((entry) => entry.id)
+    log(`✓ phase planning complete: ${taskIndex} lists ${ctx.planned.length} task(s)`)
+    return 0
   }
 }
 
