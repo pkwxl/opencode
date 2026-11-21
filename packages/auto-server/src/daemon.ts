@@ -77,6 +77,7 @@ import { OP_DEFINITIONS, type OpOutcome } from "./ops"
 import { DaemonStore, type RegisteredProject, type Scope, StoreError } from "./store"
 import { applyServerProfile } from "./profile"
 import { BRIDGE_TOKEN_ENV, REQUEST_BYTE_LIMIT, requestTooLarge, RequestError, type TransportPayload } from "./request"
+import { resolvedLine } from "./version"
 import { executorRoutes, PROTOCOL_VERSION, type ExecutorRoute } from "./ws-protocol"
 import { ExecutorBridge, freshRunSecret, type SocketData } from "./executor-bridge"
 import { parseExecutorRequest, readExecutorBody } from "./executor-request"
@@ -257,6 +258,14 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // spawned run exists: the carrier the launcher will read is checked and
   // pinned at the one moment it can be, the daemon's own start.
   const bootWarnings = await environmentBootReport(options.dataDir)
+  // 0293 (0290 F3's fix): the daemon's own line, resolved once at start —
+  // the process's module graph never moves, so its identity is a start-time
+  // fact. /health carries it beside a fresh `checkout` read of the tool
+  // tree's live state; the two diverge exactly when the checkout has moved
+  // under a still-running daemon (source mode's staleness window), and the
+  // divergence's remedy is the restart — cheap by design, every recovery
+  // re-deriving from disk.
+  const line = await resolvedLine()
   // The creation engine is always mounted (plans/0284): POST /projects is
   // generalized beyond the retired --open roots — the request names the
   // directory, its parent the anchor.
@@ -612,7 +621,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       // only — no project names, no run state, nothing a token guards. A
       // probe endpoint that needs the credential it is probing for could
       // not tell a wrong token apart from a daemon that is down.
-      return json(200, { ok: true, service: "opencode-auto-server" })
+      // 0293: the identity witness rides the same open route — `line`, the
+      // daemon process's own resolution captured at its start, beside
+      // `checkout`, the tool tree's live state read now. Equal: nothing is
+      // owed. Divergent (a source-mode daemon outliving its checkout): a
+      // restart is owed — the stale-lock recovery making it cheap by
+      // design. A compiled binary reads its stamp for both, no git.
+      return json(200, { ok: true, service: "opencode-auto-server", line, checkout: await resolvedLine() })
     }
     // The whitelist as a read surface (P4a): the project list the client
     // renders — the same registry `opencode-auto-server projects` prints and

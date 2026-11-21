@@ -1,16 +1,17 @@
-// The build identity's pin (plans/0270, 0264-04's fix): the fingerprint the
-// ready handshake carries and the serve banner prints comes from one home
-// (src/version.ts), stamped at compile by script/build.ts over the declared
-// AUTO_BUILD_COMMIT seam. This suite holds the three sides no e2e can:
-// the assembly (the stamped shape and the honest dev fallback), the stamp
-// computation's shape-checks (injection — no git, no build), and the define
-// seam's both-sides names — the script's define key and the source's
-// declared constant are two texts that must agree, so they are pinned to
-// each other here (the 0203 pattern; the wire side is the e2e's).
+// The build identity's pin (plans/0270, 0264-04's fix; the source-mode line
+// widened plans/0293): the fingerprint the ready handshake carries and the
+// serve banner prints comes from one home (src/version.ts), stamped at
+// compile by script/build.ts over the declared AUTO_BUILD_COMMIT seam. This
+// suite holds the three sides no e2e can: the assembly (the stamped shape
+// and the honest dev fallback), the stamp computation's shape-checks
+// (injection — no git, no build), and the define seam's both-sides names —
+// the script's define key and the source's declared constant are two texts
+// that must agree, so they are pinned to each other here (the 0203 pattern;
+// the wire side is the e2e's).
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { BUILD_COMMIT, buildFingerprint, UNSTAMPED_COMMIT, VERSION } from "../src/version"
+import { BUILD_COMMIT, buildFingerprint, resolvedLine, UNSTAMPED_COMMIT, VERSION } from "../src/version"
 import { shortCommit, stampDefine } from "../script/build"
 
 describe("build identity (plans/0270)", () => {
@@ -50,5 +51,23 @@ describe("build identity (plans/0270)", () => {
     // The fallback word's one home — the script names no fallback of its own.
     expect(versionSource).toContain('export const UNSTAMPED_COMMIT = "dev"')
     expect(buildSource).not.toContain('"dev"')
+  })
+
+  test("the source-mode line (plans/0293): the tool tree's own state when nothing was stamped", async () => {
+    // This suite runs from the checkout, so the resolution names the tool
+    // tree's own commit — plus dirt when the checkout is dirty — and never a
+    // fabricated sha; `dev` stands only when git cannot name the tree (the
+    // compiled binary reads its stamp without spawning, the $bunfs guard).
+    // The daemon's /health carries this resolution twice (its own start-time
+    // line beside a fresh checkout read); the e2e pins the bridge's carriage.
+    const line = await resolvedLine()
+    expect(line).toMatch(/^[0-9a-f]{7,40}(\+dirty)?$/)
+    expect(line).not.toContain(" ")
+    // The anchor discipline, pinned to the source (0270's P16 guard, 0293's
+    // narrowed decline): the git read runs against version.ts's own tree,
+    // never the working directory, and never from a compiled binary.
+    const versionSource = readFileSync(join(import.meta.dir, "..", "src", "version.ts"), "utf8")
+    expect(versionSource).toContain("cwd: import.meta.dir")
+    expect(versionSource).toContain('import.meta.dir.includes("$bunfs")')
   })
 })

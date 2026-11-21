@@ -1,7 +1,7 @@
 import { EXECUTOR_PROTOCOL, ExecutorRequestError, openExecutorCoordinator } from "@opencode-ai/auto-core/executor-coordinator"
 import { parseExecutorRequest } from "./executor-request"
 import { BRIDGE_TOKEN_ENV, parseTransport, RequestError } from "./request"
-import { buildFingerprint } from "./version"
+import { buildFingerprint, resolvedLine } from "./version"
 import { encodeFrame, parseFrame, PROTOCOL_VERSION, type StepDone, type StepRequest } from "./ws-protocol"
 
 type Coordinator = Awaited<ReturnType<typeof openExecutorCoordinator>>
@@ -82,7 +82,7 @@ function wireStep(step: Step): Record<string, unknown> {
   }
 }
 
-async function perform(coordinator: Coordinator, request: StepRequest): Promise<StepDone> {
+async function perform(coordinator: Coordinator, request: StepRequest, line: string): Promise<StepDone> {
   const base = { v: PROTOCOL_VERSION, type: "step-done", id: request.id } as const
   try {
     const { action, holder } = parseExecutorRequest(request.route, request.body, request.token)
@@ -93,8 +93,12 @@ async function perform(coordinator: Coordinator, request: StepRequest): Promise<
         // envelope beside protocol — the handshake every session starts
         // with, the one place identity needs carrying (per-response
         // repetition declined). A client that ignores the field reads the
-        // pre-change envelope.
-        payload = { build: buildFingerprint(), menu: await coordinator.ready(holder) }
+        // pre-change envelope. 0293: the commit is the resolved line — a
+        // stamped build names its commit, a source-mode bridge names the
+        // tool tree's own state at its spawn, the daemon's /health `line`
+        // the comparison home (a freshly attached bridge reading a later
+        // line than the daemon names the skew the site measured).
+        payload = { build: buildFingerprint(line), menu: await coordinator.ready(holder) }
         break
       case "heartbeat":
         payload = { menu: await coordinator.heartbeat(holder, action.leases) }
@@ -143,6 +147,11 @@ export async function runExecutorWorker(request: Record<string, unknown>): Promi
   delete process.env[BRIDGE_TOKEN_ENV]
 
   const coordinator = await openExecutorCoordinator(request.directory)
+  // 0293: the bridge's own line, resolved once per worker session — the
+  // spawn-time truth this process's modules are. Never re-read per request:
+  // the checkout may move under a live session and a fresh read would claim
+  // code this process is not running.
+  const line = await resolvedLine()
   try {
     await new Promise<void>((resolve) => {
       const socket = new WebSocket(url)
@@ -177,7 +186,7 @@ export async function runExecutorWorker(request: Record<string, unknown>): Promi
         }
         active++
         lastActivity = Date.now()
-        void perform(coordinator, parsed.frame).then((reply) => {
+        void perform(coordinator, parsed.frame, line).then((reply) => {
           if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(reply))
         }).catch(console.error).finally(() => {
           active--

@@ -59,13 +59,17 @@ test("the daemon routes authenticated executor requests to one launcher-confined
     expect(Object.keys(ready).sort()).toEqual(["build", "menu", "protocol"])
     // 0270's additive carrier: the build fingerprint rides the ready
     // envelope beside protocol — the handshake every session starts with,
-    // the one place identity needs carrying. This suite runs the daemon from
-    // source, so the commit is the honest dev fallback, never a fabricated
-    // sha; a client that ignores the field reads the pre-change envelope.
-    expect(ready.build).toEqual(buildFingerprint())
-    expect(ready.build).toEqual({ version: VERSION, commit: "dev" })
+    // the one place identity needs carrying. This suite runs the bridge from
+    // source, so the commit is the resolved line (plans/0293): the tool
+    // tree's own commit at the worker's spawn, plus dirt when the checkout
+    // is dirty — `dev` alone only when git cannot name the tree, never a
+    // fabricated sha; a client that ignores the field reads the pre-change
+    // envelope.
+    expect(ready.build).toEqual(buildFingerprint(ready.build.commit))
+    expect(ready.build.version).toBe(VERSION)
+    expect(ready.build.commit).toMatch(/^[0-9a-f]{7,40}(\+dirty)?$/)
     const { build, ...envelopeBefore } = ready
-    expect(build).toEqual({ version: "0.0.0", commit: "dev" })
+    expect(build).toEqual(ready.build)
     expect(Object.keys(envelopeBefore).sort()).toEqual(["menu", "protocol"])
     // 0269's additive carrier: the restriction catalog rides the menu itself
     // (0246 D4 b's menu letter — the single dispatch-time payload), the

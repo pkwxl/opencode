@@ -112,7 +112,7 @@ credential printed nowhere.
 
 | route               | scope    | meaning                                                                 |
 | ------------------- | -------- | ----------------------------------------------------------------------- |
-| `GET /health`       | —        | liveness, no auth                                                        |
+| `GET /health`       | —        | liveness, no auth; the identity witness (plans/0293): `line` (the daemon's own, at start) beside `checkout` (a fresh read) — divergence names a restart owed |
 | `GET /runs`         | `read`   | every run of this daemon (its registry is in-memory; see below)          |
 | `POST /runs`        | `control`| validate, spawn one worker, answer **202** + the run id                  |
 | `GET /runs/<id>`    | `read`   | the run resource: state, mapped exit code, output tail                   |

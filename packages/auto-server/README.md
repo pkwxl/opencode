@@ -148,7 +148,7 @@ line.
 
 | kind  | routes |
 | ----- | ------ |
-| REST  | `GET /health`; `GET /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan`, `transfer`, `clarify`, `reconcile` (the deterministic boundary operations — the protocol does nothing via push, plans/0282; `reconcile` the executor ledger's dead-letter reconciliation, plans/0287 (its booked non-landing class widened plans/0292), the booked-continuation re-derivation riding the same sweep, plans/0289), `models` (GET the table; POST the probe — its own `probe` scope) |
+| REST  | `GET /health` (liveness, plus the identity witness — the daemon's own `line` beside a fresh `checkout` read, their divergence the restart-owed staleness window, plans/0293); `GET /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan`, `transfer`, `clarify`, `reconcile` (the deterministic boundary operations — the protocol does nothing via push, plans/0282; `reconcile` the executor ledger's dead-letter reconciliation, plans/0287 (its booked non-landing class widened plans/0292), the booked-continuation re-derivation riding the same sweep, plans/0289), `models` (GET the table; POST the probe — its own `probe` scope) |
 | WS    | the executor coordinator's bridge socket (the per-run secret the spawn carried) — the daemon serves coding agents only, never a web client (plans/0282) |
 
 Every route but `/health` requires `Authorization: Bearer <token>`:
@@ -191,8 +191,15 @@ Successful responses include `protocol: 0.1` and the listed payload —
 wire's standing specification is the auto-core package's
 `docs/protocol.md`, enforced by the protocol-doc ratchet). The
 `ready` response also includes `build` — the server's version and build
-commit — so a stale daemon shows itself at the handshake (running from
-source, the commit reads `dev`, never a fabricated value). Lease
+commit — so a stale daemon shows itself at the handshake. Running from
+source, the commit is the resolved line (plans/0293): the tool tree's own
+commit plus dirt at the bridge's spawn, `dev` only when git cannot name
+the tree, never a fabricated value. `GET /health` carries the same
+resolution twice — `line`, the daemon process's own captured at its
+start, beside `checkout`, a fresh read of the tool tree — and the two
+diverging is the source-mode staleness window (a daemon outliving its
+checkout); its remedy is the restart, cheap by design: every recovery
+re-derives from disk. Lease
 deadlines use Unix milliseconds. After an ambiguous untargeted claim,
 reconcile `menu.leases` with `ready` before claiming again. Retry a report
 or release with its original step and lease. If a report was accepted

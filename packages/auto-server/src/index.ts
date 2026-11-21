@@ -22,7 +22,7 @@ import { applyServerProfile } from "./profile"
 import { parseEnvFile } from "./env-boot"
 import { DEFAULT_HOSTNAME, DEFAULT_PORT, deriveWorkerCommand, startDaemon } from "./daemon"
 import { defaultDataDir, DaemonStore, SCOPES, StoreError } from "./store"
-import { BUILD_COMMIT, VERSION } from "./version"
+import { resolvedLine, VERSION } from "./version"
 import { runExecutorHub } from "./executor-hub"
 import { runWorker } from "./worker"
 
@@ -446,11 +446,14 @@ if (command === "serve") {
   // assessment's §8 Q4 boundary) and the run lock's stale detection cannot
   // cross hosts; a loopback default keeps the token-guarded control plane
   // off the network until an operator explicitly widens it with --host.
-  // The banner carries the stamped identity from the same home the wire
-  // reads (plans/0270): the version beside the build commit, so a stale
-  // daemon names itself at its own startup line ("dev" = running from
-  // source, nothing stamped).
-  console.log(`opencode-auto-server ${VERSION} (build ${BUILD_COMMIT}) serving on ${daemon.url} (data dir: ${dataDir})`)
+  // The banner carries the resolved identity from the same home the wire
+  // reads (plans/0270, its source-mode line widened plans/0293): the version
+  // beside the line this process's modules actually are — a stamped build
+  // names its commit, a source run names the tool tree's own commit (plus
+  // dirt) at the moment the daemon started, `dev` alone when git cannot
+  // name the tree.
+  const line = await resolvedLine()
+  console.log(`opencode-auto-server ${VERSION} (build ${line}) serving on ${daemon.url} (data dir: ${dataDir})`)
   console.log(`whitelist: ${projects.length} project${projects.length === 1 ? "" : "s"} registered${projects.length ? ` (${projects.map((project) => project.name).join(", ")})` : ""} — runs target registered projects only`)
   console.log(`auth: ${tokens.length} token${tokens.length === 1 ? "" : "s"} (scopes: ${SCOPES.join(", ")}); requests carry 'Authorization: Bearer <token>'`)
   console.log(`v1 boundary: single machine, multiple directories; the daemon binds ${daemon.hostname} — a lock held on another host cannot be probed from here (recovery: delete that .auto/run.lock by hand)`)

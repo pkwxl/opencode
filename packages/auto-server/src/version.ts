@@ -30,3 +30,39 @@ export type BuildFingerprint = { version: string; commit: string }
 export function buildFingerprint(commit: string = BUILD_COMMIT): BuildFingerprint {
   return { version: VERSION, commit }
 }
+
+// 0293 (0290 F3's fix): the source-mode line — the identity a source run can
+// actually name. 0270's stamp reads `dev` from source (the honest floor) and
+// its residual assumed the resident daemons run built artifacts; the field
+// measured the opposite — the estate runs from checkout until a release
+// cuts, so a daemon that outlives its own checkout serves stale operations
+// beside freshly-spawned bridges with no surface naming the skew. The
+// amendment narrows 0270's declined runtime git read to its anchor: the read
+// runs against THIS FILE's tree (import.meta.dir — the tool's own source,
+// never the working directory, which names whatever project repository the
+// operator launched against, 0270's P16 guard standing), and only when
+// nothing was stamped (a compiled binary's $bunfs has no tree and no git;
+// the stamped commit stands, no spawn). The dirty suffix is coarse by
+// design — any dirt in the tool repo names itself. The comparison home is
+// /health's `line` (the daemon's own, captured at its start) beside its
+// fresh `checkout` read; the serve banner and the bridge handshake carry
+// the same resolution.
+export async function resolvedLine(): Promise<string> {
+  if (BUILD_COMMIT !== UNSTAMPED_COMMIT) return BUILD_COMMIT
+  if (import.meta.dir.includes("$bunfs")) return UNSTAMPED_COMMIT
+  const commit = await gitLine(["rev-parse", "--short", "HEAD"])
+  if (commit === undefined) return UNSTAMPED_COMMIT
+  const dirt = await gitLine(["status", "--porcelain"])
+  return dirt === undefined || dirt === "" ? commit : `${commit}+dirty`
+}
+
+async function gitLine(args: string[]): Promise<string | undefined> {
+  try {
+    const proc = Bun.spawn(["git", "--no-optional-locks", ...args], { cwd: import.meta.dir, stdout: "pipe", stderr: "pipe" })
+    const out = await new Response(proc.stdout).text()
+    if ((await proc.exited) !== 0) return undefined
+    return out.trim() || undefined
+  } catch {
+    return undefined
+  }
+}

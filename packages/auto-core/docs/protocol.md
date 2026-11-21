@@ -52,7 +52,12 @@ release
 
 - **ready** — the dispatch menu: `claimable` units with their claimable
   kinds, the caller's live `leases`, the `types` restriction catalog, the
-  `pending` person items. Idempotent; safe to poll.
+  `pending` person items. The envelope carries `build` beside `protocol` —
+  the bridge's own line: a stamped build names its commit, a source-mode
+  bridge names the tool tree's own commit plus dirt at its spawn (`dev`
+  only when git cannot name the tree), the daemon's `/health` `line` the
+  comparison home (plans/0270, its source-mode line widened plans/0293).
+  Idempotent; safe to poll.
 - **claim** — take the next step (untargeted), or a targeted
   `{ task, kind }`. Returns a leased grant, or a wait/blocked/terminal
   step. A held lease answers the same grant (brief refresh) for its holder.

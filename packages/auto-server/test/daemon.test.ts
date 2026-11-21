@@ -169,8 +169,20 @@ async function runCli(args: string[]) {
 describe("daemon: token auth (the scope matrix)", () => {
   test("health is open; every other route wants a known bearer token", async () => {
     await withHarness(async (h) => {
-      // The one unauthenticated route: liveness only.
-      expect((await h.request("GET", "/health")).status).toBe(200)
+      // The one unauthenticated route: liveness only — and 0293's identity
+      // witness rides it: `line`, the daemon's own resolution captured at
+      // its start, beside `checkout`, the tool tree's live state read now.
+      // The two agree while nothing has moved under the daemon (this
+      // harness starts and reads inside one unchanged checkout); a
+      // divergence is the source-mode staleness window, its remedy the
+      // restart. From source both name the tool tree's own commit (plus
+      // dirt), never a fabricated sha.
+      const health = await h.request("GET", "/health")
+      expect(health.status).toBe(200)
+      const body = (await health.json()) as { ok: boolean; line: string; checkout: string }
+      expect(body.ok).toBe(true)
+      expect(body.line).toMatch(/^[0-9a-f]{7,40}(\+dirty)?$/)
+      expect(body.checkout).toBe(body.line)
       // Missing header, a non-bearer header, and an unknown token are each
       // 401 — the token is the gate, not a hint. Auth precedes parsing.
       expect((await h.request("GET", "/runs")).status).toBe(401)
@@ -371,9 +383,17 @@ describe("daemon: lock conflicts (the lock is the arbiter, CLI and daemon alike)
         seen += decoder.decode(value, { stream: true })
       }
       const url = /serving on (http:\/\/[^\s]+)/.exec(seen)![1]!
+      // The banner's identity half (0270, its source-mode line widened
+      // 0293): the parenthetical names the resolved line — a stamped build
+      // its commit, a source subprocess the tool tree's own commit plus
+      // dirt, `dev` alone when git cannot name the tree.
+      expect(/\(build (?:[0-9a-f]{7,40}(?:\+dirty)?|dev)\)/.test(seen)).toBe(true)
       const health = await fetch(`${url}/health`)
       expect(health.status).toBe(200)
-      expect(((await health.json()) as { ok: boolean }).ok).toBe(true)
+      const body = (await health.json()) as { ok: boolean; line: string; checkout: string }
+      expect(body.ok).toBe(true)
+      expect(body.line).toMatch(/^[0-9a-f]{7,40}(\+dirty)?$/)
+      expect(body.checkout).toBe(body.line)
       // No token on /runs: the auth gate is up in the subprocess too.
       expect((await fetch(`${url}/runs`)).status).toBe(401)
       reader.cancel()
