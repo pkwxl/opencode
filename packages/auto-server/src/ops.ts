@@ -2,7 +2,8 @@
 // mirroring the CLI's remaining command surface — config ops (init / amend /
 // fix / reset), units (close, task-add) and models — plus the P1 `plan`
 // boundary. Served by the daemon under /projects/<project>/<op> (the
-// whitelist resolves the project exactly as POST /runs does), this module is
+// registry resolves the project exactly as every project-scoped route
+// does), this module is
 // the API's own shell duty in the CLI's shape: every gate the CLI's shell
 // runs, every refusal text, every write ordering — but through the core's
 // library functions, never a re-implementation. Since P4b the models probe
@@ -15,8 +16,9 @@
 //     renderAgentContract, ensurePointer,
 //     ensureInitGitignore, applyFix, applyReset, closeUnit, planPrelude →
 //     addTask/establishRound/syncPhaseIndex); the transfer operation
-//     spawns its advance as a run (the core's runTransfer runs in the
-//     worker, never in this process); the two template writes the
+//     applies its advance in-process (transferDeterministic — git and
+//     document writes only, zero agent processes, plans/0282); the two
+//     template writes the
 //     CLI shell also performs itself (opencode.json, the agent contract's
 //     file bytes) use the core's own renderer for the contract, and nothing
 //     here ever writes `.auto/`, `docs/` unit state or an index tick;
@@ -46,8 +48,8 @@
 // target's state refuses (body carries the CLI exit code 1|2 and its lines;
 // the clean-tree gate answers 409 with `gate: "cleanTree"`); 423 a live run
 // lock; 428 the confirmation gate unanswered (`gate: "confirm"`, the exact
-// question included); 501 a route this version refuses (agent planning needs
-// the interactive transport of P3).
+// question included); 501 a routing fact this version does not serve (the
+// task-add fallback guard).
 import { Readable, Writable } from "node:stream"
 import { join } from "node:path"
 import { checkCleanTree } from "@opencode-ai/auto-core/clean"
@@ -140,8 +142,9 @@ const refused = (code: 1 | 2, lines: string[], extras: Record<string, unknown> =
 const bad = (message: string): OpOutcome => ({ status: 400, body: { error: message } })
 const notImplemented = (message: string): OpOutcome => ({ status: 501, body: { error: message } })
 
-// The run-lock refusals, the CLI's own holder text (lockLines): 423, the same
-// status POST /runs answers a live holder with.
+// The run-lock refusals, the CLI's own holder text (lockLines): 423, the
+// status every surface that would take the directory's run lock answers a
+// live holder with.
 const locked = (directory: string, holder: LockState): OpOutcome => {
   const lines = lockLines(directory, holder)
   return {
@@ -158,11 +161,11 @@ const locked = (directory: string, holder: LockState): OpOutcome => {
 // The plan unlock (P3c): the P1 boundary is lifted — planPrelude's no-agent
 // routes keep their fast path (round establishment, the round-close gate,
 // the drift re-sync, the refusal stops — served here, in-process, exactly
-// as P1d served them), and every route that continues into an agent
-// planning session now spawns one as a run: `spawnPlanningRun` starts the
-// worker with the plan payload (stopBefore === "execute", humanQuestions
-// armed — auto-core src/opts.ts:346/:179-185 — the questions riding the
-// interactive transport and the persistent queue this unit adds). The CLI's
+// as P1d served them), and the loop route spawns nothing (plans/0282: the
+// protocol does nothing via push, ever again) — the planning input is
+// persisted, then the refusal names the executor claim surface, the
+// planning session being the `formulate` grant's (the synthesis
+// enhancement the `synthesize` grant's, plans/0281). The CLI's
 // `plan --force-close <ref> --reason` composes over the API as the close
 // operation followed by the plan operation: close-then-continue, each half
 // its own surface.
@@ -883,10 +886,13 @@ async function runTaskAdd(request: OpRequest): Promise<OpOutcome> {
 // plan (P3c, the unlock): planPrelude's no-agent routes are served exactly
 // as P1d served them (round establishment, the round-close gate, the drift
 // re-sync, the refusal stops — in-process, their own lines and codes), and
-// the loop route spawns the agent planning session as a run over
-// `spawnPlanningRun`. The request fields are the planning surface:
-//   "input"  the planning input text (the CLI's plan -p) — carried to the
-//            planning step, which persists it to the phase's plan-input.md.
+// the loop route answers pull-only (plans/0282: the daemon spawns no agent
+// session) — the planning input persisted by the prelude, the refusal
+// naming the executor claim surface. The request fields are the planning
+// surface:
+//   "input"  the planning input text (the CLI's plan -p) — persisted by
+//            the prelude to the phase's plan-input.md, read by the
+//            formulation session that claims the unit.
 //   The "append" field is retired (plans/0283): the task-append session no
 //   longer runs — task-add (the tasks operation) adds one task at a time,
 //   a changed input re-formulates the plan.
@@ -895,15 +901,10 @@ async function runTaskAdd(request: OpRequest): Promise<OpOutcome> {
 // the task-add operation (the pointer says so). `plan --force-close`'s
 // close half is the close operation: close-then-continue over the API is
 // POST close, then POST plan.
-// AUTO-DECISION (the prelude and the spawn share the op's lock window, not
-// one lock span): the CLI holds one run lock across the prelude and
-// runAll; the daemon's op releases the lock before spawning (the worker's
-// own runAll must acquire it, and the daemon's in-process hold would refuse
-// its own child). The window between release and acquire is the lock's own
-// jurisdiction — whichever driver process takes it first wins, the same
-// rule the CLI and the daemon already share — and the registry's run entry
-// exists from the spawn, so this daemon's own guards see the directory
-// held.
+// The lock span is the prelude alone: acquire "plan", run planPrelude,
+// release — no child follows since plans/0282 removed the planning spawn,
+// so the CLI's one-span shape (a single lock across the prelude and the
+// session it drove) has no counterpart here.
 async function runPlan(request: OpRequest): Promise<OpOutcome> {
   const { project, body } = request
   const dir = project.directory
