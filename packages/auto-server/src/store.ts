@@ -30,7 +30,8 @@ import { acquireRunLock, liveRunLock } from "@opencode-ai/auto-core/lock"
 // `person-questions`, `person-releases` tombstoned — the spec's tombstone
 // section is the compatibility record):
 //   read    status, logs, events (and the SSE feeds of P1e)
-//   control run control (kill), close, task-add, plan, transfer, clarify —
+//   control run control (kill), close, task-add, plan, transfer, clarify,
+//           reconcile (the executor ledger's dead-letter reconciliation) —
 //           the deterministic operations that write git
 //   config  init/amend/fix/reset (P1d's routes)
 //   probe   the model probe (POST /projects/<project>/models, P4b) — its

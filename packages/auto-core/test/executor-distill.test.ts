@@ -247,8 +247,11 @@ test("the fence: a never-set write escalates to the person (0272 composed); anot
     expect(blocked.detail).toContain("The cause is outside this lease's permitted writes — a person must inspect the state")
     expect(blocked.detail).toContain("retrying cannot fix it")
     // No question item is raised (plans/0282): the plain blocked answer is
-    // the whole surface, the pending list empty.
-    expect((await coordinator.ready({ token: "reader", channel: "menu" })).pending).toEqual([])
+    // the whole surface; 0287's held row names the booked settlement the
+    // lane waits on.
+    expect((await coordinator.ready({ token: "reader", channel: "menu" })).pending).toEqual([
+      { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." },
+    ])
 
     // Another phase's handover document: refused, but not never-set (no arm
     // of the standing table names it) — the plain blocked answer, the

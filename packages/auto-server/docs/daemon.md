@@ -11,7 +11,8 @@
 > removes a registry entry (409 beside a live run, the stop taught). The
 > standing surfaces are the executor protocol (auto-core's
 > `docs/protocol.md`, the single source), the deterministic operations
-> (transfer/plan/clarify in-process), the observability reads, and the
+> (transfer/plan/clarify in-process, reconcile over the coordinator), the
+observability reads, and the
 > project lifecycle. The scopes are the six: read, control, config, probe,
 > executor, projects.
 

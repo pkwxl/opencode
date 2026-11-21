@@ -11,8 +11,8 @@ person's local tooling: `close`, `land`, `fork`/`remove-fork`, `fix`, `sync`, `r
 tasks, the planning, the distillation and the construction are **grants external coding agents claim over
 the executor protocol** (a daemon's `POST /projects/<project>/executor/claim`; `opencode-auto-server serve`
 registers the project), and the person's acts — the boundary advance, the release, the task add — are the
-daemon's **operations** (`POST /projects/<project>/transfer` / `clarify` / `plan` / `tasks` over REST with
-a token). The work itself is unchanged in shape: task units (the phase's task index `tasks.md` +
+daemon's **operations** (`POST /projects/<project>/transfer` / `clarify` / `plan` / `tasks` / `reconcile` over REST with
+a token — `reconcile` the executor ledger's dead-letter reconciliation, plans/0287). The work itself is unchanged in shape: task units (the phase's task index `tasks.md` +
 `docs/T-NNN/`), whole-task sessions under the standing handover protocol (`subtask: off` the default,
 `auto` adaptive decomposition), the unified commit after every session, planned checking and acceptance —
 when the result line at the end of a task report says `Result: FAIL` the task blocks for a person (see

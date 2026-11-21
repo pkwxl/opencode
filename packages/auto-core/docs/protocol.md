@@ -61,7 +61,10 @@ release
 - **report** — `{ step, lease, outcome: ended|failed, note? }`: the share's
   result. `ended` settles (the coordinator stages, commits, closes out);
   `failed` books the attempt without landing. Ambiguous delivery: retry the
-  same report; a same-token claim resumes settlement first.
+  same report; a same-token claim resumes settlement first. A late report
+  over a dead lease whose unit the record already closed is answered with
+  the `reconciled` receipt (plans/0287): the lease ended without the share —
+  the receipt says so, whatever outcome the report claims.
 - **heartbeat** — renew the listed leases (the window derived from the
   grant's own budget, capped at twice it) and read the menu.
 - **release** — surrender a live lease without a report.
@@ -150,7 +153,11 @@ qualified phase id for the boundary (distill).
   the scope letter: `unit-effective` + the `undeclared: "freeform"` floor,
   or `none`).
 - **`pending`** — the pending person items: `gate` rows (the gate and its
-  document), derived from the documents.
+  document), derived from the documents, and — when the claimable set is
+  empty — the lane's own held row (plans/0287): the derivation's first
+  `wait`/`blocked` answer (`kind`, `reason`, `detail` — the step
+  vocabulary's own shapes), so an empty `claimable` never sits beside a
+  silent cause (0285's honesty gap).
 
 The landing fence admits per grant exactly: the standing refusal set
 refused for every kind (the driver workdir `.auto/`/`tmp/`, the config
@@ -175,8 +182,12 @@ The person's gates derive from document state (the admission derivation):
 human gate, `Fork:`/`Clarified:` regions in the survey document). The
 person's acts are document writes and the daemon's deterministic
 operations — the release act is the `clarify` operation (or the document
-edit itself), the boundary advance the `transfer` operation; the menu's
-`pending` list names the awaiting gate and its document.
+edit itself), the boundary advance the `transfer` operation, and the
+executor ledger's dead-letter reconciliation the `reconcile` operation
+(plans/0287; the sweep itself runs automatically at every wire act, booking
+dead leases whose units the record closed — the operation is the person's
+forced arm, naming a unit whose dead lease books whatever the unit's
+state); the menu's `pending` list names the awaiting gate and its document.
 
 The step vocabulary a claim can answer beside the grants: `wait` (with
 `reason`: `lease-held`, `in-flight`, `question`, `gate`, `not-ready` and a

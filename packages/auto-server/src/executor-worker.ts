@@ -110,7 +110,10 @@ async function perform(coordinator: Coordinator, request: StepRequest): Promise<
         break
       case "report": {
         const result = await coordinator.report(holder, action.key.step, action.key.lease, action.outcome, action.note)
-        const step = result.kind === "landed" || result.kind === "without-landing" ? await coordinator.next(holder) : result
+        // A reconciled receipt answers a late report over a dead lease the
+        // same way a consumed landing does (0287): the holder's chain ends —
+        // the unit closed without the share — and the next step routes it on.
+        const step = result.kind === "landed" || result.kind === "without-landing" || result.kind === "reconciled" ? await coordinator.next(holder) : result
         payload = { step: wireStep(step) }
         break
       }

@@ -263,9 +263,12 @@ test("the fence: the unit's own input todo and every never-set path are refused,
     expect(blocked.detail).toContain("The cause is outside this lease's permitted writes — a person must inspect the state")
     expect(blocked.detail).toContain("retrying cannot fix it")
     // The ask channel is gone (0282): no question item is raised — the
-    // plain blocked answer is the whole surface, the menu's pending list
-    // empty (the gates are document-derived and none awaits here).
-    expect((await coordinator.ready({ token: "reader", channel: "menu" })).pending).toEqual([])
+    // plain blocked answer is the whole surface (the gates are
+    // document-derived and none awaits here); 0287's held row names the
+    // booked settlement the lane waits on.
+    expect((await coordinator.ready({ token: "reader", channel: "menu" })).pending).toEqual([
+      { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." },
+    ])
   } finally {
     await coordinator.close()
   }

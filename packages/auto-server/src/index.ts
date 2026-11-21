@@ -92,7 +92,7 @@ register — add a target directory to the daemon's whitelist. The whitelist
 
 token — manage bearer tokens and their scopes (plans/0282's six): read
   (status/logs/events), control (kill, close, task-add and the plan/
-  transfer/clarify operations), config (init/amend/fix/reset), probe (the
+  transfer/clarify/reconcile operations), config (init/amend/fix/reset), probe (the
   model probe, POST /projects/<project>/models — opt-in and disabled by
   default), executor (the executor protocol), projects (the project lifecycle:
   POST /projects creation and DELETE /projects/<project>, plans/0284).

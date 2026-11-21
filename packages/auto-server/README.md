@@ -148,13 +148,13 @@ line.
 
 | kind  | routes |
 | ----- | ------ |
-| REST  | `GET /health`; `GET /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan`, `transfer`, `clarify` (the deterministic boundary operations — the protocol does nothing via push, plans/0282), `models` (GET the table; POST the probe — its own `probe` scope) |
+| REST  | `GET /health`; `GET /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan`, `transfer`, `clarify`, `reconcile` (the deterministic boundary operations — the protocol does nothing via push, plans/0282; `reconcile` the executor ledger's dead-letter reconciliation, plans/0286), `models` (GET the table; POST the probe — its own `probe` scope) |
 | WS    | the executor coordinator's bridge socket (the per-run secret the spawn carried) — the daemon serves coding agents only, never a web client (plans/0282) |
 
 Every route but `/health` requires `Authorization: Bearer <token>`:
 **401** unknown, **403** a known token without the route's scope. Scopes:
 `read` (status/observability/models), `control` (kill, close/task-add and
-the plan/transfer/clarify operations), `config` (init/amend/fix/reset),
+the plan/transfer/clarify/reconcile operations), `config` (init/amend/fix/reset),
 `probe` (the model probe alone — opt-in, carried by no default token set,
 and beside the scope it takes an explicit `confirm` field and the
 per-daemon 10-minute rate window), `executor` (the executor protocol),

@@ -869,7 +869,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return json(500, { error: `the ${op.segment} operation failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
       }
     }
-    return json(404, { error: `no route ${method} ${url.pathname} (the daemon serves: GET /health; GET /runs, GET /runs/<id>, DELETE /runs/<id> (kill); the executor protocol POST /projects/<project>/executor/<ready|claim|brief|report|heartbeat|release>; the operations POST /projects/<project>/<init|amend|fix|reset|close|tasks|plan|transfer|clarify> and GET/POST models; the observability GET /projects/<project>/status|log|events|status-events; the project lifecycle GET /projects (the whitelist), POST /projects (creation, the projects scope), DELETE /projects/<project>)` })
+    return json(404, { error: `no route ${method} ${url.pathname} (the daemon serves: GET /health; GET /runs, GET /runs/<id>, DELETE /runs/<id> (kill); the executor protocol POST /projects/<project>/executor/<ready|claim|brief|report|heartbeat|release>; the operations POST /projects/<project>/<init|amend|fix|reset|close|tasks|plan|transfer|clarify|reconcile> and GET/POST models; the observability GET /projects/<project>/status|log|events|status-events; the project lifecycle GET /projects (the whitelist), POST /projects (creation, the projects scope), DELETE /projects/<project>)` })
   }
 
   const server = Bun.serve<SocketData>({

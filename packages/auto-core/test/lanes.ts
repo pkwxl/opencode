@@ -74,6 +74,10 @@ export const REPO_LANE: readonly string[] = [
   // project fixture).
   "test/executor-audit.test.ts",
   "test/executor-catalog.test.ts",
+  // The dead-letter reconciliation suite (plans/0287): the same real-git
+  // fixture shape (expired and released leases, the person's completion
+  // amendment, the sweep's booking over the ledger).
+  "test/executor-dead-letter.test.ts",
   "test/executor-distill.test.ts",
   "test/executor-formulate.test.ts",
   // The synthesize grant kind's lifecycle (plans/0281): the same real-git

@@ -837,6 +837,72 @@ describe("the lifecycle operations (P1d)", () => {
     })
   }, 240_000)
 
+  // The reconcile operation (plans/0287, 0285's person-terminus): the
+  // executor ledger's dead-letter reconciliation over the coordinator — the
+  // automatic sweep (a person-completed unit's expired unbooked lease) and
+  // the honest answers (nothing to do, no lease on the unit, the request
+  // vocabulary, the scope, the lock family's 423).
+  test("the reconcile operation — the automatic sweep books a person-completed unit's dead lease; the field vocabulary, scope and lock answers", async () => {
+    await withOps(async (h) => {
+      const dir = await phasedProject("auto-ops-reconcile-", "implement")
+      // One person-completed unit (the done rename and the tick, the 0274
+      // amendment class) and one open unit behind it.
+      const plan = join("docs", "R-01", "P01-implement")
+      await mkdir(join(dir, plan), { recursive: true })
+      await Bun.write(join(dir, plan, "tasks.md"), "# Tasks\n\n- [x] T-001 First\n- [ ] T-002 Second\n")
+      await mkdir(join(dir, "docs", "T-001"), { recursive: true })
+      await mkdir(join(dir, "docs", "T-002"), { recursive: true })
+      await Bun.write(join(dir, "docs", "T-001", "done.md"), "# First\n\n## Goal\n\nDone by the person.\n")
+      await Bun.write(join(dir, "docs", "T-002", "todo.md"), "# Second\n\n## Goal\n\nOpen work.\n")
+      const git = gitOf(dir)
+      await git("add", "-A")
+      await git("-c", "user.name=Person", "-c", "user.email=person@example.invalid", "commit", "-qm", "person: complete T-001")
+      // The dead lease: an expired execute grant over the completed unit,
+      // never booked — the field shape of plans/0285.
+      const ledger = join(dir, ".auto", "executor-progress.json")
+      await mkdir(join(dir, ".auto"), { recursive: true })
+      const base = (await git("rev-parse", "HEAD")).trim()
+      await Bun.write(ledger, JSON.stringify([{
+        grant: { id: "T-001 exec 1", kind: "execute", unit: "T-001", title: "First", prompt: "", lease: "dead-lease", attempt: 1, workspace: dir, deadline: 1, budget: 60 },
+        holder: { token: "worker", channel: "work" },
+        base,
+        issued: 1,
+      }]))
+      const name = h.register(dir)
+      // The field vocabulary and the scope.
+      expect((await h.call("POST", `/projects/${name}/reconcile`, h.control, { task: "T-001" })).status).toBe(400)
+      expect((await h.call("POST", `/projects/${name}/reconcile`, h.control, { unit: 7 })).status).toBe(400)
+      expect((await h.call("POST", `/projects/${name}/reconcile`, h.read, {})).status).toBe(403)
+      // The automatic sweep books the dead letter with the finding line
+      // (every op's head sweeps — this is the first op to open the
+      // coordinator).
+      const swept = await h.call("POST", `/projects/${name}/reconcile`, h.control, {})
+      expect(swept.status).toBe(200)
+      expect(JSON.stringify(swept.body)).toContain("reconciled the dead lease T-001 exec 1 on T-001")
+      expect(JSON.stringify(swept.body)).toContain("the person's completion")
+      // The honest no-lease answer for an unleased unit.
+      const none = await h.call("POST", `/projects/${name}/reconcile`, h.control, { unit: "T-002" })
+      expect(none.status).toBe(200)
+      expect(JSON.stringify(none.body)).toContain("no lease stands on T-002")
+      const entries = JSON.parse(await Bun.file(ledger).text()) as { booking?: { receipt?: { kind: string; by: string } } }[]
+      expect(entries[0]!.booking?.receipt).toEqual({ kind: "reconciled", by: "person-completion" })
+      // Idempotent: the second sweep answers nothing-to-do.
+      const again = await h.call("POST", `/projects/${name}/reconcile`, h.control, {})
+      expect(again.status).toBe(200)
+      expect(JSON.stringify(again.body)).toContain("nothing to reconcile")
+      // The lock family's answer beside a live holder.
+      const releaseHolder = await plantLiveLock(dir)
+      try {
+        const held = await h.call("POST", `/projects/${name}/reconcile`, h.control, {})
+        expect(held.status).toBe(423)
+        expect(String(held.body.error)).toContain("holds the run lock")
+      } finally {
+        await releaseHolder()
+        await rm(dir, { recursive: true, force: true })
+      }
+    })
+  })
+
   test("models: read-only, no lock, the table's own exit vocabulary; the probe is the POST route (P4b)", async () => {
     await withOps(async (h) => {
       const dir = await fixtureProject("auto-ops-models-", {})
@@ -897,6 +963,7 @@ describe("the lifecycle operations (P1d)", () => {
           ["close", { ref: TASK, reason: "x" }],
           ["tasks", { title: "x" }],
           ["plan", {}],
+          ["reconcile", {}],
         ] as const) {
           const answer = await h.call("POST", `/projects/${name}/${op}`, h.control, body)
           expect(answer.status).toBe(423)

@@ -206,9 +206,13 @@ for (const point of ["booked", "committed"] as const) {
     try {
       const replacement = { token: "worker-2", channel: "solo" }
       // The recovered menu (a plain worker reader; the ask channel is gone,
-      // the pending list carries document-derived gates alone — none here).
+      // the pending list carries document-derived gates alone — none here —
+      // beside 0287's held row: the crashed settlement is the lane's own
+      // answer for why nothing is claimable, surfaced instead of a silent
+      // empty list).
       expect(await recovered.ready(replacement)).toEqual({
-        claimable: [], leases: [], types: executorTypeCatalog(), pending: [],
+        claimable: [], leases: [], types: executorTypeCatalog(),
+        pending: [{ kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." }],
       })
       expect(git(dir, "rev-parse", "HEAD").trim()).toBe(crashHead)
       expect(await recovered.claim(replacement)).toMatchObject({ kind: "verify", unit: grant.unit })
@@ -991,7 +995,11 @@ test("a blocked settlement outside the holder's permitted set names the person-n
       detail: "HEAD moved outside the booked share. Inspect the commit and executor progress before resuming. The cause is outside this lease's permitted writes — a person must inspect the state; retrying cannot fix it.",
     })
     expect(await Bun.file(join(dir, ".auto/executor-questions.json")).exists()).toBe(false)
-    expect((await coordinator.ready({ ...holder, token: "worker-2" })).pending).toEqual([])
+    // 0287's held row: the booked-but-blocked settlement is the lane's own
+    // answer, surfaced on the menu beside the empty claimable set.
+    expect((await coordinator.ready({ ...holder, token: "worker-2" })).pending).toEqual([
+      { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." },
+    ])
     // The retry's replay is byte-identical (P10), through both settlement
     // entries — the report replay and a successor claim's settle.
     expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toEqual(blocked)
@@ -1027,7 +1035,11 @@ test("replayable causes keep today's blocked answer byte-identical and raise not
       kind: "blocked", reason: "isolation", detail: "Resolve out-of-scope edits before replaying: AGENTS.md, src/other.ts.",
     })
     expect(existsSync(join(dir, ".auto/executor-questions.json"))).toBe(false)
-    expect((await coordinator.ready(holder)).pending).toEqual([])
+    // 0287's held row (the booked report awaiting settlement); no question
+    // item is raised beside it.
+    expect((await coordinator.ready(holder)).pending).toEqual([
+      { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." },
+    ])
     // The never-set alone is the person's remedy (0248 D5): the same cause
     // site escalates once the holder's own edit is gone.
     rmSync(join(dir, "src/other.ts"))

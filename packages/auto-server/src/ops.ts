@@ -75,6 +75,7 @@ import { describeModels, formatModels } from "@opencode-ai/auto-core/models-desc
 import { planPrelude } from "@opencode-ai/auto-core/plan"
 import { transferDeterministic } from "@opencode-ai/auto-core/transfer"
 import { clarifyGate } from "@opencode-ai/auto-core/clarify"
+import { openExecutorCoordinator } from "@opencode-ai/auto-core/executor-coordinator"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
 import {
   currentRound,
@@ -1040,6 +1041,49 @@ async function runClarify(request: OpRequest): Promise<OpOutcome> {
   const code = result.type === "released" ? 0 : result.type === "held" ? 2 : 1
   return code === 0 ? ok(result.lines) : refused(code, result.lines)
 }
+
+// reconcile (0285's person-terminus, enacted 0287): the dead-letter
+// reconciliation operation — the person's terminal act for ledger states the
+// durable record cannot evidence. The op opens the executor coordinator
+// over the lane (the coordinator is the ledger's one writer, the same
+// core-side home the wire's sweep runs in) and runs its reconcile act: with
+// no request fields, the automatic sweep alone — book exactly the dead
+// leases (expired or released, never reported) whose units the durable
+// record already reads done; with "unit", the forced arm beside it — every
+// dead lease of that unit books with the person's provenance, whatever the
+// unit's state. A live lease of a named unit refuses (control changes land
+// at safe boundaries); a live driver (a spawned executor run) holds the
+// coordinator's run lock and the op names the stop.
+async function runReconcile(request: OpRequest): Promise<OpOutcome> {
+  const { project, body } = request
+  for (const key of Object.keys(body ?? {})) {
+    if (key === "unit") continue
+    return bad(`unknown reconcile field "${key}" (the reconcile request takes "unit" — the id of a lane unit whose dead leases the person reconciles by name; with no unit the sweep books exactly the dead leases whose units read done in the durable record)`)
+  }
+  if ("unit" in (body ?? {}) && typeof body!.unit !== "string") {
+    return bad("unit takes a string (the unit id whose dead leases the person reconciles by name)")
+  }
+  const unconfigured = await requireConfig(project, "reconcile")
+  if (unconfigured) return unconfigured
+  const dir = project.directory
+  const holder = liveRunLock(dir)
+  if (holder !== undefined) return locked(dir, holder)
+  let lines: string[]
+  try {
+    const coordinator = await openExecutorCoordinator(dir)
+    try {
+      lines = (await coordinator.reconcile(typeof body?.unit === "string" ? body.unit : undefined)).lines
+    } finally {
+      await coordinator.close()
+    }
+  } catch (error) {
+    // A race past the pre-check (a driver took the lock between the read
+    // and the open) or an invalid ledger — either way loud, the coordinator's
+    // own message carried.
+    return refused(1, [textOf(error)])
+  }
+  return ok(lines)
+}
 // models (shell-contract §9): the registry's effective table, read-only —
 // describeModels writes nothing and takes no lock, so it runs beside a live
 // run. The probe (POST, the CLI's --probe) is its own operation below.
@@ -1178,6 +1222,7 @@ export const OP_DEFINITIONS: readonly OpDefinition[] = [
   { method: "POST", segment: "plan", what: "the plan operation", scope: "control", write: () => true, run: runPlan },
   { method: "POST", segment: "transfer", what: "the transfer operation", scope: "control", write: () => true, run: runTransferOp },
   { method: "POST", segment: "clarify", what: "the clarify operation", scope: "control", write: () => true, run: runClarify },
+  { method: "POST", segment: "reconcile", what: "the reconcile operation", scope: "control", write: () => true, run: runReconcile },
   { method: "GET", segment: "models", what: "the models operation", scope: "read", write: () => false, run: runModels },
   { method: "POST", segment: "models", what: "the model probe", scope: "probe", write: () => false, run: runProbe },
 ]
