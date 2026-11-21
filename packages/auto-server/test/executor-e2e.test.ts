@@ -495,3 +495,67 @@ test("the audit grant kind rides the wire beside the standing kinds", async () =
     await rm(directory, { recursive: true, force: true })
   }
 }, 20_000)
+
+// The lifecycle's removal over REST (plans/0284): DELETE /projects/<project>
+// is the projects scope's act; beside the live coordinator this daemon
+// spawned it refuses 409 teaching the stop (DELETE /runs/<id>, the run id
+// named); the stop landed, the entry goes and GET /projects reflects it.
+test("the project lifecycle's removal: 409 beside a live coordinator with the stop taught, then the delete lands", async () => {
+  const directory = await fixtureProject("auto-executor-lifecycle-", { subtask: "off" })
+  const dataDir = await mkdtemp(join(tmpdir(), "auto-executor-data-"))
+  const store = new DaemonStore(dataDir)
+  const project = store.register(directory)
+  const worker = store.issueToken("executor", "worker").token
+  const reader = store.issueToken("read", "reader").token
+  const control = store.issueToken("control", "control").token
+  const projects = store.issueToken("projects", "lifecycle").token
+  const listRuns = async () =>
+    (await (await fetch(`${daemon!.url}/runs`, { headers: { authorization: `Bearer ${reader}` } })).json()) as { runs: Array<{ id: string; state: string; live: boolean }> }
+  let daemon: DaemonHandle | undefined
+  try {
+    daemon = await startDaemon({ dataDir, port: 0 })
+    // No coordinator yet: the spawn is the executor route's own demand.
+    const before = await listRuns()
+    expect(before.runs).toEqual([])
+    await fetch(`${daemon.url}/projects/${encodeURIComponent(project.name)}/executor/ready`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${worker}` },
+      body: "{}",
+    })
+    const after = await listRuns()
+    expect(after.runs).toHaveLength(1)
+    const runId = after.runs[0]!.id
+    const remove = (token?: string) => fetch(`${daemon!.url}/projects/${encodeURIComponent(project.name)}`, {
+      method: "DELETE",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    })
+    expect((await remove()).status).toBe(401)
+    expect((await remove(control)).status).toBe(403)
+    const refused = await remove(projects)
+    expect(refused.status).toBe(409)
+    const refusedBody = (await refused.json()) as { error: string; run: string }
+    expect(refusedBody.run).toBe(runId)
+    expect(refusedBody.error).toContain(`live run (${runId}`)
+    expect(refusedBody.error).toContain(`DELETE /runs/${runId}`)
+    // The stop taught: the kill ladder settles the coordinator, the retry
+    // deletes the entry, and the whitelist reflects it.
+    const kill = await fetch(`${daemon.url}/runs/${runId}`, { method: "DELETE", headers: { authorization: `Bearer ${control}` } })
+    expect(kill.status).toBe(202)
+    const deadline = Date.now() + 30_000
+    for (;;) {
+      const listed = await listRuns()
+      if (!listed.runs[0]!.live) break
+      if (Date.now() > deadline) throw new Error("the killed coordinator never settled")
+      await Bun.sleep(200)
+    }
+    const deleted = await remove(projects)
+    expect(deleted.status).toBe(200)
+    expect(await deleted.json()).toMatchObject({ removed: { name: project.name, directory } })
+    const whitelist = (await (await fetch(`${daemon.url}/projects`, { headers: { authorization: `Bearer ${reader}` } })).json()) as { projects: Array<{ name: string }> }
+    expect(whitelist.projects.map((entry) => entry.name)).toEqual([])
+  } finally {
+    await daemon?.stop()
+    await rm(dataDir, { recursive: true, force: true })
+    await rm(directory, { recursive: true, force: true })
+  }
+})

@@ -5,11 +5,15 @@
 > WebSocket endpoints), the pending-question queue and the Web client are
 > **retired** — the sections describing them below are the historical
 > record of what was removed, kept until the demolition track's doc pass
-> rewrites them. The standing surfaces are the executor protocol
-> (auto-core's `docs/protocol.md`, the single source), the deterministic
-> operations (transfer/plan/clarify in-process), and the observability
-> reads. The scopes are the six: read, control, config, probe, executor,
-> projects.
+> rewrites them. Beside them the `--open`/`--root` creation roots are
+> retired (plans/0284): `POST /projects` is generalized — the request names
+> the directory, its parent the anchor — and `DELETE /projects/<project>`
+> removes a registry entry (409 beside a live run, the stop taught). The
+> standing surfaces are the executor protocol (auto-core's
+> `docs/protocol.md`, the single source), the deterministic operations
+> (transfer/plan/clarify in-process), the observability reads, and the
+> project lifecycle. The scopes are the six: read, control, config, probe,
+> executor, projects.
 
 The resident daemon of the headless service shell: it owns the target-directory
 whitelist and the auth tokens, spawns one worker child process per run (the P1b

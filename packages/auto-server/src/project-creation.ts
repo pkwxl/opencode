@@ -3,8 +3,8 @@ import {
   closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync,
   readdirSync, realpathSync, renameSync, rmSync, writeFileSync,
 } from "node:fs"
-import { randomUUID } from "node:crypto"
-import { join, resolve } from "node:path"
+import { createHash, randomUUID } from "node:crypto"
+import { basename, dirname, isAbsolute, join, resolve } from "node:path"
 import { CONFIG_DEFAULTS } from "@opencode-ai/auto-core/config"
 import { initializeRepository } from "@opencode-ai/auto-core/git"
 import { loadIntents } from "@opencode-ai/auto-core/intent/load"
@@ -55,17 +55,13 @@ function canonicalJSON(value: unknown): string {
   return JSON.stringify(value)
 }
 
-export function openProjectCreation(store: DaemonStore, declared: readonly string[], checkpoint?: (point: Checkpoint) => void) {
-  if (process.platform !== "linux") throw new Error("Open project creation requires Linux directory descriptors and no-replace rename.")
-  const roots = new Map<string, Root>()
-  for (const candidate of declared) {
-    const path = realpathSync(candidate)
-    const info = lstatSync(path, { bigint: true })
-    if (!info.isDirectory() || info.uid !== BigInt(process.geteuid!()) || (info.mode & 0o022n) !== 0n) {
-      throw new Error("Each open root must be an operator-owned directory without group or public write access.")
-    }
-    roots.set(path, { path, identity: identity(info) })
-  }
+// The generalized creation engine (plans/0284): the request names the
+// directory to create — no operator-declared roots at boot, the destination's
+// own parent the anchor, validated per request (operator-owned, no group or
+// public write — the same posture the retired --open roots enforced, the
+// projects scope the trust boundary that reaches the route at all).
+export function openProjectCreation(store: DaemonStore, checkpoint?: (point: Checkpoint) => void) {
+  if (process.platform !== "linux") throw new Error("Project creation requires Linux directory descriptors and no-replace rename.")
   // renameat2 is required: an ordinary rename can replace an empty directory
   // created between a destination check and publication.
   const native = dlopen("libc.so.6", {
@@ -76,15 +72,33 @@ export function openProjectCreation(store: DaemonStore, declared: readonly strin
   let closed = false
 
   async function create(owner: string, body: Record<string, unknown>): Promise<Result> {
-    const { root, name, config } = body
-    if (Object.keys(body).some((key) => !["root", "name", "config"].includes(key)) ||
-        typeof root !== "string" || typeof name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name) ||
+    const { directory: rawDirectory, name: rawName, config } = body
+    if (Object.keys(body).some((key) => !["directory", "name", "config"].includes(key)) ||
+        typeof rawDirectory !== "string" || !rawDirectory.trim() ||
+        (rawName !== undefined && (typeof rawName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(rawName))) ||
         (config !== undefined && (config === null || typeof config !== "object" || Array.isArray(config)))) {
-      return fail(400, "Provide a configured root, a single project name, and optional init config.")
+      return fail(400, "Provide the directory to create (an absolute path whose parent exists), an optional project name, and optional init config.")
     }
-    const target = roots.get(root)
-    if (!target) return fail(403, "Choose a configured open root or ask the operator to register the project.")
-    const directory = join(target.path, name)
+    const name = rawName ?? basename(rawDirectory)
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name)) {
+      return fail(400, `the project name "${name}" (the directory's basename, or the request's name) must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}`)
+    }
+    const parent = dirname(rawDirectory)
+    let parentInfo
+    try {
+      parentInfo = lstatSync(parent, { bigint: true })
+    } catch {
+      return fail(400, `the parent of ${rawDirectory} does not exist — create the project inside an existing directory`)
+    }
+    if (!parentInfo.isDirectory() || parentInfo.uid !== BigInt(process.geteuid!()) || (parentInfo.mode & 0o022n) !== 0n) {
+      return fail(403, `the parent ${parent} must be an operator-owned directory without group or public write access (the creation anchor's standing posture)`)
+    }
+    if (!isAbsolute(rawDirectory)) return fail(400, "the directory must be an absolute path")
+    const directory = resolve(rawDirectory)
+    if (basename(directory) !== name && rawName === undefined) {
+      return fail(400, "the directory's basename becomes the project name; pass a matching name to override it")
+    }
+    const target: Root = { path: parent, identity: identity(parentInfo) }
     const destination = Buffer.from(name + "\0")
     const requested = canonicalJSON({ subtask: "off", ...config })
     mkdirSync(ledger, { recursive: true, mode: 0o700 })
@@ -101,7 +115,7 @@ export function openProjectCreation(store: DaemonStore, declared: readonly strin
         return fail(409, "The configured root was replaced. Ask the operator to inspect it and restart the daemon.")
       }
       const anchored = anchor(rootFd)
-      const path = join(ledger, `${name}.json`)
+      const path = join(ledger, `${createHash("sha256").update(directory).digest("hex").slice(0, 24)}-${name}.json`)
       const save = (value: Intent) => {
         const temp = `${path}.tmp`
         writeFileSync(temp, JSON.stringify(value), { mode: 0o600 })

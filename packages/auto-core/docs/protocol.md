@@ -225,6 +225,24 @@ projects
 
 The executor routes require `executor`.
 
+## The project lifecycle
+
+The registry the whole surface resolves against is itself served over REST
+(plans/0284): `GET /projects` lists it (the `read` scope), `POST /projects`
+creates into it (`projects` scope) and `DELETE /projects/<project>` removes
+from it (`projects` scope). Creation is generalized beyond the retired
+`--open` roots: the request names the directory to create — `{"directory":
+"<absolute path>"}`, the destination's own parent the anchor (operator-owned,
+no group or public write), the basename the project name (a `"name"` field
+overrides), an optional `"config"` object the init the staged creation runs
+with. The staging is the same engine: a private stage directory, the init,
+the no-replace publication, the registration — every kill point
+re-derivable, a retried request idempotent. Removal refuses 409 beside a
+live coordinator or run (the stop taught: `DELETE /runs/<id>`, the run id
+named) and beside a run lock held by a driver the daemon does not know (the
+same shared condition the CLI's `unregister` meets); past both, the entry
+is removed — the directory itself is never touched.
+
 ## Tombstones
 
 The compatibility record — vocabulary this spec has removed. A removed

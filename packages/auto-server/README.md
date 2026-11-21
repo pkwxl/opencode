@@ -15,7 +15,7 @@ ratchet (`test/protocol-doc.test.ts` in both packages).
 ```
 opencode-auto-server register <dir>              # the whitelist (absolute)
 opencode-auto-server token issue --scopes read,control,answer,config [--out <file>]
-opencode-auto-server serve [--port 4770] [--host 127.0.0.1] [--data-dir <dir>] [--env-file <declaration file>] [--open --root <dir> …]
+opencode-auto-server serve [--port 4770] [--host 127.0.0.1] [--data-dir <dir>] [--env-file <declaration file>]
 # then: talk REST — the daemon serves coding agents only, no web client.
 ```
 
@@ -317,24 +317,33 @@ project through the whole surface in one unbroken run.
 
 <!-- auto: eof -->
 
-## Open project creation
+## The project lifecycle over REST
 
-Start the daemon with `serve --open --root /absolute/project-root`. Repeat
-`--root` to allow other directories. Open creation requires Linux with glibc and a
-filesystem that supports no-replace rename. Each root must be owned by the
-daemon user and writable only by that user.
+Creation is generalized beyond the retired `--open` roots (plans/0284): no
+boot-time flags — the request itself names the directory to create. Creation
+requires Linux with glibc and a filesystem that supports no-replace rename.
+The destination's parent must exist, be owned by the daemon user and be
+writable only by that user (the anchor's standing posture); the `projects`
+grant that reaches the route at all is the trust boundary.
 
-Issue a token with `token issue --scopes projects` and send
-`POST /projects` with the canonical root path, a single directory name,
-and optional init config. The full create-and-init operation uses the
-`projects` grant. For example:
+Issue a token with `token issue --scopes projects` and send `POST /projects`
+with the absolute directory, an optional name (the basename by default) and
+optional init config:
 
 ```json
-{"root":"/absolute/project-root","name":"widget","config":{"subtask":"off"}}
+{"directory":"/absolute/project-root/widget","config":{"subtask":"off"}}
 ```
 
-The daemon initializes a private directory and publishes it before adding
-it to the registry. An interrupted request can be retried by the same
-token with the same project name, root and config. Existing directories
-require the operator's usual `register` command. Review and commit the
-generated init files before starting work.
+The daemon initializes a private staging directory beside the destination
+and publishes it without replacement before adding it to the registry. An
+interrupted request can be retried with the same directory and config (the
+staged creation is idempotent). Existing directories require the operator's
+usual `register` command. Review and commit the generated init files before
+starting work.
+
+`DELETE /projects/<project>` (the same `projects` scope) removes a registry
+entry: it refuses 409 beside a live coordinator or run (the stop taught —
+`DELETE /runs/<id>`, the run id named) and beside a run lock held by a
+driver the daemon does not know (the shared condition the CLI's
+`unregister` command also meets); past both, the entry is removed — the
+directory itself is never touched.

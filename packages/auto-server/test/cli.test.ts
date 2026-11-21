@@ -96,3 +96,22 @@ describe("server entry: transfer <dir> is retired (plans/0283)", () => {
     expect(run.out).not.toContain("the lane payload")
   })
 })
+
+// The creation roots' retirement (plans/0284): POST /projects is
+// generalized — the request names the directory, its parent the anchor, the
+// projects scope the boundary — so serve has no boot-time roots to declare.
+describe("server serve entry: --open/--root are retired (plans/0284)", () => {
+  test("each flag is a usage refusal naming the generalized creation surface", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "auto-server-roots-retired-"))
+    try {
+      for (const flag of ["--open", "--root"]) {
+        const run = await runServer(["serve", flag, ...(flag === "--root" ? ["/tmp/any"] : []), "--port", "0", "--data-dir", join(scratch, "data")])
+        expect(run.code).toBe(1)
+        expect(run.err).toContain(`${flag} is retired (plans/0284)`)
+        expect(run.err).toContain("POST /projects")
+      }
+    } finally {
+      await rm(scratch, { recursive: true, force: true })
+    }
+  })
+})

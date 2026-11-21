@@ -38,7 +38,7 @@ for (const point of ["booked", "directory", "partial-init", "initialized", "publ
       import { DaemonStore } from ${JSON.stringify(storeSource)};
       const [root, dataDir, point] = process.argv.slice(1);
       applyServerProfile();
-      const creation = openProjectCreation(new DaemonStore(dataDir), [root], (current) => {
+      const creation = openProjectCreation(new DaemonStore(dataDir), (current) => {
         if (current === "directory" && point === "partial-init") {
           const stage = readdirSync(root).find((name) => name.startsWith(".auto-create-"));
           writeFileSync(join(root, stage, "AGENTS.md"), "Interrupted init");
@@ -46,7 +46,7 @@ for (const point of ["booked", "directory", "partial-init", "initialized", "publ
         }
         if (current === point) process.kill(process.pid, "SIGKILL");
       });
-      const result = await creation.request("owner", { root, name: "widget" });
+      const result = await creation.request("owner", { directory: join(root, "widget") });
       console.error(JSON.stringify(result));
       await creation.close();
     `, root, store.dataDir, point], { stderr: "pipe", stdout: "ignore" })
@@ -57,13 +57,13 @@ for (const point of ["booked", "directory", "partial-init", "initialized", "publ
     expect(store.listProjects()).toHaveLength(point === "registered" ? 1 : 0)
     expect(existsSync(directory)).toBe(point === "published" || point === "registered")
     applyServerProfile()
-    const creation = openProjectCreation(store, [root])
+    const creation = openProjectCreation(store)
     try {
-      expect(await creation.request("intruder", { root, name: "widget" })).toMatchObject({ status: 409 })
-      expect(await creation.request("owner", { root, name: "widget", config: { subtask: "auto" } })).toMatchObject({ status: 409 })
-      const result = await creation.request("owner", { root, name: "widget" })
+      expect(await creation.request("intruder", { directory })).toMatchObject({ status: 409 })
+      expect(await creation.request("owner", { directory, config: { subtask: "auto" } })).toMatchObject({ status: 409 })
+      const result = await creation.request("owner", { directory })
       expect(result).toMatchObject({ status: 200, body: { project: { name: "widget", directory } } })
-      expect(await creation.request("owner", { root, name: "widget" })).toEqual(result)
+      expect(await creation.request("owner", { directory: join(root, "widget") })).toEqual(result)
       expect(store.listProjects()).toHaveLength(1)
       expect(readdirSync(root)).toEqual(["widget"])
       expect(await Bun.file(join(directory, CONFIG_FILE)).json()).toMatchObject({ subtask: "off" })
@@ -75,33 +75,29 @@ for (const point of ["booked", "directory", "partial-init", "initialized", "publ
   })
 }
 
-linuxTest("open creation is opt-in and the projects grant authorizes the complete request", async () => {
+linuxTest("creation is always mounted (plans/0284) and the projects grant authorizes the complete request", async () => {
   const { root, path, store } = fixture()
   const { token: reader } = store.issueToken("read", "reader")
   const { token: owner } = store.issueToken("projects", "creator")
-  const closed = await startDaemon({ dataDir: store.dataDir, port: 0 })
+  // No boot-time roots anymore (plans/0284): a plain daemon serves POST
+  // /projects, the request naming the directory itself.
+  const daemon = await startDaemon({ dataDir: store.dataDir, port: 0 })
   const request = (url: string, token: string, body: object) => fetch(`${url}/projects`, {
     method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
   })
   try {
-    expect((await request(closed.url, owner, { root, name: "widget" })).status).toBe(404)
-  } finally {
-    await closed.stop()
-  }
-  const opened = await startDaemon({ dataDir: store.dataDir, port: 0, openRoots: [root] })
-  try {
-    expect((await request(opened.url, reader, { root, name: "widget" })).status).toBe(403)
-    expect((await request(opened.url, owner, { root: path, name: "widget" })).status).toBe(403)
-    expect((await request(opened.url, owner, { root, name: "../widget" })).status).toBe(400)
-    expect((await request(opened.url, owner, { root, name: "widget", config: { subtask: "invalid" } })).status).toBe(400)
+    expect((await request(daemon.url, reader, { directory: join(root, "widget") })).status).toBe(403)
+    expect((await request(daemon.url, owner, { directory: "relative/widget" })).status).toBe(400)
+    expect((await request(daemon.url, owner, { directory: join(path, "absent", "widget") })).status).toBe(400)
+    expect((await request(daemon.url, owner, { directory: join(root, "widget"), config: { subtask: "invalid" } })).status).toBe(400)
     for (const config of [{ mode: "typo" }, { intent: "typo" }, { handoverTest: true }]) {
-      const refused = await request(opened.url, owner, { root, name: "widget", config })
+      const refused = await request(daemon.url, owner, { directory: join(root, "widget"), config })
       expect(refused.status).toBe(400)
       expect(await refused.json()).toMatchObject({ error: expect.stringContaining(`config.${Object.keys(config)[0]}`) })
     }
     expect(readdirSync(root)).toEqual([])
-    const created = await request(opened.url, owner, { root, name: "widget" })
+    const created = await request(daemon.url, owner, { directory: join(root, "widget") })
     expect(await created.json()).toMatchObject({ project: { name: "widget" } })
     expect(created.status).toBe(200)
     expect(store.resolveProject("widget")?.directory).toBe(join(root, "widget"))
@@ -109,7 +105,7 @@ linuxTest("open creation is opt-in and the projects grant authorizes the complet
     symlinkSync(path, join(root, "widget"), "dir")
     expect(store.resolveProject("widget")).toBeUndefined()
   } finally {
-    await opened.stop()
+    await daemon.stop()
   }
 })
 
@@ -118,14 +114,14 @@ linuxTest("root and destination replacements do not redirect writes or publish p
   const outside = join(path, "outside")
   mkdirSync(outside)
   applyServerProfile()
-  const creation = openProjectCreation(store, [root], (point) => {
+  const creation = openProjectCreation(store, (point) => {
     if (point === "directory") {
       renameSync(root, join(path, "original"))
       symlinkSync(outside, root, "dir")
     }
   })
   try {
-    expect(await creation.request("owner", { root, name: "widget" })).toMatchObject({ status: 409 })
+    expect(await creation.request("owner", { directory: join(root, "widget") })).toMatchObject({ status: 409 })
     expect(readdirSync(outside)).toEqual([])
     expect(store.resolveProject("widget")).toBeUndefined()
   } finally {
@@ -133,11 +129,11 @@ linuxTest("root and destination replacements do not redirect writes or publish p
   }
   rmSync(root)
   renameSync(join(path, "original"), root)
-  const occupied = openProjectCreation(store, [root], (point) => {
+  const occupied = openProjectCreation(store, (point) => {
     if (point === "initialized") mkdirSync(join(root, "occupied"))
   })
   try {
-    expect(await occupied.request("owner", { root, name: "occupied" })).toMatchObject({ status: 409 })
+    expect(await occupied.request("owner", { directory: join(root, "occupied") })).toMatchObject({ status: 409 })
     expect(readdirSync(join(root, "occupied"))).toEqual([])
     expect(store.resolveProject("occupied")).toBeUndefined()
   } finally {
@@ -150,9 +146,9 @@ linuxTest("a new project inside a Git worktree has its own repository", async ()
   expect(await git(path, ["init", "-b", "outer"])).toMatchObject({ code: 0 })
   const outerConfig = await Bun.file(join(path, ".git/config")).text()
   applyServerProfile()
-  const creation = openProjectCreation(store, [root])
+  const creation = openProjectCreation(store)
   try {
-    expect(await creation.request("owner", { root, name: "widget" })).toMatchObject({ status: 200 })
+    expect(await creation.request("owner", { directory: join(root, "widget") })).toMatchObject({ status: 200 })
     const directory = join(root, "widget")
     expect(await git(directory, ["rev-parse", "--show-toplevel"])).toMatchObject({ code: 0, out: `${directory}\n` })
     expect(await git(path, ["symbolic-ref", "--short", "HEAD"])).toMatchObject({ code: 0, out: "outer\n" })

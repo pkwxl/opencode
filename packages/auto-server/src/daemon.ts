@@ -74,7 +74,7 @@ import { liveRunLock, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { readStatusModel, statusEventsResponse, tailResponse, type TailChannel } from "./observe"
 import { environmentBootReport } from "./env-boot"
 import { OP_DEFINITIONS, type OpOutcome } from "./ops"
-import { DaemonStore, type RegisteredProject, type Scope } from "./store"
+import { DaemonStore, type RegisteredProject, type Scope, StoreError } from "./store"
 import { applyServerProfile } from "./profile"
 import { BRIDGE_TOKEN_ENV, REQUEST_BYTE_LIMIT, requestTooLarge, RequestError, type TransportPayload } from "./request"
 import { executorRoutes, PROTOCOL_VERSION, type ExecutorRoute } from "./ws-protocol"
@@ -211,7 +211,6 @@ const TAIL_LIMIT = 8192
 
 export type DaemonOptions = {
   dataDir: string
-  openRoots?: readonly string[]
   port?: number
   hostname?: string
   // The command that starts a worker (source runs: [bun, src/index.ts];
@@ -258,7 +257,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   // spawned run exists: the carrier the launcher will read is checked and
   // pinned at the one moment it can be, the daemon's own start.
   const bootWarnings = await environmentBootReport(options.dataDir)
-  const creation = options.openRoots?.length ? openProjectCreation(store, options.openRoots) : undefined
+  // The creation engine is always mounted (plans/0284): POST /projects is
+  // generalized beyond the retired --open roots — the request names the
+  // directory, its parent the anchor.
+  const creation = openProjectCreation(store)
   const worker = options.worker ?? workerCommand()
   // The spawn cwd is arbitrary (the run target is the registry's absolute
   // path, the worker resolves it itself); it must only be a REAL directory
@@ -622,7 +624,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       if (denied) return denied
       return json(200, { projects: store.listProjects() })
     }
-    if (creation && segments[0] === "projects" && segments.length === 1 && method === "POST") {
+    if (segments[0] === "projects" && segments.length === 1 && method === "POST") {
       const auth = scopesOf(request, true)
       if (!auth.scopes || !auth.identity) return json(auth.status, auth.body)
       if (!auth.scopes.includes("projects")) return json(403, { error: 'Project creation requires the "projects" scope.' })
@@ -636,6 +638,35 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       server.timeout(request, 0)
       const result = await creation.request(auth.identity, body as Record<string, unknown>)
       return json(result.status, result.body)
+    }
+    // DELETE /projects/<project> (plans/0284, the lifecycle's removal): the
+    // projects scope; a live coordinator or run on the project's directory
+    // refuses 409 teaching the stop (DELETE /runs/<id> — the run id named);
+    // past that the store's own live-refusal condition guards (a run lock
+    // held by a driver this daemon does not know — another host's or a
+    // hand-run process), and past both the registry entry is removed.
+    if (segments[0] === "projects" && segments.length === 2 && method === "DELETE") {
+      const denied = needScope(request, "deleting a project", "projects")
+      if (denied) return denied
+      const name = safeDecode(segments[1]!)
+      const project = name ? store.resolveProject(name) : undefined
+      if (!project) {
+        return json(404, { error: `"${segments[1]}" is not a registered project (GET /projects lists the registry; DELETE removes an entry by name or path)` })
+      }
+      const live = [...runs.values()].find((run) => run.directory === project.directory && !TERMINAL_STATES.includes(run.state as TerminalState))
+      if (live) {
+        return json(409, {
+          error: `project "${project.name}" has a live run (${live.id}, state ${live.state}) — stop it first: DELETE /runs/${live.id} (the kill ladder), then retry the delete`,
+          run: live.id,
+        })
+      }
+      try {
+        const removed = store.unregister(name!)
+        return json(200, { removed: { name: removed.name, directory: removed.directory } })
+      } catch (error) {
+        if (error instanceof StoreError) return json(409, { error: error.message })
+        throw error
+      }
     }
     if (segments[0] === "runs") {
       if (segments.length === 1 && method === "GET") {
@@ -769,7 +800,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       const op = OP_DEFINITIONS.find((entry) => entry.segment === segments[2] && entry.method === method)
       if (!name || !op) {
         return json(404, {
-          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}${entry.method === "POST" && entry.segment === "models" ? " — the probe: its own probe scope, the confirm field, rate-limited" : ""}`).join(", ")}; the P1c run surface is GET /health, GET /runs, POST /runs, GET /runs/<id>, DELETE /runs/<id>; the P1e observability surface is GET /projects/<project>/status, GET /projects/<project>/log and GET /projects/<project>/events; the P2b structured events channel is GET /projects/<project>/status-events; the P3b interactive transport is the WebSocket endpoints GET /runs/<id>/interactive (clients) and GET /runs/<id>/worker (the run's bridge); the P4a client surface is GET / (the Web client), GET /app.js, GET /session (the token's scopes) and GET /projects (the whitelist))`,
+          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}${entry.method === "POST" && entry.segment === "models" ? " — the probe: its own probe scope, the confirm field, rate-limited" : ""}`).join(", ")}; the run surface is GET /health, GET /runs, GET /runs/<id>, DELETE /runs/<id> (kill — the coordinator a project's executor route spawned); the observability surface is GET /projects/<project>/status, /log, /events and /status-events; the project lifecycle is GET /projects (the whitelist), POST /projects (creation, the projects scope) and DELETE /projects/<project>)`,
         })
       }
       const denied = needScope(request, op.what, op.scope)
@@ -838,7 +869,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return json(500, { error: `the ${op.segment} operation failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
       }
     }
-    return json(404, { error: `no route ${method} ${url.pathname} (the daemon serves: GET /health; GET /runs, GET /runs/<id>, DELETE /runs/<id> (kill); the executor protocol POST /projects/<project>/executor/<ready|claim|brief|report|heartbeat|release>; the operations POST /projects/<project>/<init|amend|fix|reset|close|tasks|plan|transfer|clarify> and GET/POST models; the observability GET /projects/<project>/status|log|events|status-events; GET /projects (the whitelist))` })
+    return json(404, { error: `no route ${method} ${url.pathname} (the daemon serves: GET /health; GET /runs, GET /runs/<id>, DELETE /runs/<id> (kill); the executor protocol POST /projects/<project>/executor/<ready|claim|brief|report|heartbeat|release>; the operations POST /projects/<project>/<init|amend|fix|reset|close|tasks|plan|transfer|clarify> and GET/POST models; the observability GET /projects/<project>/status|log|events|status-events; the project lifecycle GET /projects (the whitelist), POST /projects (creation, the projects scope), DELETE /projects/<project>)` })
   }
 
   const server = Bun.serve<SocketData>({

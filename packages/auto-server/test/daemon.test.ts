@@ -436,3 +436,49 @@ describe("daemon: the spawn boundary's failure shapes (plans/0223)", () => {
 // lifetime is the run's non-terminal life exactly — a terminal run's bridge
 // no longer upgrades, a forged raise is refused instead of journaled), and
 // terminal records evict past a count.
+
+// The lifecycle's removal conditions (plans/0284): the store's own
+// live-refusal — the shared condition the DELETE route and the CLI's
+// unregister both meet — holds the entry beside a run lock this daemon did
+// not spawn (another host's or a hand-run process), teaching the stop; the
+// route answers 404 for the unknown name; past both the entry goes.
+describe("the project lifecycle over REST (plans/0284)", () => {
+  test("DELETE /projects/<project>: the store's live-lock refusal teaches the stop; 404 for the unknown; the delete lands past both", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "auto-server-data-"))
+    const store = new DaemonStore(dataDir)
+    const projects = store.issueToken("projects", "lifecycle").token
+    const read = store.issueToken("read", "reader").token
+    const directory = await fixtureProject("auto-server-lifecycle-", { subtask: "off" })
+    const registered = store.register(directory)
+    const daemon = await startDaemon({ dataDir, port: 0 })
+    const remove = () => fetch(`${daemon.url}/projects/${encodeURIComponent(registered.name)}`, { method: "DELETE", headers: { authorization: `Bearer ${projects}` } })
+    try {
+      expect((await fetch(`${daemon.url}/projects/${encodeURIComponent(registered.name)}`, { method: "DELETE" })).status).toBe(401)
+      expect((await fetch(`${daemon.url}/projects/${encodeURIComponent(registered.name)}`, { method: "DELETE", headers: { authorization: `Bearer ${read}` } })).status).toBe(403)
+      expect((await fetch(`${daemon.url}/projects/no-such-project`, { method: "DELETE", headers: { authorization: `Bearer ${projects}` } })).status).toBe(404)
+      // The planted lock: a driver this daemon does not know holds the
+      // directory — the shared condition refuses with the stop taught.
+      const holder = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 60000)"], { stdout: "ignore", stderr: "ignore" })
+      await Bun.write(join(directory, ".auto", "run.lock"), `${JSON.stringify({ pid: holder.pid, holder: "foreign", started: new Date().toISOString() })}\n`)
+      try {
+        const refused = await remove()
+        expect(refused.status).toBe(409)
+        const body = (await refused.json()) as { error: string }
+        expect(body.error).toContain("live driver")
+        expect(body.error).toContain("DELETE /runs/<id>")
+      } finally {
+        process.kill(holder.pid!, "SIGKILL")
+        await rm(join(directory, ".auto", "run.lock"), { force: true })
+      }
+      const deleted = await remove()
+      expect(deleted.status).toBe(200)
+      expect(await deleted.json()).toMatchObject({ removed: { name: registered.name } })
+      const whitelist = (await (await fetch(`${daemon.url}/projects`, { headers: { authorization: `Bearer ${read}` } })).json()) as { projects: Array<{ name: string }> }
+      expect(whitelist.projects.map((entry) => entry.name)).toEqual([])
+    } finally {
+      await daemon.stop()
+      await rm(dataDir, { recursive: true, force: true })
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+})

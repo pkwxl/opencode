@@ -29,7 +29,7 @@ import { runWorker } from "./worker"
 const USAGE = `usage:
   opencode-auto-server --help
   opencode-auto-server --version
-  opencode-auto-server serve [--port <n>] [--host <addr>] [--data-dir <dir>] [--env-file <path>] [--open --root <dir> …]
+  opencode-auto-server serve [--port <n>] [--host <addr>] [--data-dir <dir>] [--env-file <path>]
   opencode-auto-server register <directory> [--data-dir <dir>]
   opencode-auto-server unregister <name-or-directory> [--data-dir <dir>]
   opencode-auto-server projects [--data-dir <dir>]
@@ -83,9 +83,9 @@ serve — the daemon (P1c/P1d/P1e; pull-only since plans/0282). Binds
   evening, moved to the boot line.
 
 register — add a target directory to the daemon's whitelist. The whitelist
-  is absolute: POST /runs names a registered project (by name or by its
-  registered absolute path) and nothing else; the daemon never resolves an
-  arbitrary request path. The registry lives in the daemon's own data
+  is absolute: every project-scoped route resolves the registry (by name
+  or by the registered absolute path) and nothing else; the daemon never
+  resolves an arbitrary request path. The registry lives in the daemon's own data
   directory (--data-dir; default $XDG_CONFIG_HOME/opencode-auto/server,
   ~/.config/opencode-auto/server on a plain machine) — never inside a
   project, never under .auto/.
@@ -94,7 +94,8 @@ token — manage bearer tokens and their scopes (plans/0282's six): read
   (status/logs/events), control (kill, close, task-add and the plan/
   transfer/clarify operations), config (init/amend/fix/reset), probe (the
   model probe, POST /projects/<project>/models — opt-in and disabled by
-  default), executor (the executor protocol), projects (project creation).
+  default), executor (the executor protocol), projects (the project lifecycle:
+  POST /projects creation and DELETE /projects/<project>, plans/0284).
   The ask channel's answer/person scopes are tombstoned.
   Unauthenticated requests
   get 401, a token without the route's scope 403. The plaintext token is
@@ -385,17 +386,14 @@ if (command === "serve") {
   let port = DEFAULT_PORT
   let host = DEFAULT_HOSTNAME
   let envFile: string | undefined
-  let open = false
-  const openRoots: string[] = []
   for (let at = 0; at < rest.length; at++) {
     const flag = rest[at]
     const value = rest[at + 1]
-    if (flag === "--open") {
-      open = true
-    } else if (flag === "--root") {
-      if (value === undefined || value.startsWith("--")) refuse("--root takes a directory.")
-      openRoots.push(value)
-      at++
+    if (flag === "--open" || flag === "--root") {
+      // The creation roots are retired (plans/0284): POST /projects is
+      // generalized — the request names the directory, its parent the
+      // anchor, the projects scope the trust boundary.
+      refuse(`${flag} is retired (plans/0284): project creation over POST /projects names the directory in the request itself (the projects scope the boundary) — no boot-time roots to declare`)
     } else if (flag === "--port") {
       // 0..65535, refused at the flag instead of Bun.serve's throw: an
       // out-of-range port is a usage error and the refusal names the range
@@ -415,10 +413,9 @@ if (command === "serve") {
       envFile = value
       at++
     } else {
-      refuse(`unknown serve argument "${flag}" (serve takes --port, --host, --data-dir, --env-file, --open and --root)`)
+      refuse(`unknown serve argument "${flag}" (serve takes --port, --host, --data-dir and --env-file)`)
     }
   }
-  if (open !== (openRoots.length > 0)) refuse("--open and at least one --root are required together.")
   // malformed line refuses at its line number, never echoing the line's
   // bytes — a value may be a secret.
   if (envFile !== undefined) {
@@ -444,7 +441,7 @@ if (command === "serve") {
   const store = new DaemonStore(dataDir)
   const projects = store.listProjects()
   const tokens = store.listTokens()
-  const daemon = await startDaemon({ dataDir, port, hostname: host, ...(open && { openRoots }) })
+  const daemon = await startDaemon({ dataDir, port, hostname: host })
   // AUTO-DECISION (default bind 127.0.0.1): v1 is single-machine (the
   // assessment's §8 Q4 boundary) and the run lock's stale detection cannot
   // cross hosts; a loopback default keeps the token-guarded control plane

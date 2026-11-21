@@ -23,7 +23,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, resolve } from "node:path"
-import { acquireRunLock } from "@opencode-ai/auto-core/lock"
+import { acquireRunLock, liveRunLock } from "@opencode-ai/auto-core/lock"
 
 // The token scopes, the authorization tiers of the assessment's §8 Q6 as
 // reduced by plans/0282 (the ask channel's demolition: `answer`, `person`,
@@ -151,11 +151,22 @@ export class DaemonStore {
     return project
   }
 
+  // The lifecycle's removal (plans/0284): beside a live driver the entry
+  // stays — the shared live-refusal condition the daemon's DELETE route and
+  // the CLI's unregister command both meet here (the route adds its own
+  // in-process knowledge first: a live coordinator or run it spawned).
   unregister(nameOrDirectory: string): RegisteredProject {
     return this.updateProjects(() => {
       const projects = this.readProjects()
       const at = projects.findIndex((project) => project.name === nameOrDirectory || project.directory === nameOrDirectory)
       if (at === -1) throw new StoreError(`no registered project "${nameOrDirectory}"`)
+      const target = projects[at]!
+      const holder = liveRunLock(target.directory)
+      if (holder) {
+        throw new StoreError(
+          `project "${target.name}" has a live driver (a run lock is held in ${target.directory}) — stop it first (the daemon-side stop is DELETE /runs/<id>, the kill ladder; a foreign lock needs its own host's stop or a by-hand removal of ${target.directory}/.auto/run.lock), then unregister`,
+        )
+      }
       const [removed] = projects.splice(at, 1)
       this.writeJson(PROJECTS_FILE, projects)
       return removed!
