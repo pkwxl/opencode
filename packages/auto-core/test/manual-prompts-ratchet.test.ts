@@ -197,7 +197,10 @@ describe("manual-driver prompt ratchet", () => {
     // executor.md sentences).
     expect(coordinator).toContain('distill: "phase-handover",')
     expect(coordinator).toContain("async function distillationProblems(checkout: string, grant: Extract<Grant, { kind: \"distill\" }>): Promise<string[]> {")
-    expect(coordinator).toContain("previous.closeCommit !== undefined || last?.grant.kind === \"distill\"")
+    // 0289 inserted the person-closed facet into the closed-unit predicate
+    // (the completion ending a chain over a landed continuation) — the pin
+    // re-keyed to the new shape, the distill terminal's own letter unchanged.
+    expect(coordinator).toContain("previous.closeCommit !== undefined || previous.closed === \"person\" || last?.grant.kind === \"distill\"")
     expect(steps).toContain("kind: \"distill\"")
     expect(steps).toContain("phaseHandoverDoc(phase)")
     expect(steps).toContain("!current.handoverValid")

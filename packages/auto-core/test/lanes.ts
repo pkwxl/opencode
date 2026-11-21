@@ -78,6 +78,10 @@ export const REPO_LANE: readonly string[] = [
   // fixture shape (expired and released leases, the person's completion
   // amendment, the sweep's booking over the ledger).
   "test/executor-dead-letter.test.ts",
+  // The continuation re-derivation suite (plans/0289): the same fixture
+  // shape over the landed continuation flag (the person's handoff amendment
+  // and completion, the sweep's re-booking, the fence's release).
+  "test/executor-continuation.test.ts",
   "test/executor-distill.test.ts",
   "test/executor-formulate.test.ts",
   // The synthesize grant kind's lifecycle (plans/0281): the same real-git

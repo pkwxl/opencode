@@ -125,7 +125,13 @@ type VerifyVerdict = "pass" | "fail"
 // record (the person's amendment, 0274), or the person's reconcile
 // operation naming the unit.
 type ReconciledReceipt = { kind: "reconciled"; by: "person-completion" | "person-reconcile" }
-type Receipt = { kind: "landed"; commit: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; parked?: string; closeCommit?: string; landingCommit?: string } | { kind: "without-landing"; reason: "failed" | "zero-write" } | BlockedReport | ReconciledReceipt
+// `closed: "person"` (0289): the additive facet a landed receipt carries when
+// the person's completion ended the unit's chain over a booked continuation —
+// the share's landing stands in history (unlike the reconciled receipt, which
+// asserts no share); the facet releases the reservation, closes the claim
+// (no verify share over a person-closed unit, P3's parenthetical), and is the
+// sweep's one write (P6 — the minimum the record's reading requires).
+type Receipt = { kind: "landed"; commit: string; verdict?: VerifyVerdict; gapCount?: number; continuation?: true; parked?: string; closeCommit?: string; landingCommit?: string; closed?: "person" } | { kind: "without-landing"; reason: "failed" | "zero-write" } | BlockedReport | ReconciledReceipt
 type CloseIntent = { share: string; sourceShare?: string; tree?: string }
 // A nested repository's booked share evidence (0258): the root's checkout-
 // relative path, its HEAD at booking, and its staged tree — the per-root
@@ -839,14 +845,17 @@ export async function openExecutorCoordinator(
   let closed = false
   function serialize<T>(act: () => Promise<T>): Promise<T> {
     if (closed) return Promise.reject(new Error("The executor coordinator is closed."))
-    // The dead-letter sweep rides every serialized operation's head (0287):
-    // one home, serialized against every derivation — the pin self-clears at
-    // the next wire act of any kind (a claim, a menu read, a heartbeat), so
-    // no derivation sees a reconcileable dead letter. Idempotent and free
-    // when none stands (every entry booked or live — a healthy history's
-    // loop skips whole, the byte-identical floor, P10).
+    // The dead-letter sweep rides every serialized operation's head (0287),
+    // the continuation re-derivation beside it (0289): one home, serialized
+    // against every derivation — the pin self-clears at the next wire act of
+    // any kind (a claim, a menu read, a heartbeat), so no derivation sees a
+    // reconcileable dead letter or a correctable continuation. Idempotent and
+    // free when none stands (every entry booked or live, no flag whose
+    // evidence flipped — a healthy history's loops skip whole, the
+    // byte-identical floor, P10).
     const run = tail.then(async () => {
       await reconcileDeadLetters(now())
+      await reconcileContinuations()
       return act()
     })
     tail = run.catch(() => undefined)
@@ -927,7 +936,7 @@ export async function openExecutorCoordinator(
       const receipt = entry.booking?.receipt
       // A reconciled receipt releases the reservation (0287): the ledger's
       // claim on the unit ended — the scope it fenced is free.
-      return entry.scope !== undefined && !(receipt?.kind === "landed" && (receipt.closeCommit || receipt.parked)) && receipt?.kind !== "reconciled"
+      return entry.scope !== undefined && !(receipt?.kind === "landed" && (receipt.closeCommit || receipt.parked || receipt.closed === "person")) && receipt?.kind !== "reconciled"
     })
   }
 
@@ -988,6 +997,51 @@ export async function openExecutorCoordinator(
       const line = named
         ? `ℹ reconciled the dead lease ${entry.grant.id} on ${entry.grant.unit} — the person's reconcile operation named the unit; the never-reported share stays unbooked`
         : `ℹ reconciled the dead lease ${entry.grant.id} on ${entry.grant.unit} — the unit reads done in the durable record (the person's completion); the never-reported share stays unbooked`
+      lines.push(line)
+      reconciliationLines.push(line)
+      log(line)
+    }
+    return lines
+  }
+
+  // The continuation re-derivation (0289, 0286 F2's re-measured fix): a
+  // landed receipt carrying the continuation flag — the holder's own
+  // `Status: continue` handoff statement — routes every follow-up arm as
+  // "more work remains": the verify arm declines (the producer walk excludes
+  // continuations), the menu letters execute, and a fresh claim re-grants the
+  // next exec ordinal (the field's `T-064 exec 2` — the commissioning
+  // session's flag on a unit whose work stood whole, the record's own bytes
+  // the discriminator: a plain landed share routes its verify in both tiers,
+  // the flag alone strands it). The flag is derived state over the handoff's
+  // committed bytes (P6), and the person's two document channels correct it:
+  // amending the handoff's Status line — the flag strips, the plain-landed
+  // routing takes over, the verify share follows — or completing the unit
+  // (0274's marks): the re-booking adds the additive `closed: "person"`
+  // facet, the fence releases, the claim ends, no verify over a person-closed
+  // unit (P3). Only the unit's latest entry routes; a handoff that still
+  // reads continue over an open unit holds the designed continuation (the
+  // floor, pinned by the standing suite); live leases are never touched
+  // (P12); each re-booking logs its finding and provenance (P8).
+  async function reconcileContinuations(): Promise<string[]> {
+    const lines: string[] = []
+    for (const entry of entries) {
+      const booking = entry.booking
+      const receipt = booking?.receipt
+      if (receipt?.kind !== "landed" || !receipt.continuation || booking?.outcome !== "ended") continue
+      if (latest(entry.grant.unit) !== entry) continue
+      if (await unitCompleted(entry.grant.unit, entry.grant.kind)) {
+        await book(entry, { ...booking, receipt: { ...receipt, continuation: undefined, closed: "person" } })
+        const line = `ℹ re-derived ${entry.grant.id} on ${entry.grant.unit} — the unit reads done in the durable record (the person's completion); the continuation claim ended, the unit closed without a verify share`
+        lines.push(line)
+        reconciliationLines.push(line)
+        log(line)
+        continue
+      }
+      const { handoff } = taskDocPaths(entry.grant.unit)
+      const text = await gitRead(dir, "show", `HEAD:${handoff}`).catch(() => "")
+      if (handoffStatus(text) === "continue") continue
+      await book(entry, { ...booking, receipt: { ...receipt, continuation: undefined } })
+      const line = `ℹ re-derived ${entry.grant.id} on ${entry.grant.unit} — the amended handoff no longer reads a continue status (the person's act); the share's work stands whole and the verification follows`
       lines.push(line)
       reconciliationLines.push(line)
       log(line)
@@ -1656,7 +1710,11 @@ export async function openExecutorCoordinator(
     // person's — the advance's stop and the phase gates), and no close-out
     // rides the coordinator (the completion rename and tick are the apply,
     // the person's transfer). The unit's claim chain ends at the landing.
-    const closedUnit = previous?.kind === "landed" && (previous.closeCommit !== undefined || last?.grant.kind === "distill" || last?.grant.kind === "synthesize")
+    // A person-closed landed receipt (0289) joins the closed unit: the sweep
+    // booked the person's completion over the share's continuation — the
+    // chain ended at the landing, nothing pends and no verify follows (P3's
+    // parenthetical: a unit a person closed is done).
+    const closedUnit = previous?.kind === "landed" && (previous.closeCommit !== undefined || previous.closed === "person" || last?.grant.kind === "distill" || last?.grant.kind === "synthesize")
     // A reconciled receipt is neither settlement-pending nor verifiable
     // (0287): the landed arm below already refuses it — its booking asserts
     // no share — so the wait never fires over a reconciliation.
@@ -1798,7 +1856,10 @@ export async function openExecutorCoordinator(
     const producer = entries.findLast((entry) => entry.grant.unit === last.grant.unit && entry.grant.kind !== "verify" && entry.booking?.receipt?.kind === "landed")
     const booking = producer?.booking
     const receipt = booking?.receipt
-    if (!producer || receipt?.kind !== "landed" || (receipt.continuation || receipt.parked)) return nextWithoutGrant(at)
+    // A person-closed producer never verifies (0289): the completion ended the
+    // chain — the honest answer is the fresh-claim step, exactly as the
+    // distill/synthesize terminal below.
+    if (!producer || receipt?.kind !== "landed" || (receipt.continuation || receipt.parked || receipt.closed === "person")) return nextWithoutGrant(at)
     // No verify share over a distillation (0277): the distill producer's
     // landed receipt is terminal — the boundary's content judgment is the
     // person's (the advance's stop and the phase gates), the wrap-up brief
@@ -1909,8 +1970,9 @@ export async function openExecutorCoordinator(
     // reservation — the boundary is the person's transfer until the next
     // round of work routes. A reconciled receipt is terminal the same way
     // (0287): the ledger's claim ended, no verification follows, no
-    // reservation holds.
-    return (receipt?.kind === "landed" && (receipt.closeCommit !== undefined || receipt.parked !== undefined || entry.grant.kind === "distill" || entry.grant.kind === "synthesize")) ||
+    // reservation holds. A person-closed landed receipt joins both (0289):
+    // the completion ended the chain over the share's landing.
+    return (receipt?.kind === "landed" && (receipt.closeCommit !== undefined || receipt.parked !== undefined || receipt.closed === "person" || entry.grant.kind === "distill" || entry.grant.kind === "synthesize")) ||
       receipt?.kind === "reconciled"
   }
 
@@ -1994,14 +2056,16 @@ export async function openExecutorCoordinator(
 
   async function unitDecision(holder: Holder, at: number, kind: Grant["kind"] | undefined, last?: Entry, task?: string, scoped = false): Promise<Decision> {
     const result = last?.booking?.receipt
-    const needsFix = (result?.kind === "landed" && result.verdict === "fail") ||
+    // A person-closed receipt (0289) needs neither fix nor verification: the
+    // person's completion ended the unit's chain over the landing.
+    const needsFix = (result?.kind === "landed" && result.verdict === "fail" && result.closed !== "person") ||
       (last?.grant.kind === "fix" && (result?.kind !== "landed" || result.continuation))
     // A landed distill receipt never needs verification (0277 — the boundary's
     // judgment is the person's, D6's ruling): the unit's chain ended at the
     // landing. An audit producer's landed receipt does need it (0278, D6's
     // ruling: the push closeout runs the wrap-up for the unit, the verify
     // kind is that session converged).
-    const needsVerification = (result?.kind === "landed" && !result.closeCommit && !result.continuation && !result.parked && last?.grant.kind !== "distill" && last?.grant.kind !== "synthesize") ||
+    const needsVerification = (result?.kind === "landed" && !result.closeCommit && !result.continuation && !result.parked && result.closed !== "person" && last?.grant.kind !== "distill" && last?.grant.kind !== "synthesize") ||
       (last?.grant.kind === "verify" && result?.kind !== "landed")
     // A formulate ask routes through the fresh-claim preview (0276): the
     // formulate step derives where it stands, and claim's kind guard answers
@@ -2204,7 +2268,12 @@ export async function openExecutorCoordinator(
     // provenance, the person's terminal act for the states the record
     // cannot evidence. A live lease of the named unit refuses (P20: control
     // changes land at safe boundaries); booked entries are never the
-    // sweep's. The lines carry each booking's finding (P8).
+    // sweep's. The continuation re-derivation (0289) rides the same head
+    // sweep, evidence-gated alone — no forced arm (the person's channels
+    // are the handoff amendment and the unit's completion, both document
+    // acts), so a named unit whose continuation still stands answers with
+    // the teaching, never a flat nothing. The lines carry each booking's
+    // finding (P8).
     reconcile: (unit?: string) => serialize(async () => {
       const at = now()
       if (unit !== undefined) {
@@ -2216,7 +2285,12 @@ export async function openExecutorCoordinator(
       }
       await reconcileDeadLetters(at, unit)
       const lines = reconciliationLines.splice(0)
-      return { lines: lines.length ? lines : ["ℹ nothing to reconcile: no dead lease stands (every entry is booked, live, or already reconciled)"] }
+      if (lines.length) return { lines }
+      const standing = unit !== undefined ? latest(unit)?.booking?.receipt : undefined
+      if (standing?.kind === "landed" && standing.continuation) {
+        return { lines: [`ℹ ${unit}'s landed share still continues — its handoff at HEAD reads a continue status and the unit stands open; amend the handoff's Status line (and commit) or complete the unit to correct the continuation`] }
+      }
+      return { lines: ["ℹ nothing to reconcile: no dead lease stands (every entry is booked, live, or already reconciled)"] }
     }),
     busy: () => serialize(async () => entries.some((entry) => live(entry, now())) || pendingReport() !== undefined),
     async close() {

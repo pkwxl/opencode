@@ -148,7 +148,7 @@ line.
 
 | kind  | routes |
 | ----- | ------ |
-| REST  | `GET /health`; `GET /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan`, `transfer`, `clarify`, `reconcile` (the deterministic boundary operations — the protocol does nothing via push, plans/0282; `reconcile` the executor ledger's dead-letter reconciliation, plans/0286), `models` (GET the table; POST the probe — its own `probe` scope) |
+| REST  | `GET /health`; `GET /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan`, `transfer`, `clarify`, `reconcile` (the deterministic boundary operations — the protocol does nothing via push, plans/0282; `reconcile` the executor ledger's dead-letter reconciliation, plans/0287, the booked-continuation re-derivation riding the same sweep, plans/0289), `models` (GET the table; POST the probe — its own `probe` scope) |
 | WS    | the executor coordinator's bridge socket (the per-run secret the spawn carried) — the daemon serves coding agents only, never a web client (plans/0282) |
 
 Every route but `/health` requires `Authorization: Bearer <token>`:

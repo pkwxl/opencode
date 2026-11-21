@@ -64,7 +64,13 @@ release
   same report; a same-token claim resumes settlement first. A late report
   over a dead lease whose unit the record already closed is answered with
   the `reconciled` receipt (plans/0287): the lease ended without the share —
-  the receipt says so, whatever outcome the report claims.
+  the receipt says so, whatever outcome the report claims. A landed receipt
+  carrying the continuation flag — the holder's `Status: continue` handoff
+  statement — holds the designed continuation until the person's evidence
+  corrects it: an amended (committed) Status line or the unit's completion
+  strips the flag at the next wire act's sweep (plans/0289), the verify
+  share following the corrected receipt; a completion-closed landing carries
+  `closed: "person"` and never verifies (a person-closed unit is done).
 - **heartbeat** — renew the listed leases (the window derived from the
   grant's own budget, capped at twice it) and read the menu.
 - **release** — surrender a live lease without a report.
@@ -187,7 +193,11 @@ executor ledger's dead-letter reconciliation the `reconcile` operation
 (plans/0287; the sweep itself runs automatically at every wire act, booking
 dead leases whose units the record closed — the operation is the person's
 forced arm, naming a unit whose dead lease books whatever the unit's
-state); the menu's `pending` list names the awaiting gate and its document.
+state); the same sweep re-derives a booked continuation whose evidence the
+person corrected — the handoff's Status line amended, or the unit completed
+(plans/0289; evidence-gated alone, the operation naming a unit whose
+continuation still stands answering with the two document channels); the
+menu's `pending` list names the awaiting gate and its document.
 
 The step vocabulary a claim can answer beside the grants: `wait` (with
 `reason`: `lease-held`, `in-flight`, `question`, `gate`, `not-ready` and a
