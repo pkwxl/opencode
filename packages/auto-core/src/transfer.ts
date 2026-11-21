@@ -345,7 +345,14 @@ async function applyBoundaryDeterministic(
   await closeStep(directory, "phase-handover", phaseKey(phase).id)
   const gateProblems = await phaseGateProblems(directory, phase, gates)
   if (gateProblems.length === 0) {
-    const wallCtx: WallCtx = { directory, git: { commitTree }, opts: { stopBefore: "formulate" } }
+    // The wall ctx threads the advance's own intent (plans/0288, 0286 F1's
+    // fix): the admission instrument reads the project's pack through it —
+    // the loop's own site passes the run's full ctx, and the deterministic
+    // apply's minimal ctx here dropped the key, so the boundary held on
+    // "no instrument" on any intent-bearing project even with the op
+    // threading it. The remaining optional keys (idleMs and friends) stay
+    // the lane runner's own defaults, the pre-change floor.
+    const wallCtx: WallCtx = { directory, git: { commitTree }, opts: { stopBefore: "formulate", intent: opts.intent } }
     const wallLines = await wallBoundary(wallCtx, phase)
     if (wallLines.length) {
       for (const line of wallLines) log(line)

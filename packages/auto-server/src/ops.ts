@@ -872,6 +872,10 @@ async function runTaskAdd(request: OpRequest): Promise<OpOutcome> {
       newTask: title,
       autoNumber: loaded.config.autoNumber,
       testByDriver: loaded.config.testByDriver,
+      // The latent sibling of plans/0288's audit: no reachable arm of the
+      // prelude reads the pack over the task-add route today, but the key
+      // rides so the shape cannot bite when one grows.
+      intent: loaded.config.intent,
     })
   } finally {
     lock.release()
@@ -942,6 +946,10 @@ async function runPlan(request: OpRequest): Promise<OpOutcome> {
       isolate: loaded.config.isolate,
       autoNumber: loaded.config.autoNumber,
       testByDriver: loaded.config.testByDriver,
+      // The latent sibling of plans/0288's audit (the prelude's scaffold arm
+      // needs a phase flag this operation never passes): the key rides for
+      // the day an arm grows.
+      intent: loaded.config.intent,
       ...(typeof input === "string" && input.trim() ? { input: { text: input } } : {}),
     })
   } finally {
@@ -1007,6 +1015,12 @@ async function runTransferOp(request: OpRequest): Promise<OpOutcome> {
       autoNumber: config.autoNumber,
       testByDriver: config.testByDriver,
       acceptanceGate: config.acceptanceGate,
+      // The active intent pack (plans/0288, 0286 F1's fix): the advance's
+      // pack-dependent halves (the wall's admission instrument above all)
+      // read the project's own materialized pack — the dropped key read the
+      // built-in default on any intent-bearing project and the boundary
+      // held on "no instrument".
+      intent: config.intent,
       ...(body?.resynthesize === true ? { resynthesize: true } : {}),
     })
   } finally {

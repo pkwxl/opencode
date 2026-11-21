@@ -28,9 +28,9 @@
 //     lock-acquiring ops' 423, and the registry's retryable 409 beside a
 //     live run of this daemon (a real worker over the fake `claude`).
 import { describe, expect, test } from "bun:test"
-import { realpathSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, rename, rm, symlink } from "node:fs/promises"
-import { hostname, tmpdir } from "node:os"
+import { homedir, hostname, tmpdir } from "node:os"
 import { join } from "node:path"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
@@ -39,6 +39,7 @@ import { renderAgentContract } from "@opencode-ai/auto-core/config-fix"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
 import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { establishRound } from "@opencode-ai/auto-core/phases"
+import { findWallCommit } from "@opencode-ai/auto-core/wall"
 import { fakeAgent, fixtureProject, gitOf, TASK } from "./fixtures/project"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 
@@ -834,6 +835,67 @@ describe("the lifecycle operations (P1d)", () => {
       expect([200, 409]).toContain(established.status)
       expect(await Bun.file(join(start, "docs", "R-01", "phases.md")).exists()).toBe(true)
       for (const d of [dir, manual, blank, start]) await rm(d, { recursive: true, force: true })
+    })
+  }, 240_000)
+
+  // The intent threading (plans/0288, 0286 F1's fix): the operation's
+  // deterministic opts carried every config key except `intent`, so the
+  // advance's pack-dependent halves read the built-in default pack on any
+  // intent-bearing project — the field's wall-admission finding ("no
+  // instrument", the igb boundary) reproduced here end to end: the sealing
+  // phase's advance holds on the missing regression-cost lane row while the
+  // project's own materialized pack declares it, and the wall closes once
+  // the key rides. The plan and task-add literals share the shape (their
+  // prelude arms have no reachable intent consumer today — the audit's
+  // latent half; the key rides for the day one grows).
+  test("the transfer operation threads the project's intent — the wall's admission reads the materialized pack, not the default", async () => {
+    await withOps(async (h) => {
+      // The wall-project shape (auto-core test/wall.test.ts's fixture): a
+      // sealing phase type, a corpus behind a tracked root symlink with the
+      // stamped allow, the phase's artifacts done, a valid handover — plus
+      // this ruling's own ingredient: the lane pack materialized under the
+      // project's OWN intent name (config intent "site-pack"), never the
+      // default overlay, so the default-pack read is the measured defect.
+      const dir = await gitBlank("auto-ops-intent-")
+      const corpus = await mkdtemp(join(homedir(), "auto-ops-intent-corpus-"))
+      await Bun.write(join(corpus, "timer.c"), "void tick(void) {}\n")
+      await Bun.write(join(dir, ".gitignore"), ".auto/\ntmp/\nopencode.json\n")
+      await mkdir(join(dir, ".opencode", "auto", "phases"), { recursive: true })
+      await Bun.write(join(dir, ".opencode", "auto", "phases", "spec-read.md"), [
+        "# Spec read", "", "Wall: seal linux", "Phase-artifacts: spec-notes.md", "Task-artifacts: notes.md", "", "## plan duties", "", "Read the reference, distill the notes.", "", "<!-- auto: eof -->", "",
+      ].join("\n"))
+      await mkdir(join(dir, ".opencode", "auto", "intents"), { recursive: true })
+      await Bun.write(join(dir, ".opencode", "auto", "intents", "site-pack.md"), [
+        "# site-pack", "", "## quality", "", "### test-lanes", "", "divergence:", "Command: true", "Cost: regression", "Surfaces: .", "Exclusive: no", "",
+      ].join("\n"))
+      await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, phases: "spec-read,implement", intent: "site-pack" })
+      await Bun.write(join(dir, "opencode.json"), JSON.stringify({ permission: { external_directory: { [`${corpus}/**`]: "allow" } } }, null, 2) + "\n")
+      await symlink(corpus, join(dir, "linux"))
+      await establishRound(dir, { phases: "spec-read,implement" })
+      const phase = join("docs", "R-01", "P01-spec-read")
+      await Bun.write(join(dir, phase, "spec-notes.md"), "# Spec notes\n\nBehavior only.\n\n<!-- auto: eof -->\n")
+      await Bun.write(join(dir, phase, "tasks.md"), "# Tasks\n\n- [x] T-001 read the timer\n")
+      await Bun.write(join(dir, phase, "handover.md"), [
+        "# Handover (R-01.P01)", "", "## Key decisions", "", "- behavior only.", "", "## Constraints and pitfalls", "", "- none.", "", "## Required reading for the next phase", "", "- spec-notes.md", "", "## Artifact index", "", "- spec-notes.md", "",
+      ].join("\n"))
+      await mkdir(join(dir, "docs", "T-001"), { recursive: true })
+      await Bun.write(join(dir, "docs", "T-001", "done.md"), "# T-001 read the timer\n\nPhase: R-01.P01\n\n## Goal\n\nRead the timer.\n\n## Scope\n\nThe spec notes.\n\n## Acceptance\n\nThe notes exist.\n")
+      await Bun.write(join(dir, "docs", "T-001", "notes.md"), "# Notes (T-001)\n\nContracts at the boundary.\n\n<!-- auto: eof -->\n")
+      const git = gitOf(dir)
+      await git("add", "-A")
+      await git("commit", "-qm", "the spec room's work, door standing")
+      const name = h.register(dir)
+      const advanced = await h.call("POST", `/projects/${name}/transfer`, h.control)
+      // The wall closed: the admission found the project's own lane row
+      // (green at the tree about to go clean), the door is gone and the
+      // allow retired to the deny — the pre-fix shape held the boundary on
+      // the default pack's missing instrument instead (the door standing).
+      expect([200, 409]).toContain(advanced.status)
+      expect(existsSync(join(dir, "linux"))).toBe(false)
+      expect(JSON.parse(await Bun.file(join(dir, "opencode.json")).text()).permission.external_directory).toEqual({ [`${corpus}/**`]: "deny" })
+      expect(await findWallCommit(dir)).toBeDefined()
+      await rm(corpus, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
     })
   }, 240_000)
 
