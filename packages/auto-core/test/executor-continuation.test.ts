@@ -69,6 +69,7 @@ function project() {
 
 type Coordinator = Awaited<ReturnType<typeof openExecutorCoordinator>>
 type Grant = Extract<Awaited<ReturnType<Coordinator["claim"]>>, { lease: string }>
+type ExecuteGrant = Extract<Grant, { kind: "execute" }>
 
 function ledger(dir: string) {
   return JSON.parse(readFileSync(join(dir, ".auto/executor-progress.json"), "utf8")) as { grant: { id: string; unit: string }; booking?: { outcome?: string; receipt?: { kind: string; continuation?: true; closed?: string } } }[]
@@ -250,13 +251,18 @@ test("the shadow: a released dead tail no longer hides the flag from the person'
   const peer = { token: "peer", channel: "other" }
   let coordinator = await openExecutorCoordinator(dir, { now: () => 1 })
   try {
-    const grant = (await coordinator.claim(worker, "T-064", "execute")) as Grant
+    const grant = (await coordinator.claim(worker, "T-064", "execute")) as ExecuteGrant
+    // The fresh unit's floor (0294): no landed share exists, the grant
+    // carries no landed context.
+    expect(grant.landed).toBeUndefined()
     write(dir, "docs/T-064/notes.md", "# Notes\n\n<!-- auto: eof -->\n")
     write(dir, "docs/T-064/handoff.md", "# Handoff\n\nThe implementation stands whole.\n\nStatus: continue\n")
     expect(await coordinator.report(worker, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed", continuation: true })
     // The probing claim the stranded continuation invites, released without
-    // a report — the dead tail that shadowed the flag in the field.
-    const probe = (await coordinator.claim(peer, "T-064", "execute")) as Grant
+    // a report — the dead tail that shadowed the flag in the field. The
+    // probe is itself a re-grant over the landed share: the context rides.
+    const probe = (await coordinator.claim(peer, "T-064", "execute")) as ExecuteGrant
+    expect(probe.landed).toMatchObject({ id: "T-064 exec 1" })
     await coordinator.release(peer, probe.id, probe.lease)
     // The person's channel: the Status line amended and committed.
     write(dir, "docs/T-064/handoff.md", "# Handoff\n\nThe implementation stands whole.\n\nStatus: done\n")
@@ -272,9 +278,15 @@ test("the shadow: a released dead tail no longer hides the flag from the person'
     // The dead tail still routes the designed takeover — the site's measured
     // move, now over a corrected flag: one bounded share drains the tail.
     expect(menu.claimable).toMatchObject([{ unit: "T-064", kinds: ["execute"] }])
-    const takeover = (await coordinator.claim(peer, "T-064", "execute")) as Grant
+    const takeover = (await coordinator.claim(peer, "T-064", "execute")) as ExecuteGrant
     expect(takeover.id).toBe("T-064 exec 2")
     expect(takeover.attempt).toBe(1)
+    // 0294 (0290 F4d): the landed context rides the re-grant — the prior
+    // share's id and its landing commit (0276's per-unit context
+    // discipline), the holder reading its unit's already-landed state from
+    // the grant, not the tree.
+    expect(takeover.landed).toMatchObject({ id: "T-064 exec 1" })
+    expect(takeover.landed!.commit).toMatch(/^[0-9a-f]{7,40}$/)
     // The takeover share is truthful bounded work (a real write in scope),
     // and it lands clean — the handoff reads done, no flag is derived.
     write(dir, "docs/T-064/notes.md", "# Notes\n\nRevisited over the already-whole unit.\n\n<!-- auto: eof -->\n")

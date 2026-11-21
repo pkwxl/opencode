@@ -33,7 +33,10 @@ versions named.
 
 The reply envelope: every 200 reply body carries
 `{ "protocol": <version>, …payload }`; 400/500 replies carry
-`{ "error": "…" }`.
+`{ "error": "…" }`. The executor acts' payload shapes: `ready` answers
+`{ "build", "menu" }`, every other act `{ "step" }` — the leased grant or
+the wait/blocked/terminal notice under the `step` key (plans/0294: the
+key the site's first parse missed, named).
 
 ## Routes
 
@@ -59,8 +62,9 @@ release
   comparison home (plans/0270, its source-mode line widened plans/0293).
   Idempotent; safe to poll.
 - **claim** — take the next step (untargeted), or a targeted
-  `{ task, kind }`. Returns a leased grant, or a wait/blocked/terminal
-  step. A held lease answers the same grant (brief refresh) for its holder.
+  `{ task, kind }`. Answers under `step`: a leased grant, or a
+  wait/blocked/terminal notice. A held lease answers the same grant
+  (brief refresh) for its holder.
 - **brief** — re-read the live grant's brief for `{ task, kind }`; with
   `cursor`, the paged person answers (`answers`/`next`).
 - **report** — `{ step, lease, outcome: ended|failed, note? }`: the share's
@@ -76,8 +80,11 @@ release
   strips the flag at the next wire act's sweep (plans/0289), the verify
   share following the corrected receipt; a completion-closed landing carries
   `closed: "person"` and never verifies (a person-closed unit is done).
-- **heartbeat** — renew the listed leases (the window derived from the
-  grant's own budget, capped at twice it) and read the menu.
+- **heartbeat** — renew the listed leases and read the menu. The renewal
+  window derives from the lease's own budget, capped at twice it
+  (plans/0260) — the coordinator's ledger holds that clock; verify and
+  fix grants carry no `budget` field on the wire (plans/0294), their
+  shares living on `deadline` and the menu's renewed lease rows.
 - **release** — surrender a live lease without a report.
 - **report** carries `note`; a holder blocked on a cause outside its
   permitted writes is answered `blocked` naming the person-necessary cause
@@ -104,11 +111,16 @@ audit
 
 - **execute** — a task unit's whole-task share. Address: the task id. The
   grant carries `prompt` (the whole-task brief), `budget`, `lease`,
-  `deadline`, `attempt`, `workspace`, `answerCursor`. Writes: the unit's
-  effective scope (`touches`/declared scope) or the freeform floor, plus
-  the handoff document.
+  `deadline`, `attempt`, `workspace`, `answerCursor`; over a unit with a
+  landed share, `landed` — the prior share's id and its landing commit
+  (0276's per-unit context discipline; plans/0294 — the holder reads its
+  unit's already-landed state from the grant, not the tree). Writes: the
+  unit's effective scope (`touches`/declared scope) or the freeform floor,
+  plus the handoff document.
 - **verify** — the independent wrap-up judgment over a landed execute
-  share. Requires a different token from the producer. Writes exactly one
+  share. Requires a different token from the producer. Carries no
+  `budget` — the share's clock rides `deadline` (the heartbeat letter,
+  plans/0294). Writes exactly one
   artifact: a PASS `report.md` or a countable FAIL `gaps.md`. A PASS
   close-out ticks the index row and renames `todo.md` → `done.md`
   (driver-exclusive shapes, the coordinator's alone). A FAIL opens a fix
@@ -168,7 +180,10 @@ qualified phase id for the boundary (distill).
   empty — the lane's own held row (plans/0287): the derivation's first
   `wait`/`blocked` answer (`kind`, `reason`, `detail` — the step
   vocabulary's own shapes), so an empty `claimable` never sits beside a
-  silent cause (0285's honesty gap).
+  silent cause (0285's honesty gap). The `not-ready` detail names its
+  cause class (plans/0294): the ledger's continuation pin — its remedy
+  the person's document channels — the plan's dependency edge naming the
+  units waited on, or the index's own status.
 
 The landing fence admits per grant exactly: the standing refusal set
 refused for every kind (the driver workdir `.auto/`/`tmp/`, the config

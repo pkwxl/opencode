@@ -29,7 +29,7 @@ import { renderFix, renderPhaseHandover, renderWhole, renderWrapup, type PromptF
 import { promptFacts } from "./prompt-facts"
 import { peekProgress } from "./resume"
 import { autoSwitches } from "./switches"
-import { loadPlan, next, promptViews, readyTasks, strandedParks, taskIndexPath, taskStatePaths, type Plan } from "./tasks"
+import { loadPlan, next, promptViews, readyTasks, strandedParks, taskIndexPath, taskStatePaths, unmetDepends, type Plan } from "./tasks"
 
 type BlockReason = "config" | "subtask" | "unreadable" | "cleanTree" | "mutualPark"
 type Blocked = { kind: "blocked"; reason: BlockReason; detail: string }
@@ -38,7 +38,7 @@ export type ExecutorPreview =
   | Blocked
   | { kind: "human"; gate: "project-start" | "survey-release"; document: string; detail?: string }
   | { kind: "wait"; reason: "not-ready" | "in-flight"; detail: string }
-  | { kind: "execute"; unit: string; title: string; touches?: readonly string[]; prompt: string }
+  | { kind: "execute"; unit: string; title: string; touches?: readonly string[]; landed?: { id: string; commit: string }; prompt: string }
   | { kind: "formulate"; unit: string; title: string; phase: string; index: string; prompt: string }
   | { kind: "synthesize"; unit: string; title: string; phase: string; index: string; prompt: string }
   | { kind: "distill"; unit: string; title: string; handover: string; prompt: string }
@@ -257,7 +257,32 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
   // The boundary work's own address (0277): a targeted claim or continuation
   // route naming the current phase's qualified id passes to the boundary
   // derivation below — every other target keeps the standing not-ready wait.
-  if (state.route && state.route.task !== plan.phase) return { kind: "wait", reason: "not-ready", detail: `${state.route.task} is not ready.` }
+  // 0294 (0290 F4c): the not-ready detail names its cause class, never the
+  // bare unit name — the held row and the targeted answer diagnosable apart
+  // (the ledger's pin against the plan's edge, the field's measured
+  // indistinguishability). Four mechanical classes, each reading a state
+  // the derivation already holds.
+  if (state.route && state.route.task !== plan.phase) {
+    const target = state.route.task
+    if (target === state.continuationUnit) {
+      // The ledger's own routing reached here (preview's continuation arm):
+      // the unit's non-terminal tail — a landed share's flag, or a booked
+      // non-landing tail (0292's class) — pins the lane. The letter teaches
+      // the family's releases: the person's document channels (0289), the
+      // sweep's own record-completion arm, and the takeover share (0287's
+      // designed recovery).
+      return { kind: "wait", reason: "not-ready", detail: `${target} is held by the ledger's continuation claim — the person's handoff Status amendment or the unit's completion releases it, or a takeover share lands over the unit.` }
+    }
+    const routed = plan.tasks.find(({ id }) => id === target)
+    if (!routed) {
+      return { kind: "wait", reason: "not-ready", detail: `${target} is not a task in this phase's index.` }
+    }
+    const waiting = unmetDepends(plan, routed)
+    if (waiting.length) {
+      return { kind: "wait", reason: "not-ready", detail: `${routed.id} is not ready — waiting on ${waiting.join(", ")}.` }
+    }
+    return { kind: "wait", reason: "not-ready", detail: `${routed.id} is not ready (its status in this phase's index: ${routed.status}).` }
+  }
   const parks = strandedParks(plan)
   if (parks.length) {
     return { kind: "blocked", reason: "mutualPark", detail: parks.map((task) => `${task.id} parks on ${task.parked}`).join(", ") }

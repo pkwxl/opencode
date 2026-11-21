@@ -7,12 +7,17 @@ import { encodeFrame, parseFrame, PROTOCOL_VERSION, type StepDone, type StepRequ
 type Coordinator = Awaited<ReturnType<typeof openExecutorCoordinator>>
 type Step = Awaited<ReturnType<Coordinator["claim"]>>
 
-function wireStep(step: Step): Record<string, unknown> {
+// Exported for the wire serialization pin (test/executor-wire.test.ts,
+// plans/0294): the per-kind serializer alone, detached from the coordinator.
+export function wireStep(step: Step): Record<string, unknown> {
   switch (step.kind) {
     case "execute": {
       if (!("lease" in step)) throw new Error("Executor returned an unleased execute step.")
       const { id, unit, title, prompt, budget, lease, deadline, attempt, workspace, answerCursor } = step
-      return { kind: step.kind, id, unit, title, prompt, budget, lease, deadline, attempt, workspace, answerCursor }
+      // 0294 (0290 F4d): the landed context rides the wire over a unit
+      // with a landed share — the prior share's id and commit; absent on
+      // a fresh unit (the key itself absent, never a null).
+      return { kind: step.kind, id, unit, title, prompt, budget, lease, deadline, attempt, workspace, answerCursor, ...(step.landed ? { landed: step.landed } : {}) }
     }
     // 0276 (0256 stage 2's first convergence kind): the formulation grant —
     // a fresh unit claim like execute, carrying the phase's identity (the

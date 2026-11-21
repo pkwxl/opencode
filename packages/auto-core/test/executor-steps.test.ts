@@ -75,6 +75,44 @@ test("previews project-start and refuses subtask mode before that gate", async (
   expect(await readExecutorPreview(project("auto"))).toMatchObject({ kind: "blocked", reason: "subtask" })
 })
 
+// 0290 F4c's fix 0294: the not-ready detail names its cause class, never
+// the bare unit name — the held row and the targeted answer diagnosable
+// apart (the ledger's pin against the plan's edge, the field's measured
+// indistinguishability closed). Four mechanical classes, pinned at the
+// derivation the menu's held row copies verbatim.
+test("the not-ready wait names its cause class: the plan's edge, the ledger's pin, the plan's absence, the index's status", async () => {
+  const dir = project()
+  const path = phase(dir, "implement")
+  write(dir, `${path}/tasks.md`, "# Tasks\n\n- [ ] T-001 Ready\n- [ ] T-002 Dependent\n")
+  write(dir, "docs/T-001/todo.md", "# Ready\n\nDepends: none\nDecompose: pipeline\n\n## Scope\n\nImplement the widget.\n")
+  write(dir, "docs/T-002/todo.md", "# Dependent\n\nDepends: T-001\n\n## Scope\n\nLater work.\n")
+  commitFixture(dir)
+  // The plan's edge: a targeted claim at the dependent unit names the unmet
+  // dependency (the pre-fix letter named the unit alone).
+  expect(await readExecutorPreview(dir, undefined, { task: "T-002" })).toEqual({
+    kind: "wait", reason: "not-ready", detail: "T-002 is not ready — waiting on T-001.",
+  })
+  // The ledger's class: the same target routed by the coordinator's
+  // continuation arm (the route equal to the ledger's continuation unit)
+  // names the pin and teaches its releases — the field's held-row shape.
+  expect(await readExecutorPreview(dir, "T-002", { task: "T-002" })).toEqual({
+    kind: "wait", reason: "not-ready",
+    detail: "T-002 is held by the ledger's continuation claim — the person's handoff Status amendment or the unit's completion releases it, or a takeover share lands over the unit.",
+  })
+  // A task the plan does not carry names its absence.
+  expect(await readExecutorPreview(dir, undefined, { task: "T-999" })).toEqual({
+    kind: "wait", reason: "not-ready", detail: "T-999 is not a task in this phase's index.",
+  })
+  // The index's own status: a completed unit targeted fresh (the person's
+  // completion, no continuation routing) names its status.
+  git(dir, "mv", "docs/T-001/todo.md", "docs/T-001/done.md")
+  write(dir, `${path}/tasks.md`, "# Tasks\n\n- [x] T-001 Ready\n- [ ] T-002 Dependent\n")
+  commitFixture(dir)
+  expect(await readExecutorPreview(dir, undefined, { task: "T-001" })).toEqual({
+    kind: "wait", reason: "not-ready", detail: "T-001 is not ready (its status in this phase's index: done).",
+  })
+})
+
 test("previews the pending survey release before checking unowned dirt", async () => {
   const dir = project()
   write(dir, ".opencode/auto/phases/survey.md", "# Survey\n\nGate: human\n\n## plan duties\n\nRead the sources.\n\n<!-- auto: eof -->\n")

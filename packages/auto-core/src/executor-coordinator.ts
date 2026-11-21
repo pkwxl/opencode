@@ -2219,6 +2219,18 @@ export async function openExecutorCoordinator(
         workspace: workspace ? executorWorkspacePath(dir, workspace) : dir,
         deadline: issued + leaseWindowMs(budget), budget,
       }
+      // 0294 (0290 F4d): the landed context rides an execute grant over a
+      // unit with a landed share — the prior share's id and its landing
+      // commit, 0276's per-unit context discipline (the fix grant's
+      // phase/index/findings the precedent): a takeover or continuation
+      // holder reads its unit's already-landed state from the grant, not
+      // the tree. Attached at the ledger's own boundary (the steps
+      // derivation never touches receipts, P5); a fresh unit carries
+      // nothing — the byte-identical floor.
+      if (grant.kind === "execute") {
+        const landed = lastLanded(step.unit)
+        if (landed?.booking?.receipt?.kind === "landed") grant.landed = { id: landed.grant.id, commit: landed.booking.receipt.commit }
+      }
       const brief = withAnswers(holder, grant)
       if (brief.kind === "blocked") return brief
       const predecessor = last?.grant.id === grant.id ? last.grant.lease : undefined

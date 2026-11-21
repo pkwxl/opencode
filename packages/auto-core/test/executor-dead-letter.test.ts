@@ -4,10 +4,12 @@
 // the 0274 amendment class) stranded the lane totally: measured on the
 // pre-fix tree, every claim — targeted and untargeted alike — answered the
 // continuation's not-ready wait (`"T-001 is not ready."`, the field's
-// `"T-006 is not ready."` byte-identical in shape) because the serial
-// reservation emptied the scoped candidates and select's fallthrough routed
-// every claim at the dead continuation; and the scoped flavor fenced every
-// overlapping unit (`reserves an overlapping scope until settlement`). The
+// `"T-006 is not ready."` byte-identical in shape — 0294 later split the
+// letter into its cause classes, the ledger's pin naming itself) because
+// the serial reservation emptied the scoped candidates and select's
+// fallthrough routed every claim at the dead continuation; and the scoped
+// flavor fenced every overlapping unit (`reserves an overlapping scope
+// until settlement`). The
 // sweep books the dead letter with the reconciled receipt at the head of
 // the next serialized wire act — the pin self-clears, zero person acts
 // beyond the completion the person already made.

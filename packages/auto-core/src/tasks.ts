@@ -782,6 +782,16 @@ export function readyTasks(plan: Plan): Task[] {
   return plan.tasks.filter(({ id }) => ready.has(id))
 }
 
+// 0294 (0290 F4c): the unmet dependency edges of a task — read through the
+// same readyDone home the readiness routing reads (never a second
+// re-derivation), so the not-ready detail's cause class and the routing
+// cannot disagree.
+export function unmetDepends(plan: Plan, task: Task): string[] {
+  if (!Array.isArray(task.depends)) return []
+  const done = readyDone(plan)
+  return task.depends.filter((dep) => !done.has(dep))
+}
+
 export function next(plan: Plan): Task | undefined {
   const id = nextReady(plan.tasks.map(declOf), readyDone(plan))
   return plan.tasks.find((task) => task.id === id)
