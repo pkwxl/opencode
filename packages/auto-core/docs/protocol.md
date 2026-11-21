@@ -190,10 +190,12 @@ person's acts are document writes and the daemon's deterministic
 operations — the release act is the `clarify` operation (or the document
 edit itself), the boundary advance the `transfer` operation, and the
 executor ledger's dead-letter reconciliation the `reconcile` operation
-(plans/0287; the sweep itself runs automatically at every wire act, booking
-dead leases whose units the record closed — the operation is the person's
-forced arm, naming a unit whose dead lease books whatever the unit's
-state); the same sweep re-derives a booked continuation whose evidence the
+(plans/0287, its booked non-landing class widened plans/0292; the sweep
+itself runs automatically at every wire act, booking dead leases and
+booked `without-landing` receipts whose units the record closed — the
+operation is the person's forced arm, naming a unit whose dead lease or
+booked `without-landing` receipt books whatever the unit's state); the
+same sweep re-derives a booked continuation whose evidence the
 person corrected — the handoff's Status line amended, or the unit completed
 (plans/0289; evidence-gated alone, the operation naming a unit whose
 continuation still stands answering with the two document channels); the

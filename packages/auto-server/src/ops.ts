@@ -1056,15 +1056,17 @@ async function runClarify(request: OpRequest): Promise<OpOutcome> {
   return code === 0 ? ok(result.lines) : refused(code, result.lines)
 }
 
-// reconcile (0285's person-terminus, enacted 0287): the dead-letter
-// reconciliation operation — the person's terminal act for ledger states the
-// durable record cannot evidence. The op opens the executor coordinator
-// over the lane (the coordinator is the ledger's one writer, the same
-// core-side home the wire's sweep runs in) and runs its reconcile act: with
-// no request fields, the automatic sweep alone — book exactly the dead
-// leases (expired or released, never reported) whose units the durable
-// record already reads done; with "unit", the forced arm beside it — every
-// dead lease of that unit books with the person's provenance, whatever the
+// reconcile (0285's person-terminus, enacted 0287, its booked non-landing
+// class widened plans/0292): the dead-letter reconciliation operation — the
+// person's terminal act for ledger states the durable record cannot
+// evidence. The op opens the executor coordinator over the lane (the
+// coordinator is the ledger's one writer, the same core-side home the
+// wire's sweep runs in) and runs its reconcile act: with no request
+// fields, the automatic sweep alone — book exactly the dead leases
+// (expired or released, never reported) and the booked without-landing
+// receipts whose units the durable record already reads done; with "unit",
+// the forced arm beside it — every dead lease and booked without-landing
+// receipt of that unit books with the person's provenance, whatever the
 // unit's state. A live lease of a named unit refuses (control changes land
 // at safe boundaries); a live driver (a spawned executor run) holds the
 // coordinator's run lock and the op names the stop.
@@ -1072,7 +1074,7 @@ async function runReconcile(request: OpRequest): Promise<OpOutcome> {
   const { project, body } = request
   for (const key of Object.keys(body ?? {})) {
     if (key === "unit") continue
-    return bad(`unknown reconcile field "${key}" (the reconcile request takes "unit" — the id of a lane unit whose dead leases the person reconciles by name; with no unit the sweep books exactly the dead leases whose units read done in the durable record)`)
+    return bad(`unknown reconcile field "${key}" (the reconcile request takes "unit" — the id of a lane unit whose dead leases and booked without-landing receipts the person reconciles by name; with no unit the sweep books exactly those whose units read done in the durable record)`)
   }
   if ("unit" in (body ?? {}) && typeof body!.unit !== "string") {
     return bad("unit takes a string (the unit id whose dead leases the person reconciles by name)")

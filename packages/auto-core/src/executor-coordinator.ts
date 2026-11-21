@@ -976,16 +976,29 @@ export async function openExecutorCoordinator(
   // reservation fences the scope until a settlement that can never come. The
   // sweep reconciles the ledger DOWNWARD to the record (P6): it books the
   // entry with the reconciled receipt, one idempotent write every
-  // receipt-keyed derivation then reads closed. Live leases and booked
-  // entries are untouched (P12 — their own machinery owns them; a pending
-  // report is the settlement's, never this sweep's), and a dead lease whose
-  // unit still stands open is the takeover's, not the sweep's — the
-  // continuation routing a successor at it is the designed recovery. The
-  // person's forced arm (the reconcile operation naming the unit) books a
-  // dead lease regardless of completion — the person's terminal act for the
-  // states the record cannot evidence (P2: every wedge terminates at a
-  // person-reachable act). Each booking logs its finding and provenance
-  // (P8), the isolation walk's amendment line its precedent.
+  // receipt-keyed derivation then reads closed. Live leases are untouched
+  // (P12 — their own machinery owns them), and a dead lease whose unit
+  // still stands open is the takeover's, not the sweep's — the continuation
+  // routing a successor at it is the designed recovery. The person's forced
+  // arm (the reconcile operation naming the unit) books a dead lease
+  // regardless of completion — the person's terminal act for the states the
+  // record cannot evidence (P2: every wedge terminates at a person-reachable
+  // act). Each booking logs its finding and provenance (P8), the isolation
+  // walk's amendment line its precedent.
+  // 0290 F2's fix 0292 — the booked non-landing receipt joins the class: a
+  // booked `without-landing` (a settled report that landed nothing — the
+  // field's zero-write replays) over a unit the record completes holds the
+  // same pin (neither landed nor reconciled, the continuation arm routes at
+  // it, the reservation fences on), and 0287's channels enumerated only the
+  // unbooked dead letter — the recorded residual, its field record standing.
+  // The same two arms reach it: the record's completion books it
+  // `person-completion` at the head of every wire act (the prior booking's
+  // outcome and reason preserved in the re-booking's note — the ledger's
+  // claim reconciled downward, never history rewritten), and the forced arm
+  // books it by name for the record-blind shapes. Every other booked
+  // receipt is another mechanism's (P12 — a landed share is history, a
+  // pending report the settlement's, a blocked receipt 0287's standing
+  // residual), and a pending settlement is never the sweep's.
   // The sweep's bookings this coordinator session, in order — the reconcile
   // operation drains the buffer so its answer carries every line the sweep
   // booked during the call (the serialize head's included), never a stale
@@ -994,19 +1007,31 @@ export async function openExecutorCoordinator(
 
   async function reconcileDeadLetters(at: number, forced?: string): Promise<string[]> {
     const lines: string[] = []
+    const completed = new Map<string, boolean>()
+    const recordCloses = async (unit: string, kind: Grant["kind"]) => {
+      if (!completed.has(unit)) completed.set(unit, await unitCompleted(unit, kind))
+      return completed.get(unit)
+    }
     for (const entry of entries) {
-      if (entry.booking || live(entry, at)) continue
+      const booking = entry.booking
+      const reason = booking?.receipt?.kind === "without-landing" ? booking.receipt.reason : undefined
+      const dead = !booking && !live(entry, at)
+      // The sweep's two classes — 0287's unbooked dead letter and 0292's
+      // booked without-landing receipt; live leases (no booking, deadline
+      // standing) and every other booked receipt stay outside. Both arms
+      // below reach both classes: the forced arm by name, the automatic
+      // arm through the record's completion.
+      if (!dead && reason === undefined) continue
       const named = forced !== undefined && entry.grant.unit === forced
-      if (!named && !(await unitCompleted(entry.grant.unit, entry.grant.kind))) continue
+      if (!named && !(await recordCloses(entry.grant.unit, entry.grant.kind))) continue
       const by: ReconciledReceipt["by"] = named ? "person-reconcile" : "person-completion"
-      await book(entry, {
-        outcome: "ended",
-        note: named ? "reconciled: the person's reconcile operation named the unit" : "reconciled: the unit reads done in the durable record",
-        receipt: { kind: "reconciled", by },
-      })
-      const line = named
-        ? `ℹ reconciled the dead lease ${entry.grant.id} on ${entry.grant.unit} — the person's reconcile operation named the unit; the never-reported share stays unbooked`
-        : `ℹ reconciled the dead lease ${entry.grant.id} on ${entry.grant.unit} — the unit reads done in the durable record (the person's completion); the never-reported share stays unbooked`
+      const note = named ? "reconciled: the person's reconcile operation named the unit" : "reconciled: the unit reads done in the durable record"
+      await book(entry, reason !== undefined
+        ? { ...booking!, note: `${note} (over a without-landing share: ${reason})`, receipt: { kind: "reconciled", by } }
+        : { outcome: "ended", note, receipt: { kind: "reconciled", by } })
+      const line = reason !== undefined
+        ? `ℹ reconciled the booked share ${entry.grant.id} on ${entry.grant.unit} — ${named ? "the person's reconcile operation named the unit" : "the unit reads done in the durable record (the person's completion)"}; the never-landed receipt (${reason}) stays noted`
+        : `ℹ reconciled the dead lease ${entry.grant.id} on ${entry.grant.unit} — ${named ? "the person's reconcile operation named the unit" : "the unit reads done in the durable record (the person's completion)"}; the never-reported share stays unbooked`
       lines.push(line)
       reconciliationLines.push(line)
       log(line)
@@ -2276,12 +2301,15 @@ export async function openExecutorCoordinator(
     // The person's reconciliation act (0287): the deterministic-op arm of
     // the dead-letter sweep, exposed for the daemon's control-scope
     // operation. No unit: the automatic sweep alone (book exactly the dead
-    // leases whose units the record closed). A unit: the forced arm beside
-    // it — every dead lease of that unit books with the person's
-    // provenance, the person's terminal act for the states the record
-    // cannot evidence. A live lease of the named unit refuses (P20: control
-    // changes land at safe boundaries); booked entries are never the
-    // sweep's. The continuation re-derivation (0289) rides the same head
+    // leases — and, 0292, the booked without-landing receipts — whose units
+    // the record closed). A unit: the forced arm beside it — every dead
+    // lease and every booked without-landing receipt of that unit books
+    // with the person's provenance, the person's terminal act for the
+    // states the record cannot evidence. A live lease of the named unit
+    // refuses (P20: control changes land at safe boundaries); every other
+    // booked receipt is never the sweep's (a landed share history, a
+    // pending report the settlement's, a blocked receipt 0287's standing
+    // residual). The continuation re-derivation (0289) rides the same head
     // sweep, evidence-gated alone — no forced arm (the person's channels
     // are the handoff amendment and the unit's completion, both document
     // acts), so a named unit whose continuation still stands answers with

@@ -316,3 +316,105 @@ test("the healthy floor: a completed lane carries no reconciliation, no lines", 
     await coordinator.close()
   }
 })
+
+// 0290 F2's fix 0292: the booked zero-write pin. The field's shape
+// (squashfs T-006): the night's report replays booked the dead leases as
+// `without-landing/zero-write` receipts — 0287's channels enumerated only
+// the *unbooked* dead letter, so the booked flavor held the pin with no
+// person-reachable channel (the sweep's booked guard sat ahead of the
+// forced check; the continuation sweep handled only landed receipts). The
+// sweep's class widens: a booked without-landing receipt over a unit the
+// record completes books by the sweep itself, and the forced arm reaches
+// the booked flavor by name.
+async function zeroWrites(coordinator: Coordinator, unit: string, count: number) {
+  const grants: Grant[] = []
+  for (let index = 0; index < count; index++) {
+    const grant = await claim(coordinator, worker, unit)
+    expect(await coordinator.report(worker, grant.id, grant.lease, "ended")).toMatchObject({ kind: "without-landing", reason: "zero-write" })
+    grants.push(grant)
+  }
+  return grants
+}
+
+test("a person-completed unit's booked zero-writes reconcile at the next wire act and the lane resumes", async () => {
+  const dir = project()
+  const printed: string[] = []
+  const seen = spyOn(console, "log").mockImplementation((...args: unknown[]) => { printed.push(args.join(" ")) })
+  let coordinator = await openExecutorCoordinator(dir, { now: () => 1 })
+  try {
+    // The field's three replays — same id, the attempt budget burned (the
+    // pre-fix ledger's literal shape: three `T-006 formulate 1` entries).
+    const grants = await zeroWrites(coordinator, "T-001", 3)
+    expect(ledger(dir)).toHaveLength(3)
+    await coordinator.close()
+    personComplete(dir, "T-001", "# Tasks\n\n- [x] T-001 Task 1\n- [ ] T-002 Task 2\n- [ ] T-003 Task 3\n")
+    coordinator = await openExecutorCoordinator(dir, { now: () => 10_000 })
+    // The menu read — the first wire act — books every zero-write receipt
+    // reconciled (the pre-fix sweep skipped them all ahead of even the
+    // forced check, and the menu answered the held row "T-001 is not
+    // ready." for targeted and untargeted claims alike).
+    const menu = await coordinator.ready(peer)
+    expect(menu.claimable.map(({ unit }) => unit)).toEqual(["T-002", "T-003"])
+    expect(menu.pending).toEqual([])
+    expect(ledger(dir).filter(({ booking }) => booking?.receipt?.kind === "reconciled")).toHaveLength(3)
+    expect(printed.join("\n")).toContain("reconciled the booked share T-001 exec 1 on T-001")
+    expect(printed.join("\n")).toContain("the unit reads done in the durable record (the person's completion)")
+    expect(printed.join("\n")).toContain("the never-landed receipt (zero-write) stays noted")
+    // The untargeted claim grants the unit behind — the pin self-cleared
+    // with zero person acts beyond the completion the person already made.
+    const next = await claim(coordinator, peer)
+    expect(next.unit).toBe("T-002")
+    // Idempotent: a further act books nothing more, logs nothing more.
+    const before = printed.length
+    await coordinator.ready(peer)
+    expect(printed.length).toBe(before)
+    expect(ledger(dir).filter(({ booking }) => booking?.receipt?.kind === "reconciled")).toHaveLength(3)
+    // A late report over a booked zero-write answers with the
+    // reconciliation truth, exactly as the dead-letter flavor does.
+    expect(await coordinator.report(worker, grants[0]!.id, grants[0]!.lease, "failed")).toEqual({ kind: "reconciled", by: "person-completion" })
+  } finally {
+    seen.mockRestore()
+    await coordinator.close()
+  }
+})
+
+test("the forced arm books a named unit's zero-writes over the open unit; a landed receipt is never the sweep's", async () => {
+  const dir = project()
+  const printed: string[] = []
+  const seen = spyOn(console, "log").mockImplementation((...args: unknown[]) => { printed.push(args.join(" ")) })
+  const coordinator = await openExecutorCoordinator(dir, { now: () => 1 })
+  try {
+    await zeroWrites(coordinator, "T-001", 2)
+    // The unit stands open: the automatic arm declines (the record has not
+    // closed it) and the menu letters the designed takeover.
+    let menu = await coordinator.ready(peer)
+    expect(menu.claimable.map(({ unit }) => unit)).toEqual(["T-001"])
+    expect(ledger(dir).every(({ booking }) => booking?.receipt?.kind === "without-landing")).toBe(true)
+    // The person's forced arm reaches the booked flavor by name — the
+    // terminus for the record-blind shapes (an abandoned continuation).
+    const swept = await coordinator.reconcile("T-001")
+    expect(swept.lines).toHaveLength(2)
+    expect(swept.lines[0]).toContain("reconciled the booked share T-001 exec 1 on T-001")
+    expect(swept.lines[0]).toContain("the person's reconcile operation named the unit")
+    expect(ledger(dir).every(({ booking }) => booking?.receipt?.kind === "reconciled")).toBe(true)
+    // Idempotent, and the open unit stands as honest fresh work (the serial
+    // unit it is — the claimable letter unchanged, the routing underneath
+    // now a fresh claim rather than a continuation over dead receipts).
+    expect(await coordinator.reconcile("T-001")).toEqual({ lines: [expect.stringContaining("nothing to reconcile")] })
+    menu = await coordinator.ready(peer)
+    expect(menu.claimable.map(({ unit }) => unit)).toEqual(["T-001"])
+    // A landed receipt is history, never the sweep's: the takeover lands,
+    // and the forced arm over its unit answers nothing to reconcile with
+    // the landing untouched.
+    const takeover = await claim(coordinator, peer, "T-001")
+    expect(takeover.attempt).toBe(3)
+    write(dir, "docs/T-001/handoff.md", "# Handoff\n\nStatus: done\n")
+    expect(await coordinator.report(peer, takeover.id, takeover.lease, "ended")).toMatchObject({ kind: "landed" })
+    expect(await coordinator.reconcile("T-001")).toEqual({ lines: [expect.stringContaining("nothing to reconcile")] })
+    expect(ledger(dir).at(-1)!.booking?.receipt).toMatchObject({ kind: "landed" })
+    expect(printed.join("\n")).not.toContain("reconciled the dead lease")
+  } finally {
+    seen.mockRestore()
+    await coordinator.close()
+  }
+})
