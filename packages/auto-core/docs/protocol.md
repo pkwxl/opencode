@@ -16,6 +16,11 @@ whitelist, token issue) is documented in the server package's
 [docs/daemon.md](../../auto-server/docs/daemon.md); this document covers the
 executor protocol alone.
 
+The coordinator is model-free — it performs no model calls. Every grant's
+LLM work belongs to whichever coding-agent session claims it: any host, any
+model, the claimant's own configuration; no grant kind implies a host. The
+daemon spawns no agent session — its only child is the coordinator worker.
+
 ## Wire version
 
 ```protocol
@@ -188,7 +193,7 @@ qualified phase id for the boundary (distill).
 The landing fence admits per grant exactly: the standing refusal set
 refused for every kind (the driver workdir `.auto/`/`tmp/`, the config
 directory, every `AGENTS.md`, the unit state documents `todo.md`/`done.md`,
-the index family `phases.md`/`tasks.md`, `subtasks.md`, `opencode.json`),
+the index family `phases.md`/`tasks.md`, `subtasks.md`),
 then the per-kind arms stated above. An out-of-scope edit blocks the
 settlement replayable; a never-set cause (every offending path refused for
 every kind) is the person's.
@@ -222,7 +227,7 @@ continuation still stands answering with the two document channels); the
 menu's `pending` list names the awaiting gate and its document.
 
 The step vocabulary a claim can answer beside the grants: `wait` (with
-`reason`: `lease-held`, `in-flight`, `question`, `gate`, `not-ready` and a
+`reason`: `lease-held`, `in-flight`, `gate`, `not-ready` and a
 `retryAfter` where it applies), `blocked` (`isolation`, `commitFailed`,
 `attemptsExhausted`, `fixBudget`, `config`, `subtask`, `unreadable`,
 `cleanTree`, `mutualPark`), `human` (a gate naming its document),

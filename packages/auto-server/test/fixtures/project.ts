@@ -8,7 +8,6 @@ import { expect } from "bun:test"
 import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { renderAgentContract } from "@opencode-ai/auto-core/config-fix"
 import { CONFIG_DEFAULTS, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
 import { ensureGitignore } from "@opencode-ai/auto-core/gitignore"
 import { establishRound } from "@opencode-ai/auto-core/phases"
@@ -59,10 +58,11 @@ export const TASK_2_DOC = `# ${TASK_2}: the second widget\nPhase: R-01.P01\n\n##
 // off on 2026-10-04, plans/0059 D1) — with one, the full config is written
 // through the core's own saver (the acceptance-gate variant
 // (acceptanceGate: ["implement"], no acceptance document) is how a fixture
-// run reaches the phase gate's exit 2). The agent contract is the one
-// artifact preflight hard-requires; the round setup and the task documents
-// ride the core's own writers (establishRound), committed as the clean
-// baseline the start gate demands.
+// run reaches the phase gate's exit 2). The round setup and the task
+// documents ride the core's own writers (establishRound), committed as the
+// clean baseline the start gate demands. No agent contract and no
+// opencode.json are seeded (plans/0296 — the host's own configuration
+// files, read by nothing under test).
 export async function fixtureProject(prefix: string, config?: Partial<ProjectConfig>, tasks: 1 | 2 = 1): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix))
   const git = gitOf(dir)
@@ -81,8 +81,6 @@ export async function fixtureProject(prefix: string, config?: Partial<ProjectCon
     await mkdir(join(dir, "docs", TASK_2), { recursive: true })
     await Bun.write(join(dir, "docs", TASK_2, "todo.md"), TASK_2_DOC)
   }
-  await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
-  await Bun.write(join(dir, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
   await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, subtask: "auto", ...config })
   // The ignore set init writes (tmp/, .auto/): without it the run's own
   // state files (its log, the lock, the stats segment) would reach the

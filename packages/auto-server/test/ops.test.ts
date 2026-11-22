@@ -35,13 +35,11 @@ import { join } from "node:path"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
 import { CONFIG_DEFAULTS, CONFIG_FILE, saveProjectConfig } from "@opencode-ai/auto-core/config"
-import { renderAgentContract } from "@opencode-ai/auto-core/config-fix"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
 import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { establishRound } from "@opencode-ai/auto-core/phases"
 import { findWallCommit } from "@opencode-ai/auto-core/wall"
 import { fakeAgent, fixtureProject, gitOf, TASK } from "./fixtures/project"
-import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 
 // The daemon serves operations from this process: the hermetic base of the
 // shared fixtures (the package preload, test/preload.ts — an empty config
@@ -103,13 +101,12 @@ async function gitBlank(prefix: string): Promise<string> {
 // round established, nothing done): the plan-boundary and config-op fixture —
 // every artifact init itself writes, so a clean fixture has no fix findings.
 // The config partial merges over the defaults (e.g. agent: "claude" for the
-// suites that spawn a planning run over the fake agent).
+// suites that spawn a planning run over the fake agent). Since plans/0296
+// init writes neither opencode.json nor the agent contract (the host's own
+// configuration files), neither is seeded here.
 async function phasedProject(prefix: string, phases: string, config: Partial<import("@opencode-ai/auto-core/config").ProjectConfig> = {}): Promise<string> {
   const dir = await gitBlank(prefix)
   await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, phases, ...config })
-  await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
-  await Bun.write(join(dir, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
-  await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
   // No brief: init never writes one (plans/0133 D9 retired the seed), and a
   // missing brief is no finding — the analysis flow owns the start.
   await ensureInitGitignore(dir)
@@ -206,15 +203,18 @@ describe("the lifecycle operations (P1d)", () => {
     })
   })
 
-  test("init freezes the config layer over the core's writers: config.json, the contract, the AGENTS.md block, opencode.json, the ignore set — and no brief (the analysis flow owns the start)", async () => {
+  test("init freezes the config layer over the core's writers: config.json, the AGENTS.md block, the ignore set — and no brief, no contract, no opencode.json (the analysis flow owns the start; the host's own files never init's, plans/0296)", async () => {
     await withOps(async (h) => {
       const dir = await gitBlank("auto-ops-init-")
       const name = h.register(dir)
       const answer = await h.call("POST", `/projects/${name}/init`, h.config, { config: { phases: "am", contextLimit: 32 } })
       expect(answer.status).toBe(200)
       expect(answer.body.code).toBe(0)
-      expect(has(answer.body, "created: opencode.json")).toBe(true)
-      expect(has(answer.body, `created: ${join(".opencode", "agent", "auto.md")}`)).toBe(true)
+      // plans/0296's severance: the host's own configuration files are never
+      // init's writes — neither lands, neither named in its lines.
+      expect(await Bun.file(join(dir, "opencode.json")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, ".opencode", "agent", "auto.md")).exists()).toBe(false)
+      expect(linesOf(answer.body).some((line) => line.includes("opencode.json") || line.includes("auto.md"))).toBe(false)
       expect(has(answer.body, "appended: AGENTS.md opencode-auto block")).toBe(true)
       // The closing pointer is the rounds' opening command (plans/0101 D4):
       // transfer on a phased project, naming the assisted analysis — and
@@ -227,7 +227,6 @@ describe("the lifecycle operations (P1d)", () => {
       expect(stored.contextLimit).toBe(32)
       expect(stored.mode).toBe("migrate")
       expect(await Bun.file(join(dir, ".opencode", "auto", "brief.md")).exists()).toBe(false)
-      expect(await Bun.file(join(dir, "opencode.json")).exists()).toBe(true)
       expect((await Bun.file(join(dir, "AGENTS.md")).text()).includes("<!-- opencode-auto:start -->")).toBe(true)
       expect(await Bun.file(join(dir, ".gitignore")).text()).toContain(".auto/")
       // init writes no rounds: docs/ is untouched (transfer establishes rounds)
@@ -238,7 +237,7 @@ describe("the lifecycle operations (P1d)", () => {
     })
   })
 
-  test("the shared sequence's git halves run on this shell too: 0073's bootstrap, 0122/0147's root-symlink stamps, 0138's ignore-set closing line (plans/0193 D4)", async () => {
+  test("the shared sequence's git halves run on this shell too: 0073's bootstrap, 0138's ignore-set closing line — and a root symlink stamps nothing (plans/0193 D4; the stamps retired by plans/0296)", async () => {
     await withOps(async (h) => {
       // The bootstrap (0073 / 0165-056's S29-04): a registered target inside
       // no work tree is bootstrapped by the operation itself — the CLI's own
@@ -260,22 +259,23 @@ describe("the lifecycle operations (P1d)", () => {
         Object.assign(process.env, held)
         await rm(plain, { recursive: true, force: true })
       }
-      // The stamps (0122/0147 / S30-02): a root symlink to a reference —
-      // init stamps the allow + the edit deny exactly as the CLI's (pre-fix
-      // the two shells' init outputs differed and sessions could not read
-      // the reference until someone ran fix).
+      // The root-symlink severance floor (plans/0296): the 0122/0147 stamps
+      // are gone — opencode.json is the host's own file, never init's write,
+      // so a root symlink to a reference stamps nothing and names nothing
+      // (the reads the sealed reference wall still does are the wall's own
+      // family, demolition-docketed).
       const dir = await gitBlank("auto-ops-stamps-")
       const corpus = await mkdtemp(join(tmpdir(), "auto-ops-corpus-"))
       await symlink(corpus, join(dir, "linux"))
       const name = h.register(dir)
       const stamped = await h.call("POST", `/projects/${name}/init`, h.config, {})
       expect(stamped.status).toBe(200)
-      expect(has(stamped.body, "stamped: opencode.json the root-symlink read-only stamps")).toBe(true)
-      const permission = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()).permission
-      expect(permission.external_directory[`${realpathSync(corpus)}/**`]).toBe("allow")
+      expect(await Bun.file(join(dir, "opencode.json")).exists()).toBe(false)
+      expect(linesOf(stamped.body).some((line) => line.includes("opencode.json"))).toBe(false)
       // 0138's committed-surfaces closing line on this shell too (the
-      // lockstep miss the mirror dropped).
-      expect(has(stamped.body, "the file itself and opencode.json are committed project surfaces — commit them with the config layer")).toBe(true)
+      // lockstep miss the mirror dropped), re-keyed by plans/0296: the
+      // .gitignore alone carries the committed-surface teaching.
+      expect(has(stamped.body, "the file itself is a committed project surface — commit it with the config layer")).toBe(true)
       await rm(dir, { recursive: true, force: true })
       await rm(corpus, { recursive: true, force: true })
     })
@@ -1001,8 +1001,9 @@ describe("the lifecycle operations (P1d)", () => {
       const dir = await fixtureProject("auto-ops-locked-", {})
       // complete the config layer the way init does (the ignore set's local-only
       // entries included), so the drift gate is clean; no brief — init writes
-      // none (plans/0133), and a missing brief is no finding
-      await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
+      // none (plans/0133), and a missing brief is no finding; opencode.json
+      // and the agent contract are the host's own since plans/0296 — nothing
+      // left to complete
       await ensurePointer(dir, { testByDriver: false })
       await ensureInitGitignore(dir)
       const git = gitOf(dir)

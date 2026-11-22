@@ -61,7 +61,7 @@
 // The daemon never writes into a target directory: every state write is the
 // worker's own or an operation's own, and both go through the core's
 // functions (the operations write the config layer the way the CLI shell
-// does — saveProjectConfig, renderAgentContract, ensurePointer — never
+// does — saveProjectConfig, ensurePointer — never
 // `.auto/`, `docs/` unit state or an index tick); the daemon's view of a run
 // is its child's output plus what the run leaves on disk. The daemon's OWN
 // writes live in its own data directory: the whitelist, the token digests

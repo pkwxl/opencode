@@ -13,15 +13,15 @@
 // disabled everywhere). The constitution of this
 // layer (plans/0067 §五, assessment §11 risk 1):
 //   - every state change reaches disk through the core (saveProjectConfig,
-//     renderAgentContract, ensurePointer,
+//     ensurePointer,
 //     ensureInitGitignore, applyFix, applyReset, closeUnit, planPrelude →
 //     addTask/establishRound/syncPhaseIndex); the transfer operation
 //     applies its advance in-process (transferDeterministic — git and
-//     document writes only, zero agent processes, plans/0282); the two
-//     template writes the
-//     CLI shell also performs itself (opencode.json, the agent contract's
-//     file bytes) use the core's own renderer for the contract, and nothing
-//     here ever writes `.auto/`, `docs/` unit state or an index tick;
+//     document writes only, zero agent processes, plans/0282); the host's
+//     own configuration files (opencode.json, the agent contract's file
+//     bytes) are never this tool's writes (plans/0296 — the severance), and
+//     nothing here ever writes `.auto/`, `docs/` unit state or an index
+//     tick;
 //   - **confirm and clean-tree are two separate request fields** ("confirm",
 //     "cleanTree"), never one bundled force: the CLI's -f skips both the
 //     confirmation and the cleanliness gate, and the API must not inherit the
@@ -65,7 +65,7 @@ import {
   type ParallelLevel,
   type ProjectConfig,
 } from "@opencode-ai/auto-core/config"
-import { applyFix, fixHint, formatFixPlan, planFix, renderAgentContract } from "@opencode-ai/auto-core/config-fix"
+import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
 import { runConfigSequence } from "@opencode-ai/auto-core/config-op"
 import { probeModels } from "@opencode-ai/auto-core/agent-pool"
 import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
@@ -89,14 +89,11 @@ import { roundDirName } from "@opencode-ai/auto-core/docpaths"
 import { SUBTASK_MODES } from "@opencode-ai/auto-core/opts"
 import type { RegisteredProject, Scope } from "./store"
 import { RequestError } from "./request"
-import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 
 // The canonical unit refs closeUnit takes (the CLI's CLOSE_REF): a round
 // R-NN, a phase R-NN.P<nn> or a task T-NNN — padded shapes never name another
 // unit by accident.
 const CLOSE_REF = /^(?:R-\d{2,}|R-\d{2,}\.P\d{2,}|T-\d{3,})$/
-
-const CONTRACT_FILE = join(".opencode", "agent", "auto.md")
 
 export type OpRequest = {
   project: RegisteredProject
@@ -372,7 +369,7 @@ export function parseConfigKeys(dir: string, raw: unknown): ConfigKeys {
   {
     const value = given.agent
     if (value === "opencode" || value === "claude") agent = value
-    else if (value !== undefined) fail("config.agent takes opencode|claude (the coding agent that runs the sessions); defaults to opencode. The agent contract is always .opencode/agent/auto.md")
+    else if (value !== undefined) fail("config.agent takes opencode|claude (the coding agent that runs the sessions); defaults to opencode")
   }
   {
     const value = given.contextLimit
@@ -554,7 +551,7 @@ async function runConfigOp(kind: "init" | "amend", request: OpRequest): Promise<
     keys.isolate === undefined
   ) {
     return bad(
-      `name at least one key to change in "config" (for example: {"config":{"contextLimit":128}}; the phases key is init-stamped machinery no amend revises — a round reshapes by its roadmap line); to refresh the agent contract and the AGENTS.md block without changing a key, run the fix operation (${route(project, "fix")})`,
+      `name at least one key to change in "config" (for example: {"config":{"contextLimit":128}}; the phases key is init-stamped machinery no amend revises — a round reshapes by its roadmap line); to refresh the AGENTS.md block without changing a key, run the fix operation (${route(project, "fix")})`,
     )
   }
   // An old-layout project is a usage error before anything is read or
