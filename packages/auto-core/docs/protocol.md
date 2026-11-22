@@ -129,7 +129,11 @@ audit
   share. Requires a different token from the producer. Carries no
   `budget` — the share's clock rides `deadline` (the heartbeat letter,
   plans/0294). Writes exactly one
-  artifact: a PASS `report.md` or a countable FAIL `gaps.md`. A PASS
+  artifact: a PASS `report.md` — the share's sole changed path, closing
+  with its machine-read `Result: PASS` line (the last `Result:` line
+  governs) before the `<!-- auto: eof -->` terminator — or a countable
+  FAIL `gaps.md`, written alone (the report absent) with its
+  `Result: FAIL` line and one `### Gap` heading per gap. A PASS
   close-out ticks the index row and renames `todo.md` → `done.md`
   (driver-exclusive shapes, the coordinator's alone). A FAIL opens a fix
   round. A same-token claim over its own booked report answers the terminal

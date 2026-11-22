@@ -72,7 +72,9 @@ describe("manual prompt ratchet", () => {
     expect(executor).toContain("The coordinator owns staging, commits, and driver state.")
     expect(executor).toContain("Never run Git staging or commit operations.")
     expect(executor).toContain("Leave `.auto/`")
-    expect(executor).toContain("Verification may write only the task's report or gap list.")
+    // 0298 grew the sentence into its grammar letter (the moved-anchor
+    // discipline); the full both-sides arm lives below.
+    expect(executor).toContain("Verification may write only the task's report or gap list — the settled artifact is that path's sole write")
     expect(coordinator).toContain('if (entry.grant.kind === "verify") return path === docs.report || path === docs.gaps')
     expect(executor).toContain("Start work only after the coordinator grants a lease for that task.")
     expect(executor).toContain("Use a separate channel for each concurrent worker and keep each worker inside its assigned workspace and scope.")
@@ -432,6 +434,36 @@ describe("manual prompt ratchet", () => {
     expect(executor).not.toContain("a declared root")
     expect(doc).toContain("the request names the directory to create")
     expect(doc).toContain("the destination's own parent the anchor")
+  })
+
+  // plans/0298 (0297's remedy families, the estate's eighth field record):
+  // the verify grammar's both-sides arm — executor.md's verification
+  // letter, docs/protocol.md's verify letter and the coordinator's verify
+  // collect are one ruled relationship, so the taught grammar cannot drift
+  // from the enforced one (the record's measured path: a careful reader
+  // assembling `Verdict: PASS` from the manual's own vocabulary and
+  // dead-lettering against an arm-less refusal). The behavior — the
+  // refusal naming its failing arm — lives in test/executor-steps.test.ts.
+  test("the verify grammar: executor.md's letter, the spec's verify letter and the collect's checks are pinned together (plans/0298)", () => {
+    const executor = text("executor.md")
+    const doc = readFileSync(join(DOCS, "protocol.md"), "utf8")
+    const coordinator = src("executor-coordinator.ts")
+    // The letter: sole write, the machine-read verdict line before the
+    // terminator, the FAIL shape with its report-absent rule.
+    expect(executor).toContain("the settled artifact is that path's sole write, closing with its machine-read verdict line before the final `<!-- auto: eof -->` terminator")
+    expect(executor).toContain("a PASS report carries `Result: PASS` (the last `Result:` line governs)")
+    expect(executor).toContain("a FAIL gap list is written alone — the report absent — carrying `Result: FAIL` and one `### Gap` heading per countable gap")
+    expect(doc).toContain("the share's sole changed path, closing")
+    expect(doc).toContain("with its machine-read `Result: PASS` line (the last `Result:` line")
+    expect(doc).toContain("governs) before the `<!-- auto: eof -->` terminator")
+    expect(doc).toContain("written alone (the report absent) with its")
+    expect(doc).toContain("`Result: FAIL` line and one `### Gap` heading per gap")
+    // The producer's anchors: the collect's checks and the refusal that
+    // names its failing arm (the formulate collect's naming standard).
+    expect(coordinator).toContain('parseResult(reportText)?.type === "pass"')
+    expect(coordinator).toContain("docShapeProblems(reportText, report)")
+    expect(coordinator).toContain('parseResult(gapText)?.type === "fail" && /^### Gap\\b/m.test(gapText)')
+    expect(coordinator).toContain("the verification output is invalid: ${problems.join(\"; \")}")
   })
 
   test("protocol strings: the terminator", () => {

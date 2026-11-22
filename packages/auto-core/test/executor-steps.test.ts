@@ -844,9 +844,40 @@ test("a shadowed gap list of bad grammar blocks visibly, never a wrong verdict (
     write(dir, "docs/T-001/gaps.md", "# Verification\n\nNo countable gap headings here.\n\nResult: FAIL expected value 2\n")
     expect(await coordinator.report(verifier, verify.id, verify.lease, "ended")).toMatchObject({
       kind: "blocked", reason: "commitFailed",
-      detail: "Verification must write one valid PASS report or one countable FAIL gap list.",
+      detail: "the verification output is invalid: docs/T-001/gaps.md carries no `### Gap` heading — each countable gap is one `### Gap` heading",
     })
     expect(git(dir, "ls-files", "--", "docs/T-001/gaps.md")).toBe("")
+  } finally {
+    await coordinator.close()
+  }
+})
+
+// 0297's fix 0298, the incident's own shape pinned (erofs T-075 verify 1): a
+// report closing on prose `Verdict: PASS` plus the terminator — assembled
+// from the manual's own vocabulary — refuses naming the missing machine-read
+// line (the formulate collect's naming standard, 0297's remedy family 2),
+// never the arm-less refusal that sent the site diffing a settled report.
+test("a report without its machine-read Result line refuses naming the line (0298)", async () => {
+  const dir = project()
+  const path = phase(dir, "implement")
+  write(dir, `${path}/tasks.md`, "# Tasks\n\n- [ ] T-001 Implement widget\n")
+  write(dir, "docs/T-001/todo.md", "# Implement widget\n\nTouches: src/widget.ts\n\n## Scope\n\nImplement the widget.\n")
+  commitFixture(dir)
+  const coordinator = await openExecutorCoordinator(dir)
+  const verifier = { ...holder, token: "verifier" }
+  try {
+    const execute = await coordinator.claim(holder)
+    if (execute.kind !== "execute") throw new Error(JSON.stringify(execute))
+    write(dir, "src/widget.ts", "export const widget = 1\n")
+    expect(await coordinator.report(holder, execute.id, execute.lease, "ended")).toMatchObject({ kind: "landed" })
+    const verify = await coordinator.claim(verifier, "T-001", "verify")
+    if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
+    write(dir, "docs/T-001/report.md",
+      "# Verification\n\nThe widget exports the expected value, matching the recorded contract exactly; the diff contains the single agreed source change and nothing else.\n\nVerdict: PASS\n\n<!-- auto: eof -->\n")
+    expect(await coordinator.report(verifier, verify.id, verify.lease, "ended")).toMatchObject({
+      kind: "blocked", reason: "commitFailed",
+      detail: "the verification output is invalid: docs/T-001/report.md carries no `Result: PASS` line — the machine-read verdict is a line `Result: PASS`, the last `Result:` line governing",
+    })
   } finally {
     await coordinator.close()
   }

@@ -1358,7 +1358,30 @@ export async function openExecutorCoordinator(
         artifact = { path: gaps, text: gapText }
         gapCount = gapText.split("\n").filter((line) => /^### Gap\b/.test(line)).length
       } else {
-        return { kind: "blocked", reason: "commitFailed", detail: "Verification must write one valid PASS report or one countable FAIL gap list." }
+        // 0298 (0297's remedy family 2): the refusal names its failing arm —
+        // the formulate collect's naming standard, every detail the holder's
+        // own remedy. The judgment itself is unchanged.
+        const problems: string[] = []
+        const single = paths.length === 1 ? paths[0]! : undefined
+        if (!paths.length) {
+          problems.push("the share changed nothing — write the report (PASS) or the gap list (FAIL)")
+        } else if (single !== report && single !== gaps) {
+          problems.push(`the share changed ${paths.join(", ")} — exactly one artifact settles, the report (PASS) or the gap list (FAIL), never both`)
+        } else if (single === report) {
+          if (parseResult(reportText)?.type !== "pass") {
+            problems.push(`${report} carries no \`Result: PASS\` line — the machine-read verdict is a line \`Result: PASS\`, the last \`Result:\` line governing`)
+          }
+          problems.push(...docShapeProblems(reportText, report))
+        } else {
+          if (reportText.trim()) problems.push(`${report} is present beside the gap list — a FAIL share writes the gap list alone`)
+          if (parseResult(gapText)?.type !== "fail") {
+            problems.push(`${gaps} carries no \`Result: FAIL\` line — the machine-read verdict is a line \`Result: FAIL <one-sentence reason>\``)
+          }
+          if (!/^### Gap\b/m.test(gapText)) {
+            problems.push(`${gaps} carries no \`### Gap\` heading — each countable gap is one \`### Gap\` heading`)
+          }
+        }
+        return { kind: "blocked", reason: "commitFailed", detail: `the verification output is invalid: ${problems.join("; ")}` }
       }
     }
     if (!paths.length) {
