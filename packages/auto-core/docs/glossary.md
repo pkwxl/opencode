@@ -161,7 +161,7 @@ Lanes (parallel execution, `plans/0068`):
 | 意图 | intent | What the user wants; opposite of mechanism |
 | 机制 | mechanism | What the driver enforces |
 | 意图包 | intent pack | `templates/intents/default.md`, `### <key>` subsections |
-| agent 合约 | agent contract | `.opencode/agent/auto.md` (`CONTRACT_AGENT`) |
+| agent 合约 | agent contract | Retired with plans/0296 (the opencode severance): the tool renders no contract and writes no host configuration — `CONTRACT_AGENT` remains the push layer's dead-path constant |
 | 金样 | golden file | `test/golden/*.golden.md` |
 
 Executor protocol (the service shell's reverse-control posture, `plans/0246`):
@@ -261,7 +261,7 @@ Executor protocol (the service shell's reverse-control posture, `plans/0246`):
 | 模型路由 | model routing | Phase → role → model: `OPENCODE_AUTO_MODEL`, or under a model registry tier → candidate list (`src/routing.ts`) |
 | 模型注册表 | model registry | `src/models.ts` (0055): the operator's fleet — models, agent profiles, tiers, routes, key rings |
 | 操作者层 | operator layer | `$OPENCODE_AUTO_MODELS`, else `$XDG_CONFIG_HOME/<configDir>/models.json` |
-| 项目层(注册表) | project layer | `.opencode/auto/models.json`, local-only (gitignored); a registry layer, not the config layer |
+| 项目层(注册表) | project layer | `.opencode/auto/models.json`, local-only (the gitignore line the operator's own since plans/0296); a registry layer, not the config layer |
 | 内部名 | internal name | A model entry's registry key, `^[a-z][a-z0-9.-]*$`; never reads as `provider/model` |
 | 推理档 | (reasoning) tier | `deep` / `simple`; listing a model in a tier *is* its classification |
 | 执行档 | execute tier | The phase type's reasoning tier for task sessions: the builtin table, or a custom type's `Reasoning:` field |
