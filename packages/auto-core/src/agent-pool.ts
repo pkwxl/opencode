@@ -19,7 +19,7 @@
 //
 // Sits below the session layer and above the agent domain (§12): it may name
 // the host factories, never the loop or a session-driving module.
-import type { AgentCapabilities, AgentClient, AgentEnv, AgentHost, AgentHostFactory } from "./agent/types"
+import type { AgentCapabilities, AgentEnv, AgentHost, AgentHostFactory } from "./agent/types"
 import { join } from "node:path"
 import { opencodeHost, OPENCODE_CAPABILITIES, scrubDriverEnv } from "./agent/opencode/server"
 import { claudeHost, CLAUDE_CAPABILITIES } from "./agent/claude/host"
@@ -28,7 +28,7 @@ import { profileLine, resolveProfileEnv } from "./agent-env"
 import { degradeAgents, permissionPreset, type FleetAgent } from "./capability"
 import { log } from "./log"
 import { stepValidationLines } from "./model-step"
-import type { ModelEntry, ModelRegistry } from "./models-schema"
+import type { ModelRegistry } from "./models-schema"
 import type { ClientSource, PermissionMode, ServerControl, SubtaskMode } from "./opts"
 import { externalDirectoryLive, OPENCODE_CONFIG_FILE } from "./external-dirs"
 import { dispatchAgentProfiles, routingFacts } from "./routing"
@@ -514,7 +514,7 @@ function defaultBin(adapter: string): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// The models command's probe (§9)
+// The recovery probe prompt
 // ---------------------------------------------------------------------------
 
 // The service-availability probe prompt — the single home of the literal
@@ -523,122 +523,10 @@ function defaultBin(adapter: string): string | undefined {
 // round trip to tell whether service is back. Never probe with the
 // interrupted session (a probe turn in a real session pollutes its context,
 // and a forked probe burns the full prefix on every wait round, which only
-// makes a quota squeeze worse), so both senders dispatch it in a throwaway
-// one-shot turn — session's awaitRecovery through attempt, the models
-// command's probe through its own pool below.
+// makes a quota squeeze worse), so the sender dispatches it in a throwaway
+// one-shot turn — session's awaitRecovery through attempt. (The other sender
+// — the models command's `--probe`, a pool of its own over every listed
+// model — is gone with the models surface, plans/0296: the tool spawns no
+// agent session, ever; the prompt stays the wait-and-probe loop's single
+// home.)
 export const PROBE_PROMPT = "[DRIVER] Service availability probe: reply with just ok and do nothing else."
-
-// A probe waits for one short turn; 60 s covers a slow first model load
-// while still failing a wedged provider within the operator's patience.
-const PROBE_TIMEOUT_MS = 60_000
-
-type ModelProbe = { name: string; agent: string; ok: boolean; line: string }
-
-// Sends the recovery probe prompt to each listed model (every entry a tier
-// list, route list or the classifier names — an unused entry is not listed)
-// through a pool of its own, and answers one line per model for the shell to
-// print. It is opt-in because it costs tokens.
-// AUTO-DECISION: the probe runs every listed entry regardless of the agent filter and the windows (the table already names why a model is not a candidate now; --probe asks the orthogonal question — does the model answer at all — and silently probing less than the table shows would read as a healthy fleet)
-// AUTO-DECISION: a probe that fails is a finding printed per model, not a command error (the command's exit code stays the registry's own: 0 with a registry the run start accepts, 1 with problems it would refuse)
-export async function probeModels(
-  registry: ModelRegistry,
-  directory: string,
-  opts: { server?: string; timeoutMs?: number } = {},
-): Promise<ModelProbe[]> {
-  const listed = new Set<string>()
-  for (const list of Object.values(registry.tiers)) for (const name of list?.names ?? []) listed.add(name)
-  for (const route of registry.routes.values()) if ("names" in route) for (const name of route.names) listed.add(name)
-  for (const name of registry.classifier?.names ?? []) listed.add(name)
-  const entries = [...listed].flatMap((name) => {
-    const entry = registry.models.get(name)
-    return entry !== undefined ? [entry] : []
-  })
-  const pool = await startPool(directory, { registry, server: opts.server })
-  if (pool.pool === undefined)
-    return entries.map((entry) => ({ name: entry.name, agent: entry.agent, ok: false, line: `failed — ${pool.error!.split("\n")[0]}` }))
-  try {
-    const results: ModelProbe[] = []
-    for (const entry of entries) results.push(await probeOne(pool.pool, entry, opts.timeoutMs ?? PROBE_TIMEOUT_MS))
-    return results
-  } finally {
-    await pool.pool.close()
-  }
-}
-
-// One probe: a one-shot session on the entry's agent, titled for the
-// diagnostic, prompted on the entry's model and variant, read until the turn
-// ends or the timeout aborts it. The reply's first line is the answer; an
-// error, a timeout or a host-start problem names what happened.
-async function probeOne(pool: ServerControl, entry: ModelEntry, timeoutMs: number): Promise<ModelProbe> {
-  const base = { name: entry.name, agent: entry.agent }
-  let client: AgentClient
-  try {
-    client = await pool.client(entry.agent)
-  } catch (error) {
-    return { ...base, ok: false, line: `failed — ${errorText(error)}` }
-  }
-  const created = await client.create({ title: "auto: model probe" })
-  if (!created.ok) return { ...base, ok: false, line: `failed — ${errorText(created.error)}` }
-  const session = created.value.id
-  const stop = new AbortController()
-  let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
-    stop.abort()
-  }, timeoutMs)
-  const halted = new Promise<IteratorResult<never>>((resolve) => {
-    const done = () => resolve({ done: true, value: undefined })
-    if (stop.signal.aborted) done()
-    else stop.signal.addEventListener("abort", done, { once: true })
-  })
-  let failure: string | undefined
-  let reply = ""
-  let settled = false
-  try {
-    const events = await client.events(stop.signal)
-    void client
-      .prompt(
-        {
-          session,
-          text: PROBE_PROMPT,
-          ...(entry.model !== undefined ? { model: entry.model } : {}),
-          ...(entry.variant !== undefined ? { variant: entry.variant } : {}),
-        },
-        stop.signal,
-      )
-      .then((sent) => {
-        if (sent.ok || stop.signal.aborted) return
-        failure = errorText(sent.error)
-        stop.abort()
-      })
-    const inner = events[Symbol.asyncIterator]()
-    for (;;) {
-      const step = await Promise.race([inner.next(), halted])
-      if (step.done) break
-      const event = step.value
-      if (event.session !== session) continue
-      if (event.type === "part" && event.part.kind === "text" && event.part.final) reply = event.part.text
-      else if (event.type === "error") failure = [event.error.name, event.error.message].filter(Boolean).join(" ") || "the turn failed"
-      else if (event.type === "question") await client.rejectQuestion(event.request)
-      else if (event.type === "permission") await client.replyPermission(event.request, "reject")
-      else if (event.type === "idle") {
-        settled = true
-        break
-      }
-    }
-  } finally {
-    clearTimeout(timer)
-    if (!settled) {
-      stop.abort()
-      await client.abort(session).catch(() => {})
-    }
-  }
-  if (settled && failure === undefined)
-    return { ...base, ok: true, line: `ok — ${reply.trim().split("\n")[0]!.slice(0, 120) || "(empty reply)"}` }
-  if (timedOut) return { ...base, ok: false, line: `timed out after ${Math.round(timeoutMs / 1000)}s` }
-  return { ...base, ok: false, line: `failed — ${(failure ?? "the session ended without an answer").split("\n")[0]!.slice(0, 160)}` }
-}
-
-function errorText(error: unknown): string {
-  return (error instanceof Error ? error.message : JSON.stringify(error)).split("\n")[0]!.slice(0, 160)
-}

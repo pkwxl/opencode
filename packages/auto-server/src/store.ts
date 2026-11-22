@@ -28,18 +28,15 @@ import { acquireRunLock, liveRunLock } from "@opencode-ai/auto-core/lock"
 // The token scopes, the authorization tiers of the assessment's §8 Q6 as
 // reduced by plans/0282 (the ask channel's demolition: `answer`, `person`,
 // `person-questions`, `person-releases` tombstoned — the spec's tombstone
-// section is the compatibility record):
+// section is the compatibility record) and plans/0296 (`probe` tombstoned
+// with the models surface: the tool spawns no agent session, ever — no
+// model ever probed again):
 //   read    status, logs, events (and the SSE feeds of P1e)
 //   control run control (kill), close, task-add, plan, transfer, clarify,
 //           reconcile (the executor ledger's dead-letter reconciliation) —
 //           the deterministic operations that write git
 //   config  init/amend/fix/reset (P1d's routes)
-//   probe   the model probe (POST /projects/<project>/models, P4b) — its
-//           own opt-in scope, DISABLED BY DEFAULT: carried by no default
-//           token set (it burns tokens by starting agents; beside the scope
-//           the route takes an explicit confirm field and the daemon's
-//           per-daemon rate window)
-export const SCOPES = ["read", "control", "config", "probe", "executor", "projects"] as const
+export const SCOPES = ["read", "control", "config", "executor", "projects"] as const
 export type Scope = (typeof SCOPES)[number]
 
 export type RegisteredProject = { name: string; directory: string; registered: string; creation?: { dev: string; ino: string } }
@@ -52,8 +49,8 @@ const TOKENS_FILE = "tokens.json"
 
 // The default data directory: $XDG_CONFIG_HOME/opencode-auto/server (XDG
 // relative values are invalid and ignored, the core's models.ts precedent),
-// so `~/.config/opencode-auto/server/` on a plain machine — beside the
-// operator model registry, never inside a project.
+// so `~/.config/opencode-auto/server/` on a plain machine — under the
+// operator config root, never inside a project.
 export function defaultDataDir(env: Record<string, string | undefined> = process.env, home: string = homedir()): string {
   const xdg = env.XDG_CONFIG_HOME
   const base = xdg && isAbsolute(xdg) ? xdg : join(home, ".config")
@@ -220,9 +217,7 @@ export class DaemonStore {
   }
 
   // Issues a token carrying exactly the given scopes. The scopes must be a
-  // non-empty subset of the schema; `probe` is choosable here and required
-  // by the probe route (P4b) — still opt-in, still carried by nothing until
-  // an operator names it.
+  // non-empty subset of the schema.
   issueToken(rawScopes: string, name?: string): { token: string; stored: StoredToken } {
     const wanted = [...new Set(rawScopes.split(",").map((part) => part.trim()).filter(Boolean))]
     if (!wanted.length) throw new StoreError(`a token needs at least one scope (${SCOPES.join(", ")})`)

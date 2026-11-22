@@ -9,20 +9,19 @@
 //     amplification: `.opencode/auto/` overlays are injected verbatim into
 //     prompts, and this tool spends real tokens and writes git);
 //   - token auth with scopes (the assessment's §8 Q6 tiers): read /
-//     control / config / answer / probe. Unauthenticated → 401, a known
-//     token without the route's scope → 403. `config` guards the P1d config
-//     operations, `control` the unit/lifecycle operations that write git
-//     through the core, `read` the models table; `answer` names the P3c
-//     question queue; `probe` guards the model probe alone (P4b, POST
-//     /projects/<project>/models) — opt-in and disabled by default: no
-//     default token set carries it, and beside the scope the probe takes an
-//     explicit confirm field and this daemon's own rate window (below);
+//     control / config / executor / projects. Unauthenticated → 401, a
+//     known token without the route's scope → 403. `config` guards the P1d
+//     config operations, `control` the unit/lifecycle operations that write
+//     git through the core, `read` the observability surface, `executor`
+//     the executor protocol, `projects` the project lifecycle (the `probe`
+//     scope is gone with the models surface — plans/0296: the tool spawns
+//     no agent session, ever, so nothing probes a model again);
 //   - the run registry and worker supervision: one worker child process per
 //     run (the P1b entry, spawned as a subprocess — never imported: one run
 //     per process is the core's own invariant), with the run's exit-code
 //     vocabulary mapped onto run states and lock conflicts mapped onto
 //     HTTP;
-//   - the lifecycle operations (P1d, src/ops.ts): config ops, units, models
+//   - the lifecycle operations (P1d, src/ops.ts): config ops, units
 //     and the P1 plan boundary, run in this process as library calls into the
 //     core (an operation is a synchronous request/response — no session,
 //     no exit vocabulary of its own), never a worker child;
@@ -307,32 +306,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const liveRunOn = (directory: string): RunRecord | undefined =>
     [...runs.values()].find((run) => run.directory === directory && (run.state === "starting" || run.state === "running"))
 
-  // The daemon-wide model-probe rate window (P4b, assessment §8 Q7): one
-  // probe per window per DAEMON — not per token, not per project, because
-  // the tokens a probe spends are the operator's one wallet and the agents
-  // it starts are this machine's. The claim is atomic (checked and recorded
-  // in one step), so two concurrent confirmed probes cannot both fire; a
-  // request that never reaches the claim (no scope, no confirmation, no
-  // registry) consumes nothing. Daemon-owned in-memory state, gone with the
-  // daemon: a restart reopens the window, which is the operator's own act.
-  // AUTO-DECISION (10 minutes): the probe's cost is N short agent turns per
-  // fire; a window that spans a coffee break bounds an over-eager operator
-  // (or a refreshed tab) to six fires an hour while a deliberate fleet
-  // check stays anytime-the-window-is-open. The CLI knows no such limit —
-  // a terminal is one person's one act; a served route is not.
-  const PROBE_RATE_WINDOW_MS = 10 * 60_000
-  let probeFiredAt: number | undefined
-  const probeWindow = {
-    claim: (): { ok: true } | { ok: false; firedAt: string; retryAt: string } => {
-      const now = Date.now()
-      if (probeFiredAt !== undefined && now - probeFiredAt < PROBE_RATE_WINDOW_MS) {
-        return { ok: false, firedAt: new Date(probeFiredAt).toISOString(), retryAt: new Date(probeFiredAt + PROBE_RATE_WINDOW_MS).toISOString() }
-      }
-      probeFiredAt = now
-      return { ok: true }
-    },
-  }
-
   const view = (run: RunRecord): RunView => {
     const { proc: _proc, watcher: _watcher, ...rest } = run
     return { ...rest, live: run.state === "starting" || run.state === "running" }
@@ -413,8 +386,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
 
   // One coordinator worker child per project. The spawn environment drops
   // the daemon's ambient OPENCODE_AUTO_* layer and keeps everything else,
-  // PATH and XDG_CONFIG_HOME included (one operator, one agent tooling, one
-  // model registry). The directory is the registry's absolute path, so the
+  // PATH and XDG_CONFIG_HOME included (one operator, one agent tooling). The
+  // directory is the registry's absolute path, so the
   // cwd is only the spawn's working directory, never the run's target. The
   // payload is exactly `{ executor, directory, transport }` (plans/0282's
   // narrowed carriage — the executor worker's bridge URL), while the per-run
@@ -806,7 +779,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       return tailResponse(project.directory, (segments[2] === "log" ? "log" : "events") as TailChannel)
     }
     // The P1d operation surface: /projects/<project>/<op>, one entry per
-    // OP_DEFINITIONS (config ops, units, models, the plan boundary). The
+    // OP_DEFINITIONS (config ops, units, the plan boundary). The
     // whitelist is the same absolute rule as POST /runs — the project
     // resolves only against the registry, never against the request path
     // itself.
@@ -815,7 +788,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       const op = OP_DEFINITIONS.find((entry) => entry.segment === segments[2] && entry.method === method)
       if (!name || !op) {
         return json(404, {
-          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}${entry.method === "POST" && entry.segment === "models" ? " — the probe: its own probe scope, the confirm field, rate-limited" : ""}`).join(", ")}; the run surface is GET /health, GET /runs, GET /runs/<id>, DELETE /runs/<id> (kill — the coordinator a project's executor route spawned); the observability surface is GET /projects/<project>/status, /log, /events and /status-events; the project lifecycle is GET /projects (the whitelist), POST /projects (creation, the projects scope) and DELETE /projects/<project>)`,
+          error: `no route ${method} ${url.pathname} (P1d serves the project operations ${OP_DEFINITIONS.map((entry) => `${entry.method} /projects/<project>/${entry.segment}`).join(", ")}; the run surface is GET /health, GET /runs, GET /runs/<id>, DELETE /runs/<id> (kill — the coordinator a project's executor route spawned); the observability surface is GET /projects/<project>/status, /log, /events and /status-events; the project lifecycle is GET /projects (the whitelist), POST /projects (creation, the projects scope) and DELETE /projects/<project>)`,
         })
       }
       const denied = needScope(request, op.what, op.scope)
@@ -852,7 +825,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         // op has released the run lock by the time it calls this (the
         // worker's own runAll takes the lock, and the daemon's in-process
         // hold would refuse its own child).
-        if (!op.write(body)) return envelope(await op.run({ project, body, query: url.searchParams, probeWindow }))
+        if (!op.write(body)) return envelope(await op.run({ project, body, query: url.searchParams }))
         if (opInFlight.has(project.directory)) {
           return json(409, {
             error: `an operation is already in flight on ${project.name}; retry once it finishes (one write operation holds a directory at a time — the run lock arbitrates processes, not requests of this one)`,
@@ -864,12 +837,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           return json(409, {
             error: `a run is already active on ${project.name}: run ${live.id} is ${live.state}`,
             run: { id: live.id, state: live.state },
-            retry: "retry once the active run reaches a terminal state (GET the run to observe it); read-only operations (models, fix dryrun) run beside it",
+            retry: "retry once the active run reaches a terminal state (GET the run to observe it); read-only operations (fix dryrun) run beside it",
           })
         }
         opInFlight.add(project.directory)
         try {
-          return envelope(await op.run({ project, body, query: url.searchParams, probeWindow }))
+          return envelope(await op.run({ project, body, query: url.searchParams }))
         } finally {
           opInFlight.delete(project.directory)
         }
@@ -884,7 +857,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         return json(500, { error: `the ${op.segment} operation failed unexpectedly: ${error instanceof Error ? error.message : String(error)}` })
       }
     }
-    return json(404, { error: `no route ${method} ${url.pathname} (the daemon serves: GET /health; GET /runs, GET /runs/<id>, DELETE /runs/<id> (kill); the executor protocol POST /projects/<project>/executor/<ready|claim|brief|report|heartbeat|release>; the operations POST /projects/<project>/<init|amend|fix|reset|close|tasks|plan|transfer|clarify|reconcile> and GET/POST models; the observability GET /projects/<project>/status|log|events|status-events; the project lifecycle GET /projects (the whitelist), POST /projects (creation, the projects scope), DELETE /projects/<project>)` })
+    return json(404, { error: `no route ${method} ${url.pathname} (the daemon serves: GET /health; GET /runs, GET /runs/<id>, DELETE /runs/<id> (kill); the executor protocol POST /projects/<project>/executor/<ready|claim|brief|report|heartbeat|release>; the operations POST /projects/<project>/<init|amend|fix|reset|close|tasks|plan|transfer|clarify|reconcile>; the observability GET /projects/<project>/status|log|events|status-events; the project lifecycle GET /projects (the whitelist), POST /projects (creation, the projects scope), DELETE /projects/<project>)` })
   }
 
   const server = Bun.serve<SocketData>({

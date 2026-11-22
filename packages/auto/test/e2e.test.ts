@@ -19,8 +19,66 @@ import { bundleFileMap, parseIntentBundle, resolveIntentBundle } from "@opencode
 import { provenanceStampOf, renderProvenanceStamp } from "@opencode-ai/auto-core/provenance"
 import type { RoutingFacts } from "@opencode-ai/auto-core/routing"
 import { estimateTokens } from "@opencode-ai/auto-core/usage"
-import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
-import templateAgent from "@opencode-ai/auto-core/templates/.opencode/agent/auto.md" with { type: "file" }
+// The retired templates' last bytes, seeded locally (plans/0296 slice 1 deleted
+// templates/opencode.json and templates/.opencode/agent/auto.md — the host's own
+// files, never this tool's writes; the opt-in agent-engine e2e fixtures below
+// still seed them by hand the way init once did, so their bytes live here now).
+const TEMPLATE_CONFIG = `{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "edit": "allow",
+    "question": "allow",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "external_directory": {
+      "/**": "deny",
+      "/tmp/**": "allow"
+    },
+    "bash": {
+      "*": "allow",
+      "/tmp/*": "allow",
+      "bun test*": "allow",
+      "bun run*": "allow",
+      "bun typecheck*": "allow",
+      "bun install*": "allow",
+      "npm test*": "allow",
+      "npm run*": "allow",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow"
+    }
+  }
+}
+`
+const TEMPLATE_AGENT = `---
+description: Non-interactive execution agent driven by opencode-auto; each session completes exactly one subtask or wrap-up step of the plan
+mode: primary
+---
+
+<!-- Permission rules are controlled only by the target directory's opencode.json; do not
+     declare permission in this frontmatter: agent-level rules take precedence over
+     opencode.json, and declaring them here would void opencode.json's allow rules. -->
+
+You are a non-interactive execution agent driven by opencode-auto; no human is present to talk with you.
+
+Working contract:
+1. The session prompt names your role for this turn (whole task / decompose / subtask or stream / wrap-up / fix);
+   do strictly what that role asks.
+2. For the duration of the session AGENTS.md and opencode.json are read-only — you must not edit them,
+   and must not restore their write permission with chmod or the like.
+   AGENTS.md carries the DRIVER's opencode-auto marker block (pointer{{#if testByDriver}}/test{{/if}}/commit/summary/reference conventions,
+   merged into a single <!-- opencode-auto:start --> to <!-- opencode-auto:end --> block) and is not a place for notes:
+   record anything worth keeping in docs/ documents instead.
+3. How to handle problems:
+   a. If the problem is permission-related (such as needing access to a path outside the project directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+   b. If the problem does not involve permissions (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment and the like), handle it the way this run's prompt directs for non-permission problems — its question rule states the mode (attended: ask; unattended: decide and record) and the record discipline.
+      Asking the same question again after it was answered is treated as a real block: the DRIVER stops and waits for a human to intervene outside the session (re-run once it is handled).
+4. Write documents produced in the session under docs/, so that the next session can understand the current progress from the files on disk alone.
+`
 
 // Opt-in end-to-end test: requires `opencode` on PATH (or
 // OPENCODE_AUTO_SERVER pointing at a running serve) plus provider credentials.
@@ -57,7 +115,7 @@ test.skipIf(!E2E)(
       await listTasks(dir, P01.dir, "R-01.P01", TASKS)
       await Bun.write(
         join(dir, "opencode.json"),
-        await Bun.file(templateConfig).text(),
+        TEMPLATE_CONFIG,
       )
       // The pre-run integrity check requires the agent contract file to exist
       // (the server only answers UnknownError when it is missing).
@@ -65,7 +123,7 @@ test.skipIf(!E2E)(
       // inconsistency check also compares against the rendered one).
       await Bun.write(
         join(dir, ".opencode/agent/auto.md"),
-        renderText(await Bun.file(templateAgent).text(), {}),
+        renderText(TEMPLATE_AGENT, {}),
       )
 
       // First run: T-001 done, T-002 triggers question → blocked shutdown
@@ -132,11 +190,11 @@ test.skipIf(!E2E)(
       ])
       await Bun.write(
         join(dir, "opencode.json"),
-        await Bun.file(templateConfig).text(),
+        TEMPLATE_CONFIG,
       )
       await Bun.write(
         join(dir, ".opencode/agent/auto.md"),
-        renderText(await Bun.file(templateAgent).text(), {}),
+        renderText(TEMPLATE_AGENT, {}),
       )
 
       // boundary: "flow" restores the continuous crossing these tests
@@ -182,11 +240,11 @@ test.skipIf(!E2E)(
       await establishRound(dir, { phases: "security-review,implement" })
       await Bun.write(
         join(dir, "opencode.json"),
-        await Bun.file(templateConfig).text(),
+        TEMPLATE_CONFIG,
       )
       await Bun.write(
         join(dir, ".opencode/agent/auto.md"),
-        renderText(await Bun.file(templateAgent).text(), {}),
+        renderText(TEMPLATE_AGENT, {}),
       )
 
       // P01-security-review has no pre-listed tasks.md: the phase-planning
@@ -243,8 +301,8 @@ test.skipIf(!E2E)(
       await listTasks(dir, "docs/R-01/P03-implement", "R-01.P03", [
         ["T-003", "implementation output", 'Create implement.md in the current directory with the content "implemented".'],
       ])
-      await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
-      await Bun.write(join(dir, ".opencode/agent/auto.md"), renderText(await Bun.file(templateAgent).text(), {}))
+      await Bun.write(join(dir, "opencode.json"), TEMPLATE_CONFIG)
+      await Bun.write(join(dir, ".opencode/agent/auto.md"), renderText(TEMPLATE_AGENT, {}))
       // The round-establishment scaffolding is committed once as the baseline,
       // so the worktree is clean when the first execution unit starts (the
       // 0021 P3 start gate; the existing non-git cases are exempt, hence the
@@ -320,8 +378,8 @@ test.skipIf(!(E2E && STEPS_PAIR.length >= 2))(
     })
     try {
       await establishRound(dir, { phases: "m" })
-      await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
-      await Bun.write(join(dir, ".opencode/agent/auto.md"), renderText(await Bun.file(templateAgent).text(), {}))
+      await Bun.write(join(dir, "opencode.json"), TEMPLATE_CONFIG)
+      await Bun.write(join(dir, ".opencode/agent/auto.md"), renderText(TEMPLATE_AGENT, {}))
       // The project layer is the whole registry: one stepped entry.
       await Bun.write(
         join(dir, ".opencode/auto/models.json"),
@@ -405,8 +463,8 @@ test.skipIf(!(E2E && KEYS_SPEC.length >= 3))(
     })
     try {
       await establishRound(dir, { phases: "m" })
-      await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
-      await Bun.write(join(dir, ".opencode/agent/auto.md"), renderText(await Bun.file(templateAgent).text(), {}))
+      await Bun.write(join(dir, "opencode.json"), TEMPLATE_CONFIG)
+      await Bun.write(join(dir, ".opencode/agent/auto.md"), renderText(TEMPLATE_AGENT, {}))
       // The project layer is the whole registry: one ringed entry, two keys,
       // the dead one first.
       await Bun.write(
@@ -1116,14 +1174,12 @@ describe("CLI: init freezes the project config", () => {
     try {
       expect((await runCli(["init", dir, "--test-by-driver", "--subtask", "auto"])).code).toBe(0)
       const first = await readConfig(dir)
-      const agentFirst = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
       const agentsFirst = await Bun.file(join(dir, "AGENTS.md")).text()
       await commitFixture(dir)
       for (let i = 0; i < 2; i++) {
         expect((await runCli(["init", dir, "--test-by-driver", "--subtask", "auto"])).code).toBe(0)
       }
       expect(await readConfig(dir)).toEqual(first)
-      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).text()).toBe(agentFirst)
       expect(await Bun.file(join(dir, "AGENTS.md")).text()).toBe(agentsFirst)
       // Three bare inits in a row stay constant too
       expect((await runCli(["init", dir])).code).toBe(0)
@@ -1371,42 +1427,14 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
-  // plans/0122: the root-symlink external_directory allows — init stamps them
-  // (into a person's existing file additively), fix restores them (-f skips
-  // the confirmation), and without root symlinks nothing is written.
-  test("init/fix stamp the root-symlink external_directory allows into opencode.json (plans/0122)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    const corpus = await mkdtemp(join(tmpdir(), "auto-cli-corpus-"))
-    const readOpencode = () => Bun.file(join(dir, "opencode.json")).text()
-    try {
-      // The floor: no root symlinks — no stamp line; the external_directory
-      // the fresh file carries is the knowledge boundary alone (plans/0147).
-      const plain = await runCli(["init", dir])
-      expect(plain.code).toBe(0)
-      expect(plain.out).not.toContain("stamped: opencode.json")
-      expect(JSON.parse(await readOpencode()).permission.external_directory).toEqual({ "/**": "deny", "/tmp/**": "allow" })
+  // (plans/0122's root-symlink external_directory stamps — init additively
+  // stamping the person's opencode.json, fix restoring them — died whole with
+  // the opencode severance, plans/0296 slice 1: the host's own file is never
+  // this tool's write, and the stamp family is gone from the core; the shell
+  // e2e here could not load at all between slice 1 and slice 4, so the
+  // retirement is recorded here.)
 
-      await symlink(corpus, join(dir, "linux"))
-      await commitFixture(dir)
-      // A re-init stamps the person's existing file additively.
-      const stamped = await runCli(["init", dir])
-      expect(stamped.code).toBe(0)
-      expect(stamped.out).toContain(`stamped: opencode.json the root-symlink read-only stamps (external_directory allow + edit deny) for ${corpus}/**`)
-      const written = JSON.parse(await readOpencode())
-      expect(written.permission.external_directory).toEqual({ "/**": "deny", [`${corpus}/**`]: "allow", "/tmp/**": "allow" })
-
-      // A removed entry is a fixable finding; -f applies without asking.
-      await writeFile(join(dir, "opencode.json"), JSON.stringify({ ...written, permission: { read: "allow" } }, null, 2) + "\n")
-      const fixed = await runCli(["fix", dir, "-f"])
-      expect(fixed.code).toBe(0)
-      expect(fixed.out).toContain("fixed: opencode.json: insert the knowledge boundary (deny /** , allow /tmp/**)")
-      expect(fixed.out).toContain("fixed: opencode.json: insert the root-symlink allow(s) and their read-only edit deny(s)")
-      expect(JSON.parse(await readOpencode()).permission.external_directory).toEqual({ "/**": "deny", [`${corpus}/**`]: "allow", "/tmp/**": "allow" })
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-      await rm(corpus, { recursive: true, force: true })
-    }
-  })
+  // A branch-isolation fixture: the target directory plus one clean nested
 
   // A branch-isolation fixture: the target directory plus one clean nested
   // repository (pkg) on main (the pinned init.defaultBranch), ready to be
@@ -1749,14 +1777,10 @@ describe("CLI: init freezes the project config", () => {
       const agents = await Bun.file(join(dir, "AGENTS.md")).text()
       expect(agents).toContain("Test principle:")
       expect(agents).toContain("compilation and test runs — build, typecheck, test suites")
-      // The agent contract no longer restates the test protocol (0072 U-B,
-      // T-131: the AGENTS.md block owns it — asserted above); under
-      // test-by-driver its AGENTS.md note names the test section among the
-      // block's contents, and the protocol wording itself is gone.
-      const agent = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
-      expect(agent).toContain("pointer/test/commit/summary/reference conventions")
-      expect(agent).not.toContain("Build, test, compile, lint")
-      expect(agent).not.toContain("tmp/test.sh")
+      // The agent contract is the host's own since plans/0296 — never init's
+      // write (0072 U-B's move of the test protocol into the AGENTS.md block
+      // is asserted above; the contract file itself is absent).
+      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
       // An amend turning handover-test off keeps test-by-driver; turning
       // test-by-driver off too leaves the block differing from the render (the
       // test section should vanish), so the whole block refreshes
@@ -2071,9 +2095,12 @@ describe("CLI: phases / source / brief (phased flow P1)", () => {
       expect(init.code).toBe(0)
       expect(init.out).toContain("updated: .gitignore")
       const gitignore = await Bun.file(join(dir, ".gitignore")).text()
-      for (const entry of ["tmp/", ".auto/", "/.env", "/AGENTS.md", "/.opencode/auto/models.json"]) {
+      for (const entry of ["tmp/", ".auto/", "/.env", "/AGENTS.md"]) {
         expect(gitignore).toContain(`${entry}\n`)
       }
+      // the model registry project layer carries no entry since plans/0296 —
+      // its visibility is the operator's own line to own or drop
+      expect(gitignore).not.toContain("models.json")
     } finally {
       await rm(dir, { recursive: true, force: true })
       await rm(home, { recursive: true, force: true })
@@ -2243,6 +2270,71 @@ describe("CLI: the push commands retired (plans/0283)", () => {
   })
 })
 
+// models retired (plans/0296, the opencode severance): the model registry
+// was push-mode carriage — the tool spawns no agent session, ever, so the
+// registry's whole surface (the table command, the --probe flag) is a
+// permanent usage tombstone in the 0283 shape: the command answers its
+// one-line notice ahead of every flag, directory and lock semantics, and
+// the flag answers its own notice on every live command.
+describe("CLI: models retired (plans/0296)", () => {
+  const NOTICE =
+    "models is retired (plans/0296, the opencode severance): the model registry was push-mode carriage — this tool spawns no agent session, ever, so there is no registry left to describe or probe; the agents that work a project are external coding agents claiming grants over the executor protocol, each bringing its own model (opencode-auto-server serve registers the project)\n"
+  const FLAG_NOTICE =
+    "--probe is retired with models (plans/0296, the opencode severance): the model registry was push-mode carriage — this tool spawns no agent session, ever, so there is no fleet to probe; the agents that work a project are external coding agents claiming grants over the executor protocol, each bringing its own model"
+
+  test("the command answers its exact one-line notice with exit 1 — ahead of flags, --help and the arity check; nothing is written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-models-dead-"))
+    try {
+      const bare = await runCli(["models", dir])
+      expect(bare.code).toBe(1)
+      expect(bare.err).toBe(NOTICE)
+      // ahead of the flag policy and the unknown-option scan — --probe and
+      // garbage alike get this one answer only
+      const flagged = await runCli(["models", dir, "--probe", "--frobnicate"])
+      expect(flagged.code).toBe(1)
+      expect(flagged.err).toBe(NOTICE)
+      // ahead of --help: a retired command has no help view
+      const helped = await runCli(["models", "--help"])
+      expect(helped.code).toBe(1)
+      expect(helped.err).toBe(NOTICE)
+      // ahead of the positional-arity check
+      const extra = await runCli(["models", "dir-a", "dir-b"])
+      expect(extra.code).toBe(1)
+      expect(extra.err).toBe(NOTICE)
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("--probe answers its own retirement notice on every command that accepts the vocabulary", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-probe-dead-"))
+    try {
+      for (const args of [["init", dir, "--probe"], ["amend", dir, "--probe"], ["init", dir, "--probe=false"]]) {
+        const refused = await runCli(args)
+        expect(refused.code, args.join(" ")).toBe(1)
+        expect(refused.err, args.join(" ")).toContain(FLAG_NOTICE)
+      }
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the command is gone from the help surface and never suggested", async () => {
+    const usage = await runCli(["--help"])
+    expect(usage.code).toBe(0)
+    expect(usage.out).toContain("models (and its --probe) is retired (plans/0296, the opencode severance)")
+    expect(usage.out).not.toContain("\n  opencode-auto models ")
+    // a near-miss of the dead name never suggests it (its notice is its one
+    // answer)
+    const typo = await runCli(["model"])
+    expect(typo.code).toBe(1)
+    expect(typo.err).toContain("'model' is not a command")
+    expect(typo.err).not.toContain("'models'")
+  })
+})
+
 // init's git bootstrap and identity resolution (auto-core plans/0073, ruled
 // 2026-10-04): a non-git target directory is bootstrapped into a real
 // repository in one go — git init (init.defaultBranch when the person set
@@ -2281,9 +2373,11 @@ describe("CLI: init's git bootstrap and identity (plans/0073)", () => {
       // sees the work tree the bootstrap created).
       expect(init.out).toContain("updated: .gitignore")
       const gitignore = await Bun.file(join(dir, ".gitignore")).text()
-      for (const entry of ["tmp/", ".auto/", "/.env", "/AGENTS.md", "/.opencode/auto/models.json"]) {
+      for (const entry of ["tmp/", ".auto/", "/.env", "/AGENTS.md"]) {
         expect(gitignore).toContain(`${entry}\n`)
       }
+      // the model registry project layer carries no entry since plans/0296
+      expect(gitignore).not.toContain("models.json")
       expect(init.out).toContain(`next: the plan operation of a daemon (POST /projects/<project>/plan)`)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -2942,7 +3036,7 @@ describe("CLI: the option policy's enumeration guard (0159)", () => {
     expect(optionHelpKeys.size).toBeGreaterThan(30)
     const commandsBlock = blockOf("COMMANDS", "const OPTION_TEXT")
     const optionLists = [...commandsBlock.matchAll(/options: \[([^\]]*)\]/g)].map(([, inner]) => [...inner.matchAll(/"([^"]+)"/g)].map(([, key]) => key))
-    expect(optionLists.length).toBeGreaterThanOrEqual(14)
+    expect(optionLists.length).toBeGreaterThanOrEqual(13)
     for (const keys of optionLists) {
       for (const key of keys) {
         expect(key === "frozen" || optionHelpKeys.has(key), `the ${key} options row has no OPTION_HELP paragraph`).toBe(true)
@@ -3103,14 +3197,16 @@ describe("CLI: driver-helper and install-prompts (the shell rows of 0105/0093)",
       await commitFixture(dir)
       const installed = await runCli(["install-prompts", dir])
       expect(installed.code).toBe(0)
-      expect(installed.out).toContain(`prompt suite resynced into ${dir}/prompts: 11 files`)
-      expect(installed.out).toContain("rewritten: charter.md, executor.md, plan-append.md, resume-subtasks.md, run-as-subtasks.md")
+      // plans/0296 slice 3: the suite is executor.md alone (the push prompt
+      // suite retired with it)
+      expect(installed.out).toContain(`prompt suite resynced into ${dir}/prompts: 1 files`)
+      expect(installed.out).toContain("rewritten: executor.md")
       // The never-delete invariant: a person's own file under prompts/ is
       // reported and left alone; an already-current suite re-reports it.
       await Bun.write(join(dir, "prompts/my-own.md"), "# Mine\n\nLocal additions are the person's own.\n")
       const again = await runCli(["install-prompts", dir])
       expect(again.code).toBe(0)
-      expect(again.out).toContain(`prompt suite already current in ${dir}/prompts: 11 files`)
+      expect(again.out).toContain(`prompt suite already current in ${dir}/prompts: 1 files`)
       expect(again.out).toContain("left alone (not in the suite): my-own.md")
       expect(await Bun.file(join(dir, "prompts/my-own.md")).text()).toContain("Mine")
       // plans/0164 — the vintage pin and the drift gate. The install wrote
@@ -3119,22 +3215,22 @@ describe("CLI: driver-helper and install-prompts (the shell rows of 0105/0093)",
       // resync restores current; anything but --check is refused.
       expect(again.out).toContain("manifest: prompts/MANIFEST pins this suite")
       const manifest = JSON.parse(await Bun.file(join(dir, "prompts/MANIFEST")).text()) as { suite: string; files: Record<string, string> }
-      expect(Object.keys(manifest.files).length).toBe(11)
+      expect(Object.keys(manifest.files).length).toBe(1)
       expect(manifest.suite).toMatch(/^sha256-[0-9a-f]{64}$/)
       const clean = await runCli(["install-prompts", dir, "--check"])
       expect(clean.code).toBe(0)
       expect(clean.out).toContain(`prompt suite current in ${dir}/prompts (the manifest pins this binary's suite)`)
-      await Bun.write(join(dir, "prompts/run.md"), "drifted\n")
+      await Bun.write(join(dir, "prompts/executor.md"), "drifted\n")
       await rm(join(dir, "prompts/MANIFEST"))
       const drift = await runCli(["install-prompts", dir, "--check"])
       expect(drift.code).toBe(1)
       expect(drift.out).toContain(`prompt suite drift in ${dir}/prompts:`)
-      expect(drift.out).toContain("drifted from this binary's suite: run.md")
+      expect(drift.out).toContain("drifted from this binary's suite: executor.md")
       expect(drift.out).toContain("manifest absent: prompts/MANIFEST pins no vintage")
-      expect(await Bun.file(join(dir, "prompts/run.md")).text()).toBe("drifted\n")
+      expect(await Bun.file(join(dir, "prompts/executor.md")).text()).toBe("drifted\n")
       expect((await runCli(["install-prompts", dir])).code).toBe(0)
       expect((await runCli(["install-prompts", dir, "--check"])).code).toBe(0)
-      expect(await Bun.file(join(dir, "prompts/run.md")).text()).toContain("# run — master control")
+      expect(await Bun.file(join(dir, "prompts/executor.md")).text()).toContain("# Executor")
       const badFlag = await runCli(["install-prompts", dir, "--dryrun"])
       expect(badFlag.code).toBe(1)
       expect(badFlag.err).toContain("unknown option --dryrun: install-prompts takes only --check (a directory argument and no other options)")
@@ -3187,14 +3283,13 @@ describe("CLI: amend (plans/0052 D25)", () => {
     }
   })
 
-  test("changes the named keys only, re-renders the contract and the AGENTS.md block, leaves the rounds alone (D32)", async () => {
+  test("changes the named keys only, re-renders the AGENTS.md block, leaves the rounds alone (D32; the contract retired by plans/0296)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--context-limit", "32", "--phases", "am", "--parallel", "low", "--agent", "claude"])).code).toBe(0)
       // the opening operation establishes the current round; amend writes
       // only the config layer and no longer re-syncs the phase tail
       await establish(dir, "am")
-      await rm(join(dir, "opencode.json"))
       await rm(join(dir, ".opencode/auto/brief.md"), { force: true })
       const amended = await runCli(["amend", dir, "--test-by-driver", "--parallel", "none", "--agent", "opencode"])
       expect(amended.code).toBe(0)
@@ -3205,7 +3300,9 @@ describe("CLI: amend (plans/0052 D25)", () => {
       expect(config).toMatchObject({ contextLimit: 32, phases: "am", testByDriver: true })
       expect(config).not.toHaveProperty("parallel")
       expect(config).not.toHaveProperty("agent")
-      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).text()).toBe(renderText(await Bun.file(templateAgent).text(), { testByDriver: true }))
+      // the agent contract is the host's own since plans/0296: neither init
+      // nor amend writes it
+      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("tmp/test.sh")
       // the round step is gone (plans/0053 D32): amend writes no phase state,
       // and with the phases key untouched there is no drift to reconcile
@@ -3288,24 +3385,26 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
       expect((await runCli(["init", dir])).code).toBe(0)
       const configBefore = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
-      await rm(join(dir, ".opencode/agent/auto.md"))
+      // a missing marker block: the AGENTS.md rule's fixable finding (the
+      // agent-contract rule died with the file, plans/0296)
+      await rm(join(dir, "AGENTS.md"))
       // a dirty tree: the plain fix would refuse here (the worktree gate)
       await Bun.write(join(dir, "uncommitted.txt"), "dirty\n")
       const dry = await runCli(["fix", dir, "--dryrun"])
       expect(dry.code).toBe(1)
       expect(dry.out).toContain("config-layer findings in")
-      expect(dry.out).toContain("  fix: .opencode/agent/auto.md: missing → write it from the template")
+      expect(dry.out).toContain("  fix: AGENTS.md: the opencode-auto block is missing → write the current block and remove the stray ones")
       expect(dry.out).toContain(`dryrun: nothing was changed; apply the 1 fixable finding(s) with opencode-auto fix ${dir}`)
       expect(dry.err).not.toContain("requires a clean worktree")
-      // nothing was written: the contract stays missing, the config and the
+      // nothing was written: the block stays missing, the config and the
       // dirty file are untouched, and the tree is what it was
-      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, "AGENTS.md")).exists()).toBe(false)
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(configBefore)
       expect(await Bun.file(join(dir, "uncommitted.txt")).text()).toBe("dirty\n")
       // --dryrun=false is the plain fix (with -f applying it); the write then happens
       const applied = await runCli(["fix", dir, "--dryrun=false", "-f"])
       expect(applied.code).toBe(0)
-      expect(applied.out).toContain("fixed: .opencode/agent/auto.md: write it from the template")
+      expect(applied.out).toContain("fixed: AGENTS.md: write the current block and remove the stray ones")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -3319,17 +3418,15 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       // but it still fails to load (handoverTest without testByDriver)
       const stored = JSON.stringify({ ...CONFIG_DEFAULTS, handoverTest: true }, null, 2) + "\n"
       await Bun.write(join(dir, ".opencode/auto/config.json"), stored)
-      await rm(join(dir, ".opencode/agent/auto.md"))
       const dry = await runCli(["fix", dir, "--dryrun"])
       expect(dry.code).toBe(1)
       expect(dry.out).toContain("config-layer findings in")
       expect(dry.out).toContain("  manual: .opencode/auto/config.json: handoverTest requires testByDriver: true")
-      expect(dry.out).toContain("  skipped: the agent contract, AGENTS.md block, .gitignore, opencode.json and brief checks (.opencode/auto/config.json does not load)")
+      expect(dry.out).toContain("  skipped: the AGENTS.md block and .gitignore checks (.opencode/auto/config.json does not load)")
       expect(dry.out).toContain("dryrun: nothing was changed; the finding(s) above need a person")
       expect(dry.err).toContain("1 finding(s) need a person")
-      // nothing was written: the config is byte-identical, the contract stays missing
+      // nothing was written: the config is byte-identical
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(stored)
-      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -3381,7 +3478,9 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       const kept = await readConfig(dir)
       const stored = { ...kept, commit: false, verifyIdle: 20, source: { dir: "legacy", path: "pkg" }, destDir: "app" }
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify(stored, null, 2) + "\n")
-      await rm(join(dir, ".opencode/agent/auto.md"))
+      // the missing artifact: the AGENTS.md marker block (the agent-contract
+      // rule died with the file, plans/0296)
+      await rm(join(dir, "AGENTS.md"))
       // The person's hand edit commits before fix (fix's own clean-tree gate
       // is git-bound since init bootstraps the repository)
       await commitFixture(dir)
@@ -3390,14 +3489,15 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect(fix.out).toContain("  fix: .opencode/auto/config.json: commit: false is retired")
       expect(fix.out).toContain("fixed: .opencode/auto/config.json: move its value into .opencode/auto/brief.md under ## Target, then drop the key")
       expect(fix.out).toContain("verifyIdle was renamed to idleTime, which is also set → drop the key")
-      expect(fix.out).toContain("fixed: .opencode/agent/auto.md: write it from the template")
+      expect(fix.out).toContain("  fix: AGENTS.md: the opencode-auto block is missing → write the current block and remove the stray ones")
+      expect(fix.out).toContain("fixed: AGENTS.md: write the current block and remove the stray ones")
       expect(fix.out).toContain("✓ config layer repaired")
       // every key no rule names survives; the retired commit key is gone
       expect(await readConfig(dir)).toEqual(kept)
       const brief = await Bun.file(join(dir, ".opencode/auto/brief.md")).text()
       expect(brief).toContain("`legacy`")
       expect(brief).toContain("`app`")
-      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(true)
+      expect((await Bun.file(join(dir, "AGENTS.md")).text()).includes("<!-- opencode-auto:start -->")).toBe(true)
       expect((await runCli(["fix", dir])).out).toContain("✓ nothing to fix")
       // The repaired config loads strictly (plans/0283 re-keyed run's
       // witness to the strict-loading amend: a command that would refuse
@@ -3415,73 +3515,40 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ ...CONFIG_DEFAULTS, verify: true, handoverTest: true }, null, 2) + "\n")
-      await rm(join(dir, ".opencode/agent/auto.md"))
       await commitFixture(dir)
       const fix = await runCli(["fix", dir])
       expect(fix.code).toBe(1)
       expect(fix.out).toContain("  manual: .opencode/auto/config.json: handoverTest requires testByDriver: true")
-      expect(fix.out).toContain("  skipped: the agent contract, AGENTS.md block, .gitignore, opencode.json and brief checks (.opencode/auto/config.json does not load)")
+      expect(fix.out).toContain("  skipped: the AGENTS.md block and .gitignore checks (.opencode/auto/config.json does not load)")
       expect(fix.err).toContain("1 finding(s) need a person")
       expect(await readConfig(dir)).not.toHaveProperty("verify")
-      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  // auto-core plans/0055 §4.1: the model registry's project layer is
-  // local-only; a project initialized before init ignored it lacks the entry
-  // (plans/0283 re-keyed the run-start refusal witness to models — the
-  // registry's read-only reader — beside fix's own finding).
-  test("an older project: models refuses a project layer git does not ignore and names fix; fix adds the entry", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
-      expect((await runCli(["init", dir])).code).toBe(0)
-      const gitignore = join(dir, ".gitignore")
-      const older = (await Bun.file(gitignore).text()).replace("/.opencode/auto/models.json\n", "")
-      await Bun.write(gitignore, older)
-      // The registry declares both tier lists on its one model: since
-      // selection wires the tiers into every dispatch, a needed tier with no
-      // candidate is a start refusal (auto-core plans/0055 §6.3), and this
-      // fixture wants the reader past the tier checks.
-      await Bun.write(
-        join(dir, ".opencode/auto/models.json"),
-        JSON.stringify({ models: { glm: { agent: "opencode", model: "zhipuai/glm-4.6" } }, tiers: { deep: ["glm"], simple: ["glm"] } }),
-      )
-      const refused = await runCli(["models", dir])
-      expect(refused.code).toBe(1)
-      expect(refused.out).toContain(
-        `model registry, project layer .opencode/auto/models.json: git does not ignore it, so the unified commit would commit it; run opencode-auto fix ${dir} to add its .gitignore entry, then re-run`,
-      )
-      const fix = await runCli(["fix", dir, "-f"])
-      expect(fix.code).toBe(0)
-      expect(fix.out).toContain("  fix: .gitignore: lacks the /.opencode/auto/models.json entry (the model registry's project layer is local-only) → append the entry")
-      expect(await Bun.file(gitignore).text()).toBe(`${older}/.opencode/auto/models.json\n`)
-      expect((await runCli(["fix", dir])).out).toContain("✓ nothing to fix")
-      // After the entry exists the reader proceeds past the refusal: the
-      // table prints (the implied opencode profile) and exit 0
-      const after = await runCli(["models", dir])
-      expect(after.code).toBe(0)
-      expect(after.out).not.toContain("git does not ignore it")
-      expect(after.out).toContain("zhipuai/glm-4.6")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
+  // (The model registry's project-layer .gitignore rule — models refusing a
+  // layer git does not ignore, fix backfilling the entry — died whole with
+  // the models surface, plans/0296: init writes no entry, fix carries no
+  // rule, and the reader is a permanent tombstone.)
 
   test("the worktree gate refuses a dirty tree before any write; -f skips it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
       expect((await runCli(["init", dir])).code).toBe(0)
-      await rm(join(dir, ".opencode/agent/auto.md"))
+      // the fixable finding: the .gitignore loses its workdir entries (a
+      // tracked file, so the tree is dirty too — the double role the old
+      // agent-contract deletion played before plans/0296)
+      const gitignore = join(dir, ".gitignore")
+      const dirtyContents = (await Bun.file(gitignore).text()).replace("tmp/\n", "")
+      await Bun.write(gitignore, dirtyContents)
       const dirty = await runCli(["fix", dir])
       expect(dirty.code).toBe(1)
       expect(dirty.err).toContain("fix will delete or modify files on disk and requires a clean worktree")
-      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
+      expect(await Bun.file(gitignore).text()).toBe(dirtyContents)
       expect((await runCli(["fix", dir, "-f"])).code).toBe(0)
-      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(true)
+      expect(await Bun.file(gitignore).text()).toContain("tmp/\n")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -3790,166 +3857,6 @@ describe("CLI: remove-fork (auto-core plans/0139)", () => {
   })
 })
 
-// plan (auto-core plans/0053 D14–D15): every route the prelude settles without
-// an agent — the refusals, establishing a round, the round-close gate, the
-// notices — plus the argument checks. The loop paths (planning itself, the
-// stop after it) need an agent and live in the A7 loop harness / the
-// OPENCODE_AUTO_E2E block.
-describe("CLI: models (auto-core plans/0055 §9)", () => {
-  // A registry without windows, so the lines do not depend on the clock.
-  const REGISTRY = {
-    agents: {
-      opencode: { adapter: "opencode", env: { HTTPS_PROXY: "http://127.0.0.1:7890" } },
-      claude: { adapter: "claude", env: { HTTPS_PROXY: "{env:CLAUDE_PROXY}" } },
-    },
-    models: {
-      opus: { agent: "claude", model: "opus" },
-      k3: { agent: "opencode", model: "moonshotai/kimi-k3-256k", wider: ["moonshotai/kimi-k3"], keys: ["{env:MOONSHOT_KEY_A}", "{env:MOONSHOT_KEY_B}"] },
-      k2: { agent: "opencode", model: "moonshotai/kimi-k2", context: 128 },
-      free: { agent: "opencode", model: "opencode/some-free-model" },
-    },
-    tiers: { deep: ["opus", "k3"], simple: ["k2"] },
-    routes: { acceptance: "deep" },
-    classifier: ["free"],
-  }
-  const SECRETS = { CLAUDE_PROXY: "http://user:secret-proxy@10.0.0.1:3128", MOONSHOT_KEY_A: "sk-secret-a", MOONSHOT_KEY_B: "sk-secret-b" }
-
-  test("without a layer: the implicit registry's table, exit 0, and nothing is written", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      const none = await runCli(["models", dir])
-      expect(none.code).toBe(0)
-      const lines = none.out.split("\n")
-      // No layer file exists: the command names the implicit registry the
-      // env switches synthesize (0061 F2) and shows its table.
-      expect(lines[0]).toBe(
-        `model registry: implicit — no layer file (${join(EMPTY_CONFIG_HOME, "opencode-auto", "models.json")} nor .opencode/auto/models.json); a run synthesizes it from OPENCODE_AUTO_MODEL / OPENCODE_AUTO_MODEL_FALLBACK`,
-      )
-      expect(lines).toContain("  opencode  [implied]  adapter opencode")
-      expect(lines).toContain("  default  [implied]  agent opencode (opencode) · the agent's default model")
-      expect(none.err).toBe("")
-      const missing = join(dir, "missing.json")
-      expect((await runCli(["models", dir], { OPENCODE_AUTO_MODELS: missing })).out).toContain(`no layer file (${missing} nor`)
-      expect(await readdir(dir)).toEqual([])
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a registry through OPENCODE_AUTO_MODELS: the table with tiers, candidates, layers, steps and env names, never values", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      const file = join(dir, "operator.json")
-      await Bun.write(file, JSON.stringify(REGISTRY))
-      await mkdir(join(dir, ".opencode", "auto"), { recursive: true })
-      await Bun.write(join(dir, ".opencode/auto/models.json"), JSON.stringify({ models: { k2: { agent: "opencode", model: "moonshotai/kimi-k2-turbo-preview" } } }))
-      // It takes no run lock: a live one does not stop it.
-      await Bun.write(join(dir, RUN_LOCK_FILE), JSON.stringify({ pid: process.pid, host: hostname(), command: "run", started: "2026-09-23T10:00:00.000Z" }))
-      const shown = await runCli(["models", dir], { OPENCODE_AUTO_MODELS: file, ...SECRETS })
-      expect(shown.err).toBe("")
-      expect(shown.code).toBe(0)
-      const lines = shown.out.split("\n")
-      expect(lines[0]).toBe(`model registry: operator layer ${file} · project layer .opencode/auto/models.json`)
-      expect(lines).toContain("agent filter: none: models on every agent profile are candidates")
-      expect(lines).toContain("project cap: 64k context · default agent: opencode")
-      expect(lines).toContain("  opencode  [operator]  adapter opencode · env HTTPS_PROXY (literal)")
-      expect(lines).toContain("  claude    [operator]  adapter claude · env HTTPS_PROXY (env CLAUDE_PROXY)")
-      expect(lines).toContain("  k3    [operator]  agent opencode (opencode) · steps moonshotai/kimi-k3-256k → moonshotai/kimi-k3 · ring moonshotai (2 keys)")
-      expect(lines).toContain("  k2    [project]  agent opencode (opencode) · model moonshotai/kimi-k2-turbo-preview · ring moonshotai (2 keys)")
-      expect(lines).toContain("  moonshotai  2 keys: MOONSHOT_KEY_A, MOONSHOT_KEY_B · models k3, k2")
-      expect(lines).toContain("classifier: [operator]  free")
-      expect(lines).toContain("  implement (m) · builtin · execute tier simple")
-      expect(lines).toContain("    decompose, phase-plan, implement-scan: deep → opus ✓ · k3 ✓")
-      expect(lines).toContain("    whole, subtask, wrapup, phase-handover, diagnose, bypass: simple → k2 ✓ | opus ✓ · k3 ✓")
-      expect(lines).toContain("    decompose, whole, subtask, wrapup, phase-plan, phase-handover, implement-scan, diagnose, bypass: deep · route acceptance [operator] → opus ✓ · k3 ✓")
-      for (const value of [...Object.values(SECRETS), "127.0.0.1:7890"]) expect(shown.out).not.toContain(value)
-      expect(await Bun.file(join(dir, RUN_LOCK_FILE)).exists()).toBe(true)
-
-      // The agent filter and the override come from the environment.
-      const filtered = await runCli(["models", dir], { OPENCODE_AUTO_MODELS: file, ...SECRETS, OPENCODE_AUTO_AGENT: "claude", OPENCODE_AUTO_MODEL: "bypass=zhipuai/glm-4.6" })
-      expect(filtered.code).toBe(0)
-      expect(filtered.out).toContain("agent filter: claude (OPENCODE_AUTO_AGENT): only models on claude profiles are candidates")
-      expect(filtered.out).toContain("    decompose, phase-plan, implement-scan: deep → opus ✓ · k3 ✗")
-      expect(filtered.out).toContain("✗ not usable now: filtered out by the agent filter claude (OPENCODE_AUTO_AGENT)")
-      expect(filtered.out).toContain("    bypass: override OPENCODE_AUTO_MODEL → zhipuai/glm-4.6 ✗ (filtered out by the agent filter claude (OPENCODE_AUTO_AGENT); a raw provider/model on the default agent opencode, without window, ring or steps)")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a bad registry: the problems and exit 1; broken references print the table first", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      const file = join(dir, "operator.json")
-      await Bun.write(file, JSON.stringify({ ...REGISTRY, models: { ...REGISTRY.models, k2: { agent: "opencode", model: "moonshotai/kimi-k2", aviod: [] } } }))
-      const bad = await runCli(["models", dir], { OPENCODE_AUTO_MODELS: file, ...SECRETS })
-      expect(bad.code).toBe(1)
-      expect(bad.out).toBe(
-        [
-          `⚠ model registry, operator layer ${file}: models.k2: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys, retry)`,
-          "1 problem(s): run and plan refuse to start until they are fixed (exit 1)",
-          "",
-        ].join("\n"),
-      )
-      await Bun.write(file, JSON.stringify(REGISTRY))
-      const broken = await runCli(["models", dir], { OPENCODE_AUTO_MODELS: file, MOONSHOT_KEY_A: "sk-secret-a" })
-      expect(broken.code).toBe(1)
-      expect(broken.out).toContain("routing per phase type and role")
-      expect(broken.out).toContain(`⚠ model registry, operator layer ${file}: agents.claude.env.HTTPS_PROXY: env CLAUDE_PROXY is not set`)
-      expect(broken.out).toContain(`⚠ model registry, operator layer ${file}: models.k3.keys[1]: env MOONSHOT_KEY_B is not set`)
-      expect(broken.out.trimEnd().split("\n").at(-1)).toBe("2 problem(s): run and plan refuse to start until they are fixed (exit 1)")
-      expect(broken.out).not.toContain("sk-secret-a")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("models takes only --probe; without a registry the probe is a no-op line", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      const other = await runCli(["models", dir, "--verbose"])
-      expect(other.code).toBe(1)
-      expect(other.err).toContain("unknown option --verbose: models takes only --probe (a directory argument and no other options)")
-      // --probe without a registry probes nothing and keeps exit 0.
-      const probe = await runCli(["models", dir, "--probe"])
-      expect(probe.code).toBe(0)
-      expect(probe.out).toContain("probe: no model registry, nothing to probe")
-      // --probe is a real boolean (0159): the explicit =false opt-out runs
-      // no probe at all — before, the bare-presence read started it against
-      // the person's explicit "false", and a token-spending opt-out is never
-      // silently ignored.
-      const optOut = await runCli(["models", dir, "--probe=false"])
-      expect(optOut.code).toBe(0)
-      expect(optOut.out).not.toContain("probe:")
-      const spaceForm = await runCli(["models", dir, "--probe", "false"])
-      expect(spaceForm.code).toBe(0)
-      expect(spaceForm.out).not.toContain("probe:")
-      // `--probe true <dir>`: the boolean swallows the true/false token, so
-      // the directory after it still resolves — before probe joined
-      // BOOLEAN_FLAGS the "true" stayed positional[0], the command ran on
-      // ./true and the intended directory's registry was silently ignored.
-      // The dir-dependent signal: a project layer git would commit is a
-      // problem naming the layer's path (exit 1) only when <dir> parsed.
-      const layered = await mkdtemp(join(tmpdir(), "auto-cli-models-"))
-      await mkdir(join(layered, ".opencode", "auto"), { recursive: true })
-      await Bun.write(
-        join(layered, ".opencode", "auto", "models.json"),
-        JSON.stringify({ models: { probe: { agent: "opencode", model: "x" } } }),
-      )
-      const git = gitOf(layered)
-      await git("init")
-      const swallowed = await runCli(["models", "--probe", "true", layered])
-      expect(swallowed.code).toBe(1)
-      expect(swallowed.out).toContain("project layer .opencode/auto/models.json: git does not ignore it")
-      await rm(layered, { recursive: true, force: true })
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-
-
 // close (auto-core plans/0053 D22): the shell half — the argument order (the
 // ref first, the directory second), the flag whitelist, the run lock, and one
 // happy-path task close on a git fixture (exit code, output lines, the close
@@ -4204,9 +4111,10 @@ describe("CLI: reset de-initialization", () => {
       expect(reset.out).toContain("✓ config layer removed (docs/, .auto/ runtime state and tmp/ untouched")
 
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).exists()).toBe(false)
-      expect(await Bun.file(join(dir, "opencode.json")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "AGENTS.md")).exists()).toBe(false)
-      expect(await readdir(dir)).not.toContain(".opencode")
+      // the tool's own subtree alone is pruned (plans/0296): bare .opencode —
+      // the person's own directory — is reclaimed by no reset
+      expect(await readdir(join(dir, ".opencode"))).toEqual([])
       // Work output and runtime state survive untouched
       expect(await Bun.file(join(dir, "docs/T-001/todo.md")).text()).toBe("# T-001: my task\n")
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).exists()).toBe(true)
@@ -4222,7 +4130,6 @@ describe("CLI: reset de-initialization", () => {
       expect((await runCli(["init", dir])).code).toBe(0)
       await commitFixture(dir)
       const config = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
-      const agent = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
       const agents = await Bun.file(join(dir, "AGENTS.md")).text()
       expect((await runCli(["reset", dir])).code).toBe(0)
       // reset's deletions commit before the re-init (the overwrite gate is
@@ -4230,26 +4137,24 @@ describe("CLI: reset de-initialization", () => {
       await commitFixture(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
-      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).text()).toBe(agent)
       expect(await Bun.file(join(dir, "AGENTS.md")).text()).toBe(agents)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("reset keeps a modified opencode.json and says why", async () => {
+  test("reset never touches the person's opencode.json (plans/0296: the file is the host's own)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
       await commitFixture(dir)
       await writeFile(join(dir, "opencode.json"), '{"model":"my own config"}\n')
-      // opencode.json is a tracked surface (plans/0138): the edit is ordinary
-      // uncommitted work now, and reset's cleanliness gate — the same bracket
-      // as over an edited config.json — wants it committed first.
       await commitFixture(dir)
       const reset = await runCli(["reset", dir])
       expect(reset.code).toBe(0)
-      expect(reset.out).toContain("keep: opencode.json")
+      // the file is never reset's to keep or remove: no listing, no line, the
+      // bytes exactly the person's
+      expect(reset.out).not.toContain("opencode.json")
       expect(await Bun.file(join(dir, "opencode.json")).text()).toBe('{"model":"my own config"}\n')
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -4330,9 +4235,11 @@ describe("CLI: the worktree cleanliness gate", () => {
       expect(dirty.err).toContain(".opencode/auto/config.json")
       // The tracked surfaces (plans/0138) sit in the dirty list beside the
       // config layer — init's writes the person has not committed yet; the
-      // ignore rules still keep the local-only files (AGENTS.md) out of it.
-      expect(dirty.err).toContain("opencode.json")
+      // ignore rules still keep the local-only files (AGENTS.md) out of it,
+      // and opencode.json is the person's own since plans/0296 (never init's
+      // write, so never in the list).
       expect(dirty.err).toContain(".gitignore")
+      expect(dirty.err).not.toContain("opencode.json")
       expect(dirty.err).not.toContain("AGENTS.md")
       expect(dirty.err).toContain("-f/--force")
       // The refusal happens before any write

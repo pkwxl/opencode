@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { checkAgentBins, probeModels, singleHost, startPool } from "../src/agent-pool"
+import { checkAgentBins, singleHost, startPool } from "../src/agent-pool"
 import type { AgentHost } from "../src/agent/types"
 import type { SessionChain } from "../src/chain"
 import { loadModels } from "../src/models"
@@ -635,42 +635,10 @@ describe("preflight's bin check (§8.7)", () => {
   })
 })
 
-describe("the models command's probe (§9)", () => {
-  test("probes every listed model on its own agent and reports each answer; unused entries are not probed", async () => {
-    const { registry, hosts, pool } = await fleet(undefined, {
-      turn: (ctx) => [ev.text(ctx.session, "t", "ok"), ev.message(ctx.session, "m", 10), ev.step(ctx.session, "s"), ev.idle(ctx.session)],
-    })
-    try {
-      const probes = await probeModels(registry, "/work", { timeoutMs: 5000 })
-      expect(probes).toHaveLength(2)
-      const a1 = probes.find((probe) => probe.name === "a1")!
-      const b1 = probes.find((probe) => probe.name === "b1")!
-      expect(a1).toMatchObject({ agent: "a", ok: true })
-      // a1 answers with the default turn, b1 with the scripted "ok".
-      expect(a1.line).toContain("ok — done:")
-      expect(b1).toMatchObject({ agent: "b", ok: true })
-      expect(b1.line).toContain("ok — ok")
-      // Each probe ran on its own agent's host; the pool closed them.
-      expect(hosts.a.starts()).toBe(1)
-      expect(hosts.b.starts()).toBe(1)
-      expect(hosts.a.closed() + hosts.b.closed()).toBe(2)
-    } finally {
-      pool.close()
-    }
-  })
-
-  test("a model that errors reports the failure line; the exit stays the caller's", async () => {
-    const { registry, pool } = await fleet({ fail: { prompt: new Error("provider blew up") } })
-    try {
-      const probes = await probeModels(registry, "/work", { timeoutMs: 5000 })
-      const a1 = probes.find((probe) => probe.name === "a1")!
-      expect(a1.ok).toBe(false)
-      expect(a1.line).toContain("failed")
-    } finally {
-      pool.close()
-    }
-  })
-})
+// (The models command's probe — probeModels over every listed model, its own
+// pool per entry — is gone with the models surface, plans/0296: the tool
+// spawns no agent session, ever. PROBE_PROMPT stays, the wait-and-probe
+// loop's single home; its coverage lives in the session suites.)
 
 describe("registerAgentAdapter (§8.8)", () => {
   test("a shell registers an adapter: the registration is readable, and the registry loader accepts the name", async () => {

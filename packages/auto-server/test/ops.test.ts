@@ -15,8 +15,6 @@
 //   - the units: close over closeUnit (the Closed: field, the tick, the
 //     close commit) and task-add over addTask through planPrelude's
 //     no-session route (the document, the index line, the commit);
-//   - the models operation: read-only, no lock, runs beside a live run;
-//     the probe is the POST route behind its own opt-in scope (P4b);
 //   - the planPrelude boundary matrix: the no-agent routes served with
 //     their lines and codes (round establishment, the round-close gate,
 //     the drift refusal naming transfer, the refusal stops), and — since
@@ -179,7 +177,7 @@ async function untilRunSettles(h: Harness, id: string, timeoutMs = 120_000): Pro
 }
 
 describe("the lifecycle operations (P1d)", () => {
-  test("the whitelist and scopes gate the operations: 404 unregistered, 401 without a token, 403 naming the scope, read serving models", async () => {
+  test("the whitelist and scopes gate the operations: 404 unregistered, 401 without a token, 403 naming the scope, read serving the status read", async () => {
     await withOps(async (h) => {
       const dir = await gitBlank("auto-ops-unreg-")
       const name = h.register(dir)
@@ -190,6 +188,9 @@ describe("the lifecycle operations (P1d)", () => {
       expect(String(unknown.body.error)).toContain("not a registered project")
       // unknown op segment
       expect((await h.call("POST", `/projects/${name}/bogus`, h.config, {})).status).toBe(404)
+      // the models operations are gone (plans/0296) — the segment answers 404
+      expect((await h.call("GET", `/projects/${name}/models`, h.read)).status).toBe(404)
+      expect((await h.call("POST", `/projects/${name}/models`, h.read, { probe: true, confirm: true })).status).toBe(404)
       // auth
       expect((await h.call("POST", `/projects/${name}/init`)).status).toBe(401)
       const wrongScope = await h.call("POST", `/projects/${name}/init`, h.control, {})
@@ -198,7 +199,7 @@ describe("the lifecycle operations (P1d)", () => {
       const closeDenied = await h.call("POST", `/projects/${name}/close`, h.config, { ref: TASK, reason: "x" })
       expect(closeDenied.status).toBe(403)
       expect(String(closeDenied.body.error)).toContain('"control" scope')
-      expect((await h.call("GET", `/projects/${name}/models`, h.read)).status).toBe(200)
+      expect((await h.call("GET", `/projects/${name}/status`, h.read)).status).toBe(200)
       await rm(dir, { recursive: true, force: true })
     })
   })
@@ -965,37 +966,6 @@ describe("the lifecycle operations (P1d)", () => {
     })
   })
 
-  test("models: read-only, no lock, the table's own exit vocabulary; the probe is the POST route (P4b)", async () => {
-    await withOps(async (h) => {
-      const dir = await fixtureProject("auto-ops-models-", {})
-      const name = h.register(dir)
-      const table = await h.call("GET", `/projects/${name}/models`, h.read)
-      expect(table.status).toBe(200)
-      expect(table.body.code).toBe(0)
-      expect(table.body.problems).toEqual([])
-      expect(has(table.body, "model registry: implicit")).toBe(true)
-      expect(String(table.body.operatorPath)).toContain("models.json")
-      // the probe is its own POST route behind its own scope — not a query
-      // parameter on the free table
-      const query = await h.call("GET", `/projects/${name}/models?probe=1`, h.read)
-      expect(query.status).toBe(400)
-      expect(String(query.body.error)).toContain("the POST route")
-      expect((await h.call("GET", `/projects/${name}/models?bogus=1`, h.read)).status).toBe(400)
-      // the probe's scope tier: read does not carry it, and no default token
-      // set does — the gate is the scope itself
-      const probeDenied = await h.call("POST", `/projects/${name}/models`, h.read, { probe: true, confirm: true })
-      expect(probeDenied.status).toBe(403)
-      expect(String(probeDenied.body.error)).toContain('"probe" scope')
-      // a broken project layer is a problem a run start would refuse → the CLI's exit 1
-      await Bun.write(join(dir, ".opencode", "auto", "models.json"), "{ not json")
-      const broken = await h.call("GET", `/projects/${name}/models`, h.read)
-      expect(broken.status).toBe(409)
-      expect(broken.body.code).toBe(1)
-      expect((broken.body.problems as string[]).some((problem) => problem.includes("models.json"))).toBe(true)
-      await rm(dir, { recursive: true, force: true })
-    })
-  })
-
   test("the lock rules: the config ops refuse under a planted live holder, the lock-acquiring ops answer 423, and the read-only halves run beside it", async () => {
     await withOps(async (h) => {
       const dir = await fixtureProject("auto-ops-locked-", {})
@@ -1034,7 +1004,6 @@ describe("the lifecycle operations (P1d)", () => {
         }
         // beside the live holder: the read-only halves (the CLI's own skip list)
         expect((await h.call("POST", `/projects/${name}/fix`, h.config, { dryrun: true })).status).toBe(200)
-        expect((await h.call("GET", `/projects/${name}/models`, h.read)).status).toBe(200)
       } finally {
         await releaseHolder()
         await rm(dir, { recursive: true, force: true })

@@ -29,8 +29,6 @@ import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencod
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { runConfigSequence } from "@opencode-ai/auto-core/config-op"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
-import { describeModels, formatModels } from "@opencode-ai/auto-core/models-describe"
-import { probeModels } from "@opencode-ai/auto-core/agent-pool"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
 import { legacyLayoutProblem, parsePhases } from "@opencode-ai/auto-core/phases"
 import { loadPhaseTypes } from "@opencode-ai/auto-core/phases/custom"
@@ -169,12 +167,11 @@ const VALUE_FLAGS = new Set([
 // that read flags.has). parseConfigFlags reads the values from repeatFlags.
 const REPEAT_FLAGS = new Set(["isolate"])
 const repeatFlags = new Map<string, string[]>()
-// --probe (models' alone, plans/0055 §9) is a boolean like the rest: presence
-// means true, --probe=false the explicit opt-out, and a following true/false
-// swallowed — before it joined this set, `--probe=false` set the flag with the
-// value "false" and still ran the probe (a token-spending opt-out ignored),
-// and `--probe true <dir>` left "true" as the directory.
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon", "scaffold", "round", "phase", "from-bundle", "resynthesize", "probe", "check"])
+// The boolean flags: presence means true, --flag=false the explicit opt-out,
+// and a following true/false swallowed. (--probe was one of these before its
+// command retired — plans/0296; the shape it taught stays the rule for the
+// rest: a token-spending opt-out is never silently ignored.)
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append", "keep", "abandon", "scaffold", "round", "phase", "from-bundle", "resynthesize", "check"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -285,8 +282,11 @@ if (command === "check") {
 // ever again — a phase's tasks, the planning session, the distillation and
 // the construction are grants external coding agents claim over the
 // executor protocol, and the person's acts (the boundary advance, the
-// release, the task add) are a daemon's deterministic operations. Like
-// `continue`'s, each notice is the one answer whatever follows the command:
+// release, the task add) are a daemon's deterministic operations. `models`
+// is retired with them (plans/0296, the opencode severance): the model
+// registry was push-mode carriage — the tool spawns no agent session, ever,
+// so there is no fleet to describe or probe. Like `continue`'s, each notice
+// is the one answer whatever follows the command:
 // it fires before the flag refusals, the unknown-option scan, the
 // legacy-layout check and the run-lock refusal — a retired command has no
 // flags, directory or lock semantics left to honor.
@@ -299,6 +299,11 @@ const RETIREMENT_NOTICES: Record<string, string> = {
   // the run that spawned them — concurrency rides the executor protocol's
   // scoped/doc lease tiers.
   _lane: "_lane is retired (plans/0283): the push lane workers are demolished — concurrency rides the executor protocol's scoped/doc lease tiers (external workers claim grants in their own worktrees)",
+  // The model registry's reader (plans/0296, the opencode severance): the
+  // registry existed to route the sessions this tool spawned — with no
+  // session ever spawned there is no routing to describe, and the probe's
+  // one short agent round trip per model has no surface left.
+  models: "models is retired (plans/0296, the opencode severance): the model registry was push-mode carriage — this tool spawns no agent session, ever, so there is no registry left to describe or probe; the agents that work a project are external coding agents claiming grants over the executor protocol, each bringing its own model (opencode-auto-server serve registers the project)",
 }
 if (command !== undefined && command in RETIREMENT_NOTICES) {
   console.error(RETIREMENT_NOTICES[command])
@@ -314,7 +319,7 @@ if (command !== undefined && command in RETIREMENT_NOTICES) {
 // paragraphs its view shows; OPTION_HELP holds the paragraphs themselves in
 // the full usage's order — one text per topic (a command's behavior, an
 // option's semantics, a retirement), shared by every view that names its
-// key. The retirements (the last four keys) ride the full usage alone: they
+// key. The retirements (the last five keys) ride the full usage alone: they
 // are every command's answer on use, not one command's help. The "frozen"
 // paragraph lives beside them for the views of the commands that take or
 // refuse the config flags, and doubles as the options section's own first
@@ -335,7 +340,7 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
       "so its -p (init takes no prompt and no brief; the planning input is plan's), --brief/--brief-file (the brief's channels are the approved proposals and amend's manual revision) and --amend (change individual keys with the amend command) are retired. " +
       "In a directory inside no git work tree, init first initializes the repository itself (branch: the configured init.defaultBranch when set, else main) and prints it loudly — the driver's record and rollback need it; there is no --no-git escape hatch. " +
       "It then checks that git can commit there: a resolving global/GIT_* user.name/user.email identity passes with nothing written; else --name <name> --email <email> given at init are written as repository-local config (never --global); " +
-      "else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.env, /AGENTS.md, the model registry project layer /.opencode/auto/models.json) and every nested git repository in the tree — the .gitignore itself and opencode.json are committed project surfaces (plans/0138: the ignore set and the host posture reach every fresh clone; AGENTS.md stays local, re-derived from the committed config at every run start)",
+      "else init refuses with exit 1 before any write, the message naming the flags. It also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.env, /AGENTS.md) and every nested git repository in the tree — the .gitignore itself and opencode.json are committed project surfaces (plans/0138: the ignore set and the host posture reach every fresh clone; AGENTS.md stays local, re-derived from the committed config at every run start)",
   ],
   [
     "amend",
@@ -498,15 +503,6 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
     "--implement-file / --implement-prompt are retired (and with them the plan command itself, plans/0283): the planning input is the phase's plan-input.md, the planning session the formulate grant's over the executor protocol",
   ],
   [
-    "models",
-    "models prints the model registry's effective table without starting an agent: the layers it was read from (the operator layer $OPENCODE_AUTO_MODELS, else $XDG_CONFIG_HOME/opencode-auto/models.json; the project layer .opencode/auto/models.json, local-only), " +
-      "each agent profile (adapter, bin, server, env variable names — never values), each model entry (its layer, steps, windows and key ring by reference name) with whether it is usable now and why not " +
-      "(outside its windows, filtered out by the agent filter, a known context window below the project cap), the tiers, routes and classifier list, and per phase type and role the tier, the route in force and the ordered candidates. " +
-      "It exits 0 without a registry (one line) and 1 with the problems run and plan would refuse at start (bad JSON, an unknown field, a broken reference, a project layer git would commit); it takes no run lock; " +
-      "--probe additionally sends the recovery probe prompt to each listed model (opt-in, it costs tokens), printing each model's answer or failure, and a failed probe is a finding, not a command error; " +
-      "--probe=false is the explicit opt-out (the boolean forms every other flag takes)",
-  ],
-  [
     "status",
     "status prints the project config summary, a live run lock on its first line when one is held, and the current round's read-only overview tree — round → phase → task → subtask, with status and dependencies; " +
       "an invalid config only warns and never blocks the overview, a missing or invalid phase/task index shows as ⚠ lines, and nothing is written",
@@ -530,6 +526,10 @@ const OPTION_HELP: ReadonlyArray<readonly [key: string, text: string]> = [
   [
     "push-retired",
     "run, plan, transfer, clarify (and the hidden _lane lane worker) are retired (plans/0283): the protocol does nothing via push, ever again — a phase's tasks, the planning session, the distillation and the construction are grants external coding agents claim over the executor protocol (a daemon's POST /projects/<project>/executor/claim; opencode-auto-server serve registers the project), and the person's acts — the boundary advance, the release, the task add — are the daemon's transfer/clarify/tasks operations. The task-append session (plan --append), the repair budget (run --repair) and the charter verifier are retired with them: FAIL verdicts surface as state, the fix grant repairs verify FAILs, appends ride task-add and re-formulation",
+  ],
+  [
+    "models-retired",
+    "models (and its --probe) is retired (plans/0296, the opencode severance): the model registry was push-mode carriage — this tool spawns no agent session, ever, so there is no registry left to describe and no fleet to probe; the agents that work a project are external coding agents claiming grants over the executor protocol, each bringing its own model (opencode-auto-server serve registers the project)",
   ],
 ]
 // The exit-codes line and the per-command pointer close every help view.
@@ -621,12 +621,6 @@ const COMMANDS: readonly CommandHelp[] = [
     options: ["status", "run-lock"],
   },
   {
-    name: "models",
-    summary: "print the model registry's effective table without starting an agent",
-    synopsis: "opencode-auto models [dir] [--probe [true|false]]",
-    options: ["models"],
-  },
-  {
     name: "install-prompts",
     summary: "resync the manual-driver prompt suite into the project's prompts/ and pin its vintage in prompts/MANIFEST (you review and commit)",
     synopsis: "opencode-auto install-prompts [dir] [--check]",
@@ -647,7 +641,8 @@ const COMMAND_BY_NAME: ReadonlyMap<string, CommandHelp> = new Map(COMMANDS.map((
 // The words that name a command: the public surface minus the retired
 // (run/plan/transfer/clarify answer with their retirement notices ahead of
 // every interception, and the hidden `_lane` — the push lane worker — is
-// demolished with them, plans/0283).
+// demolished with them, plans/0283; `models` answers its own severance
+// notice, plans/0296).
 const KNOWN_COMMANDS: ReadonlySet<string> = new Set(COMMANDS.map((entry) => entry.name))
 
 // The closest live command names for an unknown word (the unknown-command
@@ -750,11 +745,10 @@ if (flags.has("help")) {
 // --from-bundle (plans/0100 D5, the unstamped bootstrap's overwrite
 // assertion — the flag passed the global whitelist for every command while
 // only sync consumed it, so `run <dir> --from-bundle` started a full run
-// with the flag silently ignored) and models' --probe (plans/0055 §9, the
-// opt-in probe — joining BOOLEAN_FLAGS put it on the whitelist too, so it
-// needs the same owned refusal to keep `run --probe` an error rather than a
-// silently ignored word) — in refusal order: with several offending flags
-// present, the first row answers.
+// with the flag silently ignored) — in refusal order: with several offending flags
+// present, the first row answers. (models' --probe was an owned flag too;
+// the row died with its command — the flag is a permanent tombstone in
+// RETIRED_FLAGS, plans/0296.)
 const OWNED_FLAGS: ReadonlyArray<{ owner: string; keys: readonly string[]; line: (key: string, command: string | undefined) => string }> = [
   {
     owner: "plan",
@@ -822,13 +816,6 @@ const OWNED_FLAGS: ReadonlyArray<{ owner: string; keys: readonly string[]; line:
       `${command ?? "this command"} does not accept it — a bundle itself is materialized by init --intent alone`,
   },
   {
-    owner: "models",
-    keys: ["probe"],
-    line: (_key, command) =>
-      `--probe is a models option (the opt-in probe: opencode-auto models <dir> --probe); ${command ?? "this command"} does not accept it — ` +
-      `the probe starts agents and costs tokens, so it never rides another command`,
-  },
-  {
     owner: "install-prompts",
     keys: ["check"],
     line: (_key, command) =>
@@ -870,6 +857,8 @@ const COMMIT_FLAG_RETIRED =
   "is retired: committing cannot be turned off — the driver commits all changes after every session ends (unified commits are the " +
   "completion condition). A stored commit: true in .opencode/auto/config.json still loads and is ignored; any other stored value " +
   "fails loading (opencode-auto fix <dir> drops the key)"
+const PROBE_FLAG_RETIRED =
+  "is retired with models (plans/0296, the opencode severance): the model registry was push-mode carriage — this tool spawns no agent session, ever, so there is no fleet to probe; the agents that work a project are external coding agents claiming grants over the executor protocol, each bringing its own model"
 const RETIRED_FLAGS: Record<string, string | { command: string; notice: string }> = {
   commit: COMMIT_FLAG_RETIRED,
   verify: COMPLETION_RETIRED,
@@ -886,21 +875,21 @@ const RETIRED_FLAGS: Record<string, string | { command: string; notice: string }
   brief: { command: "init", notice: INIT_BRIEF_RETIRED },
   "brief-file": { command: "init", notice: INIT_BRIEF_RETIRED },
   amend: AMEND_FLAG_RETIRED,
+  probe: PROBE_FLAG_RETIRED,
 }
 const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RETIRED_FLAGS), "continue", "commit-subtask", "verify-idle", "verify-max"])
 // The config flags: the project attributes init freezes into config.json and
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
 const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt", "isolate", "intent", "tree-lanes"]
-// models takes exactly one option: --probe (§9's opt-in probe, which starts
-// agents and spends tokens); install-prompts takes exactly one too: --check
+// install-prompts takes exactly one option: --check
 // (plans/0164's read-only drift gate); status, release, driver-helper
 // and clarify stay flagless (release certifies the destination as it stands —
 // no options to shape a read-only gate; driver-helper renders the
 // person-proxy brief from live state, plans/0105; clarify writes the person's
-// release mark, plans/0116).
-const MODELS_FLAGS = new Set(["probe"])
+// release mark, plans/0116). (models was a
+// one-option reader too — --probe — before its retirement, plans/0296.)
 const INSTALL_PROMPTS_FLAGS = new Set(["check"])
-const FLAGLESS = command === "status" || command === "models" || command === "release" || command === "driver-helper" || command === "clarify"
+const FLAGLESS = command === "status" || command === "release" || command === "driver-helper" || command === "clarify"
 // reset is de-initialization with nothing to configure: it accepts only
 // -f/--force (skips the confirmation and the worktree cleanliness gate).
 // fix takes its baseline from the existing config and no config flags, so it
@@ -931,7 +920,7 @@ const LAND_FLAGS = new Set(["keep", "abandon", "merge", "onto"])
 // The unknown-option interception: every flag outside its command's policy
 // below is an error with exit 1, so a typo is never silently ignored. The
 // strict commands (close, land) run their own refusal ladder; the narrow
-// readers (reset/fix/sync, models, install-prompts) and the flagless
+// readers (reset/fix/sync, install-prompts) and the flagless
 // status/release/driver-helper/clarify
 // name their whole surface; everything else (init/amend/plan/transfer/run and
 // the hidden _lane) accepts the known flag vocabulary here and leaves its
@@ -979,9 +968,8 @@ const closeOptionRefusal = strictOptionRefusal(
 )
 const landOptionRefusal = strictOptionRefusal("land", LAND_FLAGS, "land takes only --keep, --abandon, --merge and --onto <branch> (usage: opencode-auto land [dir] [--keep] [--abandon] [--merge] [--onto <branch>])")
 // One command's option policy: the refusal line for a flag, undefined to
-// accept it here. Models (auto-core plans/0055 §9) and install-prompts
-// (plans/0164) each read and print with one shaping option; status takes no
-// options at all.
+// accept it here. install-prompts (plans/0164) reads and prints with one
+// shaping option; status takes no options at all.
 const optionRefusal = (key: string): string | undefined => {
   if (command === "close") return closeOptionRefusal(key)
   if (command === "land") return landOptionRefusal(key)
@@ -990,10 +978,6 @@ const optionRefusal = (key: string): string | undefined => {
     // --from-bundle on top (the bootstrap overwrite's opt-in).
     if (RESET_FLAGS.has(key) || (command === "fix" && key === "dryrun") || (command === "sync" && SYNC_FLAGS.has(key))) return undefined
     return `unknown option --${key}: ${command} only accepts a directory argument${command === "fix" ? ", -f/--force and --dryrun" : command === "sync" ? ", -f/--force, --dryrun and --from-bundle" : " and -f/--force"}`
-  }
-  if (command === "models") {
-    if (MODELS_FLAGS.has(key)) return undefined
-    return `unknown option --${key}: models takes only --probe (a directory argument and no other options)`
   }
   if (command === "install-prompts") {
     if (INSTALL_PROMPTS_FLAGS.has(key)) return undefined
@@ -1489,8 +1473,8 @@ function flagOn(key: string): boolean {
 // with the word swallowed (the twelve silently-ignored flags this closes:
 // run's --wait-between/--max-sessions/--repair/--stop-after/--boundary/
 // --dryrun, plan's -p/--prompt and --file, close's --reason/--cascade/
-// --commit-changes/--stash-changes; plan's routes, land's, sync's,
-// models' and install-prompts' flags the OWNED_FLAGS ladder above already
+// --commit-changes/--stash-changes; plan's routes, land's, sync's
+// and install-prompts' flags the OWNED_FLAGS ladder above already
 // refuses). It sits after refuseFrozenFlags("_lane") so the shared
 // vocabulary keeps its specific notices (0193 D5's layer, unchanged).
 
@@ -2044,7 +2028,7 @@ if (command === "init" || command === "amend") {
   // than silently dropped (before this, `init --dryrun` wrote everything and
   // `init --merge <dir>` swallowed the directory as the lane value). Retired
   // flags need no entry: the RETIRED_FLAGS interception runs ahead of every
-  // command block, and the plan/transfer/land/sync/models-owned flags are
+  // command block, and the plan/transfer/land/sync-owned flags are
   // refused globally the same way — the generic line below is their backstop
   // alone.
   if (command === "init") {
@@ -2485,36 +2469,6 @@ if (command === "status") {
   }
   for (const line of await renderStatus(directory)) console.log(line)
   process.exit(0)
-}
-
-// models (auto-core plans/0055 §9): the model registry's effective table —
-// per phase type and routing role the tier, the route in force and the
-// candidates, whether each is usable now and why not, plus each entry's layer,
-// steps, key ring names, the classifier list and the profiles' env variable
-// names (never a value). It writes nothing and takes no run lock, so it runs
-// beside a live run. Exit codes: 0 no registry or a registry a run start
-// accepts; 1 one that run and plan would refuse (the problems are printed,
-// after the table when the registry loads).
-// AUTO-RESOLVE: does a registry that loads but has broken references (or a project layer git would commit) exit 1, and is its table printed? -> exit 1, since run and plan refuse it at start, with the table printed before the problems (it shows the operator what the references belong to)
-// --probe (§9) additionally sends the recovery probe prompt to each listed
-// model through the agent pool — the only thing here that starts agents, and
-// opt-in because it costs tokens; the shell only prints the lines the core
-// answers (probeModels, auto-core src/agent-pool.ts). A failed probe is a
-// finding printed per model, not a command error. A true boolean read
-// (`!== "false"`): --probe=false is the explicit opt-out and runs nothing —
-// before 0159 the bare-presence read started the probe against it.
-if (command === "models") {
-  const description = await describeModels(directory, Date.now())
-  for (const line of formatModels(description)) console.log(line)
-  if (flags.has("probe") && flags.get("probe") !== "false") {
-    if (description.registry === undefined) console.log("probe: no model registry, nothing to probe")
-    else {
-      console.log("probing every listed model (this sends one short prompt to each; it may take a while)")
-      for (const probe of await probeModels(description.registry, directory))
-        console.log(`${probe.ok ? "◇" : "⚠"} probe ${probe.name} (${probe.agent}): ${probe.line}`)
-    }
-  }
-  process.exit(description.problems.length ? 1 : 0)
 }
 
 // install-prompts (auto-core plans/0093): resync the manual-driver prompt

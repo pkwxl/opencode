@@ -12,7 +12,7 @@
 //     repair), the SSE log/events tails and the cursoring status-events
 //     stream (they read journals the driver wrote; a tail re-seek is a read
 //     position, never a file change);
-//   - the read-only operations: the models table, fix dryrun;
+//   - the read-only operations: fix dryrun;
 //   - the refusal paths that would write if they could: POST /runs under a
 //     live lock (423), an unconfirmed init (428), a shape-refused close (400),
 //     the restored run's kill (409);
@@ -204,7 +204,6 @@ describe("the daemon writes nothing inside a registered target (the P3c snapshot
       }
 
       // —— the read-only operations ——
-      expect((await request("GET", `/projects/${name}/models`, read)).status).toBe(200)
       const dryrun = await request("POST", `/projects/${name}/fix`, config, { dryrun: true })
       expect([200, 409]).toContain(dryrun.status) // findings or clean: either way nothing written
 

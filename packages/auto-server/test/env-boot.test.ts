@@ -1,9 +1,10 @@
 // The environment carrier pinned (plans/0265 — 0264-01's fix): the parse,
-// the manifest, the boot report's two arms (the lost-names diff, the
-// registry reference check), and the serve entry's --env-file wiring. Every
+// the manifest, the boot report's lost-names diff, and the serve entry's
+// --env-file wiring. Every
 // assertion is over NAMES — the security family's display rule is the point
 // of the mechanism, so a value appearing anywhere in a warning is the test
-// failing, not passing.
+// failing, not passing. (The boot report's registry-reference arm is retired
+// with the models surface — plans/0296: no registry is read at boot.)
 import { describe, expect, test } from "bun:test"
 import { join } from "node:path"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -94,32 +95,14 @@ describe("environmentBootReport", () => {
     }
   })
 
-  test("the registry arm: an unresolvable env reference warns with the core's own wording; resolved references stay silent", async () => {
+  test("the registry arms are gone with the models surface (plans/0296): an env-referencing registry and a broken one are boot-silent", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "env-boot-"))
     const registry = join(dataDir, "models.json")
     try {
-      await writeFile(registry, JSON.stringify({ models: { k3: { agent: "opencode", model: "prov/k3", keys: ["{env:BOOT_KEY_A}", "{env:BOOT_KEY_B}"] } } }), "utf8")
-      const env = { ...BASE, OPENCODE_AUTO_MODELS: registry }
-      const warnings = await environmentBootReport(dataDir, env)
-      expect(warnings).toHaveLength(2)
-      expect(warnings[0]).toContain("models.k3.keys[0]: env BOOT_KEY_A is not set")
-      expect(warnings[1]).toContain("models.k3.keys[1]: env BOOT_KEY_B is not set")
-      expect(
-        await environmentBootReport(dataDir, { ...BASE, OPENCODE_AUTO_MODELS: registry, BOOT_KEY_A: "value-never-shown", BOOT_KEY_B: "also-never" }),
-      ).toEqual([])
-    } finally {
-      await rm(dataDir, { recursive: true, force: true })
-    }
-  })
-
-  test("a broken registry layer is one boot warning naming its first problem, never a crash", async () => {
-    const dataDir = await mkdtemp(join(tmpdir(), "env-boot-"))
-    const registry = join(dataDir, "models.json")
-    try {
-      await writeFile(registry, "{ \"models\": { \"x\": { \"agent\": \"no-such-adapter\" } } }", "utf8")
-      const warnings = await environmentBootReport(dataDir, { ...BASE, OPENCODE_AUTO_MODELS: registry })
-      expect(warnings).toHaveLength(1)
-      expect(warnings[0]).toContain("the model registry could not be loaded at boot")
+      await writeFile(registry, "{ \"models\": { \"x\": { \"agent\": \"no-such-adapter\", \"keys\": [\"{env:BOOT_KEY_A}\"] } } }", "utf8")
+      // neither the unresolvable reference nor the broken layer is read at
+      // boot — the report carries the manifest diff alone
+      expect(await environmentBootReport(dataDir, { ...BASE, OPENCODE_AUTO_MODELS: registry })).toEqual([])
     } finally {
       await rm(dataDir, { recursive: true, force: true })
     }

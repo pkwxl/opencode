@@ -35,9 +35,9 @@ const PACKAGE_ROOT = join(import.meta.dir, "..")
 // The daemon spawns worker children from its own environment (this test
 // process): no ambient OPENCODE_AUTO_* reaches a worker (the daemon itself
 // scrubs the layer off its spawns; every fixture run selects its agent
-// through the request's switches instead) and no operator model registry is
-// read — the package preload (test/preload.ts, plans/0232 D1) keeps this
-// process's XDG_CONFIG_HOME at an empty temp, which the daemon's spawns keep.
+// through the request's switches instead) — the package preload
+// (test/preload.ts, plans/0232 D1) keeps this process's XDG_CONFIG_HOME at
+// an empty temp, which the daemon's spawns keep.
 
 type RunView = {
   id: string
@@ -416,7 +416,7 @@ describe("daemon: the store stays outside the projects", () => {
     try {
       const store = new DaemonStore(dataDir)
       store.register(dir)
-      store.issueToken("read", "probe")
+      store.issueToken("read", "executor")
       expect(await Bun.file(join(dataDir, "projects.json")).exists()).toBe(true)
       expect(await Bun.file(join(dataDir, "tokens.json")).exists()).toBe(true)
       // realpathSync in register reads the directory; nothing is written
@@ -428,7 +428,7 @@ describe("daemon: the store stays outside the projects", () => {
     }
   })
 
-  test("the default data directory follows the XDG convention beside the operator model registry", () => {
+  test("the default data directory follows the XDG convention under the operator config root", () => {
     const home = "/home/whoever"
     expect(defaultDataDir({ XDG_CONFIG_HOME: "/xdg" }, home)).toBe(join("/xdg", "opencode-auto", "server"))
     expect(defaultDataDir({ XDG_CONFIG_HOME: "relative" }, home)).toBe(join(home, ".config", "opencode-auto", "server"))

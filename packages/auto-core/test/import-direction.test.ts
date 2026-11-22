@@ -411,8 +411,10 @@ const CLASSIFIED: Record<string, Domain> = {
   // (models) validates against it, and the type-only importers read it
   // without binding the loader.
   "models-schema": "driver",
-  // The models command's data (plans/0055 §9): checkModels, describeModels
-  // and formatModels; starts no agent and writes nothing.
+  // The registry's read-side helpers (plans/0055 §9's surviving half — the
+  // command's own data surface retired by the severance, plans/0296):
+  // switchModelRegistryInfo and projectLayerRefusal; starts no agent and
+  // writes nothing.
   "models-describe": "driver",
   // Context steps of a model registry entry (plans/0055 §4.5): the step-up
   // point, the step walk over the live windows and the startup validation

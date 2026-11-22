@@ -86,9 +86,9 @@ survive a daemon restart; pending questions do — the journal); workers
 outlive the daemon's own stop and finish on disk; if the daemon dies
 mid-run, that is the same scene as any killed run — the lock arbitrates and
 the next run recovers, so re-host the daemon and re-run. Start the daemon
-from an environment that carries what the runs need (PATH, the model
-registry's referenced values — a launcher that forwards environment
-references by name reads them from the daemon's environment).
+from an environment that carries what the runs need (PATH included — a
+launcher that forwards environment references by name reads them from the
+daemon's environment).
 
 ## The confinement launcher — `serve --launch <script>`
 
@@ -114,7 +114,7 @@ while the daemon stays the one control plane. Requirements the launcher
 carries: the worker's WebSocket bridge URL must be reachable from inside
 the container (host-network containers reach a loopback-bound daemon at
 `127.0.0.1:4770`; wide runs carry no bridge at all), and
-environment-referenced values (model-registry keys by name) resolve from
+environment-referenced values resolve from
 the daemon's environment — forward them by name, never by value in argv.
 
 Caveats under a launcher: `DELETE /runs/<id>` signals the wrapper process —
@@ -140,25 +140,26 @@ values: the effective environment's names (presence only, the
 `OPENCODE_AUTO_*` switch layer excluded — it never reaches a child) are
 written to `<data-dir>/env-manifest.json`, and the boot warns about names
 the carrier **lost since the previous boot** (the diff against that
-manifest) and about model-registry references that do not resolve at boot —
-the discoveries that used to cost one blocked run each, moved to the boot
-line.
+manifest) — the discovery that used to cost one blocked run each, moved to
+the boot line. (That boot check's registry-reference half — model-registry
+references resolved at boot — is retired with the models surface, plans/0296:
+the tool spawns no agent session, ever.)
 
 ## The surface
 
 | kind  | routes |
 | ----- | ------ |
-| REST  | `GET /health` (liveness, plus the identity witness — the daemon's own `line` beside a fresh `checkout` read, their divergence the restart-owed staleness window, plans/0293); `GET /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan`, `transfer`, `clarify`, `reconcile` (the deterministic boundary operations — the protocol does nothing via push, plans/0282; `reconcile` the executor ledger's dead-letter reconciliation, plans/0287 (its booked non-landing class widened plans/0292), the booked-continuation re-derivation riding the same sweep, plans/0289), `models` (GET the table; POST the probe — its own `probe` scope) |
+| REST  | `GET /health` (liveness, plus the identity witness — the daemon's own `line` beside a fresh `checkout` read, their divergence the restart-owed staleness window, plans/0293); `GET /runs`, `GET /runs/<id>`, `DELETE /runs/<id>` (kill); `GET /projects`; the operations under `/projects/<p>/…` — `init`, `amend`, `fix`, `reset` (the config scope), `close`, `tasks`, `plan`, `transfer`, `clarify`, `reconcile` (the deterministic boundary operations — the protocol does nothing via push, plans/0282; `reconcile` the executor ledger's dead-letter reconciliation, plans/0287 (its booked non-landing class widened plans/0292), the booked-continuation re-derivation riding the same sweep, plans/0289) |
 | WS    | the executor coordinator's bridge socket (the per-run secret the spawn carried) — the daemon serves coding agents only, never a web client (plans/0282) |
 
 Every route but `/health` requires `Authorization: Bearer <token>`:
 **401** unknown, **403** a known token without the route's scope. Scopes:
-`read` (status/observability/models), `control` (kill, close/task-add and
+`read` (status/observability), `control` (kill, close/task-add and
 the plan/transfer/clarify/reconcile operations), `config` (init/amend/fix/reset),
-`probe` (the model probe alone — opt-in, carried by no default token set,
-and beside the scope it takes an explicit `confirm` field and the
-per-daemon 10-minute rate window), `executor` (the executor protocol),
-`projects` (project creation). The ask channel is gone (plans/0282): the
+`executor` (the executor protocol),
+`projects` (project creation) — five scopes; the `probe` scope is retired
+with the models surface (plans/0296: the tool spawns no agent session, ever,
+so no model is ever probed). The ask channel is gone (plans/0282): the
 `answer`/`person` scopes are tombstoned, and a blocked coding agent
 resolves its block itself — the person's gates are document-derived, their
 acts document writes and the deterministic operations. The plaintext token is printed once at
@@ -301,8 +302,8 @@ automatic cross-host arbitration exists or is planned for v1.
 
 ## The honestly-absent surfaces
 
-The daemon serves the run, config, units, plan-dispatch, transfer and
-models surfaces above. These stay CLI-side (`opencode-auto`, the general
+The daemon serves the run, config, units, plan-dispatch and transfer
+surfaces above. These stay CLI-side (`opencode-auto`, the general
 shell), stated plainly: `clarify` (the one-command release act — the
 daemon's texts teach the manual path, "add the line and commit yourself"),
 `sync` (the intent-bundle upgrade), `land` (branch isolation's return

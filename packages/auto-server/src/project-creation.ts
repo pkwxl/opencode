@@ -188,7 +188,6 @@ export function openProjectCreation(store: DaemonStore, checkpoint?: (point: Che
             project: { name, directory: workspace, registered: "" },
             body: { config: JSON.parse(intent.config) },
             query: new URLSearchParams(),
-            probeWindow: { claim: () => { throw new Error("Init cannot probe models.") } },
           })
           if (outcome.status !== 200) return outcome
           intent.initialized = true

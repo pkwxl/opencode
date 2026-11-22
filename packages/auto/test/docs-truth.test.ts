@@ -46,13 +46,18 @@ const TRUTH_PINS: [name: string, doc: string, needle: string][] = [
   // operation, plans/0283).
   ["README retirement row", readme, "(pointing at the transfer operation of a daemon — `POST /projects/<project>/transfer` — it runs the round-close checks and opens the next round)"],
   // The 18-command enumerations and the brief's channels.
-  ["AGENTS.md command list", agents, "land/fork/remove-fork/fix/sync/release/reset/status/models/install-prompts/driver-helper subcommands"],
+  ["AGENTS.md command list", agents, "land/fork/remove-fork/fix/sync/release/reset/status/install-prompts/driver-helper subcommands"],
   ["AGENTS.md amend brief channels", agents, "plus the project brief's manual revision (`--brief`/`--brief-file`, plans/0081 D11's channel"],
   ["MANUAL fork row", manual, "| `fork <T-NNN \\| sha> <worktree-path> [dir]` |"],
   ["MANUAL remove-fork row", manual, "| `remove-fork <worktree-path> [dir] [--force]` |"],
   ["MANUAL driver-helper row", manual, "| `driver-helper [dir]` |"],
   ["CLI command-words comment", index, "The words that name a command: the public surface minus the retired"],
   ["CLI -f refusal owner set", index, "-f/--force is an init/reset/fix/sync option"],
+  // The models severance (plans/0296): the command is a permanent tombstone
+  // on every surface that once listed it.
+  ["README models retirement", readme, "`models` (and its `--probe`) is retired with them (plans/0296, the opencode"],
+  ["CLI models notice", index, "models is retired (plans/0296, the opencode severance): the model registry was push-mode carriage"],
+  ["CLI --probe flag notice", index, "is retired with models (plans/0296, the opencode severance): the model registry was push-mode carriage"],
 ]
 
 // The retired wordings: the drift the findings measured. Their return is the
@@ -90,7 +95,7 @@ describe("docs truth (0227)", () => {
   })
 
   test("the pin tables themselves are non-empty and named", () => {
-    expect(TRUTH_PINS.length).toBe(24)
+    expect(TRUTH_PINS.length).toBe(27)
     expect(RETIRED.length).toBe(12)
   })
 })

@@ -860,17 +860,19 @@ function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[], phase
 // nothing is logged and nothing changes. Every refusal throws, and preflight
 // logs it and exits 1, like a bad config:
 //   - a project layer that git does not ignore, checked before its content is
-//     read: the unified commit would commit it. The line names fix, which
-//     adds the .gitignore entry init writes; a tracked layer must be
+//     read: the unified commit would commit it. The line names the
+//     operator's own .gitignore line (init writes no entry and fix carries
+//     no rule since plans/0296); a tracked layer must be
 //     untracked first, since ignore rules skip tracked files;
 //   - a strict load failure (ModelRegistryError: one line per problem, each
 //     naming its layer and field);
 //   - a broken reference: a variable unset or empty, a file missing or
 //     unreadable. Each line names the field, the layer and the reference,
 //     never a value.
-// The refusal of a project layer that git would commit is shared with the
-// models command (projectLayerRefusal, src/models-describe.ts), so both name
-// the same fix.
+// The refusal of a project layer that git would commit is the shared
+// projectLayerRefusal (src/models-describe.ts — the one export of the former
+// models-command module the run start keeps beside switchModelRegistryInfo;
+// the command's own surface is gone with it, plans/0296).
 // AUTO-DECISION: preflight calls the shared projectLayerRefusal instead of its own copy of the check, and keeps its own load and reference steps (the refusal line stays byte-identical, and preflight still stops before reading an unignored layer's content)
 // AUTO-DECISION: the load sits in preflight's validation block with the prompt library and the phase types, so it runs inside the run lock, before the start gate and every write, and under dryrun too (a bad registry then fails plan, run and a dryrun alike, and the custom phase types are already loaded there)
 // AUTO-DECISION: the registry rides the preflight result into the loop context instead of RunAllOpts (the options are the caller's input; the registry is state the run derives from disk once)

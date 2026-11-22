@@ -269,7 +269,6 @@ The daemon's authorization tiers (`SCOPES` in the server's store):
 read
 control
 config
-probe
 executor
 projects
 ```
@@ -303,9 +302,11 @@ silently reused (ids are never reused).
 ```protocol
 protocol: 1 — premature: the pre-0280 literal, retired by 0279's version ruling (preview-open at 0.1; old clients fail loudly at the handshake)
 routes: question, answer — the ask channel (plans/0282): the holder's question route and the person claim/answer arms; a blocked coding agent resolves its block itself, the person acts on documents and the deterministic ops
-scopes: answer, person, person-questions, person-releases — the person grants (plans/0282); six scopes remain
+scopes: answer, person, person-questions, person-releases — the person grants (plans/0282); six scopes remained then
 worker payloads: options, switches, plan, transfer, lane — the push run carriage (plans/0282); the executor coordinator is the only spawn, its payload {executor, directory, transport}
 POST /runs — the plain push run starter (plans/0282); the executor route is the only run starter
 GET /, /app.js, /session — the web client (plans/0282); the daemon serves coding agents only
 cli commands: run, plan, transfer, clarify, _lane (opencode-auto) and transfer <dir> (opencode-auto-server) — the push CLI commands (plans/0283): their channels are the daemon's operations and the protocol's grants, and each binary answers the word with a permanent usage tombstone naming the surface
+scope: probe — the model probe's tier (plans/0296): the models surface is gone with the push carriage — the tool spawns no agent session, ever, so no session is ever spawned to probe; five scopes remain
+cli command: models (opencode-auto) — the model registry's surface (plans/0296): the registry was push-mode carriage (the tool spawns no agent session, ever); the binary answers the word with a permanent usage tombstone naming the severance
 ```

@@ -3,9 +3,9 @@
 The CLI shell of the auto tool family (bin `opencode-auto`). It initializes and maintains a
 driver-governed project — the config layer `.opencode/auto/config.json` (constitutional project options:
 the agent contract, context budget, scenario mode — versioned, shared with the repository, human-editable),
-the agent contract, the AGENTS.md block, intent packs and bundles, the model registry — and carries the
+the agent contract, the AGENTS.md block, intent packs and bundles — and carries the
 person's local tooling: `close`, `land`, `fork`/`remove-fork`, `fix`, `sync`, `release`, `reset`, `status`,
-`models`, `install-prompts`, `driver-helper`.
+`install-prompts`, `driver-helper`.
 
 **The protocol does nothing via push (plans/0283)**: this binary no longer drives sessions. A phase's
 tasks, the planning, the distillation and the construction are **grants external coding agents claim over
@@ -66,7 +66,7 @@ bun run packages/auto/src/index.ts <subcommand> ...
 ## Usage
 
 ```sh
-opencode-auto init [dir]     # initialize the project config layer: fix the project config into .opencode/auto/config.json, generate opencode.json and the .opencode/agent/auto.md template, idempotently sync the single opencode-auto marker block in AGENTS.md, and write the driver workdir (tmp/, .auto/), the local-only files (/.env, /AGENTS.md, the model registry project layer /.opencode/auto/models.json) and every nested git repository in the tree into .gitignore — the .gitignore itself and opencode.json are committed project surfaces (plans/0138: the ignore set and the host posture reach every fresh clone; AGENTS.md stays local, re-derived from the committed config at every run start); writes nothing under docs/ — round directories are established by the daemon's transfer operation (its plan operation in m mode) — and no project brief: the assisted project analysis the first transfer operation opens proposes and installs it (`--brief`/`--brief-file` are retired on init). In a directory inside no git work tree it first initializes the repository itself (branch: the configured init.defaultBranch when set, else main, printed loudly) and checks a commit identity resolves — see the [init prerequisite](#project-configuration-opencodeautoconfigjson)
+opencode-auto init [dir]     # initialize the project config layer: fix the project config into .opencode/auto/config.json, generate opencode.json and the .opencode/agent/auto.md template, idempotently sync the single opencode-auto marker block in AGENTS.md, and write the driver workdir (tmp/, .auto/), the local-only files (/.env, /AGENTS.md) and every nested git repository in the tree into .gitignore — the .gitignore itself and opencode.json are committed project surfaces (plans/0138: the ignore set and the host posture reach every fresh clone; AGENTS.md stays local, re-derived from the committed config at every run start); writes nothing under docs/ — round directories are established by the daemon's transfer operation (its plan operation in m mode) — and no project brief: the assisted project analysis the first transfer operation opens proposes and installs it (`--brief`/`--brief-file` are retired on init). In a directory inside no git work tree it first initializes the repository itself (branch: the configured init.defaultBranch when set, else main, printed loudly) and checks a commit identity resolves — see the [init prerequisite](#project-configuration-opencodeautoconfigjson)
 opencode-auto amend [dir] --<key-option> <value> ... [--brief <text> | --brief-file <path>]   # rewrite only the given config keys, keep the rest (at least one key, or a brief revision; refused without a config), see "Amending (amend)"
 opencode-auto fix [dir] [-f] [--dryrun]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config; --dryrun lists the findings read-only and writes nothing (exit 0 when there are none or only informational notes, 1 when there are findings), see "Config fix (fix)"
 opencode-auto sync [dir] [-f] [--dryrun] [--from-bundle]  # upgrade a materialized intent bundle to the running binary's: unedited managed files (the pack, the mode, the phase files, digests recorded in .opencode/auto/provenance.json) fast-forward byte-identically, person-edited files/extras are reported never written or deleted, an unstamped legacy project bootstraps (byte-identical files adopted into a fresh stamp, differing ones report-only unless --from-bundle), never touching config.json and never committing — the diff is yours to review; --dryrun plans and prints only (exit 0 when nothing would change, 1 when something would), see "Bundle sync (sync)"
@@ -77,7 +77,6 @@ opencode-auto fork <T-NNN | sha> <worktree-path> [dir]   # build an experiment e
 opencode-auto remove-fork <worktree-path> [dir] [--force]   # tear down a fork: every worktree of the fork removed and its auto-fork/* branch deleted per repository (uncommitted work blocks naming the files — `--force` discards it explicitly), freeing the path and the branch name to fork again; the tips stay recoverable via git reflog; see "The retry fork (fork, remove-fork)"
 opencode-auto reset [dir]    # de-initialize: remove exactly the config-layer artifacts init wrote (the project brief .opencode/auto/brief.md is kept — an installed approved proposal or a person's `amend --brief` write — and so is a materialized intent bundle's landed files, the pack/mode/phase files and provenance.json: person-owned once landed; delete them by hand if you mean to)
 opencode-auto status [dir]   # print the project config summary and the read-only round → phase → task → subtask tree
-opencode-auto models [dir] [--probe]   # print the model registry's effective table (tier, candidates and current availability per phase type × session role); --probe additionally sends a short recovery-probe prompt to every listed model (optional, costs tokens), see "Model registry overview (models)"
 opencode-auto install-prompts [dir]   # resync the manual prompt suite (the executor protocol's manual floor, executor.md) into the target's prompts/ byte-identically — differing files rewritten, extras reported never deleted, prompts/MANIFEST written pinning the vintage; --check is the read-only drift gate; requires an initialized project, takes no run lock, runs no git (you review and commit), see "Manual prompt suite (install-prompts)"
 opencode-auto driver-helper [dir]   # render the person-proxy brief (plans/0105): the six-block context — role pin (never the driver; prompts/ is reference material), the driver's working model, the live state plus the stop's own lines, the person-owned channels open right now, the assist policy, the exact recovery commands — to paste into the coding-agent session acting with your pen at a boundary run cannot cross; read-only, stdout, nothing written, no run lock (a live lock is reported, never refused on), see "The person-proxy brief (driver-helper)"
 ```
@@ -92,7 +91,10 @@ operation (`POST /projects/<project>/transfer`) — a deterministic apply (git a
 distillation and the construction the distill/synthesize grants'; `clarify` — the person's release act is the
 daemon's clarify operation (`POST /projects/<project>/clarify`) — or the document edit itself (the whole-line
 `Clarified: yes`) plus its commit; the hidden `_lane` lane worker — concurrency rides the executor protocol's
-scoped/doc lease tiers.
+scoped/doc lease tiers. `models` (and its `--probe`) is retired with them (plans/0296, the opencode
+severance): the model registry was push-mode carriage — this tool spawns no agent session, ever, so there is
+no registry left to describe and no fleet to probe; the agents that work a project are external coding
+agents claiming grants over the executor protocol, each bringing its own model.
 
 Run `opencode-auto --help` for the full usage text (stdout, exit 0; the bare `opencode-auto` prints the same
 text to stderr with exit 1), and `opencode-auto <command> --help` (or `-h`) for one command's synopsis,
@@ -492,7 +494,6 @@ exit code stays green.
 | AGENTS.md marker block missing / inconsistent with the current config rendering / leftover old or stray marker blocks | Fixable | Write the current block and clean up the others (body text untouched) |
 | Intent packs fail to load (the marker block cannot be rendered) | Manual | — |
 | `.gitignore` missing the `tmp/` or `.auto/` entry | Fixable | Append the missing entries |
-| `.gitignore` missing the `/.opencode/auto/models.json` entry (projects initialized before init wrote it) | Fixable | Append that entry (the remaining local-only entries are left to the person) |
 | `.gitignore` missing an entry for a nested git repository in the tree (auto-core plans/0138) | Fixable | Append the entry (the parent's unified commit would otherwise absorb the repository as a gitlink) |
 | `.gitignore` holds the retired `/.gitignore` entry (projects initialized before plans/0138) | Fixable | Remove the entry — the ignore set is a tracked project surface; the file surfaces untracked and lands in git with the next commit |
 | `.gitignore` holds the retired `/opencode.json` entry (projects initialized before plans/0138) | Manual | Remove the line by hand to surface `opencode.json` as a tracked project surface — or keep the line and own it if the file must stay local (raw secrets belong in references, never literals) |
@@ -555,7 +556,7 @@ Cleanup scope (an enumerated whitelist — no globs, no recursive deletion):
 | `.opencode/agent/auto.md` | Deleted (`init` already overwrites it unconditionally from the template — a pure auto product) |
 | `opencode.json` | **Deleted only when byte-identical to the built-in template**; if edited it is kept and the list explains why |
 | `AGENTS.md` | Only the `opencode-auto` marker block is removed, the rest of the body kept verbatim; if only a hollow heading is left (i.e. the file was init-created in the first place) the whole file is deleted |
-| `.gitignore` | Only the entries init wrote are removed (`tmp/`, `.auto/`, the local-only files `/.env`/`/AGENTS.md`/`/.opencode/auto/models.json` and the entries for existing nested git repositories); user-owned entries are kept — including, on a project initialized before plans/0138, the retired `/.gitignore` and `/opencode.json` lines (their retirement is `fix`'s rule); if the file is empty after removal it is deleted entirely. The model registry project layer `.opencode/auto/models.json` itself is not deleted (it belongs to the operator, not written by the driver) |
+| `.gitignore` | Only the entries init wrote are removed (`tmp/`, `.auto/`, the local-only files `/.env`/`/AGENTS.md` and the entries for existing nested git repositories); user-owned entries are kept — including, on a project initialized before plans/0138, the retired `/.gitignore` and `/opencode.json` lines (their retirement is `fix`'s rule) and, on a project initialized before plans/0296, the former model-registry line; if the file is empty after removal it is deleted entirely |
 | `.opencode/auto/`, `.opencode/agent/`, `.opencode/` | **Reclaimed only when empty** (`rmdir`; skipped when non-empty) |
 
 **Explicitly untouched**: `docs/` (including round directories `R-NN` and task directories `T-NNN`), all
@@ -1013,11 +1014,9 @@ directory (auto-core plans/0055), merged from two layers:
   `$XDG_CONFIG_HOME/opencode-auto/models.json` (`XDG_CONFIG_HOME` defaults to `~/.config`; relative values
   are ignored). A missing file counts as no operator layer (no fallback to the XDG path).
 - **Project layer**: `.opencode/auto/models.json` (optional). It belongs to whoever operates this checkout
-  and does not travel with the repository, hence a **local-only file**: `init` writes
-  `/.opencode/auto/models.json` into `.gitignore` (`fix` backfills the entry for older projects), `reset`
-  removes only the entry and never deletes the file itself, and during a run it is read-only alongside the
-  other configs; a project layer git does not ignore (or already tracks) is refused at run start
-  startup (exit code 1, message pointing at `fix`).
+  and does not travel with the repository, hence a **local-only file**; its `.gitignore` line is the
+  operator's own since plans/0296 (init writes no entry, `fix` carries no rule, `reset` removes none),
+  and during a run it is read-only alongside the other configs.
 
 Neither layer present means **no registry**: every behavior stays byte-for-byte as before and the
 environment-switch semantics are unchanged. The merge is one level deep: each of the project layer's
@@ -1187,8 +1186,8 @@ driver's own loopback traffic to the managed server would be intercepted by the 
 logged-in accounts into two profiles. **One opencode server, one environment**: all providers on the same
 server share its env; when only some providers need a proxy, list the direct hosts in `NO_PROXY`, or declare
 two opencode profiles (each runs its own managed server and holds its own key ring; sessions never cross
-profiles). An external server keeps the env it started with; a profile's `env` has no effect on it. Logs and
-`models` output name variables only, never values.
+profiles). An external server keeps the env it started with; a profile's `env` has no effect on it. Logs
+name variables only, never values.
 
 ### Failure-message classifier (classifier)
 
@@ -1238,7 +1237,8 @@ conclusion stay byte-identical.
 | `OPENCODE_AUTO_AGENT`, the shell profile's `agent` | Selects the run's single agent | **Filter**: only models on that adapter are candidates. The config's `agent` (init `--agent`) is no longer a filter but the **default agent** — bare `provider/model` values and session records without an agent belong to it; a startup notice when no tier uses it |
 | `--server` / `OPENCODE_AUTO_SERVER` | Unchanged | Overrides an opencode profile's `server`; the key ring is inactive under an external server, and the profile's `bin` / `env` have no effect on it |
 
-The registry's effective table: see [Model registry overview (models)](#model-registry-overview-models).
+The registry's effective table was the `models` command's output — retired with the models surface
+(plans/0296, the opencode severance: the registry was push-mode carriage).
 
 ### Experiment switches (`OPENCODE_AUTO_*`)
 
@@ -1468,9 +1468,8 @@ resumed (the daemon's run lifecycle) needs no manual git work in between. The st
 mid-flight with no summary" and keep session-reuse eligibility — recovery prefers to reclaim the original
 session.
 
-During a run the driver makes opencode.json, `.opencode/auto/config.json`, AGENTS.md and the model registry
-project layer `.opencode/auto/models.json` (when present; the driver reads it only at startup and never
-writes it) read-only (chmod 0o444), temporarily restoring write access for its own writes and re-setting it
+During a run the driver makes `.opencode/auto/config.json`, the project brief, AGENTS.md, the bundle
+provenance sidecar and the project analysis read-only (chmod 0o444), temporarily restoring write access for its own writes and re-setting it
 immediately after. When the run ends (including a blocked exit) they become writable again, for human editing
 (including hand-revising the project config); read-only bits left by a force-killed run do not stop
 `init`/`amend`/`fix`/`reset` from rewriting these files. This is a guard rail against accidental writes
@@ -2208,59 +2207,17 @@ plans/0053 D12):
   executes tasks; like the phased
   flow's planning step, it reuses the unclosed session.
 
-## Model registry overview (models)
+## Model registry overview (models) — retired (plans/0296)
 
-`opencode-auto models [dir]` read-only prints the **model registry**'s effective table; it starts no
-agent and writes no file, so it takes no run lock and can run alongside a live run. The registry merges
-two layers: the operator layer
-(`$OPENCODE_AUTO_MODELS`, or `$XDG_CONFIG_HOME/opencode-auto/models.json` when unset,
-`XDG_CONFIG_HOME` defaulting to `~/.config`) and the optional project layer `.opencode/auto/models.json`
-(local-only;
-`init` writes it into `.gitignore`, older projects get it backfilled by `fix`). Neither layer present means
-no registry, and run behavior is byte-identical to before.
-This section covers only the command's output:
-
-- **Sources and environment**: the layers read, the window timezone and current time, the agent filter
-  (the shell profile's agent, else
-  `OPENCODE_AUTO_AGENT`; matched by profile adapter), the project context limit (config `contextLimit`)
-  and the default agent (config `agent`); when `OPENCODE_AUTO_MODEL` is set, an extra line marks whose
-  candidates it overrides.
-- **agent profiles**: each profile's source layer (`[operator]` / `[project]` / `[implied]`), adapter,
-  `bin`, `server` (userinfo stripped from the URL) and the `env` **variable names** — literals are only
-  marked `(literal)`, references only named
-  (`(env CLAUDE_B_PROXY)`), `null` marked `(removed)`; **no value is ever printed**.
-- **model entries**: source layer, agent, steps (`model` followed by the `wider` ids), `variant`,
-  `context`, window,
-  and the provider's key ring; the next line gives **availability right now and why** — outside the window
-  (with the next opening time),
-  excluded by the agent filter, or a known context window below the project limit; an unknown context
-  window (opencode reports it only after the server
-  starts, claude after the first turn) is only a note, not judged unavailable.
-- **key rings**: one line per provider, listing the reference names and count in order, plus the models
-  sharing it.
-- **tiers / routes / classifier**: the two tier lists, route overrides and the failure-message classifier
-  model list, each with its source layer; models referenced by no
-  tier, route list or classifier are flagged separately as unused.
-- **routing table**: under each phase type (builtin and project-custom), session roles resolving
-  identically share one line:
-  the tier (default tier, or a `route <key>` override, precedence role > type id > preset letter) and the
-  ordered candidates, `✓`/`✗` marking
-  availability right now; a simple tier continues after `|` with the deep list it borrows (a deep tier
-  never borrows simple).
-
-Exit codes: no registry prints one line, exit code `0`; a registry a run would accept prints the full
-table, exit code `0`;
-problems a run would refuse at start (bad JSON, unknown fields, bad windows, a referenced
-environment variable unset or file unreadable,
-a git-unignored project layer, …) print item by item with `⚠`, exit code `1` — when the registry loads,
-the full table prints first and the problems follow.
-`models` takes no run lock and accepts no option besides `--probe` (same group as `status`).
-`--probe` **starts agents** (lazily bringing up each profile's host via the agent pool) and sends one very
-short recovery-probe prompt (the same one the wait-and-probe loop uses) to every model referenced by a
-tier,
-route list or classifier, printing one reply-or-failure line per model — which is why it is optional:
-probing costs real tokens. A failed probe is a per-model
-finding, not a command error; the exit code still follows the registry itself.
+`opencode-auto models [dir]` and its `--probe` are retired (plans/0296, the opencode severance), each
+word answered by its one-line notice with exit 1: the model registry was push-mode carriage — it existed
+to route the sessions this tool spawned, and **this tool spawns no agent session, ever**. There is no
+registry left to describe and no fleet to probe; the agents that work a project are external coding
+agents claiming grants over the executor protocol, each bringing its own model (the claimant's own
+configuration — `docs/protocol.md`'s model-free coordinator letter). The registry's layer files and the
+[registry format section](#model-registry-and-tiered-routing-model-registry) below describe the legacy
+machinery still carried by the core (a push dead path, demolition-docketed) — nothing on the pull path
+reads it.
 
 ## Blocking and recovery
 
@@ -2291,14 +2248,14 @@ constitution's boundary disclaimer, `packages/auto-core/docs/principles.md`):
 - **Driver-run test scripts** (`--test-by-driver`) — bypass the agent's permission system as a convenience
   trade-off, equivalent to running the tests locally yourself.
 - **The standing hard security requirement** — the secrets family: registry keys and env values are
-  references (`{env:NAME}` / `{file:path}`), never literals, and logs, `models` output and error lines name
+  references (`{env:NAME}` / `{file:path}`), never literals, and logs and error lines name
   the reference, never a value (see the model registry section).
 - **The agent server** — the managed `opencode serve` child's lifecycle belongs to this tool (auto-start,
   restart, shutdown; see "opencode server and agent selection"); an external instance reused through
   `--server <url>` / `OPENCODE_AUTO_SERVER` is the operator's own to secure and repair.
 - **The headless service shell** — the daemon behind `opencode-auto-server` carries its own operational
-  security posture (the target-directory allowlist, token auth with scopes, the loopback-by-default bind,
-  the POST-not-GET model probe); it is documented with that package (`packages/auto-server/docs/daemon.md`),
+  security posture (the target-directory allowlist, token auth with scopes, the loopback-by-default bind);
+  it is documented with that package (`packages/auto-server/docs/daemon.md`),
   not here — this CLI shares only the core with it.
 
 <!-- auto: eof -->

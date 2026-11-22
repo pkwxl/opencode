@@ -6,7 +6,7 @@
 // worker (P1b — one run per child process, exit code the run's own) and the
 // daemon with its CLI-side duties (P1c — serve, plus the whitelist and token
 // management in the daemon's own data directory). The REST lifecycle surface
-// (config ops, units, models, the P1 plan boundary) is served by the daemon
+// (config ops, units, the P1 plan boundary) is served by the daemon
 // (P1d, src/ops.ts), as is the disk observability surface (P1e, src/observe.ts
 // — the polled status read model and the SSE log/journal tails).
 //
@@ -60,8 +60,7 @@ serve — the daemon (P1c/P1d/P1e; pull-only since plans/0282). Binds
   planning session itself is pull-only formulate work over the protocol),
   transfer (the person-bracketed advance: the apply halves alone, the
   distillation and synthesis the distill/synthesize grants'), clarify (the
-  person's release act) and models (GET: the read-only table; POST: the
-  probe — its own probe scope, the confirm field, rate-limited). The
+  person's release act). The
   observability surface (P1e, the read scope): GET
   /projects/<project>/status, /log, /events (SSE tails) and
   /status-events (the typed driver-events stream with event-id cursoring);

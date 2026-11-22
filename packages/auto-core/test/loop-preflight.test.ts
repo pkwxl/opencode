@@ -601,17 +601,17 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
     expect(result.registry?.routes.get("review")).toMatchObject({ tier: "simple" })
   })
 
-  test("a project layer git does not ignore exits 1 and names fix, before its content is read", async () => {
+  test("a project layer git does not ignore exits 1 and names the operator's own ignore line, before its content is read", async () => {
     const dir = await project()
     await Bun.write(join(dir, MODELS_FILE), "{ not json")
     const { result, lines } = await run(dir)
     expect(result).toEqual({ exit: 1 })
     expect(lines).toEqual([
-      `${LAYER}: git does not ignore it, so the unified commit would commit it; run opencode-auto fix ${dir} to add its .gitignore entry, then re-run`,
+      `${LAYER}: git does not ignore it, so the unified commit would commit it; add its line to .gitignore yourself (/${MODELS_FILE} — the entry is the operator's own, plans/0296), then re-run`,
     ])
   })
 
-  test("a tracked project layer exits 1 even with the entry: it must be untracked, then fix", async () => {
+  test("a tracked project layer exits 1 even with the entry: it must be untracked, then the operator's own line", async () => {
     const dir = await project({ ignored: true })
     await Bun.write(join(dir, MODELS_FILE), JSON.stringify(registry()))
     await git(dir, "add", "-f", MODELS_FILE)
@@ -619,7 +619,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
     const { result, lines } = await run(dir)
     expect(result).toEqual({ exit: 1 })
     expect(lines).toEqual([
-      `${LAYER}: git tracks it, so the unified commit would commit it; untrack it (git -C ${dir} rm --cached ${MODELS_FILE}), run opencode-auto fix ${dir} to add its .gitignore entry if it lacks one, then re-run`,
+      `${LAYER}: git tracks it, so the unified commit would commit it; untrack it (git -C ${dir} rm --cached ${MODELS_FILE}), add its line to .gitignore yourself (/${MODELS_FILE} — the entry is the operator's own, plans/0296), then re-run`,
     ])
   })
 

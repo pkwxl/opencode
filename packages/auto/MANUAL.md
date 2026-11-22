@@ -245,7 +245,6 @@ driver's unified commit is the completion condition.
 | `remove-fork <worktree-path> [dir] [--force]` | tear down a fork: every worktree removed and its `auto-fork/*` branch deleted per repository (uncommitted work blocks; `--force` discards it) |
 | `land [dir] [--keep \| --abandon \| --merge]` | return isolated round branches |
 | `status [dir]` | read-only progress tree |
-| `models [dir] [--probe]` | print the effective model routing |
 | `install-prompts [dir] [--check]` | resync the manual-driver prompt suite (the runbooks for a coding-agent session acting as the driver) into `prompts/` byte-identically and write `prompts/MANIFEST` pinning the vintage — extras reported, never deleted; no run lock, no git (you review and commit); `--check` compares without writing, exit 1 on drift |
 | `driver-helper [dir]` | render the person-proxy brief: the six-block context (role pin, the driver's working model, the live state and the stop's own lines, the open person-owned channels, the assist policy, the exact recovery commands) to paste into a coding-agent session acting with your pen at a boundary the run cannot cross |
 
@@ -254,4 +253,7 @@ The retired commands and their replacements: `run` → execute grants over the e
 (`POST /projects/<project>/transfer`); `clarify` → the clarify operation
 (`POST /projects/<project>/clarify`); `plan` → the plan operation
 (`POST /projects/<project>/plan`), the formulate grant, and the task-add operation
-(`POST /projects/<project>/tasks`); `_lane` → the executor protocol's scoped/doc lease tiers.
+(`POST /projects/<project>/tasks`); `_lane` → the executor protocol's scoped/doc lease tiers;
+`models` (with `--probe`) → nothing (plans/0296, the opencode severance: the model registry was
+push-mode carriage — the tool spawns no agent session, ever, and the agents that work a project are
+external coding agents each bringing its own model).
