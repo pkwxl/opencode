@@ -37,7 +37,7 @@ This subtask's scope declaration is in docs/T-002/S02/todo.md (written during de
 Verification: run the checks that target this subtask's own changes (its tests, the typecheck or build of what it touched), not the full suite.
 
 Test lanes (this project's suites — the table below, declared in the intent pack): when this scope's verification runs the project's suites, run them as parallel background processes you launch and judge yourself — never serially when they are independent, never a child session per suite:
-- Plan the lanes first into docs/T-002/testplan.md: per suite its exact command (the table row's), its log path under the lane-log dir (/tmp/opencode/ by default), the verdict line its log carries, the code surfaces it exercises (the row's), and its cost class — the minutes-scale cheap lanes versus the one expensive anchor. Re-use, don't re-run: a lane already green in docs/T-002/testhands/ whose surfaces no later fix touched carries its verdict forward.
+- Plan the lanes first into docs/T-002/testplan.md: per suite its exact command (the table row's), its log path under the lane-log dir (/tmp/auto/ by default), the verdict line its log carries, the code surfaces it exercises (the row's), and its cost class — the minutes-scale cheap lanes versus the one expensive anchor. Re-use, don't re-run: a lane already green in docs/T-002/testhands/ whose surfaces no later fix touched carries its verdict forward.
 - Cheap-first: launch the cheap lanes together, and launch an anchor only once they are green — an anchor started beside a cheap lane that vetoes it is a doomed long run, pure waste. A lane marked exclusive must run alone in the tree (its build directory collides with any peer): serialize it against the other lanes.
 - Launch each lane as a background process writing its log (append the exit code: `…; echo LANE_RC=$? >> <log>`); poll every few minutes — each poll is your keep-alive — and read verdicts from the log tails mechanically.
 - On a failure: read its failure region yourself, diagnose, and fix it while the other lanes keep running; kill any running lane whose surfaces the fix touches; then re-run narrowly — only the lanes whose surfaces intersect the fix — and re-green the cheap tier before any anchor re-launch. Two consecutive cycles that close nothing on the same finding → stop retrying: record the finding in the task's documents and end.
@@ -53,7 +53,7 @@ Process documents are the DRIVER's record of this long-running work — .auto/ a
 
 Constraints:
 1. Complete this one subtask strictly, and as soon as it is done, close out with the steps below and end the session, so as to keep the context of a single session small;
-2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in your host's permission configuration;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and once the current stage is finished, move straight on to the next one.
    A decision of your own must leave a record of how it was made: write the reasoning and the alternatives you considered (and rejected) into the

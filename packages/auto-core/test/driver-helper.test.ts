@@ -12,7 +12,6 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:
 import { hostname } from "node:os"
 import { dirname, join } from "node:path"
 import { GUIDANCE, ensurePointer } from "../src/agents-block"
-import { renderAgentContract } from "../src/config-fix"
 import { renderHelperBrief } from "../src/driver-helper"
 import { ANALYSIS_DOC, ASSURANCE_DOC, reportForUserPath } from "../src/docpaths"
 import { EOF_MARK } from "../src/doccheck"
@@ -23,7 +22,6 @@ import { renderRoundBrief } from "../src/round-brief"
 import { renderTaskIndex, renderTaskTodo } from "../src/tasks"
 import { setSwitchModelRegistry } from "../src/switches"
 import { git, freshRepo } from "./fixtures/runner"
-import templateConfig from "../templates/opencode.json" with { type: "file" }
 
 const made: string[] = []
 afterEach(() => {
@@ -376,7 +374,7 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     write(
       dir,
       "docs/T-001/testhands/lint.md",
-      ["# Lane lint", "", "Lane: lint", `Heads: .=${head}`, `Tree: .=${head}..${head}`, "Start: 2026-11-16T00:00:00.000Z", "End: 2026-11-16T00:00:01.000Z", "Verdict: green", "Decides: src, test", "Log: /tmp/opencode/lint.log", ""].join("\n"),
+      ["# Lane lint", "", "Lane: lint", `Heads: .=${head}`, `Tree: .=${head}..${head}`, "Start: 2026-11-16T00:00:00.000Z", "End: 2026-11-16T00:00:01.000Z", "Verdict: green", "Decides: src, test", "Log: /tmp/auto/lint.log", ""].join("\n"),
     )
     // The receipt janitor commit (plans/0171 D2): the provenance witness the
     // S4 composition reads demands the trailer family.
@@ -503,9 +501,7 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     // that remains of planFix — a recorded posture, not a finding against
     // the layer, so the person-facing row stays quiet (a channel line here
     // would send the pen after the one key the design forbids amending).
-    write(dir, ".opencode/agent/auto.md", await renderAgentContract(false))
     await ensurePointer(dir, { testByDriver: false })
-    write(dir, "opencode.json", await Bun.file(templateConfig).text())
     write(dir, ".gitignore", ".auto/\ntmp/\n/.opencode/auto/models.json\n")
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "covered round")

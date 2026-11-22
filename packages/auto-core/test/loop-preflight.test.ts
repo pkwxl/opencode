@@ -15,7 +15,6 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { AgentHost } from "../src/agent/types"
 import { ensurePointer } from "../src/agents-block"
-import { renderAgentContract } from "../src/config-fix"
 import { beginUnit, changedFiles, commitTree } from "../src/git"
 import { runAll } from "../src/loop"
 import { preflight, removeRetiredCurrent, removeRetiredInvalidRefs, removeRetiredNumberingRecord, type RunAllOpts } from "../src/loop-preflight"
@@ -90,8 +89,7 @@ describe("removeRetiredInvalidRefs (the retired reference checker's stale list)"
     // preflight logs nothing but the removal.
     const dir = await repo({})
     await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-    await ensurePointer(dir)
+      await ensurePointer(dir)
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "init")
     await Bun.write(join(dir, ".auto/invalid-refs.md"), "# Stale references\n- docs/T-001/report.md → src/gone.ts(missing)\n")
@@ -133,8 +131,7 @@ describe("removeRetiredNumberingRecord (the retired auto-numbering record, plans
     // The same initialized, committed shape the invalid-refs test builds.
     const dir = await repo({})
     await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-    await ensurePointer(dir)
+      await ensurePointer(dir)
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "init")
     await Bun.write(join(dir, ".auto/next-task"), "7\n")
@@ -172,8 +169,7 @@ describe("the start clean gate's interrupted-unit exemption (plans/0149)", () =>
   async function project(): Promise<string> {
     const dir = await repo({})
     await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-    await ensurePointer(dir)
+      await ensurePointer(dir)
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "init")
     return dir
@@ -362,8 +358,7 @@ describe("the remediation executor row at run start (plans/0172 D2, 0165-025)", 
   async function project(): Promise<string> {
     const dir = await repo({})
     await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-    await ensurePointer(dir)
+      await ensurePointer(dir)
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "init")
     return dir
@@ -429,8 +424,7 @@ describe("the run-start hooks notice (plans/0173 D4, 0165-142)", () => {
   async function project(): Promise<string> {
     const dir = await repo({})
     await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-    await ensurePointer(dir)
+      await ensurePointer(dir)
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "init")
     return dir
@@ -537,8 +531,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
     const dir = await freshRepo()
     dirs.push(dir)
     await Bun.write(join(dir, ".gitignore"), `tmp/\n.auto/\n${opts.ignored ? "/.opencode/auto/models.json\n" : ""}`)
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-    await ensurePointer(dir)
+      await ensurePointer(dir)
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "init")
     return dir
@@ -787,8 +780,7 @@ describe("the run-start composition order (the services stage)", () => {
   async function project(ignored = false): Promise<string> {
     const dir = await repo({})
     await Bun.write(join(dir, ".gitignore"), `tmp/\n.auto/\n${ignored ? "/.opencode/auto/models.json\n" : ""}`)
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-    await ensurePointer(dir)
+      await ensurePointer(dir)
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "init")
     return dir
@@ -904,8 +896,7 @@ describe("preflight: the scheduler's usage surfaces (plans/0068 D11; plans/0125 
     const dir = await freshRepo()
     dirs.push(dir)
     await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-    await ensurePointer(dir)
+      await ensurePointer(dir)
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "init")
     return dir
@@ -1008,8 +999,7 @@ describe("preflight: branch-isolation leftovers (plans/0074 §4, U-L2)", () => {
     const dir = await freshRepo()
     dirs.push(dir)
     await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\npkg/\n")
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-    await ensurePointer(dir)
+      await ensurePointer(dir)
     const nested = join(dir, "pkg")
     await mkdir(nested, { recursive: true })
     await git(nested, "init", "-q")
@@ -1087,8 +1077,7 @@ describe("preflight: the guarantees charter-key grammar (plans/0097 D1; ids cano
     const dir = await freshRepo()
     dirs.push(dir)
     await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-    await ensurePointer(dir)
+      await ensurePointer(dir)
     await mkdir(join(dir, ".opencode/auto/intents"), { recursive: true })
     await Bun.write(join(dir, ".opencode/auto/intents/charter.md"), pack)
     await git(dir, "add", "-A")
@@ -1154,8 +1143,7 @@ describe("preflight: the assert targets' vocabulary (plans/0220 D3)", () => {
     const dir = await freshRepo()
     dirs.push(dir)
     await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-    await ensurePointer(dir)
+      await ensurePointer(dir)
     await mkdir(join(dir, ".opencode/auto/intents"), { recursive: true })
     await Bun.write(join(dir, ".opencode/auto/intents/charter.md"), `# charter\n\n## guarantees\n\n### asserts\n\n${asserts}\n`)
     await git(dir, "add", "-A")

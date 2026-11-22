@@ -35,7 +35,7 @@ Process documents are the DRIVER's record of this long-running work — .auto/ a
 
 Constraints:
 1. once the whole task is complete, check for yourself whether it is genuinely complete;
-2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in your host's permission configuration;
    for anything else where the call is the user's to make (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment), do not call the question tool —
    take the recommended option as a provisional default, record the question in the affected task documents (the context, the options with their consequences, the default taken and how
    to override it), and continue; the record stays for the person's considered answer — the round conclusion's proxy-answer summary counts every such question at the round's end —

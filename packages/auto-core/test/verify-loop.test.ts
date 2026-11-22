@@ -942,7 +942,7 @@ describe("the driver-run lane gate (0096 D5)", () => {
       mkdirSync(join(dir, "docs/T-000/testhands"), { recursive: true })
       await Bun.write(
         join(dir, "docs/T-000/testhands/gate.md"),
-        [`# Lane gate`, ``, `Lane: gate`, `Heads: .=${head}`, `Start: 2026-10-14T00:00:00.000Z`, `End: 2026-10-14T00:01:00.000Z`, `Verdict: green`, `Log: /tmp/opencode/T-000-gate-old.log`, ``, EOF_MARK, ``].join("\n"),
+        [`# Lane gate`, ``, `Lane: gate`, `Heads: .=${head}`, `Start: 2026-10-14T00:00:00.000Z`, `End: 2026-10-14T00:01:00.000Z`, `Verdict: green`, `Log: /tmp/auto/T-000-gate-old.log`, ``, EOF_MARK, ``].join("\n"),
       )
       // The receipt's janitor commit (plans/0171 D2): a carry-basis receipt
       // is witnessed by its introducing commit's testhands stage — the

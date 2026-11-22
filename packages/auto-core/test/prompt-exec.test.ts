@@ -1169,7 +1169,7 @@ describe("renderDryrun", () => {
   test("permission pre-check: lists out-of-grant accesses and probes each read-only; the report goes to .auto/dryrun.md", () => {
     const text = renderDryrun(facts())
     expect(text).toContain("permission pre-check")
-    expect(text).toContain("opencode.json")
+    expect(text).toContain("permission configuration")
     expect(text).toContain("read-only probes")
     expect(text).toContain(".auto/dryrun.md")
     expect(text).toContain("do not modify any implementation code")

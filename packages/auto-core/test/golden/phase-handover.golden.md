@@ -56,7 +56,7 @@ ruling is an open decision, not a constraint, and belongs in "Key decisions" as 
 
 1. The only file this session may write is docs/R-01/P02-implement/handover.md;
    every other file, and every state file, is outside this session's write scope.
-2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in your host's permission configuration;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and once the current stage is finished, move straight on to the next one.
    A decision of your own must leave a record of how it was made: write the reasoning and the alternatives you considered (and rejected) into the

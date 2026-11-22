@@ -29,8 +29,10 @@ const TEMPLATES = resolve(import.meta.dir, "..", "templates")
 
 // The carrier roots (plans/0072 §4): everything under templates/ a session
 // reads. templates/README.md is maintainer documentation about the tool, not
-// text any session receives, so it is not a carrier.
-const CARRIER_DIRS = [join(TEMPLATES, ".opencode"), join(TEMPLATES, "prompts"), join(TEMPLATES, "intents"), join(TEMPLATES, "modes")]
+// text any session receives, so it is not a carrier. The agent-contract
+// template directory templates/.opencode/ left with plans/0296 (the tool
+// writes no host configuration any more — the person's own files).
+const CARRIER_DIRS = [join(TEMPLATES, "prompts"), join(TEMPLATES, "intents"), join(TEMPLATES, "modes")]
 
 // The probes: distinctive phrases of each constitution constant. Adding a
 // probe: it must match its constant (the anti-rot test enforces this) and

@@ -107,9 +107,10 @@ type ClaudeAgentOptions = {
   // the one the processes see: the overlay's CLAUDE_CONFIG_DIR when it sets
   // or removes one, otherwise the driver's, otherwise ~/.claude.
   projectsDir?: string
-  // Arguments from the target directory (contract, permissions); absent =
-  // contract.ts contractArgs.
-  contract?: (agent: string | undefined) => Promise<{ args: string[] } | { error: string }>
+  // The process arguments (the preset posture); absent = contract.ts
+  // contractArgs. A read-the-directory double may still fail — the client
+  // surfaces the error.
+  contract?: () => Promise<{ args: string[] } | { error: string }>
   // The grace a closing process gets before the kill ladder takes it
   // (plans/0218 D2), milliseconds; absent = CLOSE_CEILING_MS. A test seam.
   closeCeilingMs?: number
@@ -184,7 +185,7 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
   const { directory } = options
   const bin = options.bin ?? "claude"
   const spawn = options.spawn ?? bunSpawn
-  const contract = options.contract ?? ((agent) => contractArgs(directory, agent, options.permission))
+  const contract = options.contract ?? (() => contractArgs(options.permission))
   const projects = options.projectsDir ?? claudeProjectsDir(options.env)
   const sessions = new Map<string, Session>()
   const subscribers = new Set<(event: AgentEvent) => void>()
@@ -227,7 +228,7 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
   }
 
   const start = async (id: string, s: Session, input: PromptInput): Promise<AgentResult<Live>> => {
-    const extra = await contract(input.agent)
+    const extra = await contract()
     if ("error" in extra) return fail(new Error(extra.error))
     const model = input.model !== undefined ? input.model.slice(input.model.indexOf("/") + 1) : undefined
     const which =
@@ -285,7 +286,7 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
             session: id,
             error: {
               name: "PermissionDenied",
-              message: `permission denied (--permission ask-fail): ${line.tool_name}: ${line.message ?? ""}. Allow it in the permission rules of the target directory's opencode.json, then re-run.`,
+              message: `permission denied (--permission ask-fail): ${line.tool_name}: ${line.message ?? ""}. Allow it in your host's permission configuration, then re-run.`,
               isRetryable: false,
             },
           })

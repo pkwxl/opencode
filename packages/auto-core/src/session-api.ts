@@ -295,23 +295,6 @@ export async function probeSession(client: AgentClient, sessionID: string, timeo
   }
 }
 
-// A common root cause of task-dispatch failure: when the target directory is
-// missing the agent contract file the server only answers UnknownError (the
-// error body carries no root cause); detected here, hinting the recovery path
-// from the shell profile (see src/shell.ts).
-export async function missingAgentHint(opts: Opts): Promise<string> {
-  if (!opts.dir) return ""
-  const file = `.opencode/agent/${opts.agent ?? "auto"}.md`
-  const exists = await Bun.file(join(opts.dir, file)).exists()
-  if (exists) return ""
-  const { program, bin, agentRecovery } = shellProfile()
-  const recovery =
-    agentRecovery === "startup"
-      ? `re-run ${program} to restore (the default contracts are rebuilt from templates at startup), then re-run`
-      : `run ${bin} fix ${opts.dir} to restore, then re-run`
-  return `\nhint: the target directory is missing the agent contract file ${file}; the server rejects task dispatches with UnknownError because of this; ${recovery}`
-}
-
 // The fallback branch's serializer: without the sideband each ask opens its
 // own readline over the process stdin, and doc lanes (plans/0099) can put two
 // asks in the field at once — two interfaces over one stdin would both take

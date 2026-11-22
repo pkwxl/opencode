@@ -17,7 +17,6 @@ describe("protect", () => {
     dir = await mkdtemp(join(tmpdir(), "auto-protect-"))
     path = join(dir, "AGENTS.md")
     await Bun.write(path, "# AGENTS.md\n")
-    await Bun.write(join(dir, "opencode.json"), "{}")
     await Bun.write(join(dir, ".opencode/auto/config.json"), "{}")
   })
 
@@ -32,7 +31,6 @@ describe("protect", () => {
     expect(await writable(path)).toBe(true)
     await protect(dir)
     expect(await writable(path)).toBe(false)
-    expect(await writable(join(dir, "opencode.json"))).toBe(false)
     expect(await writable(join(dir, ".opencode/auto/config.json"))).toBe(false)
     await unprotect(dir)
     expect(await writable(path)).toBe(true)

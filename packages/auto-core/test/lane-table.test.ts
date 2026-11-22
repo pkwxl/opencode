@@ -257,7 +257,7 @@ const receipt = (over: Record<string, string> = {}) =>
     `Verdict: ${over.verdict ?? "green"}`,
     ...(over.decides ? [`Decides: ${over.decides}`] : []),
     ...(over.carried ? [`Carried: ${over.carried}`] : []),
-    ...(over.carried ? [] : [`Log: ${over.log ?? "/tmp/opencode/T-001-lint-1.log"}`]),
+    ...(over.carried ? [] : [`Log: ${over.log ?? "/tmp/auto/T-001-lint-1.log"}`]),
     "",
     ...(over.verdict === "red" ? ["```", "the failure region's ends", "```", ""] : []),
     EOF_MARK,
@@ -415,7 +415,7 @@ describe("exclusivity serialization (laneBatches — the set's schedule)", () =>
 describe("runTestLanes (the driver-run lane set over real repositories)", () => {
   // Lane factories over a marker file outside the repository (the tree stays
   // exactly what the receipts' recorded HEADs vouch for) and a private log
-  // directory (production writes /tmp/opencode; tests stay self-contained).
+  // directory (production writes /tmp/auto; tests stay self-contained).
   const markers = () => {
     const scratch = mkdtempSync(join(tmpdir(), "auto-lane-marks-"))
     return { scratch, file: join(scratch, "marks.txt") }
@@ -545,7 +545,7 @@ describe("runTestLanes (the driver-run lane set over real repositories)", () => 
       mkdirSync(join(dir, old, ".."), { recursive: true })
       writeFileSync(
         join(dir, old),
-        ["# Lane lint", "", "Lane: lint", `Heads: .=${head}`, "Start: 2026-10-15T10:00:00.000Z", "End: 2026-10-15T10:03:12.123Z", "Verdict: green", "Log: /tmp/opencode/T-000-lint-1.log", "", EOF_MARK, ""].join("\n"),
+        ["# Lane lint", "", "Lane: lint", `Heads: .=${head}`, "Start: 2026-10-15T10:00:00.000Z", "End: 2026-10-15T10:03:12.123Z", "Verdict: green", "Log: /tmp/auto/T-000-lint-1.log", "", EOF_MARK, ""].join("\n"),
       )
       await git(dir, "add", "--", old)
       await git(dir, "commit", "-qm", "T-000 testhands receipts (lint)", "-m", "Auto-Task: T-000", "-m", "Auto-Stage: testhands")

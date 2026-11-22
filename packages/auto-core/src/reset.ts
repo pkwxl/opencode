@@ -1,6 +1,6 @@
 // De-initialization: precisely removes the config-layer artifacts init wrote
 // (the enumerated whitelist below), clearing config leftovers that would
-// interfere with the opencode host program and other extension components.
+// interfere with the host program and other extension components.
 // Not a restoration of the uninitialized worktree: what the whitelist does not
 // name survives, and one class of init's own output deliberately does — a
 // materialized intent bundle's landed files (plans/0079 §3: the pack, mode and
@@ -9,6 +9,10 @@
 // overlay and still reported by fix/sync/status; they reach this list only
 // through PRUNE_DIRS' rmdir-if-empty, which skips non-empty directories by
 // design. Person-owned once landed — delete them by hand if you mean to.
+//
+// The host's own configuration is never this list's business (plans/0296):
+// opencode.json and the .opencode/agent/ contracts are the person's files —
+// init no longer writes them, reset never removes them.
 //
 // Boundaries (design points, read them all before changing anything):
 //   1. Clears the config layer only. .auto/'s runtime state (logs,
@@ -19,12 +23,10 @@
 //   3. Directory reclamation always uses rmdir (throws on non-empty, skipped)
 //      and never rm -r. This is the mechanism that protects
 //      .opencode/auto/prompts/ (the user's own prompt overlay directory, read
-//      by template.ts), the user's other agent contracts under
-//      .opencode/agent/, and a materialized bundle's files.
-//   4. Files shared with the host program are touched only after a
-//      byte-for-byte comparison: opencode.json is deleted only while its
-//      content equals the template, kept once modified; AGENTS.md only has
-//      the opencode-auto marker block stripped.
+//      by template.ts) and a materialized bundle's files. Only the tool's own
+//      .opencode/auto subtree is reclaimed — bare .opencode and .opencode/agent
+//      hold the person's own host surfaces and are never entered.
+//   4. AGENTS.md only has the opencode-auto marker block stripped.
 //   5. The project brief is never removed (plans/0081 D11): the stub model
 //      and its remove-while-stub rule retired — a brief is either the
 //      person's seed (init/amend --brief) or the analysis phase's generated,
@@ -32,7 +34,6 @@
 //      by comparison. Delete it by hand if you mean to.
 import { rm, rmdir, stat } from "node:fs/promises"
 import { join } from "node:path"
-import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { removePointer } from "./agents-block"
 import { BRIEF_FILE } from "./brief"
 import { removeGitignoreEntries, staleNestedEntryLines } from "./gitignore"
@@ -53,9 +54,9 @@ const CONFIG_JSON = join(".opencode", "auto", "config.json")
 // under .auto/, but its nature is config, not runtime state, so it is in
 // scope; the rest of .auto/ is untouched.
 const LEGACY_CONFIG = join(".auto", "config.json")
-const AGENT_MD = join(".opencode", "agent", "auto.md")
-// Directories reclaimed when empty, from the inside out.
-const PRUNE_DIRS = [join(".opencode", "auto"), join(".opencode", "agent"), ".opencode"]
+// Directories reclaimed when empty, from the inside out — the tool's own
+// subtree alone (plans/0296).
+const PRUNE_DIRS = [join(".opencode", "auto")]
 
 async function fileExists(path: string): Promise<boolean> {
   return Bun.file(path).exists()
@@ -77,25 +78,6 @@ export async function planReset(dir: string): Promise<ResetEntry[]> {
     entries.push({ path: BRIEF_FILE, action: "keep", reason: "the project brief (an installed approved proposal or a person's amend --brief write) is kept; delete it by hand if you mean to" })
   }
   if (await fileExists(join(dir, LEGACY_CONFIG))) entries.push({ path: LEGACY_CONFIG, action: "remove" })
-
-  // The agent contract is not compared: init already overwrites it
-  // unconditionally from the template (replacing on any content difference) —
-  // it is a pure auto artifact, and a hand edit does not earn it the status
-  // of "the user's own content".
-  if (await fileExists(join(dir, AGENT_MD))) entries.push({ path: AGENT_MD, action: "remove" })
-
-  // opencode.json is read by the host program and may hold the user's own
-  // model/permission settings: deleted only when byte-for-byte equal to the
-  // template, otherwise kept.
-  const configFile = join(dir, "opencode.json")
-  if (await fileExists(configFile)) {
-    const [current, template] = await Promise.all([Bun.file(configFile).text(), Bun.file(templateConfig).text()])
-    entries.push(
-      current === template
-        ? { path: "opencode.json", action: "remove" }
-        : { path: "opencode.json", action: "keep", reason: "content modified, not the init template original, kept" },
-    )
-  }
 
   const agents = join(dir, "AGENTS.md")
   if (await fileExists(agents)) {

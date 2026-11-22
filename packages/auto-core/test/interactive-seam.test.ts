@@ -35,7 +35,6 @@ import { dirname, join } from "node:path"
 import { PassThrough, Writable } from "node:stream"
 import { createClaudeHost } from "../src/agent/claude/host"
 import type { AgentHost } from "../src/agent/types"
-import { renderAgentContract } from "../src/config-fix"
 import type { Interactive } from "../src/control-types"
 import { EOF_MARK } from "../src/doccheck"
 import { runAll } from "../src/loop"
@@ -115,7 +114,6 @@ async function widgetProject(tasks = 1): Promise<string> {
       ? "## T-001: the widget [pending]\nBuild the widget.\n\n## T-002: the second widget [pending]\nBuild the second widget.\n"
       : "## T-001: the widget [pending]\nBuild the widget.\n"
   await seedUnits(dir, notation)
-  await Bun.write(join(dir, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
   await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
   await git(dir, "add", "-A")
   await git(dir, "commit", "-qm", "baseline")
@@ -227,8 +225,7 @@ describe("the io/Interactive seam: askHuman's wait routes to the injected implem
   test("a planning-style question (plan's humanQuestions) waits with no timeout — minutes undefined on the typed call", async () => {
     const dir = await freshRepo()
     await establishRound(dir, { phases: "m" })
-    await Bun.write(join(dir, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
-    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+      await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "baseline")
     // The planning session writes the phase's task index (the loop fixture's

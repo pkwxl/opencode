@@ -5,7 +5,6 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { renderAgentContract } from "../src/config-fix"
 import {
   DECISION_FORMAT,
   modeCtx,
@@ -29,7 +28,6 @@ import { promptViews, type Plan, type Task } from "../src/tasks"
 import { taskDocPaths } from "../src/docpaths"
 import { autoSwitches } from "../src/switches"
 import { renderTemplate, renderText, usePromptLibrary } from "../src/template"
-import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
 import { listPlan, listTask, migrate, plan, resolveItem, task } from "./fixtures/prompt"
 
 // E2 render inputs: the facts (the attended-human cases build their own) and
@@ -333,67 +331,6 @@ describe("Mode injection (-m/--mode)", () => {
   })
 })
 
-describe("init artifact templates (agent contract; the PLAN.md template retired with M3.4)", () => {
-  test("agent contract has no acceptance/verification text and the block list narrows accordingly (testByDriver off)", async () => {
-    const raw = await Bun.file(agentTemplate).text()
-    const off = renderText(raw, { testByDriver: false })
-    expect(off).toContain("AGENTS.md and opencode.json are read-only")
-    expect(off).toContain("marker block (pointer/commit/summary/reference conventions")
-    expect(off).toContain("<!-- opencode-auto:start -->")
-    expect(off).toContain("<!-- opencode-auto:end -->")
-    expect(off).not.toContain("verify")
-    expect(off).not.toContain("verification")
-  })
-})
-
-describe("agent contract template (templates/.opencode/agent/auto.md)", () => {
-  test("consistency check matches the write path: both renders differ from the raw template (it has a conditional block) and equal a direct renderText", async () => {
-    const raw = await Bun.file(agentTemplate).text()
-    expect(raw).toContain("{{#if testByDriver}}")
-    expect(raw).not.toContain("{{#if verify}}")
-    for (const testByDriver of [true, false]) {
-      const rendered = await renderAgentContract(testByDriver)
-      expect(rendered).toBe(renderText(raw, { testByDriver }))
-      expect(rendered).not.toBe(raw)
-    }
-  })
-  test("the AGENTS.md clause covers the single opencode-auto block and keeps sessions out of the file (drift guard, testByDriver on)", async () => {
-    const raw = await Bun.file(agentTemplate).text()
-    const text = renderText(raw, { testByDriver: true })
-    // AGENTS.md is read-only and not maintained by sessions (plans/0054 D2):
-    // the opencode-auto block (pointer/test/commit/summary/reference
-    // conventions) is one merged start/end block rather than the legacy
-    // per-name blocks, and notes go to docs/
-    expect(text).toContain("AGENTS.md and opencode.json are read-only")
-    expect(text).toContain("marker block (pointer/test/commit/summary/reference conventions")
-    expect(text).toContain("<!-- opencode-auto:start -->")
-    expect(text).toContain("<!-- opencode-auto:end -->")
-    expect(text).not.toContain("<!-- opencode-auto:*:start -->")
-    expect(text).toContain("is not a place for notes")
-    expect(text).not.toContain("maintenance rules")
-    expect(text).not.toContain("docs/agents/")
-    // The retired task mirror is gone from the contract (plans/0054 D3)
-    expect(text).not.toContain("CURRENT.md")
-    // 0072 U-B/T-131: the contract slimmed to driver-operational protocol —
-    // the pointer discipline (item 1), the state-file and test sentences
-    // (item 2) and the commit prohibition (item 5) folded back to the
-    // AGENTS.md block, the constitution's single source; the restatement of
-    // the task documents is gone with them (the constitution ratchet,
-    // test/constitution-ratchet.test.ts, holds every carrier to that).
-    expect(text).not.toContain("docs/T-NNN/todo.md and docs/T-NNN/subtasks.md")
-    expect(text).not.toContain("reread them after your context has been compacted")
-    expect(text).not.toContain("State files are read-only")
-    expect(text).not.toContain("Build, test, compile, lint")
-    expect(text).not.toContain("tmp/test.sh")
-    expect(text).not.toContain("Do not run git commit")
-    expect(text).not.toContain("nested .git sub-repositories")
-    // Role naming, the AGENTS.md note and problem handling stay (the
-    // contract's own layer, D1/D2 of the 0072 mapping)
-    expect(text).toContain("names your role for this turn (whole task / decompose / subtask or stream / wrap-up / fix)")
-    expect(text).toContain("How to handle problems")
-  })
-})
-
 describe("Template render completeness", () => {
   test("all render* leave no template tags behind under representative parameter combinations", () => {
     const solo = plan.tasks[0]!
@@ -420,13 +357,6 @@ describe("Template render completeness", () => {
     for (const text of texts) expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
-  test("the init artifact templates render under both testByDriver states with no leftover template tags", async () => {
-    for (const raw of [await Bun.file(agentTemplate).text()]) {
-      for (const testByDriver of [true, false]) {
-        expect(renderText(raw, { testByDriver })).not.toMatch(/\{\{|\}\}/)
-      }
-    }
-  })
 })
 
 describe("step-up template (plans/0055 §4.5)", () => {

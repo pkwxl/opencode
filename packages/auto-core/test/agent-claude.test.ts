@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { claudeAgent, claudeEnv, claudeProjectsDir, CLAUDE_CAPABILITIES, CLAUDE_ERROR_PATTERNS, type ClaudeProcess, type ClaudeSpawn } from "../src/agent/claude/client"
-import { claudePermissions, contractArgs, contractBody } from "../src/agent/claude/contract"
+import { contractArgs } from "../src/agent/claude/contract"
 import { createClaudeHost } from "../src/agent/claude/host"
 import { claudeStream } from "../src/agent/claude/stream"
 import { OPENCODE_CAPABILITIES } from "../src/agent/opencode/client"
@@ -336,73 +336,23 @@ describe("claudeStream: stdout lines → AgentEvent", () => {
 })
 
 describe("contract translation", () => {
-  test("contract body: frontmatter stripped", () => {
-    expect(contractBody("---\ndescription: x\nmode: primary\n---\n\nYou are the agent.\n")).toBe("You are the agent.")
-    expect(contractBody("No frontmatter.")).toBe("No frontmatter.")
-  })
-
-  test("opencode.json permission rules → claude allow / deny", () => {
-    const config = {
-      permission: {
-        read: "allow",
-        list: "allow",
-        edit: "allow",
-        question: "allow",
-        webfetch: "deny",
-        websearch: "ask",
-        bash: { "*": "allow", "git push*": "deny", "git status*": "allow" },
-      },
-    }
-    expect(claudePermissions(config)).toEqual({
-      allow: ["Read", "Edit", "Write", "NotebookEdit", "Bash", "Bash(git status*)"],
-      deny: ["WebFetch", "Bash(git push*)"],
-    })
-    expect(claudePermissions({ permission: "deny" }).deny).toContain("Bash")
-    expect(claudePermissions(undefined)).toEqual({ allow: [], deny: [] })
-  })
-
-  test("external_directory has no translation today — the declared capability carries the limit (plans/0190 D1; 0165-040, its translation 033/step 058)", () => {
-    // The boundary-carrying section the template ships (0147 D1) and a
-    // wall's standing deny both translate to nothing under 0041 D6's key
-    // map (ruled before 0122 existed): the adapter declares
-    // externalDirectory: false and a declared wall's close refuses on that
-    // fact (plans/0190 D1). This pin is the ratchet the adapter wave's
-    // probe-verified translation ruling (0166 step 058) updates
-    // consciously, never a silent drift.
-    expect(
-      claudePermissions({
-        permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", "/workspace/linux/**": "deny" } },
-      }),
-    ).toEqual({ allow: [], deny: [] })
+  test("external_directory has no translation — the declared capability carries the limit (plans/0190 D1; 0165-040, its translation 033/step 058)", () => {
+    // The adapter declares externalDirectory: false and a declared wall's
+    // close refuses on that fact (plans/0190 D1). The opencode.json
+    // translation this pin once held is gone with plans/0296 — the host's
+    // configuration is never read, never translated.
     expect(CLAUDE_CAPABILITIES.externalDirectory).toBe(false)
     expect(OPENCODE_CAPABILITIES.externalDirectory).toBe(true)
   })
 
-  test("process arguments per preset; a missing contract fails", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-claude-"))
-    try {
-      await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
-      await writeFile(join(dir, ".opencode", "agent", "auto.md"), "---\nmode: primary\n---\nContract.\n")
-      await writeFile(join(dir, "opencode.json"), JSON.stringify({ permission: { edit: "allow", webfetch: "deny" } }))
-      const deny = await contractArgs(dir, "auto", "deny")
-      expect(deny).toEqual({
-        args: [
-          "--disallowed-tools",
-          "AskUserQuestion",
-          "--permission-prompts",
-          "none",
-          "--append-system-prompt",
-          "Contract.",
-          "--settings",
-          JSON.stringify({ permissions: { allow: ["Edit", "Write", "NotebookEdit"], deny: ["WebFetch"] } }),
-        ],
-      })
-      const allow = await contractArgs(dir, "auto", "allow")
-      expect("args" in allow && allow.args.slice(2, 4)).toEqual(["--permission-mode", "bypassPermissions"])
-      expect(await contractArgs(dir, "other", "deny")).toEqual({ error: "agent contract file missing: .opencode/agent/other.md" })
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
+  // Plans/0296: the target directory contributes nothing to the process
+  // arguments — no agent-contract system prompt, no permission translation.
+  // The preset posture alone rides.
+  test("process arguments per preset; nothing is read from the target directory", async () => {
+    const deny = await contractArgs("deny")
+    expect(deny).toEqual({ args: ["--disallowed-tools", "AskUserQuestion", "--permission-prompts", "none"] })
+    const allow = await contractArgs("allow")
+    expect("args" in allow && allow.args.slice(2, 4)).toEqual(["--permission-mode", "bypassPermissions"])
   })
 })
 

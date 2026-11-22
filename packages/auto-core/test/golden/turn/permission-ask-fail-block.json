@@ -33,7 +33,7 @@
     "resolves": [],
     "blocked": {
       "type": "blocked",
-      "question": "permission request unanswered (--permission ask-fail): bash (rm -rf build). Allow it in the permission rules of the target directory's opencode.json, then re-run."
+      "question": "permission request unanswered (--permission ask-fail): bash (rm -rf build). Allow it in your host's permission configuration, then re-run."
     }
   }
 }

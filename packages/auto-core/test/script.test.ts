@@ -18,12 +18,12 @@ describe("scriptTmpDir", () => {
 
 describe("laneLogDir (plans/0151 D1, the environment seam)", () => {
   test("the default is the lane protocol's prescribed path", () => {
-    expect(laneLogDir({})).toBe("/tmp/opencode")
+    expect(laneLogDir({})).toBe("/tmp/auto")
   })
 
   test("OPENCODE_AUTO_LANE_LOG_DIR redirects the lane and regression logs; the empty string counts as unset", () => {
     expect(laneLogDir({ OPENCODE_AUTO_LANE_LOG_DIR: "/ws/proj/tmp/sbx/lane-logs" })).toBe("/ws/proj/tmp/sbx/lane-logs")
-    expect(laneLogDir({ OPENCODE_AUTO_LANE_LOG_DIR: "" })).toBe("/tmp/opencode")
+    expect(laneLogDir({ OPENCODE_AUTO_LANE_LOG_DIR: "" })).toBe("/tmp/auto")
   })
 })
 

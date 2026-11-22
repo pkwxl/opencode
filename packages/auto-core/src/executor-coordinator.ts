@@ -274,18 +274,20 @@ function executorStageOf(kind: Grant["kind"]): string {
 // declared scope, the driver-exclusive docs surfaces need their own arms —
 // the unit state files todo.md/done.md (task, stream and phase-planning
 // shapes), the index family (docs/R-NN/phases.md and the phase's tasks.md)
-// and docs/T-NNN/subtasks.md, plus the root config opencode.json (.opencode/
-// refused on the first line, .auto/ by workdirEntry, git metadata never
-// riding a status row). Every shape here is non-freeform, so the undeclared
-// floor below refuses them identically (P10).
+// and docs/T-NNN/subtasks.md (.opencode/ refused on the first line, .auto/
+// by workdirEntry, git metadata never riding a status row). A person-owned
+// root file such as the host's opencode.json needs no named arm (plans/0296:
+// the tool takes no posture on it) — it sits outside every grant's write
+// scopes, refused as out-of-scope like any other person file. Every shape
+// here is non-freeform, so the undeclared floor below refuses them
+// identically (P10).
 const UNIT_STATE_DOC = /^docs\/(?:T-\d+(?:\/S\d+)?|R-\d+\/P\d{2,}-[a-z][a-z0-9-]*)\/(?:todo|done)\.md$/
 const INDEX_DOC = /^docs\/R-\d+\/(?:phases|P\d{2,}-[a-z][a-z0-9-]*\/tasks)\.md$/
 const SUBTASKS_DOC = /^docs\/T-\d+\/subtasks\.md$/
-const CONFIG_DOC = /^opencode\.json$/
 const CONFIG_DIR = ".opencode"
 const AGENTS_NAME = "AGENTS.md"
 export function driverExclusive(path: string): boolean {
-  return CONFIG_DOC.test(path) || UNIT_STATE_DOC.test(path) || INDEX_DOC.test(path) || SUBTASKS_DOC.test(path)
+  return UNIT_STATE_DOC.test(path) || INDEX_DOC.test(path) || SUBTASKS_DOC.test(path)
 }
 
 // The standing refusal set (0246 D4 i's never-list, stated as the one table
@@ -442,7 +444,6 @@ function neverPaths(): string[] {
     UNIT_STATE_DOC.source,
     INDEX_DOC.source,
     SUBTASKS_DOC.source,
-    CONFIG_DOC.source,
   ]
 }
 
@@ -480,7 +481,6 @@ function formulateNeverPaths(): string[] {
     DONE_STATE_DOC_SOURCE,
     PHASES_DOC_SOURCE,
     SUBTASKS_DOC.source,
-    CONFIG_DOC.source,
   ]
 }
 

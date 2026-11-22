@@ -17,7 +17,7 @@ import { log } from "./log"
 // .gitignore (see ensureGitignore), so the unified-commit rules are unaffected.
 // The serial channel's parallel sibling — the driver-run test lane set
 // (plans/0096 D5, runTestLanes below) — keeps its logs outside the tree under
-// /tmp/opencode/ instead, the path the lane protocol itself prescribes.
+// /tmp/auto/ instead, the path the lane protocol itself prescribes.
 export function scriptTmpDir(dir: string): string {
   return join(resolve(dir), "tmp")
 }
@@ -262,7 +262,7 @@ async function isExecutable(path: string): Promise<boolean> {
 // background processes — the cheap lanes concurrently, an anchor only once
 // they green (an anchor started beside a red cheap lane is a doomed long
 // run), a lane declared exclusive alone in the tree. Each lane writes its log
-// under the lane-log dir (/tmp/opencode/ by default, plans/0151 D1's seam)
+// under the lane-log dir (/tmp/auto/ by default, plans/0151 D1's seam)
 // with the exit code appended (`LANE_RC=$?`, the line
 // the session-side protocol reads too) and is watched by the same
 // idle-progress watchdog runScript uses. The stash guard extends to the whole
@@ -274,14 +274,14 @@ async function isExecutable(path: string): Promise<boolean> {
 // new commit of their own.
 
 // Where lane logs live (the lane protocol's prescribed path, D1: logs under
-// /tmp/opencode/). Tests inject a private directory through the opts. The
+// /tmp/auto/). Tests inject a private directory through the opts. The
 // environment seam (plans/0151 D1): OPENCODE_AUTO_LANE_LOG_DIR redirects the
 // lane and regression logs — a driving environment that isolates concurrent
 // runs of sibling worktrees (the cleanroom sandbox's per-run dir, 0147 D3's
 // named residual reopened) owns the choice; the default stays the prescribed
 // path and no environment fact lives in this source (P16).
 export function laneLogDir(env: Record<string, string | undefined> = process.env): string {
-  return env.OPENCODE_AUTO_LANE_LOG_DIR || "/tmp/opencode"
+  return env.OPENCODE_AUTO_LANE_LOG_DIR || "/tmp/auto"
 }
 
 // How many log lines a red receipt's bounded evidence carries (the ends of

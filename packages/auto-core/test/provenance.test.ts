@@ -343,7 +343,6 @@ describe("purity", () => {
 // left it: the on-disk pack and the sidecar predate the charter family, the
 // running binary ships it — and no site blocks, exits nonzero, or writes.
 import { ensurePointer } from "../src/agents-block"
-import { renderAgentContract } from "../src/config-fix"
 import { planFix } from "../src/config-fix"
 import { CONFIG_DEFAULTS } from "../src/config"
 import { provenanceComparison } from "../src/bundle"
@@ -371,7 +370,6 @@ async function bundleProject(stale: boolean): Promise<string> {
   }
   await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
   await Bun.write(join(dir, ".opencode/auto/config.json"), `${JSON.stringify({ ...CONFIG_DEFAULTS, intent: "faithful", phases: "survey,analysis,design,implement,test,acceptance" }, null, 2)}\n`)
-  await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
   await ensurePointer(dir)
   await git(dir, "add", "-A")
   await git(dir, "commit", "-qm", "init")

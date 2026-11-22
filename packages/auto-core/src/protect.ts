@@ -3,9 +3,9 @@ import { join } from "node:path"
 import { ANALYSIS_DOC } from "./docpaths"
 import { PROTECTED_FILES } from "./document/roles"
 
-// Read-only guard for driver-owned files: during `run`, opencode.json, the
-// persisted project config, AGENTS.md and the model registry's project layer
-// are chmod'd 0o444 so agent sessions
+// Read-only guard for driver-owned files: during `run`, the persisted project
+// config, AGENTS.md and the model registry's project layer are chmod'd 0o444
+// so agent sessions
 // cannot modify them by mistake (defense in depth on top of the prompt
 // contract — a same-user process could still chmod them back via bash, so
 // this is a guardrail, not a security boundary). AGENTS.md holds only the
@@ -23,8 +23,7 @@ import { PROTECTED_FILES } from "./document/roles"
 // provenance sidecar (plans/0100 D1) and the project analysis (plans/0172
 // D3, 0165-093). The project layer
 // is the operator's, not driverState: the driver reads it once at run start and
-// never writes it, so it has no allowWrite path, and it goes read-only while a
-// session runs as opencode.json does. Its path is src/models.ts MODELS_FILE,
+// never writes it, so it has no allowWrite path. Its path is src/models.ts MODELS_FILE,
 // spelled out because this document-domain module imports nothing from the
 // driver plane; test/protect.test.ts pins the two together. The provenance
 // sidecar is the same shape of state (committed, written only by init's
@@ -38,7 +37,8 @@ import { PROTECTED_FILES } from "./document/roles"
 // legitimate write to it (plans/0084: the drafting agent works interactively
 // at stops, never as a driver-driven session) — the brief's precedent, its
 // path spelled out from src/docpaths.ts ANALYSIS_DOC and pinned beside it in
-// test/protect.test.ts.
+// test/protect.test.ts. The host's own opencode.json left the guard with
+// plans/0296 — the tool takes no posture on the person's host configuration.
 //
 // Beside the fixed-role set stands the declared sealed-path set (plans/0132
 // D4): the vetted channel the wall commit froze — the sealing phase's

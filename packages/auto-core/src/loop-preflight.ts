@@ -21,7 +21,6 @@ import { loopbackProxyWarning } from "./agent-env"
 import { ensurePointer } from "./agents-block"
 import { provenanceComparison } from "./bundle"
 import { executeBlockageChoices, executionLines } from "./blockage-execute"
-import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
 import { fileTracked, hookReports, type GitOps } from "./git"
 import { deleteBranch, probeReflink, workingTreeMB } from "./git-worktree"
@@ -532,34 +531,6 @@ export async function preflight(
         : ""
     log(`ℹ parallel execution: tier ${resolved.tier} — ${resolved.reason}${docNote}`)
   }
-  // The agent contract written by init (CONTRACT_AGENT); pre-run integrity
-  // check: with the contract file missing the server only answers UnknownError
-  // (no root cause), so report it here with the shell profile's recovery hint
-  // (src/shell.ts); a contract differing from the template only warns.
-  const agentName = CONTRACT_AGENT
-  const agentFile = join(directory, ".opencode/agent", `${agentName}.md`)
-  const agentText = await Bun.file(agentFile).text().catch(() => undefined)
-  const { program, bin, agentRecovery } = shellProfile()
-  if (agentText === undefined) {
-    log(`⏸ agent contract file missing: .opencode/agent/${agentName}.md(its absence makes task dispatch fail: UnknownError)`)
-    log(
-      agentRecovery === "startup"
-        ? `  recovery: re-run ${program}(the default contract is rebuilt from the template at startup), or restore the file manually`
-        : `  recovery: run ${bin} fix ${directory} to rebuild the file (or restore it manually), then re-run`,
-    )
-    return { exit: 1 }
-  }
-  // init writes the contract as rendered under the then-current testByDriver,
-  // so the comparison must render under the current config the same way
-  // (comparing against the raw template's full text would never match — the
-  // {{#if}} markers — same yardstick as renderAgentContract).
-  if (agentText !== (await renderAgentContract(Boolean(opts.testByDriver)))) {
-    log(
-      `⚠ .opencode/agent/auto.md differs from the current template (possibly a legacy contract); ` +
-        (agentRecovery === "startup" ? `re-running ${program} refreshes it from the template` : `run ${bin} fix ${directory} to refresh it`),
-    )
-  }
-
   const watcher = opts.verbose ? watchFiles(directory) : undefined
   // stats loading (plans/0019 §D): read disk → depreciate the
   // previous process's leftover segments → round rollover → open this
@@ -831,7 +802,11 @@ export async function preflight(
       return stopBlocked(2)
     }
   }
-  return { agentName, watcher, progress, registry, services: run, treeTier }
+  // The push run's agent-name threading (the opencode host's agent profile
+  // the session dispatches name): the contract file that once defined it is
+  // gone (plans/0296), so the constant alone rides — the whole thread is
+  // dead-path beside the push layer it served, demolition-docketed.
+  return { agentName: CONTRACT_AGENT, watcher, progress, registry, services: run, treeTier }
 }
 
 // The dispatches this run can send (plans/0055 §6.3): every role its

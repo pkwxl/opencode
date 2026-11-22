@@ -498,7 +498,7 @@ describe("the cover-set observation at close (plans/0244 D4, S3)", () => {
     write(
       dir,
       "docs/T-001/testhands/lint.md",
-      ["# Lane lint", "", "Lane: lint", `Heads: .=${head}`, `Tree: .=${head}..${head}`, "Start: 2026-11-16T00:00:00.000Z", "End: 2026-11-16T00:00:01.000Z", "Verdict: green", `Decides: ${decides}`, "Log: /tmp/opencode/lint.log", ""].join("\n"),
+      ["# Lane lint", "", "Lane: lint", `Heads: .=${head}`, `Tree: .=${head}..${head}`, "Start: 2026-11-16T00:00:00.000Z", "End: 2026-11-16T00:00:01.000Z", "Verdict: green", `Decides: ${decides}`, "Log: /tmp/auto/lint.log", ""].join("\n"),
     )
     await janitorCommit(dir, "docs/T-001/testhands/lint.md")
   }
@@ -543,7 +543,7 @@ describe("the cover-set observation at close (plans/0244 D4, S3)", () => {
       await commit(dir, "work", "src/net.ts")
       write(dir, ASSURANCE_DOC, ROWS)
       const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
-      const receipt = ["# Lane lint", "", "Lane: lint", `Heads: .=${head}`, `Tree: .=${head}..${head}`, "Start: 2026-11-16T00:00:00.000Z", "End: 2026-11-16T00:00:01.000Z", "Verdict: green", "Decides: src, test", "Log: /tmp/opencode/lint.log", ""].join("\n")
+      const receipt = ["# Lane lint", "", "Lane: lint", `Heads: .=${head}`, `Tree: .=${head}..${head}`, "Start: 2026-11-16T00:00:00.000Z", "End: 2026-11-16T00:00:01.000Z", "Verdict: green", "Decides: src, test", "Log: /tmp/auto/lint.log", ""].join("\n")
       // Dirty in the tree (a session wrote it, no janitor commit landed):
       write(dir, "docs/T-001/testhands/lint.md", receipt)
       let lines = await coverSetObservation(dir, 1)

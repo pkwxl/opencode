@@ -169,7 +169,7 @@ export function testLanesProblem(pack: IntentPack): string | undefined {
 //   Decides: <path>[, <path>…]             (plans/0244 D3 — the lane's
 //                                           declared surfaces, the paths
 //                                           whose verdict the receipt carries)
-//   Log: <the lane's log path (the lane-log dir, /tmp/opencode/ by default
+//   Log: <the lane's log path (the lane-log dir, /tmp/auto/ by default
 //                                          — plans/0151 D1's seam may redirect it)>
 //   Carried: <receipt path>                (carry receipts only)
 // The three machine fields (Lane/Heads/Verdict) are what carry-forward and

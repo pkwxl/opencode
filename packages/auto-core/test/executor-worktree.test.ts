@@ -287,18 +287,25 @@ test("a mixed code-and-docs declaration settles its artifact-role writes from th
 })
 
 test("a lane fences the root config even when a declaration names it", async () => {
-  // 0246 D4 i's never-list completed by 0259: opencode.json is driver-exclusive
-  // surface even inside a scope that declares it.
-  const dir = project(["opencode.json"])
+  // 0246 D4 i's never-list completed by 0259, halved by plans/0296: the
+  // config directory .opencode/ is driver-exclusive surface even inside a
+  // scope that declares it (the host's own opencode.json left the never-set —
+  // a person-owned root file, refused as out-of-scope when undeclared, the
+  // person's declaration governing when they name it).
+  const dir = project([".opencode/auto/config.json"])
   const coordinator = await openExecutorCoordinator(dir)
   try {
     const grant = await claim(coordinator, worker, "T-001", "execute")
-    write(grant.workspace, "opencode.json", "{}\n")
+    write(grant.workspace, ".opencode/auto/config.json", "{}\n")
     write(grant.workspace, "docs/T-001/handoff.md", "# Handoff\n\nStatus: done\n")
     expect(await coordinator.report(worker, grant.id, grant.lease, "ended")).toMatchObject({
-      kind: "blocked", reason: "isolation", detail: expect.stringContaining("opencode.json"),
+      kind: "blocked", reason: "isolation", detail: expect.stringContaining(".opencode/auto/config.json"),
     })
-    rmSync(join(grant.workspace, "opencode.json"))
+    // The fenced file is tracked fixture surface (the committed root config a
+    // worktree inherits): removal would leave a deletion row — the same
+    // out-of-scope edit. The edit undone is a restore to the committed
+    // content, and the lane then lands on its in-scope handoff alone.
+    git(grant.workspace, "checkout", "--", CONFIG_FILE)
     expect(await coordinator.report(worker, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
   } finally {
     await coordinator.close()

@@ -15,33 +15,25 @@ import { repoRoots } from "./git"
 // roots leaf-side (git.ts cannot import this module back).
 export const ENTRIES = ["tmp/", ".auto/"]
 
-// The model registry's project layer (plans/0055 §4.1). It belongs to whoever
-// operates this checkout, not to the project, so it is local-only like
-// opencode.json. The path is src/models.ts MODELS_FILE, spelled out here to
-// keep this module near-leaf; test/gitignore.test.ts pins the two together.
-export const MODELS_ENTRY = "/.opencode/auto/models.json"
-
 // The local-only entries init writes on top of the workdir entries: .env
-// (secrets), AGENTS.md (the driver's block — derived byte-identically from
+// (secrets) and AGENTS.md (the driver's block — derived byte-identically from
 // the committed config and re-rendered by ensurePointer at every run start,
-// so the file itself stays out of git while its source travels) and the
-// model registry's project layer (the operator's, plans/0055 §4.1). The
-// .gitignore itself and opencode.json are NOT here: they are committed
-// project surfaces (plans/0138) — the ignore set is law every machine needs
-// identically (a self-ignored file never reached git, and every fresh clone
-// lost the whole set, the first run's housekeeping commit then tracking a
-// partial file), and opencode.json holds the project's host posture
-// (permission table, timeout keys, external-directory allows). reset removes
-// the entries only: a project layer stays on disk, since the driver never
-// wrote it.
-const INIT_ENTRIES = ["/.env", "/AGENTS.md", MODELS_ENTRY]
+// so the file itself stays out of git while its source travels). The
+// .gitignore itself is NOT here: it is a committed project surface
+// (plans/0138) — the ignore set is law every machine needs identically (a
+// self-ignored file never reached git, and every fresh clone lost the whole
+// set, the first run's housekeeping commit then tracking a partial file).
+// The host's own configuration file (opencode.json) and the model registry's
+// project layer carry no entry since plans/0296 — neither is the tool's
+// surface, so their visibility is the person's own line to own or drop.
+const INIT_ENTRIES = ["/.env", "/AGENTS.md"]
 
 // The retired entries (plans/0138): pre-0138 init ignored the .gitignore
-// itself and opencode.json. fix strips the self-entry (the file surfaces
-// untracked and lands in git with the next commit) and reports opencode.json's
-// line for the person — the visibility of a file that holds person settings
-// is a person act, and a person who must keep it local owns their own line.
-export const RETIRED_ENTRIES = ["/.gitignore", "/opencode.json"]
+// itself. fix strips the self-entry (the file surfaces untracked and lands
+// in git with the next commit). The /opencode.json entry retired from this
+// family by plans/0296 — the file is the person's, and the tool takes no
+// posture on lines about it.
+export const RETIRED_ENTRIES = ["/.gitignore"]
 
 // Line-normalized equivalence: a leading / and a trailing / are both
 // disregarded (`/tmp`, `tmp/`, `tmp` are equivalent).
@@ -113,14 +105,10 @@ export async function ensureGitignore(directory: string, opts: { dryRun?: boolea
   return (await appendEntries(directory, ENTRIES, opts)).length > 0
 }
 
-// fix's rule for a project initialized before init wrote MODELS_ENTRY: append
-// that one entry (the other local-only entries are the person's to keep or
-// drop). Same equivalence and git criterion as ensureGitignore; returns whether
-// it appended (dryRun: whether it would).
-// AUTO-RESOLVE: does fix skip a .gitignore whose broader pattern (such as /.opencode/) already ignores the project layer? -> no, the rule looks for an equivalent line, as init does, not for git's verdict (such a file gets one redundant line, and the .gitignore then holds exactly the entry init writes and reset removes)
-export async function ensureModelsGitignore(directory: string, opts: { dryRun?: boolean } = {}): Promise<boolean> {
-  return (await appendEntries(directory, [MODELS_ENTRY], opts)).length > 0
-}
+// fix's rule for a project initialized before init wrote MODELS_ENTRY is gone
+// (plans/0296): the model registry's project layer is not the tool's surface,
+// so fix appends no entry for it — an operator who keeps one owns their own
+// line.
 
 // fix's rule for the nested repositories in the tree (plans/0138): init
 // stamps the set at init time, and a repository that appears later (or a
@@ -132,9 +120,7 @@ export async function ensureNestedGitignore(directory: string, opts: { dryRun?: 
 }
 
 // Which of the retired entries (RETIRED_ENTRIES) the .gitignore still holds,
-// line-normalized — fix's findings read this; the two entries take different
-// classes there (the self-entry is the tool's own surface to keep true, the
-// opencode.json line a visibility decision that belongs to the person).
+// line-normalized — fix's findings read this.
 export async function retiredGitignoreEntries(directory: string): Promise<string[]> {
   const existing = await Bun.file(join(directory, ".gitignore")).text().catch(() => undefined)
   if (existing === undefined) return []
@@ -187,8 +173,8 @@ async function stripEntries(
 // entry init wrote (the workdir, the local-only entries and the currently
 // present nested repository entries); the user's own entries are kept as they
 // are — including, on a project initialized before plans/0138, the retired
-// /.gitignore and /opencode.json lines: fix owns their retirement, and what
-// reset leaves behind is the person's.
+// /.gitignore line: fix owns its retirement, and what reset leaves behind is
+// the person's.
 export async function removeGitignoreEntries(
   directory: string,
   opts: { dryRun?: boolean } = {},

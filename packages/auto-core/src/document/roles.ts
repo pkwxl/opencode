@@ -142,13 +142,15 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
 // longer a role of its own. The project brief .opencode/auto/brief.md joined
 // with plans/0081 D6c/D11: the driver alone writes it (the init/amend seed,
 // the survey gate's install of the approved section, D15.2) — a person edits
-// it through those commands, never by hand mid-run.
-const DRIVER_STATE_PATHS = ["opencode.json", ".opencode/auto/config.json", ".opencode/auto/brief.md"]
+// it through those commands, never by hand mid-run. The host's own
+// opencode.json left the set with plans/0296 — the tool takes no posture on
+// the person's host configuration.
+const DRIVER_STATE_PATHS = [".opencode/auto/config.json", ".opencode/auto/brief.md"]
 
 // Read-only during a run (protect.ts, which adds the contract surface
 // AGENTS.md). Every entry must classify as driverState — asserted by
 // test/document-roles.test.ts.
-export const PROTECTED_FILES = ["opencode.json", ".opencode/auto/config.json", ".opencode/auto/brief.md"] as const
+export const PROTECTED_FILES = [".opencode/auto/config.json", ".opencode/auto/brief.md"] as const
 
 // The session handoff family by file name, under the task family's own
 // directories alone (ruling 0228 D1, enacting 0165-041): the task-level

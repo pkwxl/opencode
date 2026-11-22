@@ -98,7 +98,6 @@ describe("doccheck pure functions (non-trivial + last-line terminator)", () => {
 
   test("eofScanExempt: driver state files / the phase index / .auto/ / the handover document family are exempt; ordinary documents are not", () => {
     for (const rel of [
-      "opencode.json",
       "docs/R-01/phases.md",
       ".auto/state.md",
       "docs/T-001/handoff.md",
@@ -109,7 +108,8 @@ describe("doccheck pure functions (non-trivial + last-line terminator)", () => {
       expect(eofScanExempt(rel), rel).toBe(true)
     }
     // Retired layouts carry no exemption any more (M3.7): PLAN.md and the old flat handoff names are plain files.
-    for (const rel of ["docs/T-001/report.md", "docs/T-001/S01/record.md", "README.md", "docs/notes.md", "PLAN.md", "docs/T-001.testhandoff.md"]) {
+    // The host's own opencode.json left the driver-state set with plans/0296: a plain file.
+    for (const rel of ["docs/T-001/report.md", "docs/T-001/S01/record.md", "README.md", "docs/notes.md", "PLAN.md", "docs/T-001.testhandoff.md", "opencode.json"]) {
       expect(eofScanExempt(rel), rel).toBe(false)
     }
   })

@@ -74,7 +74,7 @@ Phase: R-01.P01
 1. This session writes only new lines at the end of the task index docs/R-01/P01-implement/tasks.md and each new task's
    docs/T-NNN/todo.md — never done.md; never edit, reorder or renumber an existing index line, and never change an
    existing task's document; every other file, and every state file, is outside this session's write scope.
-2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in your host's permission configuration;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and once the current stage is finished, move straight on to the next one.
    A decision of your own must leave a record of how it was made: write the reasoning and the alternatives you considered (and rejected) into the

@@ -3,10 +3,11 @@
 // phase-state read, the mode check, the merge with the dropper semantics, the
 // intent pack-existence check, the read-only prefix guard, the prompt-library
 // load, init's git bootstrap and commit-identity prerequisite (0073), the
-// retired-key warnings, the overwrite gates, the config save, the
-// opencode.json and agent-contract writes, init's root-symlink
-// external-directory stamps (0122/0147), the AGENTS.md block sync, init's
-// gitignore set, and the closing lines. The shells own their input grammar
+// retired-key warnings, the overwrite gates, the config save, the AGENTS.md
+// block sync, init's gitignore set, and the closing lines. (The opencode.json
+// and agent-contract writes and the root-symlink stamps they carried are gone
+// — plans/0296: the host's configuration file is never the tool's.) The
+// shells own their input grammar
 // (argv flags / a JSON request body — value validation included), their
 // pre-checks' placement, their gate mechanics, their exit mapping and their
 // closing-line surfaces — everything else is this module, called with the
@@ -18,8 +19,7 @@
 import { join } from "node:path"
 import type { ParallelLevel, ProjectConfig, RetiredKey } from "./config"
 import { CONFIG_DEFAULTS, CONFIG_FILE, formatProjectConfig, loadOverwriteBaseline, loadProjectConfig, mergeProjectConfig, saveProjectConfig } from "./config"
-import { fixHint, renderAgentContract } from "./config-fix"
-import { applyExternalAllows, externalAllowsStatus } from "./external-dirs"
+import { fixHint } from "./config-fix"
 import { bootstrapRepository, commitIdentityProblem, writeLocalIdentity } from "./git"
 import { ensureInitGitignore } from "./gitignore"
 import { ensurePointer } from "./agents-block"
@@ -27,7 +27,6 @@ import { loadIntents } from "./intent/load"
 import type { IntentBundle } from "./bundle"
 import { materializeIntentBundle } from "./bundle"
 import { BRIEF_FILE, writeBrief } from "./brief"
-import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { loadModes } from "./mode"
 import { currentRound, plannedPhaseUnits, readPhases, type PhaseState } from "./phases"
 import { loadPhaseTypes } from "./phases/custom"
@@ -319,43 +318,6 @@ export async function runConfigSequence(input: ConfigOpInput): Promise<ProjectCo
   }
   line(`⚙ project config (${CONFIG_FILE}): ${formatProjectConfig(config)}`)
 
-  // opencode.json is init's alone (amend writes only what renders from the
-  // config) and may hold a person's edits: skipped whenever it exists. The
-  // agent contract renders through the core's one renderer — the same
-  // function runAll's integrity check compares against, so the write and the
-  // check cannot drift apart.
-  if (!amend) {
-    const target = join(dir, "opencode.json")
-    if (await Bun.file(target).exists()) line("already exists, skipped: opencode.json")
-    else {
-      await Bun.write(target, await Bun.file(templateConfig).text())
-      line("created: opencode.json")
-    }
-  }
-  const contract = await renderAgentContract(config.testByDriver)
-  const contractPath = join(dir, ".opencode", "agent", "auto.md")
-  const current = await Bun.file(contractPath).text().catch(() => undefined)
-  if (current === contract) line(`already exists, skipped: .opencode/agent/auto.md`)
-  else {
-    await Bun.write(contractPath, contract)
-    line(current === undefined ? `created: .opencode/agent/auto.md` : `replaced (differed from the template): .opencode/agent/auto.md`)
-  }
-
-  // The root-symlink read-only stamps (0122, the composite since 0147) —
-  // every shell's init: one additive insert of exactly the stamp entries,
-  // whether it just created opencode.json or found a person's file. No root
-  // symlinks writes nothing (the byte-identical floor); a file that cannot
-  // hold the entries is a warning here and a fix finding there.
-  if (!amend) {
-    const allows = await externalAllowsStatus(dir)
-    if (allows.status === "needs-stamp") {
-      await applyExternalAllows(dir)
-      line(`stamped: opencode.json the root-symlink read-only stamps (external_directory allow + edit deny) for ${[...new Set(allows.missing.map((key) => key.replace(/^edit:/, "")))].join(", ")}`)
-    } else if (allows.status === "malformed") {
-      line("⚠ opencode.json cannot hold the root-symlink external_directory allows (malformed or a flat action); fix reports the detail")
-    }
-  }
-
   // The brief revision channel (the CLI's amend --brief; a request grammar
   // has none): the text verbatim.
   if (input.briefSeed !== undefined) {
@@ -380,15 +342,14 @@ export async function runConfigSequence(input: ConfigOpInput): Promise<ProjectCo
   if (ensured.legacyRemoved) line(`cleaned: removed ${ensured.legacyRemoved} legacy/stray opencode-auto marker block(s) from AGENTS.md`)
 
   // Plain init writes the full ignore set in one pass; amend never touches
-  // it. The file itself and opencode.json are committed project surfaces
-  // (0138) — the closing line teaches the person to commit them with the
-  // rest, on every shell.
+  // it. The file itself is a committed project surface (0138) — the closing
+  // line teaches the person to commit it with the rest, on every shell.
   if (!amend) {
     const appended = await ensureInitGitignore(dir)
     if (appended.length)
       line(
         `updated: .gitignore now ignores ${appended.join(", ")} (driver workdir, local-only files and nested git repositories; ` +
-          "the file itself and opencode.json are committed project surfaces — commit them with the config layer)",
+          "the file itself is a committed project surface — commit it with the config layer)",
       )
   }
 

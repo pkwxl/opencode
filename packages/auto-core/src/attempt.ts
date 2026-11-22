@@ -48,7 +48,7 @@ import { forgetProgressOf, peekProgress, saveProgress } from "./resume"
 import type { Router } from "./router"
 import { routingOf, selectContext } from "./routing"
 import { services } from "./services"
-import { clientOf, contextLimitsOf, missingAgentHint, renameSession, zeroUsage } from "./session-api"
+import { clientOf, contextLimitsOf, renameSession, zeroUsage } from "./session-api"
 import { statsSessionBegin, statsSessionEnd } from "./stats"
 import { createStuckTracker } from "./stuck"
 import type { Switches } from "./switches"
@@ -522,7 +522,7 @@ export async function attempt(
         if (prior) await saveProgress(opts.dir, prior)
         else await forgetProgressOf(opts.dir, task.id)
       }
-      return { type: "blocked", question: `task dispatch failed: ${formatClientError(prompt.error)}${await missingAgentHint(opts)}` }
+      return { type: "blocked", question: `task dispatch failed: ${formatClientError(prompt.error)}` }
     }
 
     const result = await watching

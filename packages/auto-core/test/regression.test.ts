@@ -21,7 +21,7 @@ const lane: TestLane = { name: "verify-full", command: "bash test/verify_full.sh
 
 // A driver-shaped receipt on disk, the writeLaneReceipt fields verbatim.
 const receiptText = (heads: string, verdict: "green" | "red", end: string): string =>
-  ["# Lane verify-full", "", `Lane: verify-full`, `Heads: .=${heads}`, `Start: ${end}`, `End: ${end}`, `Verdict: ${verdict}`, `Log: /tmp/opencode/r1.log`, "", EOF_MARK, ""].join("\n")
+  ["# Lane verify-full", "", `Lane: verify-full`, `Heads: .=${heads}`, `Start: ${end}`, `End: ${end}`, `Verdict: ${verdict}`, `Log: /tmp/auto/r1.log`, "", EOF_MARK, ""].join("\n")
 
 const writeReceipt = (dir: string, seq: number, text: string) => {
   const rel = regressionReceiptDoc(1, seq, lane.name)

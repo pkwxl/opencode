@@ -242,12 +242,12 @@ describe("the questions concern (permission: the dryrun deny and the modes)", ()
     expect(fx.permissionReplies).toEqual([{ request: "p1", reply: "always" }])
   })
 
-  test("ask-fail denies, aborts and blocks with the opencode.json guidance", async () => {
+  test("ask-fail denies, aborts and blocks with the host-configuration guidance", async () => {
     const { drive, fx } = setup({ opts: { permission: "ask-fail" } })
     await expect(drive(ev.permission(SESSION, "p1", "bash", "rm -rf build"))).resolves.toEqual({
       settle: {
         kind: "blocked",
-        question: "permission request unanswered (--permission ask-fail): bash (rm -rf build). Allow it in the permission rules of the target directory's opencode.json, then re-run.",
+        question: "permission request unanswered (--permission ask-fail): bash (rm -rf build). Allow it in your host's permission configuration, then re-run.",
       },
     })
     expect(fx.calls).toEqual(["log", "replyPermission", "abort"])

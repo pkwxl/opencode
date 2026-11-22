@@ -213,7 +213,7 @@ export const questionsConcern: Concern<"questions"> = {
       return {
         settle: {
           kind: "blocked",
-          question: `permission request unanswered (--permission ask-fail): ${desc}. Allow it in the permission rules of the target directory's opencode.json, then re-run.`,
+          question: `permission request unanswered (--permission ask-fail): ${desc}. Allow it in your host's permission configuration, then re-run.`,
         },
       }
     }

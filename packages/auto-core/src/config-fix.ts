@@ -17,18 +17,12 @@
 //   - The artifact rules render from the config, so they run only when the
 //     config loads strictly once the key rules are applied; otherwise they are
 //     reported as skipped.
-//   - Files a person may have edited (opencode.json, brief.md) are only
-//     written when missing, as init does. Three exceptions: moving the retired
-//     source/destDir into brief.md (appends to its sections, recognizing its
-//     own already-landed block so the interrupted move never appends twice —
-//     plans/0215 D1); inserting
-//     the root-symlink external_directory allows into opencode.json
-//     (plans/0122 — additive, exactly those allow entries, the person's
-//     rules kept and always winning the evaluation tie); and inserting the
-//     working-directory knowledge boundary with the symlink targets'
-//     read-only edit denies (plans/0147 — additive, exactly the
-//     deny-`/**` + allow-`/tmp/**` pair and those deny entries, the
-//     person's later rules still winning).
+//   - Files a person may have edited (brief.md) are only written when missing,
+//     as init does. One exception: moving the retired source/destDir into
+//     brief.md (appends to its sections, recognizing its own already-landed
+//     block so the interrupted move never appends twice — plans/0215 D1).
+//     The host's own configuration file (opencode.json) is no fix surface at
+//     all (plans/0296): never written, never read, never judged here.
 // validateProjectConfig stays strict: run, status and amend name `fix`
 // in a strict failure when a key rule applies (fixHint); `fix --dryrun`
 // lists the same findings without writing.
@@ -48,35 +42,16 @@ import {
 } from "./config"
 import {
   ensureGitignore,
-  ensureModelsGitignore,
   ensureNestedGitignore,
-  MODELS_ENTRY,
   removeGitignoreEntry,
   retiredGitignoreEntries,
 } from "./gitignore"
 import { ANALYSIS_DOC, roundDirName } from "./docpaths"
-import { applyExternalAllows, applyKnowledgeBoundary, externalDirectoryEntries, knowledgeBoundaryMissing, missingExternalDirectoryAllows, missingReadOnlyEditDenies, OPENCODE_CONFIG_FILE, pathsOverlap, readOnlyEditEntriesFor, rootSymlinkRealPaths, staleExternalDirectoryAllows, stampExternalDirectories, stampReadOnlyEdits } from "./external-dirs"
-import { findWallCommit, wallDeclared } from "./wall"
 import { provenanceFindings } from "./provenance"
 import { currentRound } from "./phases"
 import { supersedingPhases } from "./roadmap"
-import { CONTRACT_AGENT } from "./opts"
 import { loadIntents } from "./intent/load"
 import { shellProfile } from "./shell"
-import { renderText } from "./template"
-import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
-import templateConfig from "../templates/opencode.json" with { type: "file" }
-
-const CONTRACT_FILE = join(".opencode", "agent", `${CONTRACT_AGENT}.md`)
-
-// The agent contract's rendered text: renders the built-in template in its two
-// testByDriver states. The shell's contract-maintenance write, fix's contract
-// rule and runAll's integrity check share this function, so the write and the
-// comparison cannot drift apart (the template contains {{#if}} conditional
-// blocks; comparing the raw text against the rendered file would never match).
-export async function renderAgentContract(testByDriver: boolean): Promise<string> {
-  return renderText(await Bun.file(templateAgent).text(), { testByDriver })
-}
 
 type FixFinding = {
   class: "fixable" | "manual" | "info"
@@ -136,7 +111,7 @@ async function planKeys(dir: string): Promise<KeyPlan> {
   if (retiredValue("commit", record.commit)) drop("commit", "commit: false is retired (unified commit is a completion condition)")
   if ("verify" in record) drop("verify", `verify: ${JSON.stringify(record.verify)} is retired (task-level acceptance was removed)`)
   if (retiredValue("agent", record.agent)) {
-    drop("agent", `agent "${record.agent}" is a retired agent contract name (the contract is always ${CONTRACT_FILE})`, "drop the key (the agent is opencode)")
+    drop("agent", `agent "${record.agent}" is a retired agent name`)
   }
   for (const [old, key] of RENAMED) {
     if (!(old in record)) continue
@@ -250,13 +225,6 @@ export async function planFix(dir: string): Promise<FixPlan> {
     writes.push({ path, apply })
   }
 
-  const contract = await renderAgentContract(config.testByDriver)
-  const current = await Bun.file(join(dir, CONTRACT_FILE)).text().catch(() => undefined)
-  if (current === undefined) fixable(CONTRACT_FILE, "missing", "write it from the template", () => Bun.write(join(dir, CONTRACT_FILE), contract))
-  else if (current !== contract) {
-    fixable(CONTRACT_FILE, `differs from the template rendered for testByDriver = ${config.testByDriver}`, "rewrite it from the template", () => Bun.write(join(dir, CONTRACT_FILE), contract))
-  }
-
   // The block embeds intent-pack text, so it renders against the project's packs.
   let packs: string | undefined
   try {
@@ -278,11 +246,6 @@ export async function planFix(dir: string): Promise<FixPlan> {
   }
 
   if (await ensureGitignore(dir, { dryRun: true })) fixable(".gitignore", "lacks the tmp/ or .auto/ entry", "append the missing entries", () => ensureGitignore(dir))
-  // A project initialized before init ignored the model registry's project
-  // layer (plans/0055 §4.1): preflight refuses an unignored one and names fix.
-  if (await ensureModelsGitignore(dir, { dryRun: true })) {
-    fixable(".gitignore", `lacks the ${MODELS_ENTRY} entry (the model registry's project layer is local-only)`, "append the entry", () => ensureModelsGitignore(dir))
-  }
   // The nested-repository entries (plans/0138): init stamps the set at init
   // time; a repository that appears later (or a pre-0138 clone whose partial
   // .gitignore never carried them) would be absorbed by the parent's unified
@@ -291,101 +254,17 @@ export async function planFix(dir: string): Promise<FixPlan> {
     fixable(".gitignore", "lacks an entry for a nested git repository in the tree", "append the entry (the parent's unified commit would otherwise absorb the repository as a gitlink)", () => ensureNestedGitignore(dir))
   }
   // The retired entries (plans/0138): pre-0138 init ignored the .gitignore
-  // itself and opencode.json, so neither ever reached git — every fresh clone
-  // lost the whole ignore set (the first run's housekeeping commit then
-  // tracking a partial file) and the person's opencode.json edits were
-  // unversioned. The self-entry is the tool's own surface: stripped here, the
-  // file surfaces untracked and lands in git with the next commit. The
-  // opencode.json line stays the person's pen act: the file holds person
-  // settings, and whoever must keep it local owns their own line and this
-  // finding.
+  // itself, so it never reached git — every fresh clone lost the whole ignore
+  // set (the first run's housekeeping commit then tracking a partial file).
+  // The self-entry is the tool's own surface: stripped here, the file
+  // surfaces untracked and lands in git with the next commit. (The
+  // /opencode.json entry left this family with plans/0296 — the file is the
+  // person's, and a line about it is theirs to own or drop.)
   const retired = await retiredGitignoreEntries(dir)
   if (retired.includes("/.gitignore")) {
     fixable(".gitignore", "holds the retired /.gitignore entry (the ignore set is a tracked project surface since plans/0138 — a self-ignored file never reached git, and every fresh clone lost the whole set)", "remove the entry (the file surfaces untracked and lands in git with the next commit)", () => removeGitignoreEntry(dir, "/.gitignore"))
   }
-  if (retired.includes("/opencode.json")) {
-    findings.push({
-      class: "manual",
-      path: ".gitignore",
-      problem: "holds the retired /opencode.json entry (opencode.json is a tracked project surface since plans/0138) — remove the line by hand to surface the file, or keep it and own it if the file must stay local",
-    })
-  }
 
-  // The template write carries the boundary (plans/0147) and the read-only
-  // symlink stamps (plans/0122 + 0147 D2), so one pass sets a fresh file up
-  // completely; the file itself stays the template byte-for-byte when no
-  // symlinks exist. The sealed wall's recorded targets (plans/0189 D3): the
-  // allow layer never stamps a real path under or over one — a reopened
-  // room stays shut (the edit-layer denies still stamp; defense-in-depth).
-  const wallTargets = wallDeclared(dir) ? ((await findWallCommit(dir))?.doors.map((door) => door.target) ?? []) : []
-  const stampableAllows = (realPaths: readonly string[]): readonly string[] =>
-    wallTargets.length ? realPaths.filter((real) => !wallTargets.some((target) => pathsOverlap(real, target))) : realPaths
-  const stampedTemplate = async () => {
-    const text = await Bun.file(templateConfig).text()
-    const realPaths = await rootSymlinkRealPaths(dir)
-    let next = stampExternalDirectories(text, externalDirectoryEntries(stampableAllows(realPaths)))
-    if (next !== undefined) next = stampReadOnlyEdits(next, await readOnlyEditEntriesFor(dir))
-    return next ?? text
-  }
-  if (!(await Bun.file(join(dir, OPENCODE_CONFIG_FILE)).exists())) {
-    fixable(OPENCODE_CONFIG_FILE, "missing", "write the template", async () => Bun.write(join(dir, OPENCODE_CONFIG_FILE), await stampedTemplate()))
-  } else {
-    const text = await Bun.file(join(dir, OPENCODE_CONFIG_FILE)).text()
-    // The working-directory knowledge boundary (plans/0147 D1): standing
-    // projects keep the pre-boundary bytes; missing boundary keys are fixable
-    // (the person widens by appending later keys, which win the tie), a file
-    // that cannot hold per-pattern entries is manual.
-    const boundaryMissing = knowledgeBoundaryMissing(text)
-    if (boundaryMissing === undefined) {
-      findings.push({
-        class: "manual",
-        path: OPENCODE_CONFIG_FILE,
-        problem: "the permission.external_directory section cannot hold the working-directory knowledge boundary (malformed file or a flat action) — add it by hand",
-      })
-    } else if (boundaryMissing) {
-      fixable(OPENCODE_CONFIG_FILE, "permission.external_directory lacks the working-directory knowledge boundary (default-deny outside the working directory, /tmp excepted)", "insert the knowledge boundary (deny /** , allow /tmp/**)", () => applyKnowledgeBoundary(dir))
-    }
-    // The root-symlink read-only composite (plans/0122, the write side since
-    // 0147 D2 in every ask form since plans/0188 D3): missing entries in
-    // either layer are fixable (the write re-derives from disk at apply
-    // time — idempotent); a stale allow or a file that cannot hold
-    // per-pattern entries is manual (never guess, never delete person
-    // content). A root symlink resolving under or over a recorded wall
-    // target is a reopen (plans/0189 D3): its allow is never stamped — it
-    // would land after the boundary's catch-all deny and beat the wall's
-    // front deny under last-match-wins, re-opening the room through a new
-    // door — and the manual finding names the reopen instead.
-    const realPaths = await rootSymlinkRealPaths(dir)
-    const stampable = stampableAllows(realPaths)
-    for (const reopened of realPaths.filter((real) => !stampable.includes(real))) {
-      findings.push({
-        class: "manual",
-        path: OPENCODE_CONFIG_FILE,
-        problem: `a root symlink resolves to ${reopened}, under (or over) the sealed reference wall's recorded target — a reopen the wall's boundary checks block; remove the symlink (fix does not stamp allows past a sealed wall)`,
-      })
-    }
-    if (realPaths.length) {
-      const missing = missingExternalDirectoryAllows(text, externalDirectoryEntries(stampable))
-      const editMissing = missingReadOnlyEditDenies(text, await readOnlyEditEntriesFor(dir))
-      if (missing === undefined || editMissing === undefined) {
-        findings.push({
-          class: "manual",
-          path: OPENCODE_CONFIG_FILE,
-          problem: "the permission.external_directory or permission.edit section cannot hold the root-symlink read-only stamps (malformed file or a flat action) — add them by hand",
-        })
-      } else if (missing.length || editMissing.length) {
-        const named = [...missing, ...editMissing.map((key) => `edit ${key}`)]
-        fixable(OPENCODE_CONFIG_FILE, `the root-symlink stamps are incomplete (${named.join(", ")})`, "insert the root-symlink allow(s) and their read-only edit deny(s)", () => applyExternalAllows(dir, wallTargets))
-      }
-      for (const key of (await staleExternalDirectoryAllows(text, realPaths)) ?? []) {
-        findings.push({
-          class: "manual",
-          path: OPENCODE_CONFIG_FILE,
-          problem: `permission.external_directory allows ${key} but that path does not exist (the symlink or its target is gone) — remove the entry if the reference moved`,
-        })
-      }
-    }
-  }
   // The bundle provenance findings (plans/0100 D3): manual only — a charter
   // change is not meaning-preserving, so the class stays out of the fixable
   // set by the rule table's own contract, and `sync` owns the write side.
@@ -436,7 +315,7 @@ export function formatFixPlan(plan: FixPlan): string {
     finding.class === "fixable"
       ? `  fix: ${finding.path}: ${finding.problem} → ${finding.change}`
       : `  ${finding.class}: ${finding.path}: ${finding.problem}`
-  return [...plan.findings.map(line), ...(plan.skipped ? [`  skipped: the agent contract, AGENTS.md block, .gitignore, opencode.json and brief checks (${plan.skipped})`] : [])].join("\n")
+  return [...plan.findings.map(line), ...(plan.skipped ? [`  skipped: the AGENTS.md block and .gitignore checks (${plan.skipped})`] : [])].join("\n")
 }
 
 // The hint a strict config failure ends with when a key rule would repair it

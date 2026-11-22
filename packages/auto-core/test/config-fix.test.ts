@@ -1,13 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, relative } from "node:path"
-import templateConfig from "../templates/opencode.json" with { type: "file" }
+import { join } from "node:path"
 import { ensurePointer } from "../src/agents-block"
 import { appendToSection, briefProposal, projectBriefText } from "../src/brief"
 import { CONFIG_DEFAULTS, loadProjectConfig, saveConfigRecord } from "../src/config"
-import { applyFix, fixHint, formatFixPlan, planFix, renderAgentContract, type FixPlan } from "../src/config-fix"
-import { freshRepo, git } from "./fixtures/runner"
+import { applyFix, fixHint, formatFixPlan, planFix, type FixPlan } from "../src/config-fix"
+
 
 const CONFIG = ".opencode/auto/config.json"
 const BRIEF = ".opencode/auto/brief.md"
@@ -17,8 +16,6 @@ const BRIEF = ".opencode/auto/brief.md"
 // --brief's, the fixture writes one only where a test needs it.
 async function seedInit(dir: string, record: object = CONFIG_DEFAULTS) {
   await saveConfigRecord(dir, record)
-  await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
-  await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
   await ensurePointer(dir)
 }
 
@@ -171,7 +168,7 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     const text = formatFixPlan(plan)
     expect(text).toContain("  fix: .opencode/auto/config.json: commit: false is retired (unified commit is a completion condition) → drop the key")
     expect(text).toContain("verify: false is retired")
-    expect(text).toContain('agent "build" is a retired agent contract name')
+    expect(text).toContain('agent "build" is a retired agent name')
     expect(text).toContain("verifyIdle was renamed to idleTime → rename it to idleTime")
     expect(text).toContain("verifyMax was renamed to idleMax, which is also set → drop the key")
     expect(text).toContain("source is retired (the migration source and target are intent, not configuration) → move its value into .opencode/auto/brief.md under ## Source, then drop the key")
@@ -284,15 +281,13 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
 
   test("manual findings are reported only, and the artifact rules are skipped", async () => {
     await seedInit(dir, { commit: false, handoverTest: true })
-    await rm(join(dir, ".opencode/agent/auto.md"))
     const plan = await planFix(dir)
     expect(fixable(plan).map((finding) => finding.problem)).toEqual(["commit: false is retired (unified commit is a completion condition)"])
     expect(manual(plan)).toEqual([{ class: "manual", path: CONFIG, problem: "handoverTest requires testByDriver: true" }])
     expect(plan.skipped).toBe(".opencode/auto/config.json does not load")
-    expect(formatFixPlan(plan)).toContain("  skipped: the agent contract, AGENTS.md block, .gitignore, opencode.json and brief checks (.opencode/auto/config.json does not load)")
+    expect(formatFixPlan(plan)).toContain("  skipped: the AGENTS.md block and .gitignore checks (.opencode/auto/config.json does not load)")
     await applyFix(plan)
     expect(await readConfig(dir)).not.toHaveProperty("commit")
-    expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
   })
 
   test("invalid JSON is manual; nothing is written", async () => {
@@ -306,159 +301,18 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
 
   test("artifact rules: missing or stale artifacts are rewritten; the brief is never written (plans/0081 D11)", async () => {
     await seedInit(dir, { ...CONFIG_DEFAULTS, testByDriver: true })
-    await rm(join(dir, "opencode.json"))
     await rm(join(dir, BRIEF), { force: true })
     const agents = await Bun.file(join(dir, "AGENTS.md")).text()
     await writeFile(join(dir, "AGENTS.md"), `${agents}\n<!-- opencode-auto:old:start -->\nstale\n<!-- opencode-auto:old:end -->\n`)
     const plan = await planFix(dir)
     expect(plan.findings.map((finding) => `${finding.path}: ${finding.problem}`)).toEqual([
-      ".opencode/agent/auto.md: differs from the template rendered for testByDriver = true",
       "AGENTS.md: the opencode-auto block differs from the current config render; 1 legacy/stray opencode-auto marker block(s)",
-      "opencode.json: missing",
     ])
     await applyFix(plan)
-    expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).text()).toBe(await renderAgentContract(true))
     expect(await Bun.file(join(dir, "AGENTS.md")).text()).not.toContain("opencode-auto:old")
     // A missing brief is no finding and no write: seed it with init/amend --brief.
     expect(await Bun.file(join(dir, BRIEF)).exists()).toBe(false)
     expect((await planFix(dir)).findings).toEqual([])
-    // A person's opencode.json is never overridden — but since plans/0147 it
-    // is compared for the knowledge boundary: a file lacking the deny/`/tmp`
-    // pair gains one fixable finding (the additive insert; every person key
-    // kept and still winning the tie). With the boundary present, no finding.
-    await writeFile(join(dir, "opencode.json"), '{"model":"mine"}\n')
-    const personPlan = await planFix(dir)
-    expect(fixable(personPlan)).toEqual([
-      {
-        class: "fixable",
-        path: "opencode.json",
-        problem: "permission.external_directory lacks the working-directory knowledge boundary (default-deny outside the working directory, /tmp excepted)",
-        change: "insert the knowledge boundary (deny /** , allow /tmp/**)",
-      },
-    ])
-    await applyFix(personPlan)
-    expect((await planFix(dir)).findings).toEqual([])
-    expect((JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any).model).toBe("mine")
-  })
-
-  // plans/0122: the root-symlink external_directory allows — the template
-  // write carries the stamp, an existing file gains the entries additively,
-  // and stale or unshapeable files are report-only.
-  test("a root symlink's allow is stamped into a missing opencode.json; without symlinks the template stays byte-identical", async () => {
-    await seedInit(dir)
-    await rm(join(dir, "opencode.json"))
-    const plan = await planFix(dir)
-    await applyFix(plan)
-    expect(await Bun.file(join(dir, "opencode.json")).text()).toBe(await Bun.file(templateConfig).text())
-
-    const corpus = await mkdtemp(join(tmpdir(), "auto-fix-corpus-"))
-    await symlink(corpus, join(dir, "linux"))
-    try {
-      await rm(join(dir, "opencode.json"))
-      const stamped = await planFix(dir)
-      expect(fixable(stamped).map((finding) => `${finding.path}: ${finding.problem}`)).toEqual(["opencode.json: missing"])
-      await applyFix(stamped)
-      const written = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      // The template's boundary (plans/0147) beneath the symlink's read-only
-      // composite: the deny first, the corpus allow after it (it must win
-      // the tie), /tmp excepted, the edit layer closing the write side in
-      // every form the live tools ask (plans/0188 D3: the target, its
-      // worktree-relative form, the door name).
-      const rel = relative(dir, corpus).replaceAll("\\", "/")
-      expect(written.permission.external_directory).toEqual({ "/**": "deny", [`${corpus}/**`]: "allow", "/tmp/**": "allow" })
-      expect(written.permission.edit).toEqual({ "*": "allow", [`${corpus}/**`]: "deny", [`${rel}/**`]: "deny", "linux/**": "deny" })
-      expect((await planFix(dir)).findings).toEqual([])
-    } finally {
-      await rm(corpus, { recursive: true, force: true })
-    }
-  })
-
-  test("an existing opencode.json gains the allow additively; person keys and actions are never overridden", async () => {
-    await seedInit(dir)
-    const corpus = await mkdtemp(join(tmpdir(), "auto-fix-corpus-"))
-    await symlink(corpus, join(dir, "linux"))
-    await writeFile(
-      join(dir, "opencode.json"),
-      JSON.stringify({ model: "mine", permission: { read: "allow", external_directory: { "/person/**": "deny" } } }, null, 2) + "\n",
-    )
-    try {
-      const rel = relative(dir, corpus).replaceAll("\\", "/")
-      const plan = await planFix(dir)
-      expect(fixable(plan)).toEqual([
-        {
-          class: "fixable",
-          path: "opencode.json",
-          problem: "permission.external_directory lacks the working-directory knowledge boundary (default-deny outside the working directory, /tmp excepted)",
-          change: "insert the knowledge boundary (deny /** , allow /tmp/**)",
-        },
-        {
-          class: "fixable",
-          path: "opencode.json",
-          problem: `the root-symlink stamps are incomplete (${corpus}/**, edit ${corpus}/**, edit ${rel}/**, edit linux/**)`,
-          change: "insert the root-symlink allow(s) and their read-only edit deny(s)",
-        },
-      ])
-      await applyFix(plan)
-      const written = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      // The boundary's deny first, the corpus allow after it (winning the
-      // tie), the person's own key last (still winning its ties).
-      expect(Object.keys(written.permission.external_directory)).toEqual(["/**", `${corpus}/**`, "/tmp/**", "/person/**"])
-      expect(written.permission.external_directory["/person/**"]).toBe("deny")
-      expect(written.permission.edit).toEqual({ "*": "ask", [`${corpus}/**`]: "deny", [`${rel}/**`]: "deny", "linux/**": "deny" })
-      expect(written.model).toBe("mine")
-      expect((await planFix(dir)).findings).toEqual([])
-      // A person-owned entry on any of the deny keys reads as present: no
-      // finding — with the boundary beside it, the file is clean.
-      await writeFile(
-        join(dir, "opencode.json"),
-        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "deny" }, edit: { "*": "allow", [`${corpus}/**`]: "ask", [`${rel}/**`]: "ask", "linux/**": "ask" } } }, null, 2) + "\n",
-      )
-      expect((await planFix(dir)).findings).toEqual([])
-    } finally {
-      await rm(corpus, { recursive: true, force: true })
-    }
-  })
-
-  test("a stale allow and an unshapeable file are manual findings, never writes", async () => {
-    await seedInit(dir)
-    const corpus = await mkdtemp(join(tmpdir(), "auto-fix-corpus-"))
-    await symlink(corpus, join(dir, "linux"))
-    try {
-      const rel = relative(dir, corpus).replaceAll("\\", "/")
-      await writeFile(
-        join(dir, "opencode.json"),
-        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "allow", "/gone/**": "allow" }, edit: { "*": "allow", [`${corpus}/**`]: "deny", [`${rel}/**`]: "deny", "linux/**": "deny" } } }, null, 2) + "\n",
-      )
-      const stale = await planFix(dir)
-      expect(manual(stale)).toEqual([
-        {
-          class: "manual",
-          path: "opencode.json",
-          problem: "permission.external_directory allows /gone/** but that path does not exist (the symlink or its target is gone) — remove the entry if the reference moved",
-        },
-      ])
-      expect(stale.writes).toEqual([])
-
-      await writeFile(join(dir, "opencode.json"), "not json")
-      const malformed = await planFix(dir)
-      // A malformed file reports both stamp families' manual findings — the
-      // boundary's and the symlink composite's — never a guess of a write.
-      expect(manual(malformed)).toEqual([
-        {
-          class: "manual",
-          path: "opencode.json",
-          problem: "the permission.external_directory section cannot hold the working-directory knowledge boundary (malformed file or a flat action) — add it by hand",
-        },
-        {
-          class: "manual",
-          path: "opencode.json",
-          problem: "the permission.external_directory or permission.edit section cannot hold the root-symlink read-only stamps (malformed file or a flat action) — add them by hand",
-        },
-      ])
-      expect(malformed.writes).toEqual([])
-    } finally {
-      await rm(corpus, { recursive: true, force: true })
-    }
   })
 
   test("inside git, a .gitignore without the driver entries is fixable", async () => {
@@ -467,22 +321,16 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     const plan = await planFix(dir)
     expect(plan.findings).toEqual([
       { class: "fixable", path: ".gitignore", problem: "lacks the tmp/ or .auto/ entry", change: "append the missing entries" },
-      {
-        class: "fixable",
-        path: ".gitignore",
-        problem: "lacks the /.opencode/auto/models.json entry (the model registry's project layer is local-only)",
-        change: "append the entry",
-      },
     ])
     await applyFix(plan)
-    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n/.opencode/auto/models.json\n")
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n")
   })
 
-  // plans/0055 §4.1 (the models entry) under plans/0138's retirement rules:
-  // a pre-0138 .gitignore also holds the retired /.gitignore and /opencode.json
-  // lines — the self-entry is stripped by rule, the opencode.json line is the
-  // person's visibility call and stays a manual finding until they act.
-  test("an older init's .gitignore: fix appends the models entry, strips the retired self-entry, and reports the /opencode.json line", async () => {
+  // plans/0138's retirement rules under plans/0296: a pre-0138 .gitignore
+  // holds the retired /.gitignore line — stripped by rule. A /opencode.json
+  // line is the person's own now (the tool takes no posture on the host's
+  // file), kept verbatim like any other person line, never a finding.
+  test("an older init's .gitignore: fix strips the retired self-entry; the /opencode.json line is the person's own, no finding", async () => {
     await seedInit(dir, { ...CONFIG_DEFAULTS, contextLimit: 128, custom: "kept" })
     expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
     const older = "node_modules/\ntmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n"
@@ -490,21 +338,13 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     const config = await Bun.file(join(dir, CONFIG)).text()
     const plan = await planFix(dir)
     expect(formatFixPlan(plan)).toBe(
-      "  fix: .gitignore: lacks the /.opencode/auto/models.json entry (the model registry's project layer is local-only) → append the entry\n" +
-        "  fix: .gitignore: holds the retired /.gitignore entry (the ignore set is a tracked project surface since plans/0138 — a self-ignored file never reached git, and every fresh clone lost the whole set) → remove the entry (the file surfaces untracked and lands in git with the next commit)\n" +
-        "  manual: .gitignore: holds the retired /opencode.json entry (opencode.json is a tracked project surface since plans/0138) — remove the line by hand to surface the file, or keep it and own it if the file must stay local",
+      "  fix: .gitignore: holds the retired /.gitignore entry (the ignore set is a tracked project surface since plans/0138 — a self-ignored file never reached git, and every fresh clone lost the whole set) → remove the entry (the file surfaces untracked and lands in git with the next commit)",
     )
-    expect(plan.writes.map((write) => write.path)).toEqual([".gitignore", ".gitignore"])
+    expect(plan.writes.map((write) => write.path)).toEqual([".gitignore"])
     expect(await Bun.file(join(dir, ".gitignore")).text()).toBe(older)
     await applyFix(plan)
-    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules/\ntmp/\n.auto/\n/.env\n/AGENTS.md\n/opencode.json\n/.opencode/auto/models.json\n")
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules/\ntmp/\n.auto/\n/.env\n/AGENTS.md\n/opencode.json\n")
     expect(await Bun.file(join(dir, CONFIG)).text()).toBe(config)
-    // The manual /opencode.json finding persists until the person removes the
-    // line; with it gone by hand the plan is clean.
-    expect((await planFix(dir)).findings.map((finding) => `${finding.class}: ${finding.problem}`)).toEqual([
-      "manual: holds the retired /opencode.json entry (opencode.json is a tracked project surface since plans/0138) — remove the line by hand to surface the file, or keep it and own it if the file must stay local",
-    ])
-    await writeFile(join(dir, ".gitignore"), "node_modules/\ntmp/\n.auto/\n/.env\n/AGENTS.md\n/.opencode/auto/models.json\n")
     expect((await planFix(dir)).findings).toEqual([])
   })
 
@@ -516,21 +356,19 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
     await mkdir(join(dir, "vendor"))
     await Bun.spawn(["git", "-C", join(dir, "vendor"), "init", "-q"])
-    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.env\n/AGENTS.md\n/.opencode/auto/models.json\n")
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.env\n/AGENTS.md\n")
     const plan = await planFix(dir)
     expect(formatFixPlan(plan)).toBe("  fix: .gitignore: lacks an entry for a nested git repository in the tree → append the entry (the parent's unified commit would otherwise absorb the repository as a gitlink)")
     await applyFix(plan)
-    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n/.env\n/AGENTS.md\n/.opencode/auto/models.json\n/vendor/\n")
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n/.env\n/AGENTS.md\n/vendor/\n")
     expect((await planFix(dir)).findings).toEqual([])
   })
 
   test("planFix writes nothing", async () => {
     await seedInit(dir, { commit: false })
-    await rm(join(dir, ".opencode/agent/auto.md"))
     const before = await Bun.file(join(dir, CONFIG)).text()
     await planFix(dir)
     expect(await Bun.file(join(dir, CONFIG)).text()).toBe(before)
-    expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
   })
 
   test("fixHint names fix only when a key rule applies", async () => {
@@ -540,68 +378,5 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     expect(await fixHint(dir)).toBe(`fix: opencode-auto fix ${dir}`)
     await saveConfigRecord(dir, { ...CONFIG_DEFAULTS, contextLimit: 0 })
     expect(await fixHint(dir)).toBeUndefined()
-  })
-})
-
-// —— The sealed wall's stamp skip (plans/0189 D3, 0165-038c) ——
-//
-// A root symlink resolving under (or over) a recorded wall target is a
-// reopen: fix never stamps the external_directory allow that would beat the
-// wall's front deny under last-match-wins — the manual finding names the
-// reopen, and the edit-layer denies still stamp (defense-in-depth). Over a
-// real git repository: the wall commit's record is what fix reads.
-
-describe("fix's root-symlink stamps past a sealed wall (plans/0189 D3)", () => {
-  test("a corpus-subtree door reports the reopen and stamps no allow; the wall-less floor still stamps it", async () => {
-    const dir = await freshRepo()
-    const corpus = await mkdtemp(join(tmpdir(), "auto-fix-wall-corpus-"))
-    try {
-      await mkdir(join(corpus, "sub"), { recursive: true })
-      await Bun.write(join(dir, ".gitignore"), ".auto/\ntmp/\nopencode.json\n")
-      await mkdir(join(dir, ".opencode/auto/phases"), { recursive: true })
-      await Bun.write(
-        join(dir, ".opencode/auto/phases/spec-read.md"),
-        ["# Spec read", "", "Wall: seal linux", "", "## plan duties", "", "Read the reference.", "", "<!-- auto: eof -->", ""].join("\n"),
-      )
-      await seedInit(dir)
-      // The wall's record: a hand-crafted wall commit (the record grammar
-      // is the contract) and the sealed config it leaves behind.
-      await git(dir, "add", "-A")
-      await git(dir, "commit", "-qm", "the spec room, door standing")
-      await git(dir, "commit", "--allow-empty", "-qm", "PLAN wall close Spec read", "-m", "Auto-Stage: wall", "-m", `Wall-door: linux -> ${corpus}`)
-      await Bun.write(
-        join(dir, "opencode.json"),
-        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow", [`${corpus}/**`]: "deny" } } }, null, 2) + "\n",
-      )
-      // The reopen: a new door into the sealed corpus's subtree.
-      await symlink(join(corpus, "sub"), join(dir, "ref"))
-      const sealed = await planFix(dir)
-      expect(manual(sealed).map((finding) => finding.problem)).toContain(
-        `a root symlink resolves to ${join(corpus, "sub")}, under (or over) the sealed reference wall's recorded target — a reopen the wall's boundary checks block; remove the symlink (fix does not stamp allows past a sealed wall)`,
-      )
-      // The allow is never listed as missing; the edit-layer denies still are.
-      const incomplete = fixable(sealed).map((finding) => finding.problem).join("\n")
-      expect(incomplete).not.toContain(`(${join(corpus, "sub")}/**,`)
-      expect(incomplete).toContain(`edit ${join(corpus, "sub")}/**`)
-      await applyFix(sealed)
-      const written = JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any
-      expect(written.permission.external_directory[join(corpus, "sub") + "/**"]).toBeUndefined()
-      expect(written.permission.edit[join(corpus, "sub") + "/**"]).toBe("deny")
-
-      // The wall-less floor: a project that declares no wall (the type file
-      // gone) stamps the same door's allow exactly as before (P10).
-      await rm(join(dir, ".opencode/auto/phases/spec-read.md"))
-      await Bun.write(
-        join(dir, "opencode.json"),
-        JSON.stringify({ permission: { external_directory: { "/**": "deny", "/tmp/**": "allow" } } }, null, 2) + "\n",
-      )
-      const floor = await planFix(dir)
-      expect(fixable(floor).map((finding) => finding.problem).join("\n")).toContain(`(${join(corpus, "sub")}/**,`)
-      await applyFix(floor)
-      expect((JSON.parse(await Bun.file(join(dir, "opencode.json")).text()) as any).permission.external_directory[join(corpus, "sub") + "/**"]).toBe("allow")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-      await rm(corpus, { recursive: true, force: true })
-    }
   })
 })

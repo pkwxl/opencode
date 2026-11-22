@@ -21,7 +21,9 @@ describe("roleOf", () => {
     ["CURRENT.md", "freeform"],
     [".auto/progress.json", "driverState"],
     [".auto", "driverState"],
-    ["opencode.json", "driverState"],
+    // The host's own configuration file: the person's, never a tool surface
+    // (plans/0296) — an ordinary freeform file to the roles scan.
+    ["opencode.json", "freeform"],
     [".opencode/auto/config.json", "driverState"],
     ["docs/R-01/phases.md", "ledger"], // phase index
     ["docs/T-001/handoff.md", "handoff"],
@@ -120,10 +122,10 @@ describe("roleOf", () => {
 
 describe("role-derived policies", () => {
   test("eofScanExempt follows the role policy", () => {
-    for (const rel of ["opencode.json", ".auto/x.md", "docs/R-01/phases.md", "docs/R-01/P03-implement/handover.md", "docs/R-01/P05-acceptance/acceptance.md", "docs/R-01/P03-implement/plan-input.md"]) {
+    for (const rel of [".auto/x.md", "docs/R-01/phases.md", "docs/R-01/P03-implement/handover.md", "docs/R-01/P05-acceptance/acceptance.md", "docs/R-01/P03-implement/plan-input.md"]) {
       expect(eofScanExempt(rel), rel).toBe(true)
     }
-    for (const rel of ["docs/T-001/S01/todo.md", "docs/T-001/report.md", "README.md"]) {
+    for (const rel of ["docs/T-001/S01/todo.md", "docs/T-001/report.md", "README.md", "opencode.json"]) {
       expect(eofScanExempt(rel), rel).toBe(false)
     }
     // The lane receipts carry the eof terminator (plans/0096 D4): no

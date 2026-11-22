@@ -17,7 +17,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentError, AgentEvent, AgentHost, AgentRetryPolicy } from "../src/agent/types"
 import { renderConstitutionPreamble } from "../src/agents-block"
-import { renderAgentContract } from "../src/config-fix"
 import { preflight } from "../src/loop-preflight"
 import { unprotect } from "../src/protect"
 import { attempt } from "../src/attempt"
@@ -4075,10 +4074,7 @@ describe("doc lanes (plans/0099 stage C: the loop)", () => {
       { id: "T-001", touches: ["docs/T-001/"] },
       { id: "T-002", touches: ["docs/T-002/"] },
     ])
-    // What preflight needs beyond the fixture: the agent contract (the run's
-    // own integrity check), and the killed run's leftovers.
-    await mkdir(join(repo, ".opencode", "agent"), { recursive: true })
-    await Bun.write(join(repo, ".opencode", "agent", "auto.md"), await renderAgentContract(false))
+    // What preflight needs beyond the fixture: the killed run's leftovers.
     await Bun.write(join(repo, ".auto", "units.json"), `${JSON.stringify({ tasks: { "T-001": { status: "in_progress" }, "T-002": { status: "in_progress" } } }, null, 2)}\n`)
     await Bun.write(join(repo, "docs", "T-001", "notes.md"), "half-written by the killed run\n")
     await Bun.write(join(repo, "docs", "T-002", "notes.md"), "half-written by the killed run\n")

@@ -10,7 +10,6 @@
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { renderAgentContract } from "../src/config-fix"
 import { renderDigestIndex } from "../src/knowledge"
 import { loadIntents, packSubsection, parseIntentFile, resolveIntent } from "../src/intent/load"
 import { loadModes } from "../src/mode"
@@ -424,10 +423,5 @@ describe("golden render snapshots", () => {
     golden("test-result", renderTestResult(facts, { ...run, seq: 1 }))
     golden("test-wrapup", renderTestWrapup(facts, { handoffFile: "docs/T-002/testhandoff.md" }))
     golden("test-continue", renderTestContinue(facts, { handoffFile: "docs/T-002/testhandoff-1.md", run: { ...run, seq: 1 } }))
-  })
-
-  test("agent contract (testByDriver two states)", async () => {
-    golden("agent-contract-plain", await renderAgentContract(false))
-    golden("agent-contract-testbydriver", await renderAgentContract(true))
   })
 })

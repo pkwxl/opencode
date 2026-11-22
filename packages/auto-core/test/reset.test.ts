@@ -2,23 +2,22 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { ensurePointer } from "../src/agents-block"
 import { ensureGitignore, ensureInitGitignore, removeGitignoreEntries } from "../src/gitignore"
 import { MODELS_FILE } from "../src/models"
 import { applyReset, planReset, type ResetEntry } from "../src/reset"
 
 // A minimal replica of init's output (without running the real CLI): the
-// four config-layer files + the two shared files + the gitignore entries.
+// config-layer files + the shared AGENTS.md pointer + the gitignore entries.
+// The person's host surfaces (opencode.json, .opencode/agent/) are init's
+// output no longer (plans/0296) — the boundary tests below seed them by hand
+// where they pin reset's non-interference.
 async function seedInit(dir: string) {
   await mkdir(join(dir, ".opencode", "auto"), { recursive: true })
-  await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
   await writeFile(join(dir, ".opencode", "auto", "config.json"), '{"mode":"migrate"}\n')
   // The brief seed (plans/0081 D11): a plain init writes none, the fixture
   // seeds one like --brief would.
   await writeFile(join(dir, ".opencode", "auto", "brief.md"), "migrate legacy to bun\n")
-  await writeFile(join(dir, ".opencode", "agent", "auto.md"), "# auto agent\n")
-  await writeFile(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
   await ensurePointer(dir)
   await writeFile(join(dir, ".gitignore"), "")
   await ensureGitignore(dir)
@@ -48,8 +47,6 @@ describe("reset: config-layer cleanup", () => {
     // The brief is kept (plans/0081 D11: a seed or a generated brief; delete
     // it by hand if you mean to).
     expect(await exists(join(dir, ".opencode", "auto", "brief.md"))).toBe(true)
-    expect(await exists(join(dir, ".opencode", "agent", "auto.md"))).toBe(false)
-    expect(await exists(join(dir, "opencode.json"))).toBe(false)
     expect(await exists(join(dir, "AGENTS.md"))).toBe(false)
     expect(await readdir(dir)).toEqual([".opencode"])
   })
@@ -62,10 +59,10 @@ describe("reset: config-layer cleanup", () => {
     await seedInit(dir)
     await reset(dir)
     // The kept brief keeps .opencode/auto/ non-empty: the residual plan holds
-    // only keep and rmdir-if-empty entries, and the second reset removes
-    // nothing more.
+    // only keep and rmdir-if-empty entries (the tool's own subtree alone is
+    // pruned, plans/0296), and the second reset removes nothing more.
     const residual = await planReset(dir)
-    expect(residual.map((entry) => entry.action)).toEqual(["keep", "rmdir", "rmdir"])
+    expect(residual.map((entry) => entry.action)).toEqual(["keep", "rmdir"])
     await reset(dir)
     expect(await readdir(dir)).toEqual([".opencode"])
     expect(await exists(join(dir, ".opencode", "auto", "brief.md"))).toBe(true)
@@ -104,10 +101,13 @@ describe("reset: boundary safety", () => {
     expect(await exists(join(dir, ".opencode", "auto", "config.json"))).toBe(false)
   })
 
-  test("an opencode.json that was modified is kept (byte-for-byte comparison with the template)", async () => {
+  // plans/0296: the host's own configuration is the person's file — init
+  // writes none, reset never names it (not even a keep row: the tool takes no
+  // posture on it, whatever its bytes).
+  test("the person's opencode.json is never reset's business (any bytes, never named)", async () => {
     await writeFile(join(dir, "opencode.json"), '{"model":"my own config"}\n')
     const entries = await reset(dir)
-    expect(entries.find((entry) => entry.path === "opencode.json")).toMatchObject({ action: "keep" })
+    expect(entries.find((entry) => entry.path === "opencode.json")).toBeUndefined()
     expect(await Bun.file(join(dir, "opencode.json")).text()).toBe('{"model":"my own config"}\n')
   })
 
@@ -119,11 +119,17 @@ describe("reset: boundary safety", () => {
     expect(await exists(join(dir, ".opencode", "auto", "config.json"))).toBe(false)
   })
 
-  test("the user's own other agent contracts are not reclaimed", async () => {
+  // plans/0296: .opencode/agent/ holds the person's own host surfaces (the
+  // agent contract among them) — init writes none, reset never enters the
+  // directory and never prunes it.
+  test("the person's agent contracts are not reclaimed (the tool's own auto.md included)", async () => {
+    await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
+    await writeFile(join(dir, ".opencode", "agent", "auto.md"), "# auto\n")
     await writeFile(join(dir, ".opencode", "agent", "reviewer.md"), "# reviewer\n")
-    await reset(dir)
+    const entries = await reset(dir)
+    expect(entries.find((entry) => entry.path === ".opencode/agent/auto.md")).toBeUndefined()
+    expect(await Bun.file(join(dir, ".opencode", "agent", "auto.md")).text()).toBe("# auto\n")
     expect(await Bun.file(join(dir, ".opencode", "agent", "reviewer.md")).text()).toBe("# reviewer\n")
-    expect(await exists(join(dir, ".opencode", "agent", "auto.md"))).toBe(false)
   })
 
   test("AGENTS.md holding user-written prose: only the marker block is stripped, the prose is kept as-is", async () => {
@@ -155,12 +161,14 @@ describe("reset: boundary safety", () => {
     expect(await Bun.file(join(dir, "tmp", "verify.sh")).text()).toBe("#!/bin/sh\n")
   })
 
-  // plans/0055 §4.1: the model registry's project layer is the operator's file,
-  // never the driver's, so reset takes back init's entry for it and keeps it.
-  test("the model registry's project layer: its .gitignore entry is removed, the file and its directory stay", async () => {
+  // plans/0055 §4.1 ruled the model registry's project layer the operator's
+  // file; plans/0296 completed the posture — it is not the tool's surface, so
+  // init stamps no ignore entry for it and reset strips no line: an operator
+  // who keeps one local owns their own line.
+  test("the model registry's project layer: no init entry, no reset strip — the file and the person's line stay", async () => {
     await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited
     await writeFile(join(dir, ".gitignore"), "node_modules/\n")
-    expect(await ensureInitGitignore(dir)).toContain("/.opencode/auto/models.json")
+    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.env", "/AGENTS.md"])
     const registry = '{ "models": {} }\n'
     await writeFile(join(dir, MODELS_FILE), registry)
     const entries = await reset(dir)
@@ -174,7 +182,6 @@ describe("reset: boundary safety", () => {
     const entries = await planReset(dir)
     expect(entries.length).toBeGreaterThan(0)
     expect(await exists(join(dir, ".opencode", "auto", "config.json"))).toBe(true)
-    expect(await exists(join(dir, "opencode.json"))).toBe(true)
     expect(await exists(join(dir, "AGENTS.md"))).toBe(true)
   })
 })
@@ -222,25 +229,32 @@ describe("removeGitignoreEntries", () => {
     await mkdir(join(dir, "pkg"))
     await Bun.spawn(["git", "-C", join(dir, "pkg"), "init", "-q"]).exited
     await writeFile(join(dir, ".gitignore"), "node_modules/\n")
-    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.env", "/AGENTS.md", "/.opencode/auto/models.json", "/pkg/"])
+    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.env", "/AGENTS.md", "/pkg/"])
     expect(await removeGitignoreEntries(dir)).toEqual({ removed: true, emptied: false })
     expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules/\n")
   })
 
-  test("a file holding only init entries is deleted whole", async () => {
-    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.env\n/AGENTS.md\n/.opencode/auto/models.json\n")
+  test("a file holding only init entries is deleted whole; a person's own line (the model registry's) survives", async () => {
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.env\n/AGENTS.md\n")
     expect(await removeGitignoreEntries(dir)).toEqual({ removed: true, emptied: true })
     expect(await exists(join(dir, ".gitignore"))).toBe(false)
+    // plans/0296: the model registry's project layer carries no init entry —
+    // a person's line is theirs, never stripped.
+    await writeFile(join(dir, ".gitignore"), "tmp/\n/.opencode/auto/models.json\n")
+    expect(await removeGitignoreEntries(dir)).toEqual({ removed: true, emptied: false })
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("/.opencode/auto/models.json\n")
   })
 
-  // plans/0138: the retired /.gitignore and /opencode.json lines are a
-  // pre-0138 init's, and their retirement is fix's rule — reset mirrors the
-  // current init and leaves them as the person's own entries.
+  // plans/0138: the retired /.gitignore line is a pre-0138 init's, and its
+  // retirement is fix's rule — reset mirrors the current init and leaves it
+  // as the person's own entry. The /opencode.json line and the model
+  // registry's entry are lines about the person's own files (plans/0296): the
+  // tool takes no posture on them either way.
   test("a pre-0138 init's retired entries survive reset (fix owns their retirement)", async () => {
     await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited
     await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n/.opencode/auto/models.json\n")
     expect(await removeGitignoreEntries(dir)).toEqual({ removed: true, emptied: false })
-    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("/.gitignore\n/opencode.json\n")
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("/.gitignore\n/opencode.json\n/.opencode/auto/models.json\n")
   })
 })
 
