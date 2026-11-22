@@ -1,51 +1,50 @@
-// The manual-driver prompt ratchet (plans/0078): prompts/ is the manual-driver
-// suite — run.md (the master control), run-task / run-verify / run-fix (the
-// whole-task children), run-as-subtasks / resume-subtasks (the subtask
-// pipeline), plan-append, and charter (plans/0081 D13: the discussion runbook
-// for a greenfield baseline, the person-facing sibling of the driver-role
-// runbooks) — the runbooks a coding-agent session uses to run as the driver
-// itself, treating its child sessions as workers. run.md and the run-verify
-// close-out are driver-role (they own the driver-exclusive writes and the
-// commit grammar); run-task / run-fix / the Stage 1–3 child prompts are
-// workers (no commits, no state writes); charter is neither driver nor worker
-// — it lands everything through the init/plan flags and drives nothing.
+// The manual prompt ratchet (plans/0078): prompts/ is the manual suite —
+// executor.md alone since plans/0296's slice 3 retired the push-era
+// companions with the push CLI (run.md the master control and its
+// run-task / run-verify / run-fix / run-handover / run-plan children,
+// run-as-subtasks / resume-subtasks the subtask pipeline, plan-append the
+// append planner, charter the greenfield discussion runbook — all teaching
+// the push driver's flows, gone with them). The survivor is the executor
+// protocol's manual floor: the runbook a coding-agent session claiming
+// grants over the wire reads — host-neutral (any claimant's own host and
+// model, nothing in the protocol provisioning one), ask-channel-free (the
+// plain blocked answer the whole surface, plans/0282).
 //
 // The suite is prompt copy like templates/prompts/, but a separate carrier:
 // no renderer assembles it, so nothing structural stops it from drifting
-// from the driver's grammar — which it had (plans/0078 §1: the close-out
-// used `carryover driver-state posting`, the driver's self-heal string, as
-// its normal completion commit; the driver's sequence is exec → wrapup →
-// done). This ratchet pins the protocol literals to the driver's own, in the
+// from the wire — which it had (the `protocol: 1` literal and the question
+// payload outliving the 0.1 preview wire and the ask channel's tombstone).
+// This ratchet pins the protocol literals to the coordinator's own, in the
 // constitution-ratchet pattern: the src anti-rot arm holds the canonical
-// table against the producing code, the prompts arm holds the files to it,
+// table against the producing code, the prompts arm holds the file to it,
 // and the ruled divergences are pinned as explicit absence so reversing one
-// is a conscious change that updates this file together with plans/0078.
+// is a conscious change that updates this file together with its ruling.
 //
-// plans/0203 rules the oracle boundary (0165-165: the ratchets pinned
-// vocabulary presence while the ruled relationships drifted green): the unit
-// is the ruled relationship — the manual sentence, the retired defective
-// sentence, the frozen literal and the driver-side derivation producer held
-// together (the coupling arm below), so a conscious change on either side
-// trips this one file, which names the other side to carry with it.
-// Scenario-execution machinery is declined there (prompt copy has no
-// interpreter — a test-side re-statement would measure itself, never the
-// prompt; the semantics' one behavior home is each producer's own suite);
-// the named ceiling and the revisit trigger live in that ruling.
+// plans/0203 rules the oracle boundary: the unit is the ruled relationship
+// — the manual sentence, the retired defective sentence and the wire-side
+// derivation producer held together (the coupling arms below), so a
+// conscious change on either side trips this one file, which names the
+// other side to carry with it. Scenario-execution machinery is declined
+// there (prompt copy has no interpreter — a test-side re-statement would
+// measure itself, never the prompt; the semantics' one behavior home is
+// each producer's own suite); the named ceiling and the revisit trigger
+// live in that ruling.
 import { describe, expect, test } from "bun:test"
 import { readdirSync, readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 
 const PROMPTS = resolve(import.meta.dir, "..", "prompts")
 const SRC = resolve(import.meta.dir, "..", "src")
+const DOCS = resolve(import.meta.dir, "..", "docs")
 
 // The suite's pinned file set: a file added to prompts/ joins the ratchet
 // consciously (this test fails until it is either listed or removed).
-const FILES = ["run.md", "run-task.md", "run-verify.md", "run-fix.md", "run-handover.md", "run-plan.md", "run-as-subtasks.md", "resume-subtasks.md", "plan-append.md", "charter.md", "executor.md"]
+const FILES = ["executor.md"]
 
 const text = (name: string) => readFileSync(join(PROMPTS, name), "utf8")
 const src = (name: string) => readFileSync(join(SRC, name), "utf8")
 
-describe("manual-driver prompt ratchet", () => {
+describe("manual prompt ratchet", () => {
   test("the suite's file set is exactly the pinned one", () => {
     expect(readdirSync(PROMPTS).sort()).toEqual([...FILES].sort())
   })
@@ -282,8 +281,19 @@ describe("manual-driver prompt ratchet", () => {
   // this arm holds the manual side so the teaching cannot drift from the
   // ruled vocabulary (the additive-fields letter keeping the stop-and-ask
   // keyed on unknown protocols and step kinds, never on the additive field).
-  test("the executor prompt's protocol sentence carries the build fingerprint letter (plans/0270)", () => {
+  // plans/0296's slice 3 re-keyed the sentence to the 0.1 preview wire
+  // (0279's version ruling; the `protocol: 1` literal a tombstone) and the
+  // step/menu payload pair (0282's ask-channel tombstone), the reply
+  // envelope's literal pinned to EXECUTOR_PROTOCOL beside.
+  test("the executor prompt's protocol sentence carries the wire version and the build fingerprint letter (plans/0270; re-keyed plans/0296)", () => {
     const executor = text("executor.md")
+    const coordinator = src("executor-coordinator.ts")
+    expect(executor).toContain("Successful responses carry `protocol: 0.1` — the preview wire — and one payload, `step` or `menu`")
+    expect(coordinator).toContain("export const EXECUTOR_PROTOCOL = 0.1")
+    // The retired literals must not return: the pre-0280 `protocol: 1` and
+    // the ask channel's question payload are tombstones.
+    expect(executor).not.toContain("`protocol: 1`")
+    expect(executor).not.toContain("`question`")
     expect(executor).toContain("The `ready` response also carries `build`, the server's version and build commit")
     expect(executor).toContain("read it to detect a stale daemon")
     expect(executor).toContain("unknown extra fields are additive, not an unknown protocol")
@@ -356,1027 +366,75 @@ describe("manual-driver prompt ratchet", () => {
     expect(coordinator).toContain("This token's claim on ${producer.grant.unit} has ended")
   })
 
-  test("the src side of the grammar table still holds (anti-rot)", () => {
-    // The driver's commit grammar, stated by its producers: src/execute.ts
-    // (the exec subject and the execute/decompose/subtask stages),
-    // src/wrapup.ts (wrapup), src/loop-task.ts (the done settle — "the
-    // terminal commit of task completion"), src/git.ts (the Auto-Stage
-    // trailer and the carryover self-heal). If one of these fails, the
-    // driver's grammar changed: update prompts/ in the same change — that
-    // drift is what this ratchet exists to catch.
-    expect(src("execute.ts")).toContain("`${task.id} exec ${shortTitle(task.title)}`")
-    expect(src("execute.ts")).toContain('stage: "execute"')
-    expect(src("execute.ts")).toContain("stage: `subtask ${index}`")
-    expect(src("execute.ts")).toContain('stage: "decompose"')
-    expect(src("wrapup.ts")).toContain("`${task.id} wrapup ${shortTitle(task.title)}`")
-    // plans/0148: the fix round commits per session, the subject carrying the
-    // round and the session ordinal (`fix <round>.<session>`), derived from
-    // the log so a resumed round continues the numbering.
-    expect(src("wrapup.ts")).toContain("`${task.id} fix ${round}.${ordinal} ${shortTitle(task.title)}`")
-    expect(src("wrapup.ts")).toContain('stage: "wrapup"')
-    expect(src("loop-task.ts")).toContain("`${task.id} done ${shortTitle(task.title)}`")
-    expect(src("loop-task.ts")).toContain('stage: "done"')
-    expect(src("git.ts")).toContain("`${task.id} carryover driver-state posting`")
-    expect(src("git.ts")).toContain('stage: "carryover"')
-    expect(src("git.ts")).toContain("Auto-Stage: ${stage}")
-    // The phase-transfer grammar (plans/0088, amended by plans/0095): the
-    // handover distill, the transition close-out and the formulation
-    // construction commits, stated by their producers in loop-phase.ts /
-    // formulate.ts.
-    expect(src("loop-phase.ts")).toContain("`PLAN handover ${phaseTitle(phase)}`")
-    expect(src("loop-phase.ts")).toContain('stage: "phase-handover"')
-    expect(src("loop-phase.ts")).toContain("`PLAN transition ${phaseTitle(phase)} → ${target}`")
-    expect(src("loop-phase.ts")).toContain('stage: "phase-transition"')
-    expect(src("formulate.ts")).toContain("`PLAN formulate ${phaseText(phase)}`")
-    expect(src("formulate.ts")).toContain('stage: record?.stage ?? "phase-formulate"')
+  // plans/0296's slice 3 (0295's remedy family 2 enacted): the ask-free
+  // brief refresh — the question route's arms (the question request,
+  // question.id, project-wide raises, deduplicate-while-pending) retired
+  // from the manual with the wire's own tombstone (plans/0282), the brief
+  // route surviving as the held grant's re-read alone. The answers paging
+  // (answerCursor/cursor/answers[].next) died with the ask channel — the
+  // coordinator's withAnswers reduced to the response-size bound — so the
+  // manual carries neither the vocabulary nor the arms, pinned absent
+  // beside the surviving route's producer anchor.
+  test("the ask-free arms: the brief refresh stays, the question vocabulary never returns (plans/0282; re-keyed plans/0296)", () => {
+    const executor = text("executor.md")
+    const coordinator = src("executor-coordinator.ts")
+    expect(executor).toContain("Refresh the live brief with `brief {\"task\":\"T-012\",\"kind\":\"execute\"}` on the same channel")
+    expect(executor).toContain("a held lease is re-answered with the same grant for its holder")
+    expect(coordinator).toContain("brief: (holder, task, kind) => serialize(async () => {")
+    expect(coordinator).toContain("typeof checkout === \"string\" ? withAnswers(holder, last.grant) : checkout")
+    // The ask channel's vocabulary must not return to the manual: no
+    // question route, no answers paging.
+    expect(executor).not.toContain("`question`")
+    expect(executor).not.toContain("answerCursor")
+    expect(executor).not.toContain("`answers`")
+    expect(executor).not.toContain("`cursor`")
   })
 
-  // plans/0203 (0165-165 / S25-11): the ratchet pins ruled relationships,
-  // not just vocabulary presence — and a relationship has two sides. The arms
-  // below hold the manual side (the ruled sentence, the retired defective
-  // sentence pinned absent); this arm holds the driver side of each one: the
-  // derivation-bearing producer line the manual copy mirrors. A conscious
-  // semantics change in a producer trips this file beside the producer's own
-  // suite (git.test.ts, verify-loop.test.ts, phases.test.ts, the unit tests
-  // hold the behavior), and each pin's pairing comment names the manual copy
-  // to carry in the same change — plans/0078's anti-rot pattern extended
-  // from vocabulary literals to ruled derivations. These are line pins, not
-  // behavior proofs; scenario execution is declined (plans/0203 D1).
-  test("the src side of the ruled relationships still holds (the coupling arm, plans/0203)", () => {
-    const gitSrc = src("git.ts")
-    // 0202 D2's short-title rule ("first clause, cut at the first `:` / `(` /
-    // em-dash", "capped at four words") → shortTitle's separators loop and
-    // four-word slice. The loop names the driver's true separator set — the
-    // full-width twins the prose does not name, 0202's accepted bounded
-    // divergence made visible here.
-    expect(gitSrc).toContain('for (const sep of [":", "(", "（", "—", "–"]) head = head.split(sep)[0]!')
-    expect(gitSrc).toContain('return words.slice(0, 4).join(" ")')
-    // 0201 D1's fix-subject ordinal ("one past the highest … already in the
-    // log", "1 when none exists") → nextFixSession's prefix scan and max+1.
-    expect(gitSrc).toContain("const prefix = `${taskId} fix ${round}.`")
-    expect(gitSrc).toContain("return max + 1")
-    // 0200 D1's verification baseline ("the parent of the task's first
-    // commit carrying the `Auto-Task: T-NNN` trailer") → charterBaseline's
-    // parent rev-parse of taskFirstCommit's first trailer hit.
-    expect(gitSrc).toContain('const parent = await git(root, ["rev-parse", "--short", `${first.first}^`]).catch(() => undefined)')
-    const wrapupSrc = src("wrapup.ts")
-    // 0201 D2's countable grammar ("`### Gap N` headings alone") → countGaps'
-    // mechanical line test and the shape gate's zero-headings rejection.
-    expect(wrapupSrc).toContain('for (const line of text.split("\\n")) if (/^### Gap\\b/.test(line)) n += 1')
-    expect(wrapupSrc).toContain("if (countGaps(text) === 0)")
-    // 0201 D2 / 0200 D1's progress rule ("strictly lower than the best",
-    // "the minimum its FAILs have measured") → the strictly-lower streak
-    // reset and the Math.min best update.
-    expect(wrapupSrc).toContain("if (bestGaps !== undefined) noProgress = gapsNow < bestGaps ? 0 : noProgress + 1")
-    expect(wrapupSrc).toContain("bestGaps = bestGaps === undefined ? gapsNow : Math.min(bestGaps, gapsNow)")
-    // 0200 D1's round-scoped verdict ("keys on that round's session writes
-    // alone") → the paired removal of the reserved files before each round's
-    // first dispatch.
-    expect(wrapupSrc).toContain('await rm(join(dir, taskDoc(task.id, "report")), { force: true })')
-    expect(wrapupSrc).toContain('await rm(join(dir, taskDoc(task.id, "gaps")), { force: true })')
-    const unitSrc = src("document/unit.ts")
-    // 0200 D3's phase selector (the unticked line; the tick the completion
-    // record) → nextReady takes the first readyUnitIds result over the Depends graph — the
-    // done set is the tick, so tick beats order (currentPhase delegates
-    // here).
-    expect(unitSrc).toContain("if (!done.has(unit.id) && (deps.get(unit.id) ?? []).every((dep) => done.has(dep))) yield unit.id")
-    // 0200 D2's unit-state law ("exactly one of" todo.md / done.md) →
-    // scanUnitStates' both/neither illegal scan.
-    expect(unitSrc).toContain('if (state === "both" || state === "neither") illegal.push({ id: ref.id, kind: state })')
+  // plans/0294 (0290 F4d): the landed context's both-sides arm — the
+  // executor.md item-2 sentence and the coordinator's grant-assembly attach
+  // are one ruled relationship, so the field cannot drift from the letter.
+  // The wire pass-through lives in packages/auto-server's wireStep (its
+  // serialization suite pins the key carried and absent); the behavior —
+  // the takeover reading its landed state from the grant — in
+  // test/executor-continuation.test.ts.
+  test("the landed context rides the execute grant over a unit with a landed share (plans/0294)", () => {
+    const executor = text("executor.md")
+    const coordinator = src("executor-coordinator.ts")
+    expect(executor).toContain("An execute grant over a unit with a landed share carries `landed: { id, commit }`")
+    expect(executor).toContain("the takeover or continuation holder reads its unit's already-landed state from the grant, not the tree")
+    expect(executor).toContain("the key is absent on a fresh unit")
+    expect(coordinator).toContain("grant.landed = { id: landed.grant.id, commit: landed.booking.receipt.commit }")
   })
 
-  test("the commit grammar: the master control's share commits, then the close-out's wrapup → done", () => {
-    // plans/0087: every task/fix session's share lands as its own commit at
-    // the session's end — the master control's write (the driver's unified
-    // commit after a session; its fix rounds land the same way, `<id> fix
-    // <n> <title>`). The verification's close-out therefore starts from a
-    // landed range: it validates the range holds only the unit's own
-    // commits, then makes the report commit (wrapup) and the state-writes
-    // commit (done) — the exec grammar lives in run.md's share-commit rule.
-    const run = text("run.md")
-    for (const literal of ["<task id> exec <short title>", "<task id> fix <round>.<session> <short title>", "Auto-Task: <task id>", "Auto-Stage: execute"]) {
-      expect(run, "run.md").toContain(literal)
-    }
-    // plans/0094: a share landed at a handover carries the share ordinal in
-    // its subject — ` [<k>]`, one past the unit's landed shares of the same
-    // role and round, so the log distinguishes sessions — and the
-    // verification's range check accepts the optional tail. The handover
-    // itself rides the share commit (committed content, a precise revert
-    // point; only the gap list stays a disk transient), its deletion a
-    // completion write in the close-out's done commit.
-    for (const literal of ["<task id> exec <short title> [<k>]", "<task id> fix <round>.<session> <short title>"]) {
-      expect(run, "run.md").toContain(literal)
-    }
-    expect(run, "run.md").toContain("rides the share commit")
-    expect(text("run-verify.md")).toContain("the deletion is a completion write")
-    const verify = text("run-verify.md")
-    expect(verify, "run-verify.md").toContain("share ordinal ` [<k>]`")
-    for (const literal of ["<task id> wrapup <short title>", "<task id> done <short title>", "Auto-Task: <task id>"]) {
-      expect(verify, literal).toContain(literal)
-    }
-    const order = ["Auto-Stage: wrapup", "Auto-Stage: done"].map((stage) => verify.indexOf(stage))
-    expect(order.every((at) => at >= 0)).toBe(true)
-    expect(order, "the close-out commits appear in the driver's order").toEqual([...order].sort((a, b) => a - b))
-    // The verification names the exec grammar only to validate the range
-    // (check 1); its own commits are the wrapup and done passes alone, so
-    // no execute-stage commit block exists in its close-out.
-    expect(verify.indexOf("Auto-Stage: execute")).toBeLessThan(verify.indexOf("## The verdict"))
+  // plans/0296's slice 3 (0295's remedy family 1 + plans/0284's lifecycle):
+  // the manual floor mirrors the standing spec — the host-neutrality letter
+  // (the coordinator model-free, the claimant's host and model its own
+  // affair) against docs/protocol.md's model-free coordinator letter, and
+  // the projects letter (the directory-named creation, the parent the
+  // anchor) against the spec's lifecycle letter. The daemon-side producer
+  // lives in packages/auto-server (src/project-creation.ts); this arm holds
+  // the two copy-bearing sides so neither drifts from the other.
+  test("the manual floor mirrors the spec's model-free coordinator and lifecycle letters (plans/0284; plans/0296)", () => {
+    const executor = text("executor.md")
+    const doc = readFileSync(join(DOCS, "protocol.md"), "utf8")
+    // The host-neutrality letter: the manual's statement and the spec's
+    // model-free coordinator paragraph held together.
+    expect(executor).toContain("The claimant's host and model are its own affair: any coding-agent session may claim a grant")
+    expect(executor).toContain("nothing in the protocol presumes, provisions, or names a host")
+    expect(doc).toContain("The coordinator is model-free")
+    expect(doc).toContain("no grant kind implies a host")
+    // The projects letter: the directory-named creation, the parent the
+    // anchor, the basename the name — root retired with the declared-roots
+    // gate, creation always mounted.
+    expect(executor).toContain('`POST /projects` with `projects` takes `{"directory": "<absolute path>"}`')
+    expect(executor).toContain("the request names the directory to create, its parent the anchor")
+    expect(executor).toContain("the basename the project name, an optional `name` field overriding it")
+    expect(executor).not.toContain("a declared root")
+    expect(doc).toContain("the request names the directory to create")
+    expect(doc).toContain("the destination's own parent the anchor")
   })
 
-  test("the Auto-Nested alignment lines ride the enclosing repository's driver commits", () => {
-    // The driver's unified commit (src/git.ts message/nestedHeads) reads the
-    // current HEAD of every nested repository when the enclosing repository
-    // commits — one `Auto-Nested: <rel> @ <short sha>` trailer line per
-    // repository, the just-landed SHA where it committed this pass, the
-    // baseline where it did not — so any commit of the enclosing repository
-    // aligns cross-repository state (the fork command's reconstruction
-    // anchor, src/fork.ts). The manual suite's commit-making roles each
-    // teach the same grammar in their own file (every companion is a
-    // separate session that never sees run.md): the master control's
-    // share/park/fix/phase commits, the verification close-out, the handover
-    // close-out and the subtask pipeline's driver cycles — the nested
-    // repositories' own commits carrying the two trailers alone. Found as
-    // field evidence (P19): the aster-mig cleanroom baseline run's log
-    // carries the line on every commit of the enclosing repository —
-    // exec/fix/wrapup/done alike — while the suite taught none of it.
-    expect(src("git.ts")).toContain("`Auto-Nested: ${repo.rel} @ ${repo.sha}`")
-    for (const name of ["run.md", "run-verify.md", "run-handover.md", "run-as-subtasks.md", "resume-subtasks.md"]) {
-      expect(text(name), name).toContain("`Auto-Nested: <nested repository path> @ <its short HEAD sha>`")
-    }
-  })
-
-  test("carryover is the self-heal string only — never the close-out", () => {
-    // plans/0078 §1's fix: `T-NNN carryover driver-state posting` is how the
-    // driver self-heals uncommitted driver-state leftovers (src/git.ts
-    // beginUnit), not its completion commit. resume-subtasks keeps it
-    // exactly there — reconstructing an interrupted run's uncommitted state
-    // writes is the self-heal's own case.
-    for (const name of ["run.md", "run-verify.md", "run-as-subtasks.md"]) expect(text(name), name).not.toContain("carryover")
-    const resume = text("resume-subtasks.md")
-    expect(resume).toContain("`T-NNN carryover driver-state posting`")
-    expect(resume).toContain("Auto-Stage `carryover`")
-  })
-
-  test("protocol strings: terminator, verdicts, result lines, record markers", () => {
+  test("protocol strings: the terminator", () => {
     for (const name of FILES) expect(text(name), name).toContain("<!-- auto: eof -->")
-    // plans/0200 D1: the verdict strings' carrier set grows to the subtask
-    // companions — their Stage 3 verification child answers on the same frozen
-    // channel run-verify.md answers on (`Verification: PASS` /
-    // `Verification: INCOMPLETE`), never a vocabulary of its own.
-    for (const name of ["run.md", "run-verify.md", "run-as-subtasks.md", "resume-subtasks.md"]) {
-      expect(text(name), name).toContain("`Verification: PASS`")
-      expect(text(name), name).toContain("`Verification: INCOMPLETE`")
-    }
-    // The result line carries wrapup.md's protocol wording. Every
-    // verification write states the PASS form in its report and the FAIL
-    // form as the gap list's own closing line — plans/0200 D1 carried it to
-    // the subtask companions (the loop below), plans/0201 D2 to run-verify
-    // (the 0201 D2 arm) — never a report's (a FAIL writes no report).
-    expect(text("run-verify.md"), "run-verify.md").toContain("`Result: PASS`")
-    for (const name of ["run-as-subtasks.md", "resume-subtasks.md"]) {
-      expect(text(name), name).toContain("`Result: PASS`")
-      expect(text(name), name).toContain("`Result: FAIL <one-sentence reason>`")
-    }
-    // The record duty, verbatim from question-rule's unattended branch.
-    for (const name of ["run-task.md", "run-fix.md", "run-as-subtasks.md", "resume-subtasks.md"]) {
-      expect(text(name), name).toContain("`AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)`")
-      expect(text(name), name).toContain("`AUTO-DECISION: <decision> (<reason>)`")
-    }
-  })
-
-  // plans/0200 D1 (0165-005 / S25-01): the subtask companions' Stage 3 is the
-  // task-level verification loop — the same whole-unit protocol run.md's loop
-  // steps 5–6 run, over the subtask pipeline's commit grammar — not the
-  // pre-0083 narrative wrap-up that closed the task on the wrap-up session's
-  // own reading of the checklist (the S1: completion judged by self-report).
-  // The driver-role session owns every commit and state write (children never
-  // commit — the companions' own constitutional division); the verification
-  // child is a fresh pair of eyes over the committed range; a FAIL's gap list
-  // is the driver's countable grammar (0146 D1) and stays uncommitted (the
-  // manual suite's gap lifecycle, run.md's); the fix loop runs under the
-  // best-count progress rule (0146 D3 as re-ruled by 0198 D1).
-  test("the subtask companions' Stage 3 is the task-level verification loop (plans/0200 D1)", () => {
-    for (const name of ["run-as-subtasks.md", "resume-subtasks.md"]) {
-      const doc = text(name)
-      // The verification charter: inspection of the range, never claims.
-      expect(doc, name).toContain("a fresh pair of eyes")
-      expect(doc, name).toContain("never from the subtask sessions' claims")
-      expect(doc, name).toContain("Do not re-run the acceptance's executable checks")
-      expect(doc, name).toContain("the parent of the task's first commit carrying the `Auto-Task: T-NNN` trailer")
-      // The round-scoped verdict (0170 D1 carried): the reserved files are
-      // deleted at each round's dispatch, the verdict keys on that round's
-      // own writes.
-      expect(doc, name).toContain("keys on that round's session writes alone")
-      // The countable gap grammar and its closing line.
-      expect(doc, name).toContain("`### Gap N — <one-line title>`")
-      expect(doc, name).toContain("`## Gaps` heading")
-      expect(doc, name).toContain("`docs/T-NNN/gaps.md`")
-      // The fix loop: the share grammar (0148 D1, the driver's nextFixSession
-      // derivation — max+1 from the log, never a landed count; the subject's
-      // `<short title>` form plans/0202 D1's, flipped from `<task title>` in
-      // that lockstep), the stage, and the gap list kept out of every commit.
-      expect(doc, name).toContain("T-NNN fix <round>.<session> <short title>")
-      expect(doc, name).toContain("Auto-Stage `execute`")
-      expect(doc, name).toContain("`git restore --staged docs/T-NNN/gaps.md`")
-      expect(doc, name).toContain("the gap list stays on disk")
-      expect(doc, name).toContain("never in a commit")
-      // The progress rule's manual statement: the loop's best (0198 D1), the
-      // strictly-lower test, the two-consecutive stop, the 2N+2 bound.
-      expect(doc, name).toContain("strictly lower than the best")
-      expect(doc, name).toContain("two consecutive fix rounds made no progress")
-      expect(doc, name).toContain("2N+2 fix rounds")
-      // The retired narrative close must not return: no per-subtask verdict
-      // distilled by the wrap-up session, no PASS written on the sessions'
-      // own "run or observed" claims.
-      expect(doc, name).not.toContain("one line per subtask")
-      expect(doc, name).not.toContain("Write PASS only when every check the task requires was actually run or observed")
-    }
-  })
-
-  // plans/0200 D3 (0165-053 / S25-07): the companions' phase selector is
-  // run.md's — the first UNTICKED line. The `(closed: …)` suffix the old
-  // selector keyed on is a digest rendering of a person-closed phase
-  // (phases.ts D16), never a state the phase close-out writes; the tick is
-  // the completion record, so a normally completed earlier phase no longer
-  // wins the pick over the current phase.
-  test("the companions' phase selector is the unticked line (plans/0200 D3)", () => {
-    for (const name of ["run-as-subtasks.md", "resume-subtasks.md"]) {
-      const doc = text(name).replaceAll("\n", " ").replace(/  +/g, " ")
-      expect(doc, name).toContain("unticked (`- [ ]`; the phase close-out ticks it `- [x]` on completion)")
-      expect(text(name), name).not.toContain("(closed: …")
-    }
-    // The selector is run.md's own sentence, lockstep across the suite.
-    const run = text("run.md").replaceAll("\n", " ").replace(/  +/g, " ")
-    expect(run).toContain("unticked (`- [ ]`; the phase close-out ticks it `- [x]` on completion)")
-  })
-
-  // plans/0200 D2 (0165-048 / S25-02): resume's decomposition gate reads the
-  // unit state — exactly one of todo.md / done.md per item, the tick's
-  // agreement — never todo.md alone, which rejected exactly the state a
-  // completed subtask leaves (the normal interrupted shape this file exists
-  // to recover).
-  test("resume's decomposition gate reads the unit state, not one file name (plans/0200 D2)", () => {
-    const resume = text("resume-subtasks.md")
-    expect(resume).toContain("For every checklist item n (S01 = item 1), exactly one of")
-    expect(resume).toContain("earlier items legitimately hold `done.md` alone")
-    expect(resume).toContain("must be ticked `- [x]` in `subtasks.md`")
-    // The retired gate rule — every item's todo.md must exist — must not
-    // return: it is the defect.
-    expect(resume).not.toContain("For every checklist item n, `docs/T-NNN/S<nn>/todo.md` (S01 = item 1) exists")
-  })
-
-  // plans/0200 D4 (0165-164 / S25-09): the re-entry is keyed on the
-  // verification state and idempotent — an existing report is committed only
-  // when uncommitted, the completion writes only when pending, a committed
-  // FAIL report stops for the person with no git write (the old path
-  // recommitted it unconditionally).
-  test("resume's re-entry is keyed on the verification state and idempotent (plans/0200 D4)", () => {
-    const resume = text("resume-subtasks.md")
-    expect(resume).toContain("decided by the verification state:")
-    expect(resume).toContain("commit the report only when it is still uncommitted")
-    expect(resume).toContain("the no-progress streak one")
-    // The retired unconditional verdict path must not return.
-    expect(resume).not.toContain("follow Stage 3's verdict rules directly")
-  })
-
-  // plans/0201 D1 (0165-049 / S25-03): the manual fix subject's <session>
-  // derives from the log — one past the highest `<task id> fix <round>.<n>`
-  // subject already in the log for that round, across every repository the
-  // target holds, 1 when none exists — the driver's nextFixSession
-  // derivation, never a landed count (the count numbered a fresh round's
-  // first session 0, repeated the share after `fix 1.1` as 1 again, and
-  // renumbered the sparse indices a context-wall handover legitimately
-  // leaves). Sparse indices stay sparse: the numbering keys on the log's
-  // highest, never on a count of landings.
-  test("the manual fix subject's ordinal derives from the log, never a landed count (plans/0201 D1)", () => {
-    const run = text("run.md").replaceAll("\n", " ").replace(/  +/g, " ")
-    // Both derivation sites teach the max+1 log derivation: loop step 3's
-    // share-ordinal paragraph and step 6's INCOMPLETE landing sentence.
-    const hits = run.match(/one past the highest `<task id> fix <round>\.<n>` subject already in the log/g) ?? []
-    expect(hits.length, "run.md carries the log derivation in both fix-subject sites").toBe(2)
-    expect(run).toContain("across every repository the target holds")
-    expect(run).toContain("1 when none exists")
-    expect(run).toContain("sparse indices stay sparse")
-    // The retired count-based derivation must not return: it is the defect.
-    expect(run).not.toContain("the round's landed fix shares count")
-  })
-
-  // plans/0201 D2 (0165-050 / S25-04): the whole-task gap channel carries the
-  // driver's countable grammar — the verification child writes `## Gaps` with
-  // one `### Gap N — <one-line title>` heading per gap and the closing
-  // `Result: FAIL` line, the fix child reads the same form, and the master
-  // shape-checks the verdict's write, counts the headings alone and applies
-  // the best-count progress rule in 0198 D1's terms (run.md's pre-0198
-  // progress sentences were the last stale copies — 0200's residual,
-  // discharged here).
-  test("the whole-task gap channel is the driver's countable grammar, counted mechanically (plans/0201 D2)", () => {
-    const verify = text("run-verify.md").replaceAll("\n", " ").replace(/  +/g, " ")
-    // The write grammar: the countable headings, the closing verdict line,
-    // no terminator in that file.
-    expect(verify).toContain("`### Gap N — <one-line title>` heading under a `## Gaps` heading")
-    expect(verify).toContain("`Result: FAIL <one-sentence reason>`")
-    expect(verify).toContain("no terminator in that file")
-    // The retired freeform shape must not return: it is the defect (the same
-    // list was two entries to a prose reader and zero to the count).
-    expect(verify).not.toContain("its last line of body text is simply its last entry")
-    // The fix child reads the same form (the driver's fix template's own
-    // description of the list).
-    expect(text("run-fix.md").replaceAll("\n", " ").replace(/  +/g, " ")).toContain(
-      "`### Gap N — <one-line title>` heading under a `## Gaps` heading: the",
-    )
-    // The master: the shape gate (one feedback relaunch, then stop), the
-    // mechanical count over the headings alone, the best-count progress rule
-    // in 0198 D1's terms — loop step 6 and the single-mode copy alike.
-    const run = text("run.md").replaceAll("\n", " ").replace(/  +/g, " ")
-    expect(run).toContain("at least one `### Gap N —` heading under `## Gaps`")
-    expect(run).toContain("one feedback relaunch of the verification child")
-    expect(run).toContain("`### Gap N` headings alone")
-    expect(run).toContain("strictly lower than the best")
-    expect(run).toContain("the minimum its FAILs have measured")
-    expect(run).toContain("two consecutive fix rounds made no progress")
-    expect(run).toContain("2N+2 fix rounds")
-    expect(run).toContain("while the loop's best count is strictly lowered")
-    // The retired pre-0198 readings must not return.
-    expect(run).not.toContain("a round that shrank the count buys the loop another round")
-    expect(run).not.toContain("the count stopped shrinking")
-    expect(run).not.toContain("while the gap count shrinks")
-  })
-
-  // plans/0202 D1–D3 (0165-163 / S25-08): the manual suite's short-title
-  // grammar completed — 0148 D2's mechanical rule (the title's first clause,
-  // cut at the first `:` / `(` / em-dash, capped at four words, the leading
-  // words the fallback) taught once per commit-making companion, and every
-  // task-title-bearing subject carrying `<short title>`: the companions'
-  // decompose/wrapup/fix/done sites (0200 D1's fix subjects among them) and
-  // run.md's formulation share. 0148 D3's mirror had landed in run.md and
-  // run-verify.md alone; the companions kept the full-title placeholders, so
-  // manual history differed by title length and clause shape from driver
-  // history despite the suite's same-grammar promise.
-  test("every task-title-bearing subject is the short title, the mechanical rule taught per companion (plans/0202)", () => {
-    // The rule's mechanical terms, once per commit-making companion (each a
-    // separate session that never sees the others — run-verify's primary
-    // hands it the FULL title, so the derivation must live in its own file).
-    for (const name of ["run.md", "run-verify.md", "run-as-subtasks.md", "resume-subtasks.md"]) {
-      const doc = text(name).replaceAll("\n", " ").replace(/  +/g, " ")
-      expect(doc, name).toContain("first clause, cut at the first `:` / `(` / em-dash")
-      expect(doc, name).toContain("capped at four words")
-      expect(doc, name).toContain("the title's leading words when the first clause is empty")
-    }
-    // The companions' four subject forms, short — plus the Stage 2 note (the
-    // item's declared short title under the same cap, the driver's shortTitle
-    // over the item line landing exactly before the colon).
-    for (const name of ["run-as-subtasks.md", "resume-subtasks.md"]) {
-      const doc = text(name)
-      for (const literal of [
-        "T-NNN decompose <short title>",
-        "T-NNN wrapup <short title>",
-        "T-NNN fix <round>.<session> <short title>",
-        "T-NNN done <short title>",
-      ]) {
-        expect(doc, `${name}: ${literal}`).toContain(literal)
-      }
-      expect(doc.replaceAll("\n", " ").replace(/  +/g, " "), name).toContain("under the same four-word cap")
-      // The retired full-title subject literals must not return: they are
-      // the defect (the driver's own subjects carry shortTitle, 0148 D2).
-      for (const retired of [
-        "decompose <task title>",
-        "wrapup <task title>",
-        "done <task title>",
-        "fix <round>.<session> <task title>",
-      ]) {
-        expect(doc, `${name}: retired ${retired}`).not.toContain(retired)
-      }
-    }
-    // The formulation share lands as the task grammar's own commit — the
-    // driver lands it through the task pipeline's short-title exec subject.
-    const run = text("run.md")
-    expect(run).toContain("`<task id> exec <short title>`")
-    expect(run).not.toContain("`<task id> exec <title>`")
-  })
-
-  test("the trailer grammar and the stage vocabulary", () => {
-    for (const name of ["run-as-subtasks.md", "resume-subtasks.md"]) {
-      expect(text(name), name).toContain("Auto-Task: T-NNN")
-      expect(text(name), name).toContain("Auto-Stage: <stage>")
-      for (const stage of ["Auto-Stage `decompose`", "Auto-Stage `subtask <n>`", "Auto-Stage `wrapup`", "Auto-Stage `done`"]) {
-        expect(text(name), name).toContain(stage)
-      }
-    }
-  })
-
-  test("the P1 process-path list is verbatim", () => {
-    for (const name of ["run-verify.md", "run-as-subtasks.md", "resume-subtasks.md"]) {
-      expect(text(name), name).toContain("`docs/T-*`, `docs/R-*`, `docs/phases/`, `PLAN.md`, `.auto/`")
-    }
-  })
-
-  // charter.md's cross-references (plans/0081 D13): the command shapes the
-  // chartering session lands the baseline through must be the driver's own —
-  // the brief seed (D11), the scaffold flow (D12) and the planning input —
-  // so the prompt cannot drift from the CLI that exists.
-  test("charter lands the baseline through the driver's own flags (plans/0081 D13)", () => {
-    const charter = text("charter.md")
-    expect(charter).toContain("init <dir> --brief")
-    expect(charter).toContain("plan <dir> --scaffold")
-    expect(charter).toContain("plan <dir> --file <path>")
-    // plans/0101 D2/D4: the phased project start is transfer's — a phased
-    // not-established state refuses plan outright, whatever route option
-    // rode along — and the analysis flow precedes any planning input, so
-    // the charter's landing names the advance command and the mode split.
-    expect(charter).toContain("transfer <dir>")
-    // The brief's four constants (D11.4) and the scaffold's shape are named,
-    // not paraphrased away.
-    for (const literal of ["goal", "source/reference", "target", "the constraints every round must respect"]) {
-      expect(charter, literal).toContain(literal)
-    }
-    expect(charter).toContain("in scope")
-    expect(charter).toContain("out of scope")
-    // The stated difference from re-work names the survey (D14.4's
-    // cross-link) and the negotiate-vs-distill distinction.
-    expect(charter).toContain("survey")
-    expect(charter).toContain("negotiated")
-    expect(charter).toContain("distilled")
-    // Nothing is driven: the chartering session runs no run/plan of its own
-    // beyond naming the commands the person runs.
-    expect(charter).not.toContain("opencode-auto run <dir>")
-  })
-
-  test("plan-append carries the Decompose field (plans/0075)", () => {
-    const append = text("plan-append.md")
-    expect(append).toContain("Decompose: <split | whole | pipeline>")
-    for (const value of ["`Decompose: split`", "`Decompose: whole`", "`Decompose: pipeline`"]) expect(append, value).toContain(value)
-  })
-
-  test("the test-protocol config keys are refused, not ignored", () => {
-    for (const name of ["run.md", "run-as-subtasks.md", "resume-subtasks.md"]) {
-      expect(text(name), name).toContain("`testByDriver`")
-      expect(text(name), name).toContain("`handoverTest`")
-    }
-  })
-
-  test("the run modes: window, sprint and pace, one phrase in the hand-over (plans/0089; window re-ruled by plans/0117)", () => {
-    // Person-directed, chosen per invocation — no second file, no fill-ins
-    // in run.md: `mode: window <HH:MM–HH:MM>` is the working period (0117
-    // D5, re-ruled from 0089's prohibited stretch): local times, a range
-    // may span midnight, launches only inside it, every launch sized to
-    // the runway the end leaves (a task/fix child's budget the smaller of
-    // the default and the runway; ≥10 minutes of runway to launch a
-    // task/fix child, ≥15 for a verification/handover/planning child),
-    // the end a soft deadline the wrap-up alone may overrun slightly —
-    // new work never starts past it, and before the start the session
-    // holds polling or ends with a restart-at-the-start report.
-    // `mode: sprint <minutes>` walls
-    // the whole run below the platform's task kill (a 3-hour kill →
-    // sprint 175, the gap to the kill itself the landing margin), child
-    // budgets the runway itself (wall − now, no second margin — relaunch
-    // while ≥10 minutes remain) so the run hands off at the wall and ends
-    // properly before the kill; `mode: pace <minutes>` pauses between
-    // child sessions — the person's throttle against a rolling 5-hour
-    // usage cap, waited in polled short steps, composable with window
-    // alone: its waits apply inside the window (outside it no launch
-    // happens anyway), slowing the token burn of the working stretches
-    // (`pace` never rides with `sprint` or `single`: a wall-bounded run
-    // spends its runway on work, not on waiting).
-    // All share the park/resume rules that
-    // override the begun-task boundary refusal, resuming off 0087's
-    // committed shares.
-    const run = text("run.md")
-    expect(run).toContain("`mode: window <HH:MM–HH:MM>`")
-    expect(run).toContain("the working period")
-    expect(run).toContain("times in this machine's local time")
-    expect(run).toContain("end is a soft deadline")
-    expect(run).toContain("`mode: sprint <minutes>`")
-    expect(run).toContain("sprint 175")
-    expect(run).toContain("`mode: pace <minutes>`")
-    expect(run).toContain("`mode: window <HH:MM–HH:MM> pace 20`")
-    expect(run).toContain("re-derive the task's baseline as the parent of its first `T-NNN` share commit")
-  })
-
-  test("the single-session mode: `mode: single <minutes>` folds every role into the one session (plans/0117)", () => {
-    // Some providers disallow child sessions outright — the delegated
-    // design rests on a facility they withhold. `mode: single <minutes>`
-    // names that shape: no child of any role is ever launched; this one
-    // session takes every role itself (master control, task, fix,
-    // verification, handover, planning), reading each companion as the
-    // rulebook of the role it holds — the companions' worker rules bind
-    // unchanged, their session-boundary rules (a child's budget, a
-    // child's final reply) read against the whole session. `<minutes>`
-    // is the wall — the one-hour child budget's whole-session
-    // replacement, set below the platform's kill (a 3-hour kill →
-    // single 175, sprint's arithmetic), the gap the wrap-up's room:
-    // settle the lanes, write the handoff, land the share, Finish — the
-    // wrap-up completes inside the gap even past the wall, and never let
-    // the platform kill the session mid-flight; context is the wall's
-    // twin, a voluntary cut the same way at any moment. Git is identical
-    // to the delegated run: one commit per role share at each role
-    // boundary, the same grammar and order — which makes verification
-    // self-verification (run-verify's checks and close-out by the same
-    // session), the loss of fresh eyes named in the report, the default
-    // phase-boundary stop the person's bracket. `parallel: <n>` never
-    // rides with it (a wave needs child sessions — both phrases are a
-    // stop and report), `window` alone composes (the working period
-    // gates the session's own work starts), and the park/resume restart
-    // re-keys one way: the successor takes the identified role up itself.
-    const run = text("run.md")
-    expect(run).toContain("`mode: single <minutes>`")
-    expect(run).toContain("no child session of any role is ever launched")
-    expect(run).toContain("the one-hour child budget's whole-session replacement")
-    expect(run).toContain("`single 175`")
-    expect(run).toContain("work, never the wrap-up: finish the step in flight")
-    expect(run).toContain("never let the\nplatform kill this session mid-flight")
-    expect(run).toContain("commit per role share at each role boundary")
-    expect(run).toContain("verification becomes self-verification")
-    expect(run).toContain("the verifications ran in the session that did the work")
-    expect(run).toContain("a wave needs child sessions")
-    expect(run).toContain("rides with `window` alone")
-    expect(run).toContain("the whole design rests on one of the two")
-    // The clock rule hardened in place after the 0117 field incident: a run
-    // whose accumulated time estimate drifted an hour ahead overrode forty
-    // correct `date` readings as "a lagging container clock" and stopped
-    // 80 minutes before its wall. The wall is read, never remembered: the
-    // printed `date` output alone decides the runway, computed in the open
-    // from the recorded start, and a disagreement between estimate and
-    // reading resolves for the reading — there is no second clock.
-    expect(run).toContain("let the printed reading alone decide it")
-    expect(run).toContain("start + <minutes> − the printed now")
-    expect(run).toContain("the output wins unconditionally")
-    expect(run).toContain("there is no second clock to reconcile it against")
-  })
-
-  test("the facility-keyed launch: background-first for every run, foreground only forced (plans/0092)", () => {
-    // No run of this suite is attended in the watching sense — the person
-    // hands the file over and returns for the hand-overs and reports — so
-    // 0090's attendance keying never paid its foreground preference while
-    // its cost (the ~10-minute quiet kill) was paid by every plain run,
-    // and the one case it marked for background-first (a sprint on its
-    // native idle-task host) had no background facility at all. The
-    // policy: launch background-first wherever the host has a background
-    // facility; foreground only on a host without one (the idle-task
-    // session), where a killed child relaunches foreground with the
-    // continue line plus the quiet-child nudge — the companions' polling
-    // discipline the child's only shield, the sprint wall the bound.
-    const run = text("run.md")
-    expect(run).toContain("Launch children background-first")
-    expect(run).toContain("nobody watches a child's live transcript")
-    expect(run).toContain("forces every child foreground")
-    expect(run).toContain("poll your log in short steps — never sit waiting on a long command")
-  })
-
-  test("the notification wait: a running child's output is never read (plans/0118)", () => {
-    // The field incident: a plain serial run on a notification-delivering
-    // host — the master launched its task child background-first as 0092
-    // rules and then kept fetching the running child's live output instead
-    // of waiting for the completion notification. Three inductions in the
-    // copy caused it: the loop said "When it ends" without naming the
-    // wait's mechanism (the completion notification appeared once, as a
-    // labeling rationale, never as the wait); the mid-flight quiet nudge
-    // ("has been quiet past ~10 minutes") could only be discharged by
-    // watching the transcript; and the budget wall's "without ending" left
-    // the master to improvise how it knows. The ruling: the completion
-    // notification is the wait — a running child's transcript is never
-    // fetched, tailed or polled for quietness, progress or liveness (the
-    // transcript is the child's context; no mechanical check reads it; a
-    // background child cannot be quiet-killed, so silence endangers
-    // nothing); a clock that must be held (the budget wall, a mode's
-    // gates) reads `date` in the pace idiom's short sleep steps, never the
-    // child's output; the budget wall keys on clock arithmetic alone (the
-    // recorded launch time plus the budget the master itself filled); the
-    // mid-flight quiet nudge is retired — no nudge is ever sent to a
-    // running background child, the wall the sole backstop, while 0090
-    // D2's relaunch-time nudge on the forced-foreground host stands
-    // verbatim; and where a host's wait call blocks on the child yet
-    // returns its output, the final reply alone is the intake — the
-    // verdict line plus the mechanical checks, as the context rule says.
-    const run = text("run.md")
-    expect(run).toContain("The wait is the completion notification, never the child's live output")
-    expect(run).toContain("Never fetch, tail or poll a running child's transcript")
-    expect(run).toContain("hold it the pace idiom's way")
-    expect(run).toContain("a fact of clock arithmetic")
-    expect(run).toContain("no mid-flight nudge is ever sent")
-    expect(run).toContain("the completion notification of the background launch, the call's return of a")
-    // The loop's step 3 and the context rule carry the cross-ties: the
-    // step names the wait's two shapes, the context rule names the
-    // prohibition against the transcript channel.
-    expect(run).toContain("(the launching section's wait)")
-    expect(run).toContain("never through a running child's transcript")
-    // The retired mid-flight nudge stays retired: the "still there?" shape
-    // must not return (the relaunch-time nudge string, pinned in the 0092
-    // test above, is the survivor).
-    expect(run).not.toContain("still there?")
-  })
-
-  test("the phase boundary is a stop by default; `phases: all` lifts it (plans/0091)", () => {
-    // One phase per hand-over: the master control ends the run at every
-    // phase boundary — the phase closed and landed, the report naming
-    // the review it waits for (the handover document, its OPEN decisions
-    // above all, the task reports) — and the person continues by handing
-    // the file over again; the restart takes the next not-closed phase
-    // through the ordinary boundary check, the loop's step 0 planning an
-    // unplanned one. The hand-over phrase `phases: all` lifts the stop
-    // for the whole run, riding beside the mode phrases and named in the
-    // report like a mode line so the person's restart repeats it.
-    const run = text("run.md")
-    expect(run).toContain("`phases: all`")
-    expect(run).toContain("one phase per hand-over")
-    expect(run).toContain("Stop at the phase boundary — the default")
-    expect(run).toContain("only under `phases: all`")
-    expect(run).toContain("the `phases: all` phrase when it rode")
-  })
-
-  test("the human gate is conditional on the recorded forks — zero forks hands over ungated (plans/0081 D14.3)", () => {
-    // The field incident (the aster-mig R-05 round): the phase-transfer step
-    // had stated the survey gate unconditionally since plans/0088 — "its
-    // survey.md must carry a whole-line `Clarified: yes`" — so a zero-fork
-    // survey (the `Forks: none` small posture) stopped the manual run for a
-    // release the gate never required, while the person's `clarify` answered
-    // "nothing awaits" — a hold no command could release. The gate is the
-    // driver's own conditional check (src/phases.ts phaseGateProblems: a
-    // missing survey is always a problem; at least one `Fork:` line holds
-    // for `Clarified: yes`; zero forks completes the phase like an ungated
-    // one): the hold rides the recorded forks, never the phase type alone.
-    const run = text("run.md")
-    expect(run).toContain("a missing survey is a gate problem")
-    expect(run).toContain("holds for the person only when it records at least one")
-    expect(run).toContain("`Forks: none`")
-    expect(run).toContain("completes the phase like an ungated one")
-    expect(run).toContain("no `Clarified:` line is needed")
-    // The unconditional form must not return: the gate never demands a
-    // `Clarified:` line a zero-fork survey has nothing to release.
-    expect(run).not.toContain("must carry a whole-line")
-  })
-
-  test("the phase-transfer companions carry the driver's phase grammar (plans/0088)", () => {
-    // The handover child mirrors the driver's handoverPhase: the distiller
-    // session's four-section handover document (templates/prompts/
-    // phase-handover.md), then completePhase (the phase todo.md → done.md
-    // rename + the phases.md tick) and the two commits — PLAN handover
-    // (stage phase-handover) and PLAN transition (stage phase-transition).
-    // The planning child mirrors the driver's phase-plan session: the task
-    // index and the taskTodoSpec documents; its output lands as the
-    // master control's PLAN plan commit (stage phase-plan), the worker
-    // itself never committing.
-    const handover = text("run-handover.md")
-    for (const literal of [
-      "PLAN handover <phase id> <phase name>",
-      "PLAN transition <phase id> <phase name> → <next target>",
-      "Auto-Task: PLAN",
-      "Auto-Stage: phase-handover",
-      "Auto-Stage: phase-transition",
-      "## Key decisions",
-      "## Constraints and pitfalls",
-      "## Required reading for the next phase",
-      "## Artifact index",
-    ]) {
-      expect(handover, "run-handover.md").toContain(literal)
-    }
-    // The task-document spec is the driver's taskTodoSpec, verbatim.
-    const plan = text("run-plan.md")
-    for (const literal of ["`# T-NNN: <task title>`", "`Phase: R-NN.P<nn>`", "`## Goal`", "`## Scope`", "`## Acceptance`", "- [ ] T-NNN <task title>", "plan-input.md"]) {
-      expect(plan, "run-plan.md").toContain(literal)
-    }
-    // The formulation construction commit is the master control's alone
-    // (plans/0095); the child's own share lands as the task grammar's exec
-    // (the short-title form, plans/0202 D1).
-    for (const literal of ["PLAN formulate <phase id> <phase name>", "Auto-Stage: phase-formulate", "`<task id> exec <short title>`"]) {
-      expect(text("run.md"), "run.md").toContain(literal)
-    }
-  })
-
-  test("the phase-close holds: the regression lanes and the sealed reference wall (plans/0098; 0121; 0132)", () => {
-    // 0098's driver mechanism ("the suite can adopt the two-level
-    // vocabulary when a person-driven round needs it") and 0132's wall ("a
-    // suite copy waits for its consumer") were both deferred until a real
-    // manual consumer arrived — the cleanroom rounds are it, and the suite
-    // now carries both halves at the phase close, before the handover child
-    // runs. The regression hold: every `Cost: regression` row of the pack's
-    // `### test-lanes` table green at exactly the tree about to close (the
-    // receipt's `Heads:` line against the HEADs read now; a stale lane runs
-    // at the close, one at a time, receipted under docs/R-NN/regression/
-    // and landed as the driver's PLAN regression commit; red holds the
-    // phase, the receipt and its log the person's input) — 0121's
-    // divergence lane rides this generic rule, its driver-side moments the
-    // phase closes. The wall: a `Wall:` field on a phase type document
-    // declares it; post-wall the record (the `Auto-Stage: wall` commit) has
-    // its `Wall-door:` doors absent and its `Wall-sealed:` paths frozen (a
-    // driver commit touching them a violation, a person commit the one
-    // recorded exception), the lane hold the close's admission; pre-wall at
-    // or after the sealing phase the wall is open and NEVER closed by the
-    // suite — the person's advance seals it (the driver's transfer), the
-    // open wall named in the report. The task side holds the split: a
-    // regression row is never a task session's lane.
-    const run = text("run.md")
-    const task = text("run-task.md")
-    for (const literal of [
-      "`Cost: regression`",
-      "`.opencode/auto/intents/<intent>.md`",
-      "`docs/R-NN/regression/`",
-      "`Heads:`",
-      "`Verdict: green`",
-      "`Verdict: red`",
-      "PLAN regression R-NN",
-      "Auto-Stage: regression",
-      "`Wall:`",
-      "`Auto-Stage: wall`",
-      "`Wall-door: <name> -> <target>`",
-      "`Wall-sealed:`",
-      "green-at-the-current-tree",
-    ]) {
-      expect(run, "run.md").toContain(literal)
-    }
-    // 0158 D5: the manual master's regression lanes name the lane-log dir
-    // seam too — the same 0151 wording, both files of the manual twin.
-    expect(run, "run.md").toContain("the lane-log dir (/tmp/opencode/ by default)")
-    // The wall is never closed by the suite — the person's advance act.
-    expect(run, "run.md").toContain("this suite never closes it")
-    expect(run, "run.md").toContain("the driver's `transfer`")
-    // The task/master split: regression rows are the driver's alone.
-    expect(task, "run-task.md").toContain("A `Cost: regression` row is never one of your lanes")
-    // plans/0177 D2 (0165-052): a row declaring an Evidence channel keeps
-    // its raw log out of the manual receipt — the verdict from the wrapper's
-    // exit-code line alone, the failure region from the channel file.
-    expect(run, "run.md").toContain("declared `Evidence:` file")
-    expect(run, "run.md").toContain("read no other line of the log")
-    // The P16 line: the holds speak the field/lane grammar alone, never an
-    // intent family's vocabulary.
-    expect(run, "run.md").not.toContain("cleanroom")
-    expect(task, "run-task.md").not.toContain("cleanroom")
-    expect(run, "run.md").not.toContain("divergence")
-  })
-
-  test("the approved brief installs at the handover close-out (plans/0081 D15.2)", () => {
-    // The suite once declined the release's other half ("this suite does
-    // not replicate that write") — with the survey's brief now the carrier
-    // of the settled constants every later phase plans from (the cleanroom
-    // methodology rides it), a manual run that never installed it would
-    // plan each later phase against the stale seed. The handover child —
-    // the driver's completion role — installs the released survey's
-    // `## Project brief` section verbatim (an equal brief writes nothing; a
-    // survey without the section installs nothing) as its own commit
-    // between the completion writes and the transition, the driver's own
-    // installApprovedBrief grammar, and the master control's outcome check
-    // accepts the third commit.
-    const handover = text("run-handover.md")
-    for (const literal of [
-      "`Gate: human`",
-      "`## Project brief`",
-      "`.opencode/auto/brief.md`",
-      "PLAN brief install the approved project brief (from <phase dir>/survey.md)",
-      "Auto-Stage: brief-install",
-      "installs nothing",
-    ]) {
-      expect(handover, "run-handover.md").toContain(literal)
-    }
-    const run = text("run.md")
-    expect(run, "run.md").toContain("the approved brief's install")
-    expect(run, "run.md").toContain("PLAN brief install the approved project brief")
-    // The retired non-replication stance must not return.
-    expect(run, "run.md").not.toContain("this suite does not replicate that write")
-  })
-
-  test("the gap channel is gaps.md; the handover channel is the driver's own handoff.md", () => {
-    // The verification gap list lives in `docs/T-NNN/gaps.md` — the driver's
-    // own verification loop uses the same path since plans/0083 (D3), and the
-    // manual suite keeps it. The session handover lives in
-    // `docs/T-NNN/handoff.md`, ending with the driver's own status line:
-    // plans/0078 §3 deliberately offered no Status protocol to worker
-    // prompts, and the handover upgrade (plans/0086) reversed that ruling
-    // consciously — the suite's task and fix children now hand over at work
-    // boundaries (the implementation→testing boundary, a test type) or when
-    // their session budget (`<session budget>`, 60 minutes by default) runs
-    // out, mirroring the driver's ondemand handover channel (src/docpaths.ts
-    // handoffFile — the status line parsed by the driver, the file removed
-    // at completion and close, src/close.ts removing handoff and gaps
-    // together). Verification children still hand over never: their verdict
-    // plus close-out is atomic, so the Status literals stay out of
-    // run-verify.
-    expect(text("run-verify.md")).toContain("`docs/<task id>/gaps.md`")
-    expect(text("run-fix.md")).toContain("`docs/<task id>/gaps.md`")
-    expect(text("run.md")).toContain("`docs/T-NNN/gaps.md`")
-    expect(text("run-task.md")).toContain("`docs/<task id>/handoff.md`")
-    expect(text("run-fix.md")).toContain("`docs/<task id>/handoff.md`")
-    for (const name of ["run-task.md", "run-fix.md"]) {
-      expect(text(name), name).toContain("`Status: continue`")
-      expect(text(name), name).toContain("`Status: done`")
-      expect(text(name), name).toContain("`<session budget>`")
-    }
-    // plans/0096 D2 widens the task child's status grammar to the
-    // three-word form — the park line names its blocker on the line
-    // itself ("pending" was ruled out: it already means todo.md-present
-    // in the readiness vocabulary). The fix child keeps the two-word
-    // grammar; the master control reads the same line (the loop's step 4
-    // and the readiness rules) and its missing-status feedback carries
-    // the widened grammar (pinned in the 0096 test below).
-    expect(text("run-task.md"), "run-task.md").toContain("`Status: park <blocker task id>`")
-    expect(text("run.md")).toContain("`Status: park <blocker task id>`")
-    // The close-out clears both channels (the gap list from disk, the riding
-    // handover through a committed completion write), and the master control
-    // carries the budget default.
-    expect(text("run-verify.md")).toContain("`docs/<task id>/handoff.md`")
-    expect(text("run.md")).toContain("60 minutes")
-    // The reversal's boundary: the verification child writes no handover of
-    // its own, and the subtask pipeline / charter stay outside the channel.
-    expect(text("run-verify.md")).not.toContain("`Status: continue`")
-    expect(text("run-verify.md")).not.toContain("`Status: done`")
-    for (const name of ["run-as-subtasks.md", "resume-subtasks.md", "plan-append.md", "charter.md"]) {
-      expect(text(name), name).not.toContain("handoff.md")
-      expect(text(name), name).not.toContain("`Status: continue`")
-    }
-  })
-
-  test("the test lanes and the dependency park (plans/0096)", () => {
-    // D1: the testing phase runs the project's suites as parallel lanes —
-    // background processes the task session itself launches and judges,
-    // planned per project into docs/T-NNN/testplan.md (each suite's exact
-    // command through the project's own runner — the plan derives from the
-    // project's actual suites, nothing hardcoded —, its log path, its
-    // verdict line, the code surfaces it exercises, its cost class),
-    // launched cheap-first with the one expensive anchor held back until
-    // the cheap tier greens, carried forward while no later fix touches a
-    // lane's surfaces, receipted in docs/T-NNN/testhands/<lane id>.md (the
-    // acceptance anchor's green receipt the evidence the verification
-    // session checks), and handed over at lane-set boundaries only —
-    // 0086's per-test-type boundary retired into it. Lanes are processes
-    // inside the task session, not child sessions: the one-at-a-time rule
-    // over child sessions stands.
-    // D2: the dependency park — the handover's status line gains
-    // `Status: park <blocker task id>`, the blocker named on the
-    // machine-parsed line itself ("pending" ruled out: it already means
-    // todo.md-present in the readiness vocabulary). The master control
-    // validates the blocker, lands the parked handoff as its own park
-    // commit (`<task id> park <task title>`, `Auto-Stage: park`, the
-    // blocker's `Depends:` amendment riding it — the park is not a share,
-    // the ordinal counts shares alone), counts the parked task done for
-    // its successors, and flips the line back to `Status: continue` at
-    // the pick after the blocker closes. The verification's check 1
-    // accepts the task's own park commits (protocol state) and other
-    // tasks' commits that landed between its shares while it sat in the
-    // park.
-    const run = text("run.md")
-    const task = text("run-task.md")
-    const verify = text("run-verify.md")
-    // D1: the lane protocol's paths (both files name them) and the
-    // lanes-are-processes sentence on the one-at-a-time rule.
-    for (const doc of [run, task]) {
-      expect(doc).toContain("`docs/T-NNN/testplan.md`")
-      expect(doc).toContain("`docs/T-NNN/testhands/`")
-    }
-    expect(run).toContain("parallel lanes are processes, not child sessions")
-    // 0158 D5 — the 0151 lockstep completion: the manual twin names the
-    // lane-log dir as the seam it is (/tmp/opencode/ the default; manual
-    // children inherit the person's environment, so the
-    // OPENCODE_AUTO_LANE_LOG_DIR redirect must stay prescribable), the
-    // driver channel's (_partials.md) exact wording.
-    expect(task).toContain("under the lane-log dir (/tmp/opencode/ by default)")
-    // D2: the park grammar — the worker's status line (pinned again in the
-    // widened status-grammar check above) and the master control's widened
-    // missing-status feedback.
-    expect(task).toContain("`Status: park <blocker task id>`")
-    expect(run).toContain("`Status: continue|done|park <task id>`")
-    // The park commit's grammar, stated by both driver-role files.
-    for (const doc of [run, verify]) {
-      expect(doc).toContain("<task id> park <short title>")
-      expect(doc).toContain("Auto-Stage: park")
-    }
-    // The verification's widened range shapes: the park commits are
-    // protocol state outside check 3's diff, the other tasks' commits out
-    // of unit entirely.
-    expect(verify).toContain("excluded from check 3's diff")
-    expect(verify).toContain("while it sat in the park")
-  })
-
-  test("the parallel wave: `parallel: <n>` overlays the serial loop (plans/0104)", () => {
-    // The manual twin of the driver's doc lanes (0099) for the doc-work
-    // phases — analysis, design, acceptance above all: the hand-over
-    // line's `parallel: <n>` waves independent documentation-scoped
-    // task/fix children in this same tree (no worktrees, no landing
-    // machinery — the master control stays the sole git writer and the
-    // sole ticker of the index), while the unnamed run keeps the serial
-    // loop exactly as written — the floor. Admission rides the
-    // declaration, fail-safe: whole-task, a non-empty `Touches:` with
-    // every entry under `docs/`, effective scopes (`Touches` ∪ the own
-    // `docs/T-NNN/`, implied when unlisted) pairwise disjoint — an
-    // undeclared, code-touching or overlapping task runs alone. The
-    // deltas over the loop: shares land scoped to the ended task's
-    // effective scope (a full-tree add would absorb a live sibling's
-    // writes), one verification at a time (its close-out ticks the
-    // shared index) with the master's git writes never overlapping a
-    // verification's flight, parks deferring to the drain, the
-    // verification's path-limited diff and generalized interleaving,
-    // and run-plan's `Depends:`/`Touches:` declaration discipline on
-    // doc tasks — the declaration is what the wave admits on.
-    const run = text("run.md")
-    expect(run).toContain("`parallel: <n>`")
-    expect(run).toContain("the serial floor")
-    expect(run).toContain("effective scope")
-    expect(run).toContain("non-empty `Touches:` field")
-    expect(run).toContain("limited to its task's effective scope")
-    expect(run).toContain("never beside another verification")
-    expect(run).toContain("defers to the drain")
-    expect(run).toContain("uncommitted content")
-    expect(run).toContain("spanning several task scopes")
-    expect(run).toContain("a task or fix child's prompt carries the parallel line")
-    expect(run).toContain("the `phases: all` phrase when it rode, the `parallel: <n>` phrase likewise")
-    // The wave-scheduling amendment over 0104's verification clause: the
-    // width's peak is <n> task/fix children plus at most one verification,
-    // stated overtly so the person sizes <n> for the brief <n>+1; a pending
-    // verification launches before any new task child (a facility refusal
-    // narrows the wave for a task, never blocks the verification — completion
-    // evidence rides on it); verifications ending together queue
-    // one-at-a-time and drain fully at the wave's tail; the freed task slot
-    // refills beside the verification; and an ended task's scope awaiting its
-    // deferred landing is tolerated residue, not a stop.
-    expect(run).toContain("plus at most one verification child beside them")
-    expect(run).toContain("sizing it for the brief <n>+1 peak a verification adds")
-    expect(run).toContain("a pending verification launches before any new task child")
-    expect(run).toContain("queue their verifications")
-    expect(run).toContain("the freed slot then refills with the next admitted ready task")
-    expect(run).toContain("an ended task's scope whose landing waits out a verification's flight")
-    // The 0096 clarifier keeps its role for the serial default.
-    expect(run).toContain("parallel lanes are processes, not child sessions")
-    for (const name of ["run-task.md", "run-fix.md"]) {
-      expect(text(name), name).toContain("your writes stay inside your task's declared scope")
-    }
-    expect(text("run-task.md"), "run-task.md").toContain("does not decompose")
-    const verify = text("run-verify.md")
-    expect(verify).toContain("while it sat in the park or ran beside its siblings in a parallel wave")
-    expect(verify).toContain("limit the diff to the unit's own scope")
-    expect(verify).toContain("never a sibling's path")
-    const plan = text("run-plan.md")
-    expect(plan).toContain("`Touches:`")
-    expect(plan).toContain("the declarations are what the master control's parallel wave admits on")
-  })
-
-  test("report.md is the verification's alone — a task deliverable never lives there (plans/0120)", () => {
-    // The field incident (the aster-mig cleanroom round): the audit tasks'
-    // deliverable was named `docs/T-NNN/report.md`, so the task session and
-    // the verification child became two writers of one file — the exec
-    // commits created the reports (316/439 lines of audit findings), the
-    // wrapup commits then appended (+112) or revised (+212/−46) them — and
-    // with no deliverable path distinct from the implied own directory
-    // there was nothing to declare in `Touches:`, so the wave never formed.
-    // The ruling: `report.md` is the verification's wrap-up report alone
-    // (the verdict's durable record — a Result line authored by the work
-    // session would be self-report), one writer per file; a task's
-    // deliverable carries its own name, the phase duty text naming its
-    // conventions (the cleanroom audit phase's findings.md, pinned by its
-    // own bundle file — this ratchet holds the suite copy alone). Pinned on
-    // all three copy sites: the planner, the worker, the append planner.
-    expect(text("run-plan.md")).toContain("`docs/T-NNN/report.md` is a reserved name")
-    expect(text("run-task.md")).toContain("One name in that directory is reserved")
-    expect(text("plan-append.md")).toContain("the verification's wrap-up report, reserved")
-    // 0124 D3: the handover survey's read-side enumeration names the report
-    // as the verification's, never as a task-artifact example.
-    const runHandover = text("run-handover.md").replaceAll("\n", " ").replace(/  +/g, " ")
-    expect(runHandover).toContain("plus the task's own artifacts and the verification's report.md")
-    expect(runHandover).not.toContain("artifacts such as report.md")
-  })
-
-  // plans/0245: the gap-list ignore set — the suite's one sanctioned transient
-  // (`docs/T-NNN/gaps.md`: written by an INCOMPLETE verification, read by the
-  // fix session, deleted by a passing close-out, never in a commit, its
-  // presence on disk the pending-fix hint) moved from tolerated porcelain
-  // dirt to a gitignored entry the master control ensures at run start. The
-  // field incident: the gap list sat dirty in the porcelain between a
-  // verification and its fix round — and across restarts inside one — so
-  // every clean-seam check carried a transient exception and a mid-fix-round
-  // restart strained the preflight clean gate; retry residue (untracked
-  // scratch a relaunched session left behind) met the same stop-and-report.
-  // The landing: the entry `docs/T-*/gaps.md` appended idempotently at run
-  // start, its delta in the driver's own housekeeping grammar (no new
-  // vocabulary — the PLAN housekeeping stage is the driver's own run-start
-  // commit, the coupling pin below), residue appended the same way the moment
-  // it surfaces — never deleted, an unclassifiable file riding the share as
-  // work — and every seam's check now reads a porcelain that lists nothing.
-  test("the gap-list ignore set and the residue sweep (plans/0245)", () => {
-    const run = text("run.md")
-    const verify = text("run-verify.md")
-    // The entry, its landing grammar and its idempotence, in run.md's own
-    // section.
-    expect(run).toContain("`docs/T-*/gaps.md`")
-    expect(run).toContain("PLAN housekeeping ignore set")
-    expect(run).toContain("Auto-Stage: housekeeping")
-    expect(run).toContain("An already-present entry commits nothing")
-    // The residue arm: untracked-only, never deleted, an unclassifiable file
-    // rides the share as work.
-    expect(run).toContain("Residue is untracked files only")
-    expect(run).toContain("never delete or edit the files themselves")
-    expect(run).toContain("let it ride the share")
-    // The clean-seam restatement: the porcelain-transient exception family is
-    // gone — the retired stop-and-report residue rule with it.
-    expect(run).not.toContain("porcelain lists only the transient gap list")
-    expect(run).not.toContain("anything else is residue: stop and report")
-    expect(run).not.toContain("the tree clean except the transient gap list")
-    // The verification child expects a clean porcelain and accepts the
-    // housekeeping shape in the unit's range (protocol state, never work
-    // content).
-    expect(verify).toContain("The worktree is clean in the porcelain")
-    expect(verify).toContain("`Auto-Stage: housekeeping`")
-    expect(verify).toContain("never work content")
-    expect(verify).not.toContain("clean except the transient gap list")
-    expect(verify).not.toContain("as tolerated as the")
-    // The coupling arm (plans/0203's two-sided form): the manual grammar
-    // mirrors the driver's own run-start housekeeping commit — the stage
-    // exists producer-side.
-    expect(src("loop-preflight.ts")).toContain('stage: "housekeeping"')
   })
 })

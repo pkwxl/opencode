@@ -70,8 +70,11 @@ release
   `{ task, kind }`. Answers under `step`: a leased grant, or a
   wait/blocked/terminal notice. A held lease answers the same grant
   (brief refresh) for its holder.
-- **brief** — re-read the live grant's brief for `{ task, kind }`; with
-  `cursor`, the paged person answers (`answers`/`next`).
+- **brief** — re-read the live grant's brief for `{ task, kind }`; for a
+  held lease the same grant is re-answered for its holder. The ask
+  channel's paging arms (`cursor`, the `answers`/`next` walk) died with
+  the question route (plans/0282): the request carries no `cursor` field
+  and the reply attaches no answers.
 - **report** — `{ step, lease, outcome: ended|failed, note? }`: the share's
   result. `ended` settles (the coordinator stages, commits, closes out);
   `failed` books the attempt without landing. Ambiguous delivery: retry the

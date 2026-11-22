@@ -78,7 +78,7 @@ opencode-auto remove-fork <worktree-path> [dir] [--force]   # tear down a fork: 
 opencode-auto reset [dir]    # de-initialize: remove exactly the config-layer artifacts init wrote (the project brief .opencode/auto/brief.md is kept — an installed approved proposal or a person's `amend --brief` write — and so is a materialized intent bundle's landed files, the pack/mode/phase files and provenance.json: person-owned once landed; delete them by hand if you mean to)
 opencode-auto status [dir]   # print the project config summary and the read-only round → phase → task → subtask tree
 opencode-auto models [dir] [--probe]   # print the model registry's effective table (tier, candidates and current availability per phase type × session role); --probe additionally sends a short recovery-probe prompt to every listed model (optional, costs tokens), see "Model registry overview (models)"
-opencode-auto install-prompts [dir]   # resync the manual-driver prompt suite (runbooks for a coding-agent session acting as the driver) into the target's prompts/ byte-identically — differing files rewritten, extras reported never deleted, prompts/MANIFEST written pinning the vintage; --check is the read-only drift gate; requires an initialized project, takes no run lock, runs no git (you review and commit), see "Manual-driver prompt suite (install-prompts)"
+opencode-auto install-prompts [dir]   # resync the manual prompt suite (the executor protocol's manual floor, executor.md) into the target's prompts/ byte-identically — differing files rewritten, extras reported never deleted, prompts/MANIFEST written pinning the vintage; --check is the read-only drift gate; requires an initialized project, takes no run lock, runs no git (you review and commit), see "Manual prompt suite (install-prompts)"
 opencode-auto driver-helper [dir]   # render the person-proxy brief (plans/0105): the six-block context — role pin (never the driver; prompts/ is reference material), the driver's working model, the live state plus the stop's own lines, the person-owned channels open right now, the assist policy, the exact recovery commands — to paste into the coding-agent session acting with your pen at a boundary run cannot cross; read-only, stdout, nothing written, no run lock (a live lock is reported, never refused on), see "The person-proxy brief (driver-helper)"
 ```
 
@@ -892,14 +892,14 @@ destroyed mid-run). Like `fork` it takes no run lock in the source. Exit codes: 
 path is not a fork of this project / `2` blocked — the live run, the uncommitted work, or a git failure
 midway (the removal is resumable by re-running: an already-removed member is seen and skipped).
 
-### Manual-driver prompt suite (install-prompts)
+### Manual prompt suite (install-prompts)
 
-`opencode-auto install-prompts [dir]` resyncs the **manual-driver prompt suite** into the target's
-`prompts/` (auto-core plans/0093): the runbooks for a coding-agent session acting as the driver with its
-child sessions as workers (`run.md` the master control, the `run-task`/`run-verify`/`run-fix`/
-`run-handover`/`run-plan` children, `run-as-subtasks`/`resume-subtasks` for the subtask pipeline,
-`plan-append` the append planner) — the other way of driving a round, with no automated driver process
-at all. The command **requires an initialized project** and takes exactly one option, `--check`.
+`opencode-auto install-prompts [dir]` resyncs the **manual prompt suite** into the target's
+`prompts/` (auto-core plans/0093): the executor protocol's manual floor — `executor.md`, the
+runbook a coding-agent session claiming grants over the daemon's executor routes reads. The
+push-era runbooks (`run.md` the master control and its children, the subtask pipeline, the append
+planner, the charter discussion runbook) retired with the push CLI (auto-core plans/0296). The
+command **requires an initialized project** and takes exactly one option, `--check`.
 
 - **Byte-identical overwrite is the point**: every suite file whose content differs is rewritten, an
   already-identical one is left untouched, and files in `prompts/` the suite does not carry are
@@ -908,7 +908,7 @@ at all. The command **requires an initialized project** and takes exactly one op
   digest plus the suite-level digest of the installed revision. Commit the manifest alone and the
   target proves which suite drives it; `install-prompts <dir> --check` is the read-only gate over the
   same facts (drifted/missing files, the manifest's state), exit `0` clean and `1` on any drift — run
-  it before handing a target to a manual-driver session.
+  it before handing a target to a session that reads the suite.
 - **No run lock, no git**: the automated driver never reads the target's `prompts/`, so the command
   writes nothing a running driver reads and runs beside a live run; and it runs no git command — the
   suite is tracked content in the target, so you review and commit the resync.
@@ -928,7 +928,8 @@ predicates and stop-line emitters the terminal prints — so it can never be sta
 the role, unlike a hand-drafted paste-prompt.
 
 The brief is six blocks: **ROLE** (the proxy pin — the session never takes the driver's seat and
-never the manual-driver role of `prompts/run.md`, which is reference material, not the execution
+never the executor claimant's role of `prompts/executor.md`, which is reference material, not the
+execution
 path; and its mandate is the person's instruction alone — every stop a command reaches is a report
 point, never a runway, 0107), **PRIMER** (the driver's working model), **STATE** (the live facts plus the stop's own
 lines), **CHANNELS** (the person-owned documents open at this state, each with its grammar and its

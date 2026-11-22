@@ -37,32 +37,14 @@
 import { createHash } from "node:crypto"
 import { mkdir, stat } from "node:fs/promises"
 import { CONFIG_FILE } from "./config"
-import suiteCharter from "../prompts/charter.md" with { type: "file" }
 import suiteExecutor from "../prompts/executor.md" with { type: "file" }
-import suitePlanAppend from "../prompts/plan-append.md" with { type: "file" }
-import suiteResumeSubtasks from "../prompts/resume-subtasks.md" with { type: "file" }
-import suiteRunAsSubtasks from "../prompts/run-as-subtasks.md" with { type: "file" }
-import suiteRunFix from "../prompts/run-fix.md" with { type: "file" }
-import suiteRunHandover from "../prompts/run-handover.md" with { type: "file" }
-import suiteRunPlan from "../prompts/run-plan.md" with { type: "file" }
-import suiteRunTask from "../prompts/run-task.md" with { type: "file" }
-import suiteRunVerify from "../prompts/run-verify.md" with { type: "file" }
-import suiteRun from "../prompts/run.md" with { type: "file" }
 
 // The registry itself: every file of the suite, by name, in directory order.
 // PROMPT_SUITE is the list the guard test compares against the directory.
+// The push-era companions retired with the push CLI (plans/0296's slice 3):
+// the suite is the executor protocol's manual floor alone.
 const SUITE: readonly { readonly name: string; readonly file: string }[] = [
-  { name: "charter.md", file: suiteCharter },
   { name: "executor.md", file: suiteExecutor },
-  { name: "plan-append.md", file: suitePlanAppend },
-  { name: "resume-subtasks.md", file: suiteResumeSubtasks },
-  { name: "run-as-subtasks.md", file: suiteRunAsSubtasks },
-  { name: "run-fix.md", file: suiteRunFix },
-  { name: "run-handover.md", file: suiteRunHandover },
-  { name: "run-plan.md", file: suiteRunPlan },
-  { name: "run-task.md", file: suiteRunTask },
-  { name: "run-verify.md", file: suiteRunVerify },
-  { name: "run.md", file: suiteRun },
 ]
 export const PROMPT_SUITE: readonly string[] = SUITE.map((entry) => entry.name)
 

@@ -168,7 +168,7 @@ Executor protocol (the service shell's reverse-control posture, `plans/0246`):
 
 | 中文 | English | Code / notes |
 |---|---|---|
-| 执行器 | executor | A session started in any coding agent that drives work through the protocol: it sends the standing requests (`ready`/`claim`/`brief`/`report`/`heartbeat`/`release`/`question`/`answer`) to the service shell's per-project endpoint and works the step its lease grants — the reverse-control posture, the loop turned inside out; the runbook `prompts/executor.md` (solo worker and hub postures); never a fourth `AgentClient` adapter (the adapter model presumes push) |
+| 执行器 | executor | A session started in any coding agent that drives work through the protocol: it sends the standing requests (`ready`/`claim`/`brief`/`report`/`heartbeat`/`release`) to the service shell's per-project endpoint and works the step its lease grants — the reverse-control posture, the loop turned inside out; the runbook `prompts/executor.md` (solo worker and hub postures); never a fourth `AgentClient` adapter (the adapter model presumes push) |
 | 协调器 | coordinator | The per-project worker inside the service shell that holds the run lock — the sole writer of shared git state and the admission authority behind every lease grant (`packages/auto-server/src/executor-worker.ts` over core `src/executor-coordinator.ts` + `src/executor-steps.ts`); in this posture the server **is** the driver (P4: the executor prompt teaches no git grammar at all) |
 
 ## Documents and protocols

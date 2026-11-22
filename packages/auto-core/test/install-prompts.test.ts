@@ -88,11 +88,11 @@ describe("install-prompts", () => {
       const again = await installPrompts(dir)
       expect(again.written).toEqual([])
       expect(again.unchanged.sort()).toEqual([...PROMPT_SUITE].sort())
-      await writeFile(join(dir, "prompts", "run.md"), "drifted\n")
+      await writeFile(join(dir, "prompts", "executor.md"), "drifted\n")
       const third = await installPrompts(dir)
-      expect(third.written).toEqual(["run.md"])
-      expect(await Bun.file(join(dir, "prompts", "run.md")).text()).toEqual(
-        await Bun.file(join(SUITE_DIR, "run.md")).text(),
+      expect(third.written).toEqual(["executor.md"])
+      expect(await Bun.file(join(dir, "prompts", "executor.md")).text()).toEqual(
+        await Bun.file(join(SUITE_DIR, "executor.md")).text(),
       )
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -127,13 +127,13 @@ describe("install-prompts", () => {
     const dir = await makeProject()
     try {
       await installPrompts(dir)
-      const before = await Bun.file(join(dir, "prompts", "run.md")).text()
+      const before = await Bun.file(join(dir, "prompts", "executor.md")).text()
       const report = await checkPrompts(dir)
       expect(report.drifted).toEqual([])
       expect(report.missing).toEqual([])
       expect(report.manifest).toBe("current")
       expect(report.extra).toEqual([])
-      expect(await Bun.file(join(dir, "prompts", "run.md")).text()).toEqual(before)
+      expect(await Bun.file(join(dir, "prompts", "executor.md")).text()).toEqual(before)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -143,16 +143,20 @@ describe("install-prompts", () => {
     const dir = await makeProject()
     try {
       await installPrompts(dir)
-      await writeFile(join(dir, "prompts", "run.md"), "drifted\n")
-      await rm(join(dir, "prompts", "charter.md"))
+      await writeFile(join(dir, "prompts", "executor.md"), "drifted\n")
       const drifted = await checkPrompts(dir)
-      expect(drifted.drifted).toEqual(["run.md"])
-      expect(drifted.missing).toEqual(["charter.md"])
+      expect(drifted.drifted).toEqual(["executor.md"])
+      expect(drifted.missing).toEqual([])
       expect(drifted.manifest).toBe("current") // the manifest pins the suite, the disk drifted from both
+      await rm(join(dir, "prompts", "executor.md"))
+      const absent = await checkPrompts(dir)
+      expect(absent.drifted).toEqual([])
+      expect(absent.missing).toEqual(["executor.md"])
+      expect(absent.manifest).toBe("current")
       // A manifest absent or pinning something else is its own finding.
       await rm(join(dir, "prompts", MANIFEST_NAME))
-      const absent = await checkPrompts(dir)
-      expect(absent.manifest).toBe("missing")
+      const missing = await checkPrompts(dir)
+      expect(missing.manifest).toBe("missing")
       await Bun.write(join(dir, "prompts", MANIFEST_NAME), '{"generator":"x","suite":"sha256-0","files":{}}')
       const stale = await checkPrompts(dir)
       expect(stale.manifest).toBe("stale")
@@ -182,20 +186,20 @@ describe("install-prompts", () => {
   })
 
   test("the formatter names the directory and the outcome", async () => {
-    const current = formatInstallPrompts("/proj", { written: [], unchanged: ["run.md"], extra: [], suite: "sha256-abc" })
+    const current = formatInstallPrompts("/proj", { written: [], unchanged: ["executor.md"], extra: [], suite: "sha256-abc" })
     expect(current).toEqual([
       "prompt suite already current in /proj/prompts: 1 files",
       `  manifest: prompts/${MANIFEST_NAME} pins this suite (sha256-abc)`,
     ])
     const resynced = formatInstallPrompts("/proj", {
-      written: ["run.md", "run-task.md"],
-      unchanged: ["charter.md"],
+      written: ["executor.md"],
+      unchanged: [],
       extra: ["local-note.md"],
       suite: "sha256-abc",
     })
     expect(resynced).toEqual([
-      "prompt suite resynced into /proj/prompts: 3 files (2 rewritten, 1 unchanged)",
-      "  rewritten: run.md, run-task.md",
+      "prompt suite resynced into /proj/prompts: 1 files (1 rewritten, 0 unchanged)",
+      "  rewritten: executor.md",
       `  manifest: prompts/${MANIFEST_NAME} pins this suite (sha256-abc)`,
       "  left alone (not in the suite): local-note.md",
     ])
@@ -207,15 +211,14 @@ describe("install-prompts", () => {
     ])
     expect(
       formatCheckPrompts("/proj", {
-        drifted: ["run.md"],
-        missing: ["charter.md"],
+        drifted: ["executor.md"],
+        missing: [],
         manifest: "stale",
         extra: ["local-note.md"],
       }),
     ).toEqual([
       "prompt suite drift in /proj/prompts:",
-      "  drifted from this binary's suite: run.md",
-      "  missing: charter.md",
+      "  drifted from this binary's suite: executor.md",
       `  manifest stale: it pins a suite other than this binary's`,
       "  left alone (not in the suite): local-note.md",
     ])
