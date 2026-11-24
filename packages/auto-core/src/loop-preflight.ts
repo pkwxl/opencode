@@ -28,7 +28,6 @@ import { ensureGitignore } from "./gitignore"
 import type { InteractiveOption } from "./interactive"
 import {
   dispatchLane,
-  docEligible,
   docScheduler,
   laneExit,
   laneOutcome,
@@ -46,6 +45,7 @@ import {
   type TierProbe,
   type TreeTier,
 } from "./lanes"
+import { docEligible } from "./lane-scope"
 import { liveRunLock } from "./lock"
 import { log } from "./log"
 import { leftoverIsolationLines } from "./land"

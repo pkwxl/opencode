@@ -40,9 +40,7 @@ import { phaseKey, routePhase, type PhaseUnit } from "./phases"
 import {
   conflictRepair,
   dispatchLane,
-  docEligible,
   docScheduler,
-  docScope,
   laneEligible,
   laneExit,
   laneOutcome,
@@ -52,7 +50,6 @@ import {
   orphanRedispatch,
   readyUnits,
   readLaneReport,
-  scopesDisjoint,
   streamUnitOf,
   streamUnits,
   worktreeScheduler,
@@ -62,6 +59,7 @@ import {
   type LaneRuntime,
   type TreeTier,
 } from "./lanes"
+import { docEligible, docScope, scopesDisjoint } from "./lane-scope"
 import { recallProgress } from "./resume"
 import { regressionBoundary } from "./regression"
 import { promptFacts } from "./prompt-facts"

@@ -10,7 +10,6 @@
 import { mkdir, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
-import { briefProposal, installBriefProposal } from "./brief"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
 import { acceptanceMark, ACCEPTED_MARK, constraintPitfallResolves, HANDOVER_SECTIONS, validHandover } from "./document/roles"
 import { ANALYSIS_DOC, reportForUserPath, roundDirName } from "./docpaths"
@@ -23,9 +22,7 @@ import { appendWithStep } from "./loop-append"
 import { planWithStep } from "./loop-plan"
 import { runTaskLoop, type LoopCtx } from "./loop-task"
 import {
-  CLARIFIED_MARK,
   completePhase,
-  clarifiedMark,
   phaseAcceptanceDoc,
   phaseFlowBlockedLine,
   phaseGateProblems,
@@ -33,14 +30,13 @@ import {
   phaseHandoverDoc,
   phaseKey,
   phaseState,
-  phaseSurveyDoc,
   phaseTitle,
   phaseVerdictDoc,
   roundIsOpen,
   routePhase,
   type PhaseUnit,
 } from "./phases"
-import { emptyIndexNotice, executeNotice, gateStopLines, openRoundEmptyLines, openRoundWrapLines, phaseBoundaryLines, roundCompleteNext } from "./plan"
+import { emptyIndexNotice, executeNotice, installApprovedBrief, logGateStop, openRoundEmptyLines, openRoundWrapLines, phaseBoundaryLines, roundCompleteNext } from "./plan"
 import { planInputPath, readPlanInput } from "./plan-input"
 import { openBlockage } from "./blockage-diagnose"
 import { clampLine, clampedItemsOf } from "./charter-clamp"
@@ -56,6 +52,9 @@ import { statsPhase } from "./stats"
 import { stepPause } from "./step"
 import { loadPlan, resetPlanning } from "./tasks"
 import { wallBoundary } from "./wall"
+
+// Keep the historical loop-phase exports for callers of these shared boundary actions.
+export { installApprovedBrief, logGateStop } from "./plan"
 
 // phase handover (§F, docs never move): ① the distillation session (the AI's
 // only duty, a one-off bypass) produces the permanent handover document
@@ -347,19 +346,6 @@ async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   return 0
 }
 
-// A phase gate holds (plans/0049 G7): the phase stays on its handover route,
-// and the next run re-checks. The human's ways on — sign, rework through an
-// append, or close without the gate — are spelled out here as commands: the
-// append removes the stale handover itself (plans/0053 D25) and replans the
-// distillation after the fix tasks. Exported since plans/0101 D1/D2: run's
-// boundary stop and transfer's phase-boundary refusal check the human gate
-// ahead of any session and print this same awaiting shape. The lines
-// compose in plan's gateStopLines (plans/0105 D3) so the person-proxy brief
-// renders the same bytes; this prints them.
-export async function logGateStop(directory: string, phase: PhaseUnit, problems: string[], acceptance: string | undefined): Promise<void> {
-  for (const line of await gateStopLines(directory, phase, problems, acceptance)) log(line)
-}
-
 // Whether run's boundary-stop shape is in force (plans/0101 D1): plain run
 // with --boundary not restoring the flow. A stop condition in force (plan's
 // "execute", transfer's "formulate") runs its own grammar and never this
@@ -399,31 +385,6 @@ async function boundaryStop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   }
   for (const line of await boundaryStopLines(ctx, phase)) log(line)
   return 0
-}
-
-// The brief install on survey release (plans/0081 D15.2): the person's
-// `Clarified: yes` approves the forks and the proposed `## Project brief`
-// section in one act — on release the driver installs that section verbatim
-// into .opencode/auto/brief.md (brief.ts installBriefProposal, shared with
-// the pre-round analysis release of plans/0084; the run's git seam carries
-// the commit strategy). Idempotent: an installed equal brief writes nothing
-// and still runs the commit (plans/0209 D2 — the interrupted install
-// recovered by the re-run). A survey released without a proposal installs
-// nothing (an earlier install or the default path's `a`-phase proposal
-// remain the brief's sources).
-// Exported since plans/0282: the deterministic transfer's apply calls it
-// beside the loop (the survey release's install half — mark-gated, its own
-// pathspec commit); the ctx use is structural (directory + the git seam).
-export async function installApprovedBrief(ctx: { directory: string; git: Pick<LoopCtx["git"], "commitTree"> }, phase: PhaseUnit): Promise<void> {
-  const survey = phaseSurveyDoc(phase)
-  const text = await Bun.file(join(ctx.directory, survey)).text().catch(() => "")
-  // Mark-gated (plans/0169 D2): the install — and its "approved" log line —
-  // runs only when the person's release mark holds, never on a gate that
-  // passed without the person's act.
-  if (!clarifiedMark(text)) return
-  const proposal = briefProposal(text)
-  if (proposal === undefined) return
-  for (const line of await installBriefProposal(ctx.directory, survey, proposal, ctx.git.commitTree)) log(line)
 }
 
 // the phase loop (D.1; the no-phase mode runs this loop too, plans/0047 L2):

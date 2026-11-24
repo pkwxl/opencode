@@ -13,7 +13,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ModelEntry, ModelRegistry, TierList } from "../src/models-schema"
 import { releasedRoadmapRounds } from "../src/roadmap"
-import { runTransfer } from "../src/transfer"
+import { runTransfer, transferDeterministic } from "../src/transfer"
+import { readExecutorPreview } from "../src/executor-steps"
+import { CONFIG_FILE } from "../src/config"
 import { addTask } from "../src/task-add"
 import { completePhase, establishRound, phaseLabel, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
 import { renderRoundBrief } from "../src/round-brief"
@@ -844,6 +846,25 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "ignore the render")
     return dir
+  }
+
+  for (const round of ["R-01", "R-02"]) {
+    test(`a released ${round} proposal continues through deterministic transfer to a pull grant`, async () => {
+      const dir = await cleanRepo()
+      await Bun.write(join(dir, CONFIG_FILE), JSON.stringify({ subtask: "off", phases: "mt" }))
+      if (round === "R-02") await completeRound(dir, "mt")
+      const roadmap = ["- R-01 mt — port the core", "- R-02 mt — verify the port"]
+      await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(roadmap) + BRIEFS.replace("### R-01", `### ${round}`))
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", `release the ${round} proposal`)
+
+      const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
+      expect(out.code).toBe(0)
+      expect(out.lines.some(line => line.includes("claimable formulate work"))).toBe(true)
+      expect(await readExecutorPreview(dir)).toMatchObject({ kind: "formulate", phase: `${round}.P01` })
+      expect(await Bun.file(join(dir, "docs", round, "round.md")).text()).toContain("Port the core with the retry ladder intact.")
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+    })
   }
 
   test("a released proposal passes the round-start gate: installed verbatim on the driver's round-start commit, the construct follows in the same invocation", async () => {

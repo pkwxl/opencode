@@ -428,8 +428,7 @@ const CLASSIFIED: Record<string, Domain> = {
   plan: "driver",
   // transfer, the single advance command (plans/0101 D2): the
   // person-bracketed boundaries — shape resolution and stops beside plan's
-  // row machinery (which it shares through establishRoundSetup), delegating
-  // the advance's sessions to runAll.
+  // row machinery (which it shares through establishRoundSetup).
   transfer: "driver",
   // The planning input plan-input.md: read, persist, commit (plans/0053 D9).
   "plan-input": "driver",
@@ -554,6 +553,7 @@ const CLASSIFIED: Record<string, Domain> = {
   "executor-coordinator": "driver",
   "executor-worktree": "driver",
   "task-handoff": "driver",
+  "lane-scope": "driver",
   // The blockage dossier and honest block line (plans/0082 §2 D1/D2), the
   // strict remediation-plan parser and the blockage document's shape (§4
   // D5 / §5 D6): the pure half every covered block site builds on.
@@ -771,9 +771,7 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // through plan.ts's lines-returning twins.
   "driver-helper": "pipeline",
   plan: "pipeline",
-  // transfer, the single advance command (plans/0101 D2): pipeline — the
-  // runAll it delegates to is the pipeline's top, and its shape resolution
-  // reads the same round/phase machinery plan's rows do.
+  // Transfer applies the state-resolved round and phase boundaries.
   transfer: "pipeline",
   // clarify, the person's release command (plans/0116): pipeline beside
   // close — one state-resolving write over the same gate readers, reaching
@@ -810,6 +808,7 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   "executor-steps": "pipeline",
   "executor-coordinator": "pipeline",
   "task-handoff": "pipeline",
+  "lane-scope": "pipeline",
   // The 0082 blockage family and the charter clamp (pipeline beside the
   // loops that call them and the plan prelude that executes the marks).
   blockage: "pipeline",
@@ -1016,6 +1015,11 @@ const SEAM_POLICY_REACH: Array<{ from: string; to: string; why: string }> = [
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept
 // explicit (some are implied by RANK) so the failure message carries the rationale.
 const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
+  {
+    from: "transfer",
+    to: ["loop", "loop-phase"],
+    why: "deterministic transfer shares boundary actions with the loop. Only the legacy review continuation loads runAll, on demand.",
+  },
   {
     from: "testrun",
     to: ["session", "attempt", "watch", "exec-session", "execute", "runner"],

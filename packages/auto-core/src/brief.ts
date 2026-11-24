@@ -21,7 +21,7 @@
 // never writes it (plans/0133 D9 — the seed channel retired): the analysis
 // owns the brief from the start — the survey phase's closing task proposes
 // a `## Project brief` section, the person's `Clarified: yes` approves it,
-// and the driver installs that section verbatim (D15.2, loop-phase.ts
+// and the driver installs that section verbatim (D15.2, plan.ts
 // installApprovedBrief). `amend --brief <text> | --brief-file <path>` stays
 // the person's rare manual override — the revision channel, never the
 // start's.

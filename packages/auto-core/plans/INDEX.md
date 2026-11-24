@@ -360,6 +360,8 @@ Two corpus facts have no numbered file to carry them, so they get their own rows
 | 0303-retired-knowledge-extraction | Removes callerless helper functions and tests left after the push knowledge extraction sessions retired. Historical digest readers and the knowledge artifact path check stay in use. | active-authority | P10, P18, P21 | src/knowledge.ts, src/docpaths.ts, test/knowledge.test.ts | (open — ships with the next release) |
 | 0304-pull-only-round-replay | Isolated standalone daemon replay on a7f2b7bf1. One scripted round exercised both settlement recoveries, six grant kinds, a measured FAIL and repair, transfer and round close. | historical-only | P5, P8, P10, P19 | — (field record) | — |
 | 0305-shared-task-handoff | Moves the shared dependency-park decisions, release note and continuation limits out of push execution. | active-authority | P10, P21 | src/task-handoff.ts, src/executor-coordinator.ts, src/executor-steps.ts | (open — ships with the next release) |
+| 0306-shared-lane-scope | Separates documentation lane scope and path overlap decisions from push lane dispatch. | active-authority | P10, P21 | src/lane-scope.ts, src/lanes.ts, src/executor-coordinator.ts, src/task-handoff.ts | (open — ships with the next release) |
+| 0307-separate-transfer-from-push-loop | Removes eager push-loop imports from deterministic transfer and retains the legacy entry. | active-authority | P10, P21 | src/transfer.ts, src/plan.ts, src/loop-phase.ts | (open — ships with the next release) |
 
 ## Maintaining this index
 

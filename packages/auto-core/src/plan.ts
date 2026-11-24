@@ -55,7 +55,7 @@ import { loadPhaseTypes } from "./phases/custom"
 import { phasesProblem, resolvePhases } from "./phases/registry"
 import { readPlanInput, planInputPath, type PlanInput } from "./plan-input"
 import { awaitingFormulation } from "./formulate"
-import { changedFiles, commitTree } from "./git"
+import { changedFiles, commitTree, type GitOps } from "./git"
 import { isolateRound } from "./git-land"
 import { installRoundBrief, renderRoundBrief, roundBriefText } from "./round-brief"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
@@ -959,10 +959,8 @@ export async function establishRoundSetup(
 // prints. The loop-side originals print through these; a brief that could
 // disagree with the terminal is worse than none.
 
-// The held-phase gate stop (plans/0049 G7; the lines-returning twin of
-// loop-phase's logGateStop, verbatim): the awaiting clarification shape, the
-// acceptance shape, or the held-gate shape, with the person's ways on —
-// sign, rework through an append, or close without the gate — as commands.
+// The held-phase gate stop (plans/0049 G7). The transfer command, the phase
+// loop and the person-proxy brief all render the same available actions.
 export async function gateStopLines(directory: string, phase: PhaseUnit, problems: readonly string[], acceptance: string | undefined): Promise<string[]> {
   const { bin } = shellProfile()
   const surface = surfaceOf()
@@ -986,8 +984,7 @@ export async function gateStopLines(directory: string, phase: PhaseUnit, problem
     // The install promise conditioned on the proposal (plans/0207 D3,
     // 0165-188): the release completes the phase either way, but only a
     // survey carrying a `## Project brief` proposal installs one — the same
-    // extraction the install itself gates on (loop-phase's
-    // installApprovedBrief). A proposal-less survey must not promise an
+    // extraction installApprovedBrief gates on. A proposal-less survey must not promise an
     // install the person will not see.
     const surveyText = await Bun.file(join(directory, survey)).text().catch(() => "")
     lines.push(
@@ -1017,6 +1014,32 @@ export async function gateStopLines(directory: string, phase: PhaseUnit, problem
   )
   lines.push(`  to close the phase without its gate: ${bin} close ${phaseKey(phase).id} ${directory} --reason <text>`)
   return lines
+}
+
+export async function logGateStop(directory: string, phase: PhaseUnit, problems: readonly string[], acceptance: string | undefined): Promise<void> {
+  for (const line of await gateStopLines(directory, phase, problems, acceptance)) log(line)
+}
+
+// The brief install on survey release (plans/0081 D15.2): the person's
+// `Clarified: yes` approves the forks and the proposed `## Project brief`
+// section in one act — on release the driver installs that section verbatim
+// into .opencode/auto/brief.md (brief.ts installBriefProposal, shared with
+// the pre-round analysis release of plans/0084; the run's git seam carries
+// the commit strategy). Idempotent: an installed equal brief writes nothing
+// and still runs the commit (plans/0209 D2 — the interrupted install
+// recovered by the re-run). A survey released without a proposal installs
+// nothing (an earlier install or the default path's `a`-phase proposal
+// remain the brief's sources).
+export async function installApprovedBrief(ctx: { directory: string; git: Pick<GitOps, "commitTree"> }, phase: PhaseUnit): Promise<void> {
+  const survey = phaseSurveyDoc(phase)
+  const text = await Bun.file(join(ctx.directory, survey)).text().catch(() => "")
+  // Mark-gated (plans/0169 D2): the install — and its "approved" log line —
+  // runs only when the person's release mark holds, never on a gate that
+  // passed without the person's act.
+  if (!clarifiedMark(text)) return
+  const proposal = briefProposal(text)
+  if (proposal === undefined) return
+  for (const line of await installBriefProposal(ctx.directory, survey, proposal, ctx.git.commitTree)) log(line)
 }
 
 // The phase-boundary stop (plans/0101 D1; the dir-based twin of loop-phase's

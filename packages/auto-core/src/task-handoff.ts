@@ -2,7 +2,7 @@
 import { join } from "node:path"
 import { checkArtifactSpecs, taskArtifactSpecs } from "./document/spec"
 import { taskChangedPaths } from "./git"
-import { pathsOverlap } from "./lanes"
+import { pathsOverlap } from "./lane-scope"
 import { renderParkRelease, type PromptFacts, type TaskDocs } from "./prompt"
 import { taskStatePaths, type Plan, type Task } from "./tasks"
 

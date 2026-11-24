@@ -261,7 +261,7 @@ function parseHeads(value: string): { root: string; sha: string }[] | undefined 
 
 // Whether a lane's declared surfaces intersect a set of changed paths — the
 // `Touches:` matching discipline (a directory surface contains every path
-// inside it; equal paths match). The twin of pathsOverlap in src/lanes.ts,
+// inside it; equal paths match). The twin of pathsOverlap in src/lane-scope.ts,
 // reimplemented here because the intent domain may not import driver modules;
 // the two must stay in step.
 const pathSegments = (path: string): string[] => path.split(/[\\/]+/).filter((part) => part !== "" && part !== ".")
