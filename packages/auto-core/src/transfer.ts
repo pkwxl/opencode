@@ -251,14 +251,14 @@ async function advanceDeterministic(directory: string, round: number, opts: RunA
       // An empty index (or the open-round shape's fresh index): the floor
       // construction is this invocation's product — construct and stop for
       // review, the protocol's synthesize/formulate grants the follow-ups.
-      return await constructAndStopDeterministic(directory, route.phase)
+      return await constructAndStopDeterministic(directory, route.phase, opts)
     }
     if (awaitingFormulation(route.plan.tasks, route.phase)) {
       // The standing formulation unit: its todo is the review object (a
       // re-construct composes the current floor, idempotent rewrite-on-diff
       // under the digest-keep), the dispatch the protocol's formulate
       // grant's.
-      return await constructAndStopDeterministic(directory, route.phase)
+      return await constructAndStopDeterministic(directory, route.phase, opts)
     }
     if (route.plan.tasks.some((task) => task.status !== "done")) {
       log(
@@ -350,8 +350,8 @@ async function applyBoundaryDeterministic(
 // through the standing path, the stop the person's review — the push
 // advance's own review-stop shape, the synthesis and the planning session
 // named as the protocol grants they now are.
-async function constructAndStopDeterministic(directory: string, phase: PhaseUnit): Promise<number> {
-  const landed = await constructPhaseFloor(directory, phase)
+async function constructAndStopDeterministic(directory: string, phase: PhaseUnit, opts: Pick<RunAllOpts, "resynthesize">): Promise<number> {
+  const landed = await constructPhaseFloor(directory, phase, opts)
   if (landed.type === "dirty" || landed.type === "unreadable") {
     log(`⏸ the repository state cannot host the formulation construction: ${landed.files.join(", ")}`)
     return 2

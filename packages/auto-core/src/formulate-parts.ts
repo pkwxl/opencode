@@ -10,14 +10,10 @@
 // domains; never imports the loops.
 import { join } from "node:path"
 import { analysisText } from "./analysis"
-import type { BlockMapEntry } from "./blockage"
-import { BRIEF_FILE } from "./brief"
-import { ANALYSIS_DOC, roundBriefPath } from "./docpaths"
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
 import { formatTokens, log } from "./log"
 import type { LoopCtx } from "./loop-task"
 import { DEFAULT_CONTEXT_LIMIT } from "./opts"
-import { planInputPath } from "./plan-input"
 import { phaseHandoverDoc, phaseState, phaseTitle, prevRoundDigest, type PhaseState, type PhaseUnit } from "./phases"
 import { roundBriefText } from "./round-brief"
 import { statsDigest } from "./stats"
@@ -192,30 +188,6 @@ export async function priorRoundBlock(directory: string, state: PhaseState, cont
       capped,
     },
   }
-}
-
-// The floor's block map (plans/0082 §2 D1): each block of the assembled todo
-// and its source path, from the composition state itself — never a guess
-// read back out of the rendered text. The synthesized shape prepends its own
-// blocks ahead of these.
-export function floorBlocks(phase: PhaseUnit, input: string | undefined, brief: string | undefined, taskIndex: string, parts: FormulationParts | undefined): BlockMapEntry[] {
-  const manual = parts === undefined
-  return [
-    { block: "formulation todo", source: "the deterministic assembly (plans/0095)" },
-    ...(manual ? [] : [{ block: "phase duties", source: "the active pack's phase-duties section" }]),
-    { block: "brief", source: brief ? BRIEF_FILE : `${BRIEF_FILE} (absent)` },
-    ...(manual
-      ? []
-      : [
-          { block: "round brief", source: roundBriefPath(parts!.state.round) },
-          ...(parts!.analysis !== undefined ? [{ block: "analysis", source: ANALYSIS_DOC }] : []),
-          ...parts!.handoverDocs.map((doc) => ({ block: "handover", source: doc.path })),
-          ...(parts!.prevRound !== undefined ? [{ block: "previous round digest", source: "the prior-knowledge and previous-round documents" }] : []),
-        ]),
-    { block: "planning input", source: input ? planInputPath(phase) : `${planInputPath(phase)} (absent)` },
-    { block: "task index", source: taskIndex },
-    { block: "mode notes", source: "the active mode file" },
-  ]
 }
 
 // The earlier phases' distilled handovers in index order, one block per done

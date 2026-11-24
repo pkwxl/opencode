@@ -3,7 +3,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import type { ModelEntry, ModelRegistry, TierList } from "../src/models-schema"
 import { releasedRoadmapRounds } from "../src/roadmap"
 import { transferDeterministic } from "../src/transfer"
 import { openExecutorCoordinator } from "../src/executor-coordinator"
@@ -16,12 +15,10 @@ import { renderRoundBrief } from "../src/round-brief"
 import { renderTaskIndex } from "../src/tasks"
 import { reportForUserPath } from "../src/docpaths"
 import { EOF_MARK } from "../src/doccheck"
-import type { RoutingFacts } from "../src/routing"
-import { services } from "../src/services"
-import { ev, type TurnScript } from "./fixtures/agent"
+import type { TurnScript } from "./fixtures/agent"
 import { captureRun } from "./fixtures/capture"
 import { freshRepo, git } from "./fixtures/runner"
-import { SYNTHESIS_MARK, artifactTurns, landPhaseHandover, loopFixture, phaseDirId, phaseHandover, promptPhaseDir, synthesisTurn, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { artifactTurns, landPhaseHandover, loopFixture, phaseDirId, phaseHandover, promptPhaseDir, taskDoc, type LoopFixture } from "./fixtures/loop"
 
 const made: string[] = []
 const fixtures: LoopFixture[] = []
@@ -318,8 +315,7 @@ describe("transfer: applying a phase boundary (plans/0101 D2 shapes 2/3)", () =>
 // The reviewed plan task's seam (plans/0101 D3/D4): the strict roadmap-line
 // failure transfer's establishment meets (the D5 pin plan's phased rows used
 // to carry), the review stop's output — the records beside the todo, the
-// round-brief duty of a stub round.md — and --resynthesize bypassing the
-// digest keep of a standing synthesized todo.
+// round-brief duty of a stub round.md.
 describe("transfer: the review gate and the rejected-edit channel (plans/0101 D3)", () => {
   test("a released roadmap line the project cannot establish fails exit 1 naming the line (D5)", async () => {
     const dir = await repo()
@@ -359,8 +355,7 @@ describe("transfer: the review gate and the rejected-edit channel (plans/0101 D3
     expect(reviewed.lines.some((line) => line.includes("plan refuses to dispatch while it stays a stub"))).toBe(true)
     // The audit pointer: this round holds no prompt-audit.md (the
     // charter-less construct writes no records), so the records line stays
-    // quiet beside the todo — the --resynthesize case below pins the other
-    // half (a synthesis run writes the audit, the stop names it).
+    // quiet beside the todo.
     expect(existsSync(join(f.dir, "docs/R-01/prompt-audit.md"))).toBe(false)
     expect(advanced.lines.some((line) => line.includes("the construction's records sit beside it"))).toBe(false)
     // The person fills the round brief: the reconstruct absorbs it — the
@@ -385,156 +380,6 @@ describe("transfer: the review gate and the rejected-edit channel (plans/0101 D3
     expect(todo).toContain("Port the core; the journal deferred.")
     // plan dispatches the reviewed task (the loop's formulation route).
     expect((await f.run({ stopBefore: "execute" })).code).toBe(0)
-  })
-
-  // The charter pack (the synthesis suite's): a verify-plan charter makes the
-  // construct run the constructor session, so the digest keep and its
-  // --resynthesize bypass are observable as sessions and todo bytes.
-  const CHARTER_PACK = [
-    "# verify",
-    "",
-    "## acceptance",
-    "",
-    "### result-line",
-    "",
-    "Write it in every report: `Result: PASS` means every acceptance criterion was observed to pass.",
-    "",
-    "## guarantees",
-    "",
-    "### verify-plan",
-    "",
-    "The charter bar the plan must serve.",
-    "",
-  ].join("\n")
-
-  const entry = (name: string): ModelEntry => ({ name, layer: "operator", agent: "opencode", model: `prov/${name}` })
-  const routing = (): RoutingFacts => ({
-    registry: {
-      layers: [{ name: "operator", path: "/unused/models.json" }],
-      tz: "UTC",
-      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
-      models: new Map([entry("a"), entry("free")].map((item) => [item.name, item])),
-      tiers: { deep: { tier: "deep", names: ["a"], layer: "operator" } as TierList },
-      routes: new Map(),
-      unused: [],
-      classifier: { names: ["free"], layer: "operator" },
-    } as ModelRegistry,
-    agentFilter: "opencode",
-    filterSource: undefined,
-    defaultAgent: "opencode",
-    runAgent: "opencode",
-    router: services().router,
-    clock: services().clock,
-  })
-
-  const VERIFY_MARK = "You read one prompt that a planning step"
-  const FIDELITY_MARK = "You judge the fidelity of one synthesis"
-  const verifyYes: TurnScript = (ctx) => {
-    if (!ctx.text.includes(VERIFY_MARK)) return undefined
-    return [ev.text(ctx.session, `vrf_${ctx.n}`, "Consistent: yes"), ev.step(ctx.session, `vrfstp_${ctx.n}`), ev.idle(ctx.session)]
-  }
-  const fidelityPass: TurnScript = (ctx) => {
-    if (!ctx.text.includes(FIDELITY_MARK)) return undefined
-    return [ev.text(ctx.session, `fid_${ctx.n}`, "Fidelity: pass"), ev.step(ctx.session, `fidstp_${ctx.n}`), ev.idle(ctx.session)]
-  }
-
-  // The constructor turn: one obligation row per source section the prompt
-  // carries, quoting its first line (the content-tolerant locate's happy
-  // path), the ids continuing at the prompt's own nextId.
-  const constructorOf = (brief: () => string): TurnScript => (ctx) => {
-    if (!ctx.text.includes(SYNTHESIS_MARK)) return undefined
-    const start = Number(/continue the O sequence at O-(\d+)/.exec(ctx.text)?.[1] ?? "2")
-    const rows: string[] = []
-    for (const match of ctx.text.matchAll(/^### (\S+\.md)\n\n([^\n]+)/gm)) {
-      rows.push(`- O-${String(start + rows.length).padStart(2, "0")} | ${match[1]} | "${match[2]!.trim()}" | the plan's tasks cover it`)
-    }
-    return synthesisTurn(brief(), rows)(ctx)
-  }
-
-  test("--resynthesize bypasses the digest keep: the constructor re-voices, the new todo lands for review", async () => {
-    const brief = { text: "The round's goals, re-voiced under the charter." }
-    const f = await loopFixture("mt", (dir) => ({
-      turn: (ctx) => verifyYes(ctx) ?? fidelityPass(ctx) ?? constructorOf(() => brief.text)(ctx) ?? artifactTurns(dir)(ctx)!,
-    }))
-    fixtures.push(f)
-    await mkdirSync(join(f.dir, ".opencode", "auto", "intents"), { recursive: true })
-    await Bun.write(join(f.dir, ".opencode/auto/intents/verify.md"), CHARTER_PACK)
-    await establishRound(f.dir, { phases: "mt" })
-    writeFileSync(join(f.dir, "docs/R-01/round.md"), renderRoundBrief(1).replace("## Goal", "## Goal\n\nPort the core with the protocol intact."))
-    await f.commit("round setup")
-    // The construct runs the synthesis pipeline: the constructor session
-    // re-voices, the synthesized todo lands, the review stop answers.
-    const first = await f.run({ stopBefore: "formulate", intent: "verify", routing: routing() })
-    expect(first.code).toBe(0)
-    expect(first.lines.some((line) => line.includes("✓ formulation synthesis: the constructor"))).toBe(true)
-    const todo = await Bun.file(join(f.dir, "docs/T-001/todo.md")).text()
-    expect(todo).toContain(brief.text)
-    // The synthesis wrote the round's audit record: the review stop names it
-    // beside the todo (D3's output — the verdicts and the synthesis:/
-    // fidelity: entries live there).
-    expect(first.lines.some((line) => line.includes("ℹ the construction's records sit beside it in docs/R-01/prompt-audit.md"))).toBe(true)
-    expect((await Bun.file(join(f.dir, "docs/R-01/prompt-audit.md")).text()).includes("synthesis:")).toBe(true)
-    // The plain re-run digest-keeps (plans/0097 D6): no constructor session,
-    // the todo byte-identical — the no-person-edit-channel discipline (the
-    // todo is driver-owned, whatever stands is what construction landed).
-    const constructorsBefore = f.agent.prompts.filter((prompt) => prompt.text.includes(SYNTHESIS_MARK)).length
-    const again = await f.run({ stopBefore: "formulate", intent: "verify", routing: routing() })
-    expect(again.code).toBe(0)
-    expect(again.lines.some((line) => line.includes("the landed formulation todo of T-001 stands"))).toBe(true)
-    expect(f.agent.prompts.filter((prompt) => prompt.text.includes(SYNTHESIS_MARK))).toHaveLength(constructorsBefore)
-    expect(await Bun.file(join(f.dir, "docs/T-001/todo.md")).text()).toBe(todo)
-    // --resynthesize (plans/0101 D3): the keep bypassed — the constructor
-    // session runs again, the new brief lands through the rewrite-on-diff.
-    brief.text = "A sharper re-voicing of the same sources."
-    const resynthesized = await f.run({ stopBefore: "formulate", intent: "verify", routing: routing(), resynthesize: true })
-    expect(resynthesized.code).toBe(0)
-    expect(resynthesized.lines.some((line) => line.includes("the landed formulation todo of"))).toBe(false)
-    expect(resynthesized.lines.some((line) => line.includes("✓ formulation synthesis: the constructor"))).toBe(true)
-    expect(f.agent.prompts.filter((prompt) => prompt.text.includes(SYNTHESIS_MARK))).toHaveLength(constructorsBefore + 1)
-    const after = await Bun.file(join(f.dir, "docs/T-001/todo.md")).text()
-    expect(after).toContain("A sharper re-voicing")
-    expect(after).not.toBe(todo)
-    // A one-shot force: the next plain re-run keeps whatever landed.
-    const settled = await f.run({ stopBefore: "formulate", intent: "verify", routing: routing() })
-    expect(settled.lines.some((line) => line.includes("the landed formulation todo of T-001 stands"))).toBe(true)
-    expect(await Bun.file(join(f.dir, "docs/T-001/todo.md")).text()).toBe(after)
-  })
-
-  // The digest's durable home (plans/0205 D3, enacting S08-07): the
-  // floor-assembly digest rides the landed todo's own `Floor-Digest:` field —
-  // committed with the todo it describes — so a fresh clone, a fork worktree
-  // or a cleared `.auto/` keeps the reviewed todo instead of refusing "an
-  // input changed since construction" and re-voicing under the charter (the
-  // 0097 D6 churn the keep exists to prevent).
-  test("the digest travels with the todo: a cleared .auto/ (a fresh clone, a fork worktree) keeps the landed synthesis", async () => {
-    const brief = { text: "The round's goals, re-voiced under the charter." }
-    const f = await loopFixture("mt", (dir) => ({
-      turn: (ctx) => verifyYes(ctx) ?? fidelityPass(ctx) ?? constructorOf(() => brief.text)(ctx) ?? artifactTurns(dir)(ctx)!,
-    }))
-    fixtures.push(f)
-    await mkdirSync(join(f.dir, ".opencode", "auto", "intents"), { recursive: true })
-    await Bun.write(join(f.dir, ".opencode/auto/intents/verify.md"), CHARTER_PACK)
-    await establishRound(f.dir, { phases: "mt" })
-    writeFileSync(join(f.dir, "docs/R-01/round.md"), renderRoundBrief(1).replace("## Goal", "## Goal\n\nPort the core with the protocol intact."))
-    await f.commit("round setup")
-    const first = await f.run({ stopBefore: "formulate", intent: "verify", routing: routing() })
-    expect(first.code).toBe(0)
-    expect(first.lines.some((line) => line.includes("✓ formulation synthesis: the constructor"))).toBe(true)
-    // The construction record: the todo carries its floor digest committed
-    // beside it (a pre-0205 construction has no field; the gitignored units
-    // record served those and stays their fallback).
-    const todo = await Bun.file(join(f.dir, "docs/T-001/todo.md")).text()
-    expect(todo).toMatch(/^Floor-Digest: [0-9a-f]{16}$/m)
-    // The finding's probe: .auto/ cleared — exactly the fresh-clone state
-    // (0128 fork worktrees start here too). The keep reads the committed
-    // field, never the vanished record.
-    rmSync(join(f.dir, ".auto"), { recursive: true, force: true })
-    const constructorsBefore = f.agent.prompts.filter((prompt) => prompt.text.includes(SYNTHESIS_MARK)).length
-    const again = await f.run({ stopBefore: "formulate", intent: "verify", routing: routing() })
-    expect(again.code).toBe(0)
-    expect(again.lines.some((line) => line.includes("the landed formulation todo of T-001 stands"))).toBe(true)
-    expect(f.agent.prompts.filter((prompt) => prompt.text.includes(SYNTHESIS_MARK))).toHaveLength(constructorsBefore)
-    expect(await Bun.file(join(f.dir, "docs/T-001/todo.md")).text()).toBe(todo)
   })
 })
 

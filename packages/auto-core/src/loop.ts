@@ -27,7 +27,7 @@ import type { AgentPool } from "./agent-pool"
 import { startPool } from "./agent-pool"
 import { installServices, uninstallServices } from "./services"
 import { shellProfile } from "./shell"
-import { flushStats, statsClassifyUsage, statsSynthesisUsage, statsTotals } from "./stats"
+import { flushStats, statsClassifyUsage, statsTotals } from "./stats"
 import { freezeSwitches } from "./switches"
 import { loadPlan, readChecklist, runtimeParked, runtimeSplit, taskStatePaths } from "./tasks"
 import { parseUnitDoc } from "./document/unit"
@@ -279,12 +279,6 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     // flushes; without a classifier list nothing reports into it, so a
     // registry without one registers harmlessly.
     run.router.setClassifyUsageSink((usage) => void statsClassifyUsage(directory, usage))
-    // The formulation one-shots' booking (plans/0097 D6): the constructor and
-    // the fidelity pass report into the stats `synthesis` bucket — the same
-    // outside-the-unit-totals discipline as the classify sink, so a fallback
-    // that burned two deep-tier attempts stays visible in the per-model
-    // lines instead of vanishing.
-    run.router.setSynthesisUsageSink((usage) => void statsSynthesisUsage(directory, usage))
     // The ready server handle captured as const before the clamp wiring
     // below (plans/0237 D6: the closure once read a const declared after
     // the dryrun branch — a TDZ trap for any clamp invocation from that
@@ -424,7 +418,6 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     // Drop the classifier's usage sink before the stats handle flushes, so a
     // late answer cannot book into a re-loaded handle after the run's end.
     run.router.setClassifyUsageSink(undefined)
-    run.router.setSynthesisUsageSink(undefined)
     setClampCaller(undefined)
     // Graceful stats close-out (plans/0019 §D): fold the open segment, then
     // persist the closed segment and unload the handle; the next loadStats

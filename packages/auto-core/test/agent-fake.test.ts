@@ -56,7 +56,7 @@ import type { Plan, Task } from "../src/tasks"
 import { watch } from "../src/watch"
 import { workOrder } from "../src/work-order"
 import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgentOptions, MODEL, type TurnContext, type TurnScript, WINDOW } from "./fixtures/agent"
-import { artifactTurns, appendOneTask, loopFixture, promptPhaseDir, SYNTHESIS_MARK, synthesisTurn, type LoopFixture } from "./fixtures/loop"
+import { artifactTurns, appendOneTask, loopFixture, promptPhaseDir, type LoopFixture } from "./fixtures/loop"
 import { clockAt, fixedClock, manualClock } from "./fixtures/clock"
 import { freshRepo, git, task } from "./fixtures/runner"
 import { reloadUnits, seedUnits, unitsText } from "./fixtures/units"
@@ -3568,28 +3568,10 @@ describe("the plan step without the charter verifier (plans/0283: the verifier r
     return artifactTurns(dir)(ctx)
   }
 
-  // Since plans/0097 the charter pack's formulation runs the constructor
-  // session and its fidelity check ahead of the verifier (compose → verify):
-  // the constructor's scripted reply — one obligation row quoting the plan
-  // file, m mode's only source here (the brief is absent — a source-health
-  // finding), continuing past the seeded report-duty row O-01 — and the
-  // fidelity check's pass verdict.
-  const SYNTH_TITLE = "auto: formulation synthesis"
-  const FIDELITY_MARK = "You judge the fidelity of one synthesis"
-  const withConstructor = (input: string, verdict: string | undefined): ((dir: string) => TurnScript) => (dir: string): TurnScript => (ctx) =>
-    synthesisTurn("The widget is reimplemented from the specification alone.", [
-      `- O-01 | docs/R-01/P01-implement/plan-input.md | "${input}" | the plan's tasks cover the specification-only reimplementation`,
-    ])(ctx) ??
-    (ctx.text.includes(FIDELITY_MARK)
-      ? [ev.text(ctx.session, `fid_${ctx.n}`, "Fidelity: pass"), ev.idle(ctx.session)]
-      : undefined) ??
-    verdictTurn(verdict)(dir)(ctx)
-
   test("a contradictory planning input runs the planning session: no verifier session, no audit verdict, the charter's judgment nobody's machine (plans/0283)", async () => {
     const f = await verifierFixture(
       CHARTER_PACK,
-      withConstructor(
-        CONTRARY_INPUT,
+      verdictTurn(
         'Consistent: no — the charter\'s "never to be read, copied or translated" contradicts the prompt\'s "Copy the reference implementation\'s modules over verbatim, reading its source directly" (in the planning input)',
       ),
     )
@@ -3601,8 +3583,6 @@ describe("the plan step without the charter verifier (plans/0283: the verifier r
       // only outcome.
       expect(code).toBe(0)
       expect(f.agent.prompts.some((prompt) => prompt.text.includes(VERIFY_MARK))).toBe(false)
-      // The audit may carry the constructor's synthesis entries (0097's own
-      // records); no VERIFIER verdict is ever in it.
       const audit = await Bun.file(join(f.dir, "docs/R-01/prompt-audit.md")).text().catch(() => "")
       expect(audit).not.toMatch(/(formulation|admission|handover) [^:]*: (INCONSISTENT|FAILED|consistent)/)
       expect(existsSync(join(f.dir, "docs/R-01/P01-implement/tasks.md"))).toBe(true)
@@ -3612,13 +3592,11 @@ describe("the plan step without the charter verifier (plans/0283: the verifier r
   })
 
   test("a pack that declares a charter never opens a verifier session either: the run proceeds, nothing recorded (the retirement floor, plans/0283)", async () => {
-    const f = await verifierFixture(CHARTER_PACK, withConstructor("Reimplement the widget from the specification alone.", "Consistent: yes"))
+    const f = await verifierFixture(CHARTER_PACK, verdictTurn("Consistent: yes"))
     try {
       const { code } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing() })
       expect(code).toBe(0)
       expect(f.agent.prompts.some((prompt) => prompt.text.includes(VERIFY_MARK))).toBe(false)
-      // The audit may carry the constructor's synthesis entries (0097's own
-      // records); no VERIFIER verdict is ever in it.
       const audit = await Bun.file(join(f.dir, "docs/R-01/prompt-audit.md")).text().catch(() => "")
       expect(audit).not.toMatch(/(formulation|admission|handover) [^:]*: (INCONSISTENT|FAILED|consistent)/)
       expect(existsSync(join(f.dir, "docs/R-01/P01-implement/tasks.md"))).toBe(true)
@@ -3632,7 +3610,7 @@ describe("the plan step without the charter verifier (plans/0283: the verifier r
     // dispatched as an ordinary whole task on the implement type's execute
     // tier (b), the operator's planning route never reaching the session it
     // was written for (0165-031).
-    const f = await verifierFixture(CHARTER_PACK, withConstructor("Reimplement the widget from the specification alone.", "Consistent: yes"))
+    const f = await verifierFixture(CHARTER_PACK, verdictTurn("Consistent: yes"))
     try {
       const { code } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing() })
       expect(code).toBe(0)
@@ -3654,7 +3632,7 @@ describe("the plan step without the charter verifier (plans/0283: the verifier r
     // keyed by the planning word pins the session to its own entry.
     const routed = routing()
     routed.registry = { ...routed.registry, routes: new Map([["phase-plan", { key: "phase-plan", layer: "operator", names: ["b"] }]]) }
-    const g = await verifierFixture(CHARTER_PACK, withConstructor("Reimplement the widget from the specification alone.", "Consistent: yes"))
+    const g = await verifierFixture(CHARTER_PACK, verdictTurn("Consistent: yes"))
     try {
       const { code } = await g.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routed })
       expect(code).toBe(0)

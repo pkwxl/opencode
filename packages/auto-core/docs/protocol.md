@@ -154,11 +154,10 @@ audit
   The continuation lands and the next formulation share resumes planning.
   A share that changes planning output still passes the full formulation
   checks, including coverage when its input carries an obligations ledger.
-- **synthesize** — the formulation construction's re-voicing session (the
-  constructor one-shot converged). Address: the construction unit's own
-  task id; `phase` and `index` ride the grant; the brief is the identical
-  `formulate-synthesize` prompt over the same evidential sources the push
-  compose renders. The holder writes its reply (the prescribed
+- **synthesize** — the formulation construction's re-voicing session.
+  The grant addresses the formulation unit by task id and includes
+  `phase`, `index`, and the `formulate-synthesize` prompt with its
+  evidential sources. The holder writes its reply (the prescribed
   `<<<SOURCES-BRIEF …` / `<<<LEDGER …` blocks plus the `Rationale:` line)
   at the unit's `todo.md` path — the one write surface, the reply channel.
   Each obligation or conflict row begins with a literal dash and space.
@@ -172,8 +171,10 @@ audit
   no verify share follows a synthesis; the unit continues as formulate
   work over the synthesized todo. Derives only while the standing todo is
   the floor (its Scope carries no obligations ledger), a charter resolves,
-  and the synthesis switch is not off — otherwise the formulate floor is
-  byte-identical.
+  and `OPENCODE_AUTO_SYNTHESIS` is enabled. Transfer preserves a synthesized
+  todo while its floor digest still matches. A changed floor or a transfer
+  request with `resynthesize: true` reconstructs the floor and lets an
+  eligible executor claim synthesis again.
 - **distill** — the phase-boundary distillation (the handover document).
   Address: the phase's qualified id; `handover` (the one write path) rides
   the grant. Terminal: no verify share follows a distillation; the

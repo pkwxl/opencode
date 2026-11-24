@@ -8,7 +8,6 @@ import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle } from "../src/bundle"
 import { renderPhaseHandover } from "../src/prompt"
 import { planDutyText, renderFormulationTodo } from "../src/prompt-plan"
-import { planDuties } from "../src/plan-gate"
 import { formulationAcceptance } from "../src/formulate"
 import { promptFacts } from "../src/prompt-facts"
 import { usePromptLibrary, renderText } from "../src/template"
@@ -523,16 +522,5 @@ describe("planDutyText tiers (plans/0080 §4)", () => {
       expect(floor.scope.replace(/\s+/g, " ")).not.toContain("once per tree state")
       expect(floor.scope).toContain("- Bring the test suite to cover the delivered work")
     })
-    // The legacy planning path also threads the measured delta.
-    const dir = mkdtempSync(join(tmpdir(), "auto-duty-delta-"))
-    try {
-      mkdirSync(join(dir, ".opencode", "auto", "intents"), { recursive: true })
-      writeFileSync(join(dir, ".opencode", "auto", "intents", "default.md"), "# default\n")
-      const ctx = { directory: dir, opts: {} } as unknown as Parameters<typeof planDuties>[0]
-      expect(planDuties(ctx, L("t"), true).replace(/\s+/g, " ")).toContain("once per tree state as the regression bound")
-      expect(planDuties(ctx, L("t"))).toBe(planDutyText(promptFacts({ dir }), L("t")))
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
   })
 })

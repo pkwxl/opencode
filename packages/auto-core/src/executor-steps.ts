@@ -677,13 +677,13 @@ export async function readFormulationBaseInput(
 // synthesize grant (0281), the charter verifier's session refused (the
 // person's review at the stop, the executor's verify share over the
 // formulation unit). Returns constructFormulation's own shapes.
-export async function constructPhaseFloor(dir: string, phase: PhaseUnit) {
+export async function constructPhaseFloor(dir: string, phase: PhaseUnit, opts: { resynthesize?: boolean } = {}) {
   const base = await readFormulationBaseInput(dir, { phase })
   if (base.todo === undefined) {
     return { type: "failed" as const, question: "the formulation render facts could not load — inspect the project configuration" }
   }
   return constructFormulation(dir, phase, base.todo, {
-    ...(base.digest ? { digest: base.digest } : {}),
+    ...(base.digest ? { digest: base.digest, keepMatchingFloor: !opts.resynthesize } : {}),
     ...(base.prefixIds.length ? { prefix: base.prefixIds } : {}),
   })
 }

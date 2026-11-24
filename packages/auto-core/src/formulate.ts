@@ -16,8 +16,8 @@ import { taskNumber, taskNumberFloor } from "./numbering"
 import { phaseLabel, phaseName, type PhaseUnit } from "./phases"
 import type { PhaseTypeEntry } from "./phases/registry"
 import type { PromptFacts } from "./prompt"
-import { loadPlan, qualifiedPhase, recordTodoDigest, renderTaskIndex, renderTaskTodo, taskIndexPath, taskStatePaths, todoDigest, type PlanPhase, type Task } from "./tasks"
-import { parseIndex } from "./document/unit"
+import { loadPlan, qualifiedPhase, recordTodoDigest, renderTaskIndex, renderTaskTodo, taskIndexPath, taskStatePaths, todoDigest, unitSynthDigest, type PlanPhase, type Task } from "./tasks"
+import { parseIndex, parseUnitDoc } from "./document/unit"
 
 // The formulation marker (plans/0095 D1): the task document's `Formulate:`
 // field, driver-written, carrying the owning phase's qualified id. It parses
@@ -119,7 +119,7 @@ export async function constructFormulation(
   dir: string,
   phase: PhaseUnit,
   body: { goal: string; scope: string; acceptance: string },
-  record?: { digest?: string; prefix?: string[]; stage?: string },
+  record?: { digest?: string; prefix?: string[]; stage?: string; keepMatchingFloor?: boolean },
 ): Promise<ConstructedFormulation> {
   const state = await formulationState(dir, phase)
   if (state.type === "foreign") {
@@ -168,6 +168,13 @@ export async function constructFormulation(
   if (previous === document && !fresh) {
     await recordTodoDigest(dir, id, todoDigest(document))
     return { type: "current", id, numberStart: n + 1 }
+  }
+  // Transfer compares the input floor even when the landed todo carries a
+  // different body from executor synthesis. Older todos may use the local
+  // record. Keep the original todo digest pinned when reusing those bytes.
+  if (!fresh && previous !== undefined && record?.keepMatchingFloor && record.digest !== undefined) {
+    const previousFloor = parseUnitDoc(previous).fields["floor-digest"] || await unitSynthDigest(dir, id)
+    if (previousFloor === record.digest) return { type: "current", id, numberStart: n + 1 }
   }
   await mkdir(join(dir, "docs", id), { recursive: true })
   await Bun.write(join(dir, pending), document)

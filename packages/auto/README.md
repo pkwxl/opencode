@@ -1272,13 +1272,12 @@ shows the full set. Switches whose `off` is an emergency exit say so.
 | `OPENCODE_AUTO_STEP` | off | Step mode: hard-pause at `phase` / `task` / `subtask` boundaries, waiting for Enter |
 | `OPENCODE_AUTO_STRICT_RESUME` | on | Interruption-recovery fidelity gates (baseline and model verified at resume); `off` is the emergency-off |
 | `OPENCODE_AUTO_STUCK` | on | Stuck-loop detection (repeated-action hints, at most three per session) |
-| `OPENCODE_AUTO_SYNTHESIS` | on | Formulation synthesis where the pack declares a plan charter; `off` forces the deterministic Stage-1 floor (the emergency exit) |
-| `OPENCODE_AUTO_SYNTHESIS_TIMEOUT` | 15 | The formulation constructor's one-shot wall in minutes (a timeout degrades to the floor, never a failure) |
+| `OPENCODE_AUTO_SYNTHESIS` | on | Offers a synthesize grant for a formulation with a plan charter. Set `off` to formulate from the deterministic floor. |
 
 Retired variables (permanent tombstones): `OPENCODE_AUTO_REF_CHECK`, `OPENCODE_AUTO_REUSE_SESSION`,
-`OPENCODE_AUTO_HANDOVER_CONCURRENT`, `OPENCODE_AUTO_TASK_CONTEXT` and `OPENCODE_AUTO_PLAN_VERIFY` (the
-charter verifier retired with the push commands, plans/0283 — FAIL verdicts surface as state, the fix
-grant repairs verify FAILs) — a set variable prints one
+`OPENCODE_AUTO_HANDOVER_CONCURRENT`, `OPENCODE_AUTO_TASK_CONTEXT`, `OPENCODE_AUTO_PLAN_VERIFY`,
+and `OPENCODE_AUTO_SYNTHESIS_TIMEOUT`. Synthesis now runs through an executor lease. A set retired
+variable prints one
 `⚠ … is retired` notice at run start and changes nothing; a notice, never a usage error, so a stale
 shell profile cannot cost an unattended run.
 

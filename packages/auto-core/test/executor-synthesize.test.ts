@@ -25,6 +25,7 @@ import { executorTypeCatalog, openExecutorCoordinator } from "../src/executor-co
 import { clampSwitches } from "../src/switches"
 import { phaseType } from "../src/phases/registry"
 import { renderTaskIndex } from "../src/tasks"
+import { transferDeterministic } from "../src/transfer"
 import type { PhaseUnit } from "../src/phases"
 
 const PHASE: PhaseUnit = { round: "R-01", id: "P01", type: "implement", entry: phaseType("implement")!, dir: "docs/R-01/P01-implement" }
@@ -220,6 +221,55 @@ test("the synthesize lifecycle: the reply lands through the construction under t
   } finally {
     await coordinator.close()
   }
+})
+
+test("transfer keeps a matching synthesized todo after a fresh checkout and can reopen synthesis", async () => {
+  const { dir, unit } = await synthesisProject()
+  const todoPath = `docs/${unit}/todo.md`
+  const phases = "implement"
+  expect(await transferDeterministic(dir, { phases })).toBe(0)
+  const floor = readFileSync(join(dir, todoPath), "utf8")
+  expect(floor).toMatch(/^Floor-Digest: [0-9a-f]{16}$/m)
+
+  async function landSynthesis(brief: string) {
+    const coordinator = await openExecutorCoordinator(dir)
+    try {
+      const grant = await coordinator.claim(WORKER)
+      if (grant.kind !== "synthesize") throw new Error(JSON.stringify(grant))
+      write(dir, todoPath, reply().replace(`The input demands the widget's reimplementation: ${PLAN_INPUT}`, brief))
+      expect(await coordinator.report(WORKER, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
+    } finally {
+      await coordinator.close()
+    }
+  }
+
+  await landSynthesis("First synthesis of the planning input.")
+  expect(readFileSync(join(dir, todoPath), "utf8")).toContain("First synthesis of the planning input.")
+  const head = git(dir, "rev-parse", "HEAD")
+  expect(await transferDeterministic(dir, { phases })).toBe(0)
+  expect(git(dir, "rev-parse", "HEAD")).toBe(head)
+  expect(await readExecutorPreview(dir)).toMatchObject({ kind: "formulate", unit })
+
+  expect(await transferDeterministic(dir, { phases, resynthesize: true })).toBe(0)
+  expect(readFileSync(join(dir, todoPath), "utf8")).toBe(floor)
+  await landSynthesis("Revised synthesis of the same planning input.")
+  const revised = readFileSync(join(dir, todoPath), "utf8")
+  expect(revised).toContain("Revised synthesis of the same planning input.")
+  const revisedHead = git(dir, "rev-parse", "HEAD")
+
+  rmSync(join(dir, ".auto"), { recursive: true, force: true })
+  expect(await transferDeterministic(dir, { phases })).toBe(0)
+  expect(readFileSync(join(dir, todoPath), "utf8")).toBe(revised)
+  expect(git(dir, "rev-parse", "HEAD")).toBe(revisedHead)
+  expect(await readExecutorPreview(dir)).toMatchObject({ kind: "formulate", unit })
+
+  write(dir, `${PHASE.dir}/plan-input.md`, "Plan the widget and its fixtures.\n")
+  commitFixture(dir, "change the planning input")
+  expect(await transferDeterministic(dir, { phases })).toBe(0)
+  const revisedFloor = readFileSync(join(dir, todoPath), "utf8")
+  expect(revisedFloor).toContain("Plan the widget and its fixtures.")
+  expect(revisedFloor).not.toContain("## Obligations ledger")
+  expect(await readExecutorPreview(dir)).toMatchObject({ kind: "synthesize", unit })
 })
 
 test("the collect: an invalid reply blocks replayable with the push loop's own findings", async () => {

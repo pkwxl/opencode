@@ -47,7 +47,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       analysis: true,
       park: true,
       synthesis: true,
-      synthesisTimeout: 15,
       regression: true,
       docLanes: true,
     })
@@ -72,7 +71,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         [SWITCH_ENV.hibernate]: "",
         [SWITCH_ENV.agent]: "",
         [SWITCH_ENV.laneIsolation]: "",
-        [SWITCH_ENV.synthesisTimeout]: "",
       }),
     ).toEqual({
       fork: true,
@@ -94,7 +92,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       analysis: true,
       park: true,
       synthesis: true,
-      synthesisTimeout: 15,
       regression: true,
       docLanes: true,
     })
@@ -137,7 +134,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       analysis: true,
       park: true,
       synthesis: true,
-      synthesisTimeout: 15,
       regression: true,
       docLanes: true,
     })
@@ -373,7 +369,7 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_SYNTHESIS_TIMEOUT=15, OPENCODE_AUTO_REGRESSION=on, OPENCODE_AUTO_DOC_LANES=on",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_REGRESSION=on, OPENCODE_AUTO_DOC_LANES=on",
     )
   })
 
@@ -381,7 +377,7 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "on" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=on")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_SYNTHESIS_TIMEOUT=15, OPENCODE_AUTO_REGRESSION=on, OPENCODE_AUTO_DOC_LANES=on",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=on, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=, OPENCODE_AUTO_LANE_ISOLATION=off, OPENCODE_AUTO_REMEDIATE=on, OPENCODE_AUTO_ANALYSIS=on, OPENCODE_AUTO_PARK=on, OPENCODE_AUTO_SYNTHESIS=on, OPENCODE_AUTO_REGRESSION=on, OPENCODE_AUTO_DOC_LANES=on",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "off" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=off")
@@ -415,13 +411,6 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     expect(undoc.docLanes).toBe(false)
     expect(nonDefaultSwitches(undoc)).toBe("OPENCODE_AUTO_DOC_LANES=off")
     expect(() => parseSwitches({ [SWITCH_ENV.docLanes]: "maybe" })).toThrow(/OPENCODE_AUTO_DOC_LANES invalid value/)
-    // The constructor's wall (plans/0097 D3/D6): positive minutes, fractions
-    // allowed, default 15 silent; 0 and garbage fail strictly.
-    expect(parseSwitches({ [SWITCH_ENV.synthesisTimeout]: "2.5" }).synthesisTimeout).toBe(2.5)
-    expect(nonDefaultSwitches(parseSwitches({ [SWITCH_ENV.synthesisTimeout]: "25" }))).toBe("OPENCODE_AUTO_SYNTHESIS_TIMEOUT=25")
-    for (const bad of ["0", "-5", "soon"]) {
-      expect(() => parseSwitches({ [SWITCH_ENV.synthesisTimeout]: bad })).toThrow(/OPENCODE_AUTO_SYNTHESIS_TIMEOUT invalid value/)
-    }
     // model in effect: the routing entries reconstruct the env value in the stable wildcard→letter→role order; the failover candidates stand as their own item
     const routed = parseSwitches({ [SWITCH_ENV.model]: "*=kimi/k2,m=anthropic/c-4,decompose=anthropic/c-4" })
     expect(nonDefaultSwitches(routed)).toBe("OPENCODE_AUTO_MODEL=*=kimi/k2,m=anthropic/c-4,decompose=anthropic/c-4")
@@ -573,6 +562,16 @@ describe("the retired-switch registry (a removed mechanism's variable)", () => {
     // startup line's).
     expect("planVerify" in parseSwitches({ [name]: "on" })).toBe(false)
     expect(nonDefaultSwitches(parseSwitches({ [name]: "on" }))).toBeUndefined()
+  })
+
+  test("the retired synthesis timeout is ignored in favor of executor leases", () => {
+    const name = "OPENCODE_AUTO_SYNTHESIS_TIMEOUT"
+    const env = { [name]: "soon" }
+    expect(parseSwitches(env).synthesis).toBe(true)
+    expect(nonDefaultSwitches(parseSwitches(env), env)).toBeUndefined()
+    expect(retiredSwitchNotes(env)).toEqual([
+      `⚠ ${name} is retired (synthesis runs through an executor lease; the push constructor timeout was removed); the variable is ignored`,
+    ])
   })
 
   test("the switch-diet tranche-1 retirements: in-chain reuse and concurrent test handover", () => {

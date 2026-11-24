@@ -208,29 +208,6 @@ export const diagnosisTurn = (dir: string, plan?: (file: string) => string | und
   return undefined
 }
 
-// —— Synthesis turns (plans/0097 D3, the agent-fake cases) ——
-
-// The constructor prompt's opening marker (templates/prompts/formulate-synthesize.md).
-export const SYNTHESIS_MARK = "You are the constructor session"
-
-// One constructor turn: the strict reply shape — the brief between its
-// delimiters, the ledger rows (raw lines, crafted by the test against the
-// sources it knows the prompt carries) between theirs, the closing Rationale
-// line. Compose with the other turns (`synthesisTurn(brief, rows)(ctx) ??
-// verdictTurn(...)(ctx)`); returning undefined lets the next script (or the
-// default turn — whose "done: …" reply fails the parse twice and lands the
-// documented fallback) take the session.
-export const synthesisTurn = (brief: string, rows: readonly string[], rationale = "the sources demand a specification-only reimplementation"): TurnScript => (ctx: TurnContext) => {
-  if (!ctx.text.includes(SYNTHESIS_MARK)) return undefined
-  return [
-    ev.text(ctx.session, `syn_${ctx.n}`, ["<<<SOURCES-BRIEF", brief, "SOURCES-BRIEF>>>", "<<<LEDGER", ...rows, "LEDGER>>>", `Rationale: ${rationale}`].join("\n")),
-    // One billed step, as a real one-shot turn always closes with — the
-    // usage the router's synthesis sink books.
-    ev.step(ctx.session, `synstp_${ctx.n}`),
-    ev.idle(ctx.session),
-  ]
-}
-
 export function appendOneTask(dir: string, phaseDir: string): string {
   const file = join(dir, phaseDir, "tasks.md")
   const task = padTask(nextTaskNumber(dir))

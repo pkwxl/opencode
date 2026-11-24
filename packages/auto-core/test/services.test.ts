@@ -334,8 +334,6 @@ const MOVED_TO_ROUTER = [
   "noteClassifierLimit",
   "setClassifyUsageSink",
   "classifyUsageSink",
-  "setSynthesisUsageSink",
-  "synthesisUsageSink",
 ] as const
 
 // Every free function that moved into the control service (its method

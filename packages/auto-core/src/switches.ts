@@ -64,22 +64,8 @@ export const SWITCH_ENV = {
   // the park line reads as the invalid-handoff case it always was before the
   // mechanism, and every other status value is unaffected.
   park: "OPENCODE_AUTO_PARK",
-  // Formulation synthesis (plans/0097 D6): where the pack declares a plan
-  // charter for a phase, the constructor session re-voices the evidential
-  // sources under the charter and derives the obligation ledger the plan is
-  // totality-checked against. off is the emergency exit returning the
-  // deterministic Stage-1 floor even for charter packs — the charter still
-  // rides the Acceptance and the verifier; the switch can only remove the
-  // enhancement, never a check (the OPENCODE_AUTO_PLAN_VERIFY precedent).
+  // Makes a formulation with a plan charter eligible for a synthesize grant.
   synthesis: "OPENCODE_AUTO_SYNTHESIS",
-  // The formulation constructor's one-shot wall in minutes (plans/0097
-  // D3/D6): default 15, a planning-scale budget — the constructor reads the
-  // full evidential source stack of a formulation (six figures of bytes on a
-  // handover-rich round) and composes its whole reply in one turn, nothing
-  // like the classifier-scale seconds of its sibling one-shots. The wall is
-  // never a check: a timeout degrades to the floor through the D4 ladder
-  // like any constructor failure; this only tunes the wait.
-  synthesisTimeout: "OPENCODE_AUTO_SYNTHESIS_TIMEOUT",
   // The regression lane — the two-level pass (plans/0098 D8): where the
   // pack's lane table declares a regression-cost row, the driver runs it in
   // the background against committed trees and the phase close holds on its
@@ -143,6 +129,7 @@ export const RETIRED_SWITCHES: Readonly<Record<string, string>> = {
   // charter check runs ahead of them (the guarantees' mechanical asserts and
   // the settlement's checks judge).
   OPENCODE_AUTO_PLAN_VERIFY: "the charter verifier was removed; the plan and append steps are deterministic",
+  OPENCODE_AUTO_SYNTHESIS_TIMEOUT: "synthesis runs through an executor lease; the push constructor timeout was removed",
 }
 
 // The notice lines the retired switches produce for an environment (pure;
@@ -409,18 +396,8 @@ export type Switches = {
   // removes the whole machinery — the park line is then the invalid-handoff
   // case; it never adds anything.
   park: boolean
-  // Formulation synthesis (default on, plans/0097): where the resolved plan
-  // charter of a formulation is non-empty, the constructor session and the
-  // obligation ledger machinery run ahead of the formulation task. off forces
-  // the deterministic Stage-1 floor even for charter packs — it only removes
-  // the enhancement, never the charter itself (which keeps riding the
-  // Acceptance and the verifier).
+  // Allow synthesize grants for a formulation with a plan charter.
   synthesis: boolean
-  // The constructor one-shot's wall in minutes (default 15, plans/0097
-  // D3/D6): a planning-scale budget, see SWITCH_ENV.synthesisTimeout. The
-  // fidelity pass and the plan verifier keep their fixed classifier-scale
-  // walls — they judge on the cheap entry and answer in seconds.
-  synthesisTimeout: number
   // The regression lane, two-level pass (default on, plans/0098 D8): the
   // background slot and the phase-close hold activate only where the pack
   // declares a regression-cost row. off removes the machinery for one run —
@@ -461,7 +438,6 @@ const SWITCH_DEFAULTS: Switches = {
   analysis: true,
   park: true,
   synthesis: true,
-  synthesisTimeout: 15,
   regression: true,
   docLanes: true,
 }
@@ -645,16 +621,6 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     }
     return value
   }
-  // Positive minutes (a wall of 0 would time out before the first event):
-  // fractions allowed, so unit tests can take sub-minute values.
-  const positiveMinutes = (name: string, raw: string | undefined, fallback: number): number => {
-    if (raw === undefined || raw === "") return fallback
-    const value = Number(raw)
-    if (!Number.isFinite(value) || value <= 0) {
-      throw new Error(`env ${name} invalid value: "${raw}" (expected positive minutes, fractions allowed; empty string = unset, default ${fallback})`)
-    }
-    return value
-  }
   const forkBaseRaw = env[SWITCH_ENV.forkBase]
   const forkBase = forkBaseRaw === undefined || forkBaseRaw === "" ? SWITCH_DEFAULTS.forkBase : forkBaseRaw
   if (forkBase !== "session" && forkBase !== "digest") {
@@ -703,7 +669,6 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     analysis: onOff(SWITCH_ENV.analysis, env[SWITCH_ENV.analysis], SWITCH_DEFAULTS.analysis),
     park: onOff(SWITCH_ENV.park, env[SWITCH_ENV.park], SWITCH_DEFAULTS.park),
     synthesis: onOff(SWITCH_ENV.synthesis, env[SWITCH_ENV.synthesis], SWITCH_DEFAULTS.synthesis),
-    synthesisTimeout: positiveMinutes(SWITCH_ENV.synthesisTimeout, env[SWITCH_ENV.synthesisTimeout], SWITCH_DEFAULTS.synthesisTimeout),
     regression: onOff(SWITCH_ENV.regression, env[SWITCH_ENV.regression], SWITCH_DEFAULTS.regression),
     docLanes: onOff(SWITCH_ENV.docLanes, env[SWITCH_ENV.docLanes], SWITCH_DEFAULTS.docLanes),
     agent,
@@ -749,7 +714,6 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.analysis === SWITCH_DEFAULTS.analysis ? undefined : `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
     switches.park === SWITCH_DEFAULTS.park ? undefined : `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
     switches.synthesis === SWITCH_DEFAULTS.synthesis ? undefined : `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,
-    switches.synthesisTimeout === SWITCH_DEFAULTS.synthesisTimeout ? undefined : `${SWITCH_ENV.synthesisTimeout}=${switches.synthesisTimeout}`,
     switches.regression === SWITCH_DEFAULTS.regression ? undefined : `${SWITCH_ENV.regression}=${switches.regression ? "on" : "off"}`,
     switches.docLanes === SWITCH_DEFAULTS.docLanes ? undefined : `${SWITCH_ENV.docLanes}=${switches.docLanes ? "on" : "off"}`,
     env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${displayUrl(env[SWITCH_ENV.server]!)}` : undefined,
@@ -781,7 +745,6 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
     `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
     `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,
-    `${SWITCH_ENV.synthesisTimeout}=${switches.synthesisTimeout}`,
     `${SWITCH_ENV.regression}=${switches.regression ? "on" : "off"}`,
     `${SWITCH_ENV.docLanes}=${switches.docLanes ? "on" : "off"}`,
   ].join(", ")

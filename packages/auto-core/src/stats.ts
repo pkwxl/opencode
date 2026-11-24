@@ -52,7 +52,6 @@ import {
   mergeModelStats,
   num,
   parseStatsDoc,
-  SYNTHESIS_BUCKET,
   taskStintRecord,
   type Bucket,
   type DecomposeRun,
@@ -945,15 +944,6 @@ async function bucketUsage(dir: string | undefined, bucketName: string, usage: U
 // Lazy-loaded like the other APIs when no handle exists.
 export async function statsClassifyUsage(dir: string | undefined, usage: Usage): Promise<void> {
   await bucketUsage(dir, CLASSIFY_BUCKET, usage)
-}
-
-// The formulation one-shots' token booking (plans/0097 D6): the constructor
-// and the fidelity pass, through the router's synthesis sink — same shape as
-// the classify booking (phase/round only, never the task stint), its own
-// bucket so the two pipelines' overhead stay readable apart in the per-model
-// lines.
-export async function statsSynthesisUsage(dir: string | undefined, usage: Usage): Promise<void> {
-  await bucketUsage(dir, SYNTHESIS_BUCKET, usage)
 }
 
 // A wait-and-probe sleep spent on a quota window (plans/0057 §11 item 7):

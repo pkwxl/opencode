@@ -22,7 +22,6 @@ import {
   statsQuotaWait,
   statsSessionBegin,
   statsSessionEnd,
-  statsSynthesisUsage,
   statsTask,
   statsTotals,
   statsWaitBegin,
@@ -1111,19 +1110,16 @@ describe("stats per-model / per-tier / classify buckets", () => {
   // plans/0212 D5 (0165-125), enacting 0152 D4(c): the one-shots book to
   // phase/round only — never the open task stint, whose ledger line they
   // would land in (a one-shot is no unit's session).
-  test("the classify/synthesis buckets: one-shot tokens outside the unit's session totals and outside the task stint's record — phase/round only", async () => {
+  test("the classify bucket: one-shot tokens outside the unit's session totals and outside the task stint's record — phase/round only", async () => {
     await loadStats(dir)
     await statsTask(dir, "T-001")
     await statsClassifyUsage(dir, usage(42))
-    await statsSynthesisUsage(dir, usage(7))
     await statsTask(dir, "T-002") // closes T-001's stint: the line must not carry the one-shots
     await flushStats(dir)
     const doc = await readDoc()
     for (const bucket of [doc.phaseB, doc.roundB]) {
       expect(bucket.models?.classify?.usage.input).toBe(42)
       expect(bucket.models?.classify?.sessions).toBe(1)
-      expect(bucket.models?.synthesis?.usage.input).toBe(7)
-      expect(bucket.models?.synthesis?.sessions).toBe(1)
       expect(bucket.usage.input).toBe(0) // never in the bucket's own totals
       expect(bucket.sessions).toBe(0)
     }

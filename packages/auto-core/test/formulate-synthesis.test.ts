@@ -1,16 +1,7 @@
-// Formulation synthesis (plans/0097 D2–D6): the obligation ledger's grammar
-// and mechanical validation (quote anchoring, source vocabulary, the seeded
-// protocol rows), the constructor reply's strict parse, the floor digest,
-// and the loop-level ladder — the synthesized todo landing beside its audit
-// line, the fallback to the Stage-1 floor on an unparsable constructor, the
-// switch's emergency exit, and the digest-keyed idempotence (a pending
-// formulation whose floor assembly is unchanged keeps its landed todo, no
-// constructor re-run).
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs"
-import { tmpdir } from "node:os"
+// Synthesis grammar and legacy formulation collect regressions.
+import { describe, expect, test } from "bun:test"
+import { rmSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
-import type { ModelEntry, ModelRegistry, TierList } from "../src/models-schema"
 import { phaseType, phaseTypeOfLetter } from "../src/phases/registry"
 import { establishRound } from "../src/phases"
 import {
@@ -32,11 +23,9 @@ import {
   type LedgerRow,
   type LedgerSource,
 } from "../src/formulate-synthesis"
-import { clampSwitches } from "../src/switches"
-import { services } from "../src/services"
-import type { RoutingFacts } from "../src/routing"
-import { ev, type TurnScript } from "./fixtures/agent"
-import { SYNTHESIS_MARK, appendOneTask, artifactTurns, loopFixture, promptPhaseDir, synthesisTurn, type LoopFixture } from "./fixtures/loop"
+import { recordTodoDigest, todoDigest } from "../src/tasks"
+import type { TurnScript } from "./fixtures/agent"
+import { appendOneTask, artifactTurns, loopFixture, promptPhaseDir, type LoopFixture } from "./fixtures/loop"
 
 // —— the pure half ——
 
@@ -193,305 +182,39 @@ describe("the floor digest (0097 D6)", () => {
   })
 })
 
-// —— the loop-level ladder ——
-
-// The registry the routing carries: a deep-tier entry the constructor's
-// planning route picks, a free classifier entry the verifier would use.
-const entry = (name: string): ModelEntry => ({ name, layer: "operator", agent: "opencode", model: `prov/${name}` })
-const routing = (): RoutingFacts => ({
-  registry: {
-    layers: [{ name: "operator", path: "/unused/models.json" }],
-    tz: "UTC",
-    agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
-    models: new Map([entry("a"), entry("free")].map((item) => [item.name, item])),
-    tiers: { deep: { tier: "deep", names: ["a"], layer: "operator" } as TierList },
-    routes: new Map(),
-    unused: [],
-    classifier: { names: ["free"], layer: "operator" },
-  },
-  agentFilter: "opencode",
-  filterSource: undefined,
-  defaultAgent: "opencode",
-  runAgent: "opencode",
-  router: services().router,
-  clock: services().clock,
-})
-
-// The pack: a charter (the synthesis and the verifier activate) plus the
-// result-line discipline (the wrap-up writes verdicts, so the loop fixture's
-// wrap-up branch produces reports).
-const CHARTER_PACK = [
-  "# verify",
-  "",
-  "## acceptance",
-  "",
-  "### result-line",
-  "",
-  "Write it in every report: `Result: PASS` means every acceptance criterion was observed to pass.",
-  "",
-  "## guarantees",
-  "",
-  "### verify-plan",
-  "",
-  "The charter bar the plan must serve.",
-  "",
-].join("\n")
+// Exercise legacy collect with a previously landed ledger. The executor
+// suite covers how new synthesis replies land.
 const INPUT = "Reimplement the widget from the specification alone."
-const SYNTH_TITLE = "auto: formulation synthesis"
-const FIDELITY_TITLE = "auto: formulation fidelity check"
-const VERIFY_MARK = "You read one prompt that a planning step"
-const FIDELITY_MARK = "You judge the fidelity of one synthesis"
 
-// The fidelity check's scripted verdict (D5): pass by default; the fail-path
-// test scripts its own.
-const fidelityTurn = (verdict: string): TurnScript => (ctx) => {
-  if (!ctx.text.includes(FIDELITY_MARK)) return undefined
-  return [ev.text(ctx.session, `fid_${ctx.n}`, verdict), ev.step(ctx.session, `fidstp_${ctx.n}`), ev.idle(ctx.session)]
-}
-
-// The formulation unit's document text, whatever its state file is (a
-// completed unit's todo.md was renamed to done.md).
-const unitDoc = async (dir: string, id: string): Promise<string> => {
-  for (const name of ["done.md", "todo.md"]) {
-    const text = await Bun.file(join(dir, "docs", id, name)).text().catch(() => undefined)
-    if (text !== undefined) return text
-  }
-  throw new Error(`no state file of ${id}`)
-}
-
-// Drop a unit's blocked mark from the runtime record, so the next run
-// re-enters the planning step instead of resuming the blocked task directly.
-const unblock = async (dir: string, id: string): Promise<void> => {
-  const file = join(dir, ".auto", "units.json")
-  const units = JSON.parse(await Bun.file(file).text()) as { tasks: Record<string, Record<string, unknown>> }
-  if (units.tasks[id] !== undefined) delete units.tasks[id]!.status
-  await Bun.write(file, `${JSON.stringify(units, null, 2)}\n`)
-  await rmSync(join(dir, ".auto", "progress.json"), { force: true })
-}
-
-// The verifier's scripted reply: the composed document is judged consistent,
-// so the ladder under test is the synthesis side alone.
-const verifyYes: TurnScript = (ctx) => {
-  if (!ctx.text.includes(VERIFY_MARK)) return undefined
-  return [ev.text(ctx.session, `vrf_${ctx.n}`, "Consistent: yes"), ev.step(ctx.session, `vrfstp_${ctx.n}`), ev.idle(ctx.session)]
-}
-
-// The titles of every create() call the fake agent saw.
-const createTitles = (f: LoopFixture): string[] =>
-  f.agent.argsOf("create").map((args) => (args[0] as { title?: string } | undefined)?.title ?? "")
-
-// A fixture like the verifier suite's: m mode, a charter pack committed ahead
-// of the round, the plan input persisted, routing with a planning-route entry.
-async function synthesisFixture(turn: (dir: string) => TurnScript, fidelity = "Fidelity: pass"): Promise<LoopFixture> {
-  const f = await loopFixture("m", (dir): { turn: TurnScript } => ({ turn: (ctx) => verifyYes(ctx) ?? fidelityTurn(fidelity)(ctx) ?? turn(dir)(ctx) }))
-  await mkdirSync(join(f.dir, ".opencode", "auto", "intents"), { recursive: true })
-  await writeFileSync(join(f.dir, ".opencode", "auto", "intents", "verify.md"), CHARTER_PACK)
+async function formulationFixture(turn: (dir: string) => TurnScript, withLedger = false): Promise<LoopFixture> {
+  const f = await loopFixture("m", (dir) => ({ turn: turn(dir) }))
   await establishRound(f.dir, { phases: "m" })
-  await Bun.write(join(f.dir, "docs", "R-01", "P01-implement", "plan-input.md"), `${INPUT}\n`)
+  await Bun.write(join(f.dir, "docs/R-01/P01-implement/plan-input.md"), `${INPUT}\n`)
   await f.commit("round setup")
+  if (withLedger) {
+    expect((await f.run({ stopBefore: "formulate" })).code).toBe(0)
+    const path = join(f.dir, "docs/T-001/todo.md")
+    const floor = await Bun.file(path).text()
+    const todo = floor.replace("## Acceptance", [
+      LEDGER_HEADING,
+      "",
+      `- O-01 | docs/R-01/P01-implement/plan-input.md | "${INPUT}" | the plan covers a specification-only reimplementation`,
+      "",
+      "## Acceptance",
+    ].join("\n"))
+    await Bun.write(path, todo)
+    await f.commit("land the synthesized todo fixture")
+    await recordTodoDigest(f.dir, "T-001", todoDigest(todo))
+  }
   return f
 }
 
-// The constructor's scripted reply quotes the plan file as it stands when
-// the session runs (a changed input changes the quote).
-const constructorTurn: TurnScript = (ctx) => {
-  const input = /### (docs\/R-01\/P01-implement\/plan-input\.md)\n\n([^\n]+)/.exec(ctx.text)?.[2]?.trim()
-  if (input === undefined) return undefined
-  // plans/0109 D2: the seeded sequence in m mode starts empty (the report
-  // row retired), so the session's first row is O-01.
-  return synthesisTurn("The widget is reimplemented from the specification alone.", [
-    `- O-01 | docs/R-01/P01-implement/plan-input.md | "${input}" | the plan's tasks cover the specification-only reimplementation`,
-  ])(ctx)
-}
+const createTitles = (f: LoopFixture): string[] =>
+  f.agent.argsOf("create").map((args) => (args[0] as { title?: string } | undefined)?.title ?? "")
 
-let envSaved: [string, string | undefined][] = []
-beforeEach(() => {
-  envSaved = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
-  for (const [key] of envSaved) delete process.env[key]
-})
-afterEach(() => {
-  for (const [key, value] of envSaved) if (value !== undefined) process.env[key] = value
-})
-describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", () => {
-  test("a good constructor reply lands the synthesized todo and its audit line; the ledger rides the single input", async () => {
-    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? artifactTurns(dir)(ctx)!)
-    try {
-      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
-      expect(code).toBe(0)
-      // The composed chain: constructor → fidelity check → verifier →
-      // formulation session; the todo on disk carries the frame + brief +
-      // ledger, and the audit names the charters, the rationale and the
-      // fidelity verdict.
-      const todo = await unitDoc(f.dir, "T-001")
-      expect(todo).toContain("## Sources brief (constructor session, under the charter)")
-      expect(todo).toContain(LEDGER_HEADING)
-      expect(todo).toContain(`- O-01 | docs/R-01/P01-implement/plan-input.md | "${INPUT}" |`)
-      const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
-      expect(audit).toMatch(/formulation R-01\.P01 synthesis: charters \[verify-plan\] on a — the sources demand a specification-only reimplementation — source health: \.opencode\/auto\/brief\.md absent/)
-      expect(audit).toMatch(/formulation R-01\.P01 fidelity: pass/)
-      // D8: the wrap-up of the ledger-bearing formulation task judges row by
-      // row — the framing and the ledger rows ride its prompt, the coverage
-      // line names the map.
-      const wrapup = f.agent.prompts.find((prompt) => prompt.text.includes("only performs the wrap-up") && prompt.text.includes("single input of this formulation task"))
-      expect(wrapup).toBeDefined()
-      expect(wrapup!.text).toContain("judge it row by row")
-      expect(wrapup!.text).toContain("The obligations ledger under judgment:")
-      expect(wrapup!.text).toContain("- O-01 | docs/R-01/P01-implement/plan-input.md |")
-      expect(wrapup!.text).toContain("docs/T-001/coverage.md")
-      expect(lines.some((line) => line.includes("✓ formulation synthesis: the constructor a re-voiced"))).toBe(true)
-      // Plans/0283: no verifier session follows the constructor — the plan
-      // step is deterministic, nothing judges the composed prompt.
-      expect(f.agent.prompts.some((prompt) => prompt.text.includes("You read one prompt that a planning step"))).toBe(false)
-      // The synthesized document is committed: the phase-formulate commit
-      // carries it (the audit's prompt-audit commit ahead of it).
-      const log = await f.git("log", "--format=%s", "--", "docs/T-001/todo.md")
-      expect(log).toContain("PLAN formulate P01-implement Implementation")
-    } finally {
-      await rmSync(f.dir, { recursive: true, force: true })
-    }
-  })
-
-  test("the constructor's wait is visible and its tokens booked: the start line names the model and the configured wall, the one-shot usage reaches the synthesis sink", async () => {
-    // The wall comes from the OPENCODE_AUTO_SYNTHESIS_TIMEOUT switch — 0.5 min
-    // renders as a 30 s bound, so the start line pins both the model the
-    // constructor runs on and the budget it waits under.
-    clampSwitches({ synthesisTimeout: 0.5 })
-    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? artifactTurns(dir)(ctx)!)
-    // The sink goes on the services holder the fixture's run will read (the
-    // fixture installs its own fresh holder at creation).
-    const booked: number[] = []
-    services().router.setSynthesisUsageSink((usage) => booked.push(usage.steps))
-    try {
-      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
-      expect(code).toBe(0)
-      const start = lines.find((line) => line.includes("◈ formulation synthesis: the constructor a (route phase-plan) re-voices"))
-      expect(start).toContain("bounded 30 s")
-      expect(lines.some((line) => line.includes("ℹ formulation synthesis: the fidelity pass"))).toBe(true)
-      // The constructor's and the fidelity pass's one-shots each reported
-      // their usage through the run router's sink (booked steps, whatever
-      // the figure) — a fallback that burns attempts stays countable.
-      expect(booked.length).toBeGreaterThanOrEqual(2)
-    } finally {
-      services().router.setSynthesisUsageSink(undefined)
-      clampSwitches({ synthesisTimeout: 15 })
-      await rmSync(f.dir, { recursive: true, force: true })
-    }
-  })
-
-  test("an unparsable constructor falls back to the floor after its one retry: FALLBACK audit line, no ledger in the todo, the run completes", async () => {
-    const f = await synthesisFixture((dir) => (ctx) => artifactTurns(dir)(ctx)!)
-    try {
-      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
-      expect(code).toBe(0)
-      // Two constructor attempts (the default turn's reply never parses),
-      // then the floor.
-      const titles = createTitles(f)
-      expect(titles.filter((title) => title === SYNTH_TITLE)).toHaveLength(2)
-      expect(lines.some((line) => line.includes("formulation synthesis fell back to the Stage-1 deterministic floor"))).toBe(true)
-      const todo = await unitDoc(f.dir, "T-001")
-      expect(todo).not.toContain(LEDGER_HEADING)
-      expect(todo).toContain("## Input: plan file (docs/R-01/P01-implement/plan-input.md)")
-      const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
-      expect(audit).toMatch(/formulation R-01\.P01 synthesis: FALLBACK — [^]*\(after one retry/)
-    } finally {
-      await rmSync(f.dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a fidelity fail retries the constructor once with the evidence, then the ladder: FAIL audit line, the floor", async () => {
-    // The constructor's replies are mechanically valid, the fidelity check
-    // keeps failing on the same dropped demand: one constructor retry under
-    // the evidence, then the floor with the fidelity FAIL recorded ahead of
-    // the FALLBACK line.
-    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? artifactTurns(dir)(ctx)!, "Fidelity: fail — the fixture-format constraint the round brief names is dropped")
-    try {
-      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
-      expect(code).toBe(0)
-      // The constructor ran its two attempts (the fidelity evidence feeding
-      // the second), the fidelity check judged both, then the floor.
-      expect(createTitles(f).filter((title) => title === SYNTH_TITLE)).toHaveLength(2)
-      expect(createTitles(f).filter((title) => title === FIDELITY_TITLE)).toHaveLength(2)
-      expect(lines.some((line) => line.includes("formulation synthesis fell back to the Stage-1 deterministic floor: the fidelity check failed"))).toBe(true)
-      const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
-      expect(audit).toMatch(/formulation R-01\.P01 fidelity: FAIL — the fixture-format constraint the round brief names is dropped/)
-      expect(audit.indexOf("fidelity: FAIL")).toBeLessThan(audit.indexOf("synthesis: FALLBACK"))
-      expect(await unitDoc(f.dir, "T-001")).not.toContain(LEDGER_HEADING)
-    } finally {
-      await rmSync(f.dir, { recursive: true, force: true })
-    }
-  })
-
-  test("OPENCODE_AUTO_SYNTHESIS=off forces the floor: no constructor session, no audit entry, the charter still rides the Acceptance", async () => {
-    clampSwitches({ synthesis: false })
-    const f = await synthesisFixture((dir) => (ctx) => artifactTurns(dir)(ctx)!)
-    try {
-      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
-      expect(code).toBe(0)
-      expect(createTitles(f)).not.toContain(SYNTH_TITLE)
-      expect(lines.some((line) => line.includes("formulation synthesis off: OPENCODE_AUTO_SYNTHESIS=off"))).toBe(true)
-      const todo = await unitDoc(f.dir, "T-001")
-      expect(todo).not.toContain(LEDGER_HEADING)
-      expect(todo).toContain("The project's intent charter binds this plan in addition")
-      // No verifier session, so no audit verdict either (plans/0283): the
-      // audit may not exist at all; when it does, no synthesis entry is in
-      // it.
-      const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text().catch(() => "")
-      expect(audit).not.toContain("synthesis:")
-    } finally {
-      clampSwitches({ synthesis: true })
-      await rmSync(f.dir, { recursive: true, force: true })
-    }
-  })
-
-  test("no routing degrades loudly: the FALLBACK audit line names it, the floor carries the charter", async () => {
-    const f = await synthesisFixture((dir) => (ctx) => artifactTurns(dir)(ctx)!)
-    try {
-      const { code } = await f.run({ intent: "verify" })
-      expect(code).toBe(0)
-      expect(createTitles(f)).not.toContain(SYNTH_TITLE)
-      const audit = await Bun.file(join(f.dir, "docs", "R-01", "prompt-audit.md")).text()
-      expect(audit).toMatch(/synthesis: FALLBACK — no model registry routing/)
-      expect(await unitDoc(f.dir, "T-001")).not.toContain(LEDGER_HEADING)
-    } finally {
-      await rmSync(f.dir, { recursive: true, force: true })
-    }
-  })
-
-  test("digest idempotence: a pending formulation whose floor is unchanged keeps its landed todo — no constructor re-run, byte-identical", async () => {
-    // First run: the constructor succeeds, the formulation session writes
-    // nothing (the default turn) — the collect blocks, the task stays
-    // pending, the todo and its digest stay on disk.
-    // The formulation session (the whole-task session over the todo) writes
-    // nothing: the default turn's reply produces no index, the collect
-    // blocks, the task stays pending with its landed todo and digest.
-    const f = await synthesisFixture(() => constructorTurn)
-    try {
-      const first = await f.run({ intent: "verify", routing: routing(), stopBefore: "execute" })
-      expect(first.code).toBe(2)
-      // The unit stays pending: its todo (synthesized) and digest are on
-      // disk, no done.md.
-      const todo = await unitDoc(f.dir, "T-001")
-      expect(todo).toContain(LEDGER_HEADING)
-      expect(existsSync(join(f.dir, "docs", "T-001", "done.md"))).toBe(false)
-
-      // Second run over the same tree (the blocked mark cleared, the way a
-      // person re-running plan enters): the floor assembly is unchanged, so
-      // the landed synthesized todo stands — no constructor session, no
-      // rewrite — the verifier and the formulation session run again.
-      await unblock(f.dir, "T-001")
-      const constructorsBefore = createTitles(f).filter((title) => title === SYNTH_TITLE).length
-      const second = await f.run({ intent: "verify", routing: routing(), stopBefore: "execute" })
-      expect(second.code).toBe(2)
-      expect(createTitles(f).filter((title) => title === SYNTH_TITLE)).toHaveLength(constructorsBefore)
-      expect(second.lines.some((line) => line.includes("the landed formulation todo of T-001 stands"))).toBe(true)
-      expect(await unitDoc(f.dir, "T-001")).toBe(todo)
-    } finally {
-      await rmSync(f.dir, { recursive: true, force: true })
-    }
-  })
-
+describe("formulation collect", () => {
   test("the formulation collect totality-checks the coverage map: a missing map blocks the unit, the wrap-up never runs (0097 D7)", async () => {
-    // The constructor succeeds, the planner writes the index but no coverage
+    // The planner writes the index but no coverage
     // map (a planning turn without the fixture's coverage branch): the
     // collect names the demand and blocks — a named problem, never a silent
     // pass.
@@ -503,9 +226,9 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       }
       return artifactTurns(dir)(ctx)
     }
-    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? planNoCoverage(dir)(ctx))
+    const f = await formulationFixture(planNoCoverage, true)
     try {
-      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
+      const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(2)
       expect(lines.some((line) => line.includes("the formulation output is invalid") && line.includes("the coverage map is missing or empty"))).toBe(true)
       // The wrap-up never dispatched: the collect blocked first.
@@ -534,9 +257,9 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       }
       return artifactTurns(dir)(ctx)
     }
-    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? dropOwnRow(dir)(ctx))
+    const f = await formulationFixture(dropOwnRow)
     try {
-      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
+      const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(2)
       expect(lines.some((line) => line.includes("the formulation output is invalid") && line.includes("no longer lists the formulation task"))).toBe(true)
       // The wrap-up never dispatched: the guard blocked before it.
@@ -571,9 +294,9 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       }
       return artifactTurns(dir)(ctx)
     }
-    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? stripLedger(dir)(ctx))
+    const f = await formulationFixture(stripLedger, true)
     try {
-      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
+      const { code, lines } = await f.run({ stopBefore: "execute" })
       // The strip is detected and restored; the plan proceeds on the landed
       // text (the ledger present, the coverage map checked against it).
       expect(code).toBe(0)
@@ -617,9 +340,9 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       }
       return best?.id
     }
-    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? forgeMarker(dir)(ctx))
+    const f = await formulationFixture(forgeMarker)
     try {
-      const { code, lines } = await f.run({ intent: "verify", routing: routing() })
+      const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(2)
       expect(lines.some((line) => line.includes("carries a `Formulate:` field") && line.includes("the driver's marker of the phase's formulation unit; remove the field line"))).toBe(true)
       expect(createTitles(f).some((title) => title!.includes("wrapup"))).toBe(false)
@@ -648,9 +371,9 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       }
       return artifactTurns(dir)(ctx)
     }
-    const f = await synthesisFixture((dir) => (ctx) => constructorTurn(ctx) ?? dropOwnRow(dir)(ctx))
+    const f = await formulationFixture(dropOwnRow)
     try {
-      const first = await f.run({ intent: "verify", routing: routing() })
+      const first = await f.run({ stopBefore: "execute" })
       expect(first.code).toBe(2)
       expect(first.lines.some((line) => line.includes("no longer lists the formulation task"))).toBe(true)
       // The driver restored the row at the head and committed the restore as
@@ -662,7 +385,7 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
       // The re-run sees the unit and re-dispatches the formulation over the
       // surviving files (the session drops the row again — the same blocked
       // voice, never a silent execution of the unjudged plan).
-      const second = await f.run({ intent: "verify", routing: routing() })
+      const second = await f.run({ stopBefore: "execute" })
       expect(second.code).toBe(2)
       expect(second.lines.some((line) => line.includes("no longer lists the formulation task"))).toBe(true)
     } finally {
@@ -670,25 +393,4 @@ describe("the constructor session and the degradation ladder (0097 D3/D4/D6)", (
     }
   })
 
-  test("a changed floor re-runs the pipeline: a changed planning input re-synthesizes", async () => {
-    const f = await synthesisFixture(() => constructorTurn)
-    try {
-      const first = await f.run({ intent: "verify", routing: routing(), stopBefore: "execute" })
-      expect(first.code).toBe(2)
-      const constructorsBefore = createTitles(f).filter((title) => title === SYNTH_TITLE).length
-      expect(constructorsBefore).toBeGreaterThan(0)
-      // The input changes: the floor digest changes, the full pipeline runs
-      // again over the pending unit (construction's rewrite-on-diff lands
-      // the new todo).
-      await Bun.write(join(f.dir, "docs", "R-01", "P01-implement", "plan-input.md"), "Reimplement the widget and its fixtures from the specification alone.\n")
-      await f.commit("input changed")
-      await unblock(f.dir, "T-001")
-      const second = await f.run({ intent: "verify", routing: routing(), stopBefore: "execute" })
-      expect(second.code).toBe(2)
-      expect(createTitles(f).filter((title) => title === SYNTH_TITLE)).toHaveLength(constructorsBefore + 1)
-      expect(second.lines.some((line) => line.includes("the landed formulation todo of T-001 stands"))).toBe(false)
-    } finally {
-      await rmSync(f.dir, { recursive: true, force: true })
-    }
-  })
 })
