@@ -7,17 +7,15 @@
 //      line (D5) — stopping at the round-start gate (the setup stays
 //      uncommitted; committing it is the person's review, G1);
 //   2. phase boundary (the current phase complete): the human gate checked
-//      first — a survey with open forks refuses exit 2 ahead of any session,
-//      the release act stays writing `Clarified: yes` — then, through the
-//      loop under stopBefore "formulate" (runAll), the handover
-//      distillation, the phase close (installApprovedBrief on a released
-//      survey — what today's run re-entry did, absorbed), and the next
-//      phase's formulation todo constructed and stopped for review (D3);
+//      first (a survey with open forks holds for `Clarified: yes`). Once the
+//      distill grant's handover lands, transfer installs any approved survey
+//      brief, closes the phase, and constructs the next formulation todo
+//      for review (D3);
 //   3. round close: the same invocation, when the closed phase was the
 //      round's last, additionally performs the round close and stops there —
 //      the full stop between rounds is the person's natural moment with
 //      R-NN's close listing (a commissioned report beside it) before
-//      committing to R-NN+1 (the loop's complete route gates it, exit 2
+//      committing to R-NN+1 (the round-close checks gate it, exit 2
 //      naming the checks);
 //   4. round open (the round closed): the roadmap's next line applied (D5)
 //      — a released roadmap that plans lines governs the sequence's end, so
@@ -43,10 +41,8 @@
 // the reshape and its apply are one seam. Since plans/0206 D3 the mid-phase
 // refusal arm re-derives the same way ahead of its own stop, so the apply is
 // the advance's in every state, never plan's uncommitted sync.
-// The lock is taken here and held across the pre-checks and the loop (runAll
-// re-enters it per process), the plan --force-close precedent; the
-// clean-tree refusals are preflight's (the advance runs only on a committed
-// state — establishment deliberately does not, its G1 stop is the point).
+// The transfer lock covers the checks and writes. The round-start review
+// stop can leave the newly established round for the person to commit.
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
 import { closeAuditStopLines, ensureCloseAudit, updateAssuranceBaselines } from "./close-audit"
@@ -105,40 +101,22 @@ import { loadPlan, type Plan } from "./tasks"
 import { validHandover } from "./document/roles"
 import { wallBoundary, wallPrecheckFindings, type WallCtx } from "./wall"
 
-// Legacy transfer entry. Only its review continuation loads the session loop.
-export async function runTransfer(directory: string, opts: RunAllOpts): Promise<number> {
-  return transferWithLock(directory, opts, advanceToReview)
-}
-
-// The deterministic advance (plans/0282, the pull-only world's transfer op):
-// the same state resolution under the same lock, with the deterministic
-// apply selected for every continuation, including round establishment. The session
-// work it declines rides the executor protocol as grants (the distillation
-// as distill, the construction's re-voicing as synthesize, the planning
-// session as formulate, the phase's tasks as execute/verify/fix); the person
-// brackets every boundary exactly as before, their acts the document writes
-// and this operation. Zero agent processes are spawned — the daemon-side
-// posture 0279 rules.
+// Apply the person's boundary under the transfer lock. Session work is
+// performed through executor grants (plans/0282).
 export async function transferDeterministic(directory: string, opts: RunAllOpts): Promise<number> {
-  return transferWithLock(directory, opts, advanceDeterministic)
-}
-
-type Advance = (directory: string, round: number, opts: RunAllOpts) => Promise<number>
-
-async function transferWithLock(directory: string, opts: RunAllOpts, advance: Advance): Promise<number> {
   const lock = acquireRunLock(directory, "transfer")
   if (!lock.ok) {
     for (const line of lockLines(directory, lock.holder)) log(line)
     return 1
   }
   try {
-    return await transferAdvance(directory, opts, advance)
+    return await transferAdvance(directory, opts)
   } finally {
     lock.release()
   }
 }
 
-async function transferAdvance(directory: string, opts: RunAllOpts, advance: Advance): Promise<number> {
+async function transferAdvance(directory: string, opts: RunAllOpts): Promise<number> {
   const { bin } = shellProfile()
   // m mode keeps today's shape entirely (plans/0101 D8): the single implicit
   // phase, the formulation riding run, the planning input the person's lever
@@ -161,7 +139,7 @@ async function transferAdvance(directory: string, opts: RunAllOpts, advance: Adv
   // Shape 1: no established round — the assisted analysis flow, or a direct
   // / resumed establishment (the switch off, a later round, an interrupted
   // round start).
-  if (!(await Bun.file(join(directory, phaseIndexPath(round))).exists())) return await projectStart(directory, round, opts, advance)
+  if (!(await Bun.file(join(directory, phaseIndexPath(round))).exists())) return await projectStart(directory, round, opts)
   const route = await routePhase(directory, { loadPlan, bin, phases: opts.phases ?? "m" })
   if (route.type === "blocked") {
     log(phaseFlowBlockedLine(route.reason))
@@ -190,17 +168,17 @@ async function transferAdvance(directory: string, opts: RunAllOpts, advance: Adv
   if (route.type !== "complete" && (await roundIsOpen(directory))) return await openRoundAdvance(directory, round, route, opts)
   // Shape 4: the round closed — the round-close gate, then the next round
   // from the roadmap's line or the exhausted stop.
-  if (route.type === "complete") return await roundOpen(directory, round, opts, advance)
+  if (route.type === "complete") return await roundOpen(directory, round, opts)
   // The construct-and-review tail (shapes 1/2/4's second invocation, and the
   // rejection channel of D3): an empty index awaits its formulation todo, an
-  // awaiting formulation task awaits dispatch — either way the loop
+  // awaiting formulation task awaits dispatch — either way transfer
   // constructs (idempotent rewrite-on-diff; the digest-keep holds an
   // unchanged floor) and stops at the review seam. The predicate is the
   // shared awaiting one (plans/0101 D4): the todo wherever it sits in the
   // index, beside hand-added tasks too.
-  if (route.type === "plan") return await advance(directory, round, opts)
+  if (route.type === "plan") return await advanceDeterministic(directory, round, opts)
   if (route.type === "execute") {
-    if (awaitingFormulation(route.plan.tasks, route.phase)) return await advance(directory, round, opts)
+    if (awaitingFormulation(route.plan.tasks, route.phase)) return await advanceDeterministic(directory, round, opts)
     // The mid-phase arm re-derives first (plans/0206 D3, amending 0101 D6's
     // deferral): the tail reshape's one apply is the advance's own committed
     // rewrite wherever the state stops it, so the refusal plan and run name
@@ -226,45 +204,12 @@ async function transferAdvance(directory: string, opts: RunAllOpts, advance: Adv
       return 2
     }
   }
-  return await advance(directory, round, opts)
+  return await advanceDeterministic(directory, round, opts)
 }
 
-// The advance proper (shapes 2/3's sessions and every construction): the
-// unstarted-tail re-derivation first (plans/0101 D6 — the boundary's apply,
-// the person's amendment or the moved roadmap line), then the loop under
-// stopBefore "formulate" — the handover distillation, the phase close, the
-// round close at the complete route all run inside it, and it stops at the
-// construction's review seam inside the planning step (loop-plan's stop,
-// D3's output), never dispatching a task session. preflight's gates apply
-// unchanged (the clean tree above all: the advance runs only on a committed
-// state — which is why the re-derivation commits its own rewrite).
-async function advanceToReview(directory: string, round: number, opts: RunAllOpts): Promise<number> {
-  const stop = await rederiveTail(directory, round, opts)
-  if (stop !== undefined) return stop
-  await applyReleasedBrief(directory, round)
-  const { runAll } = await import("./loop")
-  return await runAll(directory, { ...opts, stopBefore: "formulate" })
-}
-
-// The deterministic advance's boundary walk (plans/0282): the same prefix
-// as advanceToReview — the tail re-derivation, the released brief's install
-// — then the boundary resolved from the documents alone, every session the
-// push advance ran replaced by its protocol grant or its stop:
-//   - pending tasks: the phase's work is the executor protocol's (execute
-//     grants) — the honest stop naming the claim surface;
-//   - an invalid or missing handover: the distillation is the distill
-//     grant's — the stop names it (the landed share composing with this
-//     walk's apply on the next invocation, 0277's own shape C.2);
-//   - a valid handover: the apply — the resume point closed, the gates and
-//     the wall read-only first, the survey's approved brief installed, the
-//     completion rename, the transition commit — then the walk continues to
-//     the next boundary (the next phase's floor constructed and stopped for
-//     review, or the round close at the complete route).
-// The construction's synthesis enhancement and the charter verifier are
-// deliberately not run (the synthesize grant and the executor's verify
-// share own them, 0281's rulings); the floor lands through the standing
-// construction path and the stop is the person's review exactly as the
-// push advance's was.
+// Apply the tail reshape and released brief, then walk the current boundary.
+// The phase completes after its distill handover lands. The next phase's
+// formulation floor is constructed for review before any executor claims it.
 async function advanceDeterministic(directory: string, round: number, opts: RunAllOpts): Promise<number> {
   const { bin } = shellProfile()
   const stop = await rederiveTail(directory, round, opts)
@@ -633,7 +578,7 @@ async function settleOpenClose(directory: string, round: number): Promise<void> 
 // shapes and exit semantics as they move, the stop lines naming transfer's
 // rhythm. OPENCODE_AUTO_ANALYSIS=off degrades to direct establishment from
 // config, no analysis machinery (D8).
-async function projectStart(directory: string, round: number, opts: RunAllOpts, advance: Advance): Promise<number> {
+async function projectStart(directory: string, round: number, opts: RunAllOpts): Promise<number> {
   let analysisOn: boolean
   try {
     analysisOn = autoSwitches().analysis
@@ -652,7 +597,7 @@ async function projectStart(directory: string, round: number, opts: RunAllOpts, 
     // The release (row 0d's shape): the approved brief proposal installed,
     // R-01 establishes under the D5 resolution — the sourced G1 stop names
     // the line that ruled.
-    return establishStop(directory, 1, opts, gate.lines, advance)
+    return establishStop(directory, 1, opts, gate.lines)
   }
   // The switch off, a later round, or an interrupted establishment (row 1's
   // shape): the previous round's round-close check, then the establishment.
@@ -663,7 +608,7 @@ async function projectStart(directory: string, round: number, opts: RunAllOpts, 
       return 2
     }
   }
-  return establishStop(directory, round, opts, [], advance)
+  return establishStop(directory, round, opts, [])
 }
 
 // Shapes 1/4's stop: the establishment itself is establishRoundSetup (shared
@@ -676,7 +621,7 @@ async function projectStart(directory: string, round: number, opts: RunAllOpts, 
 // (the m-mode precedent — no construction exists for the advance's seam to
 // carry the install), and the next step is the open channels, never a
 // construction.
-async function establishStop(directory: string, round: number, opts: RunAllOpts, before: string[], advance: Advance): Promise<number> {
+async function establishStop(directory: string, round: number, opts: RunAllOpts, before: string[]): Promise<number> {
   const { bin } = shellProfile()
   const surface = surfaceOf()
   const setup = await establishRoundSetup(directory, round, { phases: opts.phases!, isolate: opts.isolate, testByDriver: opts.testByDriver })
@@ -749,7 +694,7 @@ async function establishStop(directory: string, round: number, opts: RunAllOpts,
         manual: false,
       },
     })
-    return await advance(directory, round, opts)
+    return await advanceDeterministic(directory, round, opts)
   }
   const lines = establishStopLines(
     directory,
@@ -784,7 +729,7 @@ async function establishStop(directory: string, round: number, opts: RunAllOpts,
 // documents-are-the-interface rule, holding to the end), never a silent
 // config round; a project with no released roadmap keeps falling back to
 // config `phases` (D5), today's behavior.
-async function roundOpen(directory: string, round: number, opts: RunAllOpts, advance: Advance): Promise<number> {
+async function roundOpen(directory: string, round: number, opts: RunAllOpts): Promise<number> {
   const { bin } = shellProfile()
   // An open round's interrupted close settles first (plans/0243 B): the
   // checks below read a committed state.
@@ -803,5 +748,5 @@ async function roundOpen(directory: string, round: number, opts: RunAllOpts, adv
     for (const line of roadmapExhaustedLines(directory, round)) log(line)
     return 0
   }
-  return establishStop(directory, round + 1, opts, roundCloseLines(close), advance)
+  return establishStop(directory, round + 1, opts, roundCloseLines(close))
 }

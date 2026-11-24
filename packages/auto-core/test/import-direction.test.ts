@@ -1016,7 +1016,7 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
   {
     from: "transfer",
     to: ["loop", "loop-phase"],
-    why: "deterministic transfer shares boundary actions with the loop. Only the legacy review continuation loads runAll, on demand.",
+    why: "transfer applies boundaries directly. Executor grants perform the session work.",
   },
   {
     from: "testrun",
@@ -1323,10 +1323,9 @@ for (const key of modules) {
   // bare `import "spec"` (side-effect imports)
   for (const m of text.matchAll(/^import\s*["']([^"']+)["']/gm)) record(m[1]!, false)
   // `import("./spec")` in type position (`type X = import("./x").Y`, a
-  // field's `x?: import("./x").T`): a type edge like `import type`. A dynamic
-  // value import (`await import("./x")`) is excluded by the lookbehind — it
-  // loads the module at run time and belongs to the value graph.
-  for (const m of text.matchAll(/(?<!await\s*)import\(\s*["']([^"']+)["']\s*\)/g)) record(m[1]!, true)
+  // field's `x?: import("./x").T`): a type edge like `import type`.
+  // An awaited import loads the module and is recorded as a value edge.
+  for (const m of text.matchAll(/(await\s+)?\bimport\(\s*["']([^"']+)["']\s*\)/g)) record(m[2]!, m[1] === undefined)
   edges.set(key, list)
 }
 

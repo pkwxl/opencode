@@ -9,11 +9,11 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { appendOneTask, artifactTurns, loopFixture, promptPhaseDir, type LoopFixture } from "./fixtures/loop"
+import { appendOneTask, artifactTurns, loopFixture, phaseHandover, promptPhaseDir, type LoopFixture } from "./fixtures/loop"
 import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
 import { captureRun } from "./fixtures/capture"
 import { establishRound } from "../src/phases"
-import { runTransfer } from "../src/transfer"
+import { transferDeterministic } from "../src/transfer"
 import { services } from "../src/services"
 
 const made: LoopFixture[] = []
@@ -300,10 +300,6 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
   test("the held boundary is the designed amendment moment: the stop names the reshape channel, and the released advance re-derives the tail (plans/0101 D6)", async () => {
     const analysisBlocks: string[] = []
     const f = await fixture(analysisBlocks)
-    // runTransfer's preflight needs the agent contract on disk (the fixture's
-    // own runs bypass preflight); committed like the round setup.
-    await Bun.write(join(f.dir, ".opencode/agent/auto.md"), "contract\n")
-    await f.commit("agent contract")
     // run completes the survey's work and stops at its boundary where the
     // gate holds: the awaiting lines name the reshape channel beside the
     // release — the survey's findings in hand, F10's evidence mechanically
@@ -324,18 +320,17 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
     writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "Clarified: yes\n\n<!-- auto: eof -->"))
     await f.commit("the findings reshape the round; clarified")
-    // The advance (the fixture's fake host under runTransfer's full
-    // preflight): the re-derivation applies the moved line — + P03-test on
-    // the driver's own commit — then the gate passes, the phase closes, and
-    // P02's plan task is constructed for review, all one advance.
-    const host = { client: f.agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
-    const advanced = await captureRun(() => runTransfer(f.dir, { managed: host, phases: "survey,implement" }))
+    // Land the distill output before applying the released boundary.
+    const phase = await f.phase(0)
+    await Bun.write(join(f.dir, phase.dir, "handover.md"), phaseHandover(phase.dir))
+    await f.commit("distill survey handover")
+    const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(advanced.code).toBe(0)
     expect(advanced.lines.some((line) => line.includes("✓ unstarted tail of round R-01 re-derived to the roadmap of docs/analysis.md (+ P03-test)"))).toBe(true)
     expect(await Bun.file(join(f.dir, "docs/R-01/phases.md")).text()).toContain("P03 test")
     expect(await f.git("log", "--format=%s")).toContain("PLAN resync R-01 tail to the roadmap of docs/analysis.md (+ P03-test)")
     expect(existsSync(join(f.dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
-    expect(advanced.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect(advanced.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
   })
 })

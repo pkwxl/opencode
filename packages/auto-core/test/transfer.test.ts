@@ -1,19 +1,12 @@
-// transfer, the single advance command (plans/0101 D2): the four shapes and
-// their refusals, resolved by state. The no-session shapes — project start
-// (the 0084 analysis flow re-homed), the gate-held refusal, nothing to
-// advance, the round-open and roadmap-exhausted stops — drive runTransfer
-// directly over a real git repository; the advance proper (the handover, the
-// phase close, the construction's review stop) rides the phase loop under
-// stopBefore "formulate" on the native fake agent (fixtures/loop.ts), the
-// same loop runAll hands control to — the survey-gate suite walks its
-// gated variant end to end.
+// Transfer resolves the person's boundary over real repositories. The
+// push loop's own construction and dispatch regressions use its fixture.
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ModelEntry, ModelRegistry, TierList } from "../src/models-schema"
 import { releasedRoadmapRounds } from "../src/roadmap"
-import { runTransfer, transferDeterministic } from "../src/transfer"
+import { transferDeterministic } from "../src/transfer"
+import { openExecutorCoordinator } from "../src/executor-coordinator"
 import { readExecutorPreview } from "../src/executor-steps"
 import { CONFIG_FILE } from "../src/config"
 import { addTask } from "../src/task-add"
@@ -27,7 +20,7 @@ import { services } from "../src/services"
 import { ev, type TurnScript } from "./fixtures/agent"
 import { captureRun } from "./fixtures/capture"
 import { freshRepo, git } from "./fixtures/runner"
-import { SYNTHESIS_MARK, appendOneTask, artifactTurns, loopFixture, phaseDirId, promptPhaseDir, synthesisTurn, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { SYNTHESIS_MARK, appendOneTask, artifactTurns, loopFixture, phaseDirId, phaseHandover, promptPhaseDir, synthesisTurn, taskDoc, type LoopFixture } from "./fixtures/loop"
 
 const made: string[] = []
 const fixtures: LoopFixture[] = []
@@ -36,7 +29,7 @@ afterEach(() => {
   for (const fixture of fixtures.splice(0)) rmSync(fixture.dir, { recursive: true, force: true })
 })
 
-// runTransfer's own capture (the fixture's run wraps the loop alone): the
+// transferDeterministic's own capture (the fixture's run wraps the loop alone): the
 // scrubbed switch layer and the terminal, the fixtures/capture.ts wrapper.
 const capture = captureRun
 
@@ -108,7 +101,7 @@ async function forkedSurvey(dir: string): Promise<void> {
 describe("transfer: m mode and the project-start shapes (plans/0101 D2 shape 1, D8)", () => {
   test("m mode refuses: the plan/run shapes stand, no boundary vocabulary applies", async () => {
     const dir = await repo()
-    const out = await capture(() => runTransfer(dir, { phases: "m" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "m" }))
     expect(out.code).toBe(1)
     expect(out.lines.some((line) => line.includes("transfer applies to phased projects"))).toBe(true)
     expect(out.lines.some((line) => line.includes("execute with opencode-auto run"))).toBe(true)
@@ -116,7 +109,7 @@ describe("transfer: m mode and the project-start shapes (plans/0101 D2 shape 1, 
 
   test("project start with no analysis: the stub opens, the guidance attaches, the stop names transfer", async () => {
     const dir = await repo()
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
     expect(existsSync(join(dir, "docs/analysis.md"))).toBe(true)
     expect(out.lines.some((line) => line.includes("the project analysis is open"))).toBe(true)
@@ -134,13 +127,13 @@ describe("transfer: m mode and the project-start shapes (plans/0101 D2 shape 1, 
   test("an unreleased analysis awaits the person (exit 2); grammar problems hold the release", async () => {
     const dir = await repo()
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"], false))
-    const awaiting = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const awaiting = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(awaiting.code).toBe(2)
     expect(awaiting.lines.some((line) => line.includes("the project analysis awaits you"))).toBe(true)
     expect(existsSync(join(dir, "docs/R-01"))).toBe(false)
     // Grammar problems are their own hold (row 0b's shape).
     await Bun.write(join(dir, "docs/analysis.md"), ["# Project analysis", "", "no sections at all", "", "Clarified: yes", ""].join("\n"))
-    const problems = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const problems = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(problems.code).toBe(2)
     expect(problems.lines.some((line) => line.includes("problems that hold its release"))).toBe(true)
   })
@@ -148,7 +141,7 @@ describe("transfer: m mode and the project-start shapes (plans/0101 D2 shape 1, 
   test("a released analysis installs the approved brief and establishes R-01 under the roadmap's line, stopping at the round-start gate naming transfer", async () => {
     const dir = await repo()
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 test,implement — port the core and its tests"]))
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
     // The brief proposal installed verbatim (its own commit through the tree).
     const brief = await Bun.file(join(dir, ".opencode/auto/brief.md")).text()
@@ -172,7 +165,7 @@ describe("transfer: m mode and the project-start shapes (plans/0101 D2 shape 1, 
     // process.env inside the run callback survives the capture's finally and
     // leaks the off switch into later-loaded files (the pollution surfaced
     // running file subsets out of alphabetical order).
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }), { plant: { OPENCODE_AUTO_ANALYSIS: "off" } })
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }), { plant: { OPENCODE_AUTO_ANALYSIS: "off" } })
     expect(out.code).toBe(0)
     expect(existsSync(join(dir, "docs/analysis.md"))).toBe(false)
     expect(out.lines.some((line) => line.includes("✓ round R-01 established: P01-implement, P02-test"))).toBe(true)
@@ -184,7 +177,7 @@ describe("transfer: the phase-boundary refusals (plans/0101 D2)", () => {
   test("a survey with open forks refuses ahead of any session, naming survey.md, the forks and the release line", async () => {
     const dir = await repo()
     await forkedSurvey(dir)
-    const out = await capture(() => runTransfer(dir, { phases: "survey,implement" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "survey,implement" }))
     expect(out.code).toBe(2)
     expect(out.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
     expect(out.lines.some((line) => line.includes("records 1 open Fork: line(s)"))).toBe(true)
@@ -212,7 +205,7 @@ describe("transfer: the phase-boundary refusals (plans/0101 D2)", () => {
       return (await readPhases(dir, 1))!
     })()
     await pendingTaskPhase(dir, "implement", state.phases[0]!)
-    const out = await capture(() => runTransfer(dir, { phases: "implement" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "implement" }))
     expect(out.code).toBe(2)
     expect(out.lines.some((line) => line.includes("nothing to advance: R-01.P01 implement still holds 1 pending task(s)"))).toBe(true)
     expect(out.lines.some((line) => line.includes("execute them first: opencode-auto run"))).toBe(true)
@@ -225,7 +218,7 @@ describe("transfer: the round-open shape (plans/0101 D2 shape 4, D5)", () => {
     const dir = await repo()
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core", "- R-02 m — harden the port"]))
     await completeRound(dir, "mt")
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
     expect(existsSync(join(dir, "docs/R-02/phases.md"))).toBe(true)
     expect(out.lines.some((line) => line.includes("✓ round R-02 established: P01-implement — phases from the roadmap of docs/analysis.md (R-02 line \"harden the port\"; config default was \"mt\")"))).toBe(true)
@@ -235,7 +228,7 @@ describe("transfer: the round-open shape (plans/0101 D2 shape 4, D5)", () => {
     const done = await repo()
     await Bun.write(join(done, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]))
     await completeRound(done, "mt")
-    const exhausted = await capture(() => runTransfer(done, { phases: "mt" }))
+    const exhausted = await capture(() => transferDeterministic(done, { phases: "mt" }))
     expect(exhausted.code).toBe(0)
     expect(exhausted.lines.some((line) => line.includes("holds no line for round R-02"))).toBe(true)
     expect(exhausted.lines.some((line) => line.includes("extend ## Roadmap"))).toBe(true)
@@ -246,7 +239,7 @@ describe("transfer: the round-open shape (plans/0101 D2 shape 4, D5)", () => {
     // fallback), today's behavior.
     const configFlow = await repo()
     await completeRound(configFlow, "mt")
-    const fallback = await capture(() => runTransfer(configFlow, { phases: "mtv" }))
+    const fallback = await capture(() => transferDeterministic(configFlow, { phases: "mtv" }))
     expect(fallback.code).toBe(0)
     expect(fallback.lines.some((line) => line.includes("✓ round R-02 established: P01-implement, P02-test, P03-acceptance"))).toBe(true)
   })
@@ -259,7 +252,7 @@ describe("transfer: the round-open shape (plans/0101 D2 shape 4, D5)", () => {
     await Bun.write(brief, renderRoundBrief(1))
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "unfill the close listing")
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(2)
     expect(out.lines.some((line) => line.includes("does not pass its round-close checks, so round R-02 cannot open yet"))).toBe(true)
     expect(out.lines.some((line) => line.includes("close listing"))).toBe(true)
@@ -267,34 +260,48 @@ describe("transfer: the round-open shape (plans/0101 D2 shape 4, D5)", () => {
   })
 })
 
-describe("transfer: the advance through the loop (stopBefore \"formulate\", plans/0101 D2 shapes 2/3)", () => {
-  test("the boundary advance runs end to end through runAll's preflight: the lock re-entered, the distillation session, the close, the review stop", async () => {
-    // The managed-host shape of run-status's subscriber suite: runAll runs
-    // its full preflight over the caller's fake host, so this pins the
-    // runTransfer → runAll wiring the loop-fixture cases sit beside (the
-    // lock re-entry, the clean-tree gate, the drift check) — one advance of
-    // a seeded boundary state.
-    const { fakeAgent } = await import("./fixtures/agent")
+describe("transfer: applying a phase boundary (plans/0101 D2 shapes 2/3)", () => {
+  test("the boundary waits for distill, then applies the landed handover and constructs the next formulation", async () => {
     const dir = await repo()
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), "contract\n")
+    await Bun.write(join(dir, CONFIG_FILE), JSON.stringify({ phases: "mt", subtask: "off" }))
     await establishRound(dir, { phases: "mt", round: 1 })
-    // P01 at its boundary: its one task done and committed.
-    const state = (await readPhases(dir, 1))!
-    await Bun.write(join(dir, state.phases[0]!.dir, "tasks.md"), "- [x] T-001 task T-001\n")
-    await mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+    const phase = (await readPhases(dir, 1))!.phases[0]!
+    const handover = join(phase.dir, "handover.md")
+    await Bun.write(join(dir, phase.dir, "tasks.md"), "- [x] T-001 task T-001\n")
     await Bun.write(join(dir, "docs/T-001/done.md"), taskDoc("T-001", "R-01.P01"))
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "phase done")
-    const agent = fakeAgent({ turn: artifactTurns(dir) })
-    const host = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
-    const out = await capture(() => runTransfer(dir, { managed: host, phases: "mt" }))
+
+    const before = await git(dir, "rev-parse", "HEAD")
+    const held = await capture(() => transferDeterministic(dir, { phases: "mt" }))
+    expect(held.code).toBe(2)
+    expect(held.lines.join("\n")).toContain('claim with kind "distill"')
+    expect(await git(dir, "rev-parse", "HEAD")).toBe(before)
+    expect(existsSync(join(dir, phase.dir, "done.md"))).toBe(false)
+
+    const coordinator = await openExecutorCoordinator(dir)
+    try {
+      const worker = { token: "distiller", channel: "solo" }
+      const grant = await coordinator.claim(worker)
+      if (grant.kind !== "distill") throw new Error(JSON.stringify(grant))
+      expect(grant.handover).toBe(handover)
+      await Bun.write(join(dir, grant.handover), phaseHandover(phase.dir))
+      expect(await coordinator.report(worker, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
+    } finally {
+      await coordinator.close()
+    }
+
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
-    expect(existsSync(join(dir, "docs/R-01/P01-implement/handover.md"))).toBe(true)
-    expect(existsSync(join(dir, "docs/R-01/P01-implement/done.md"))).toBe(true)
-    expect(out.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect(existsSync(join(dir, phase.dir, "done.md"))).toBe(true)
+    expect(out.lines.join("\n")).toContain("its todo is the review object")
+    expect(await readExecutorPreview(dir)).toMatchObject({ kind: "formulate" })
+    expect(await git(dir, "log", "--format=%B")).toContain("Auto-Stage: phase-transition")
     expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
   })
+})
 
+describe("push loop: stopBefore formulation", () => {
   test("the boundary advance distills, closes the phase and constructs the next plan task, stopping at the review seam — one advance per invocation", async () => {
     const f = await loopFixture("mt")
     fixtures.push(f)
@@ -359,7 +366,7 @@ describe("transfer: the review gate and the rejected-edit channel (plans/0101 D3
     // directory exists, the index is the missing piece): establishment meets
     // the line here, past the analysis branch.
     mkdirSync(join(dir, "docs/R-01"), { recursive: true })
-    const out = await capture(() => runTransfer(dir, { phases: "am" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "am" }))
     expect(out.code).toBe(1)
     expect(out.lines.some((line) => line.includes('the roadmap of docs/analysis.md plans R-01 with "analysis,nonexistent,implement"'))).toBe(true)
     expect(out.lines.some((line) => line.includes("unknown phase type(s) nonexistent"))).toBe(true)
@@ -697,49 +704,50 @@ describe("transfer: the review seam beside a hand-added task (plans/0205)", () =
 // construction, on the driver's own commit; started and ticked phases are
 // immutable (the sync's guards); and the one reshape channel is the roadmap
 // line (plans/0137 — `amend --phases` retired, the tests passing the value
-// through runTransfer's opt the driver-internal seam the moved line feeds).
+// through transferDeterministic's opt the driver-internal seam the moved line feeds).
 describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
   test("the boundary advance re-derives the unstarted tail before constructing: the amended value applies on the driver's own commit, the ticked prefix untouched", async () => {
     const f = await loopFixture("mt")
     fixtures.push(f)
-    await Bun.write(join(f.dir, ".opencode/agent/auto.md"), "contract\n")
     await establishRound(f.dir, { phases: "mt", round: 1 })
     await f.commit("round setup")
     // run executes P01's work and stops at its boundary (D1) — the review
     // moment the person amends at (the shell's amend wrote the new config
     // value; the hold admitted it here).
     expect((await f.run()).code).toBe(0)
-    const host = { client: f.agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
+    const phase = await f.phase(0)
+    await Bun.write(join(f.dir, phase.dir, "handover.md"), phaseHandover(phase.dir))
+    await f.commit("distill handover")
     // The advance under the amended value ("mv": the tail's test phase
     // becomes acceptance): the re-derivation replaces the unstarted tail,
     // commits the rewrite on its own commit, and the construction that
     // follows builds on the rewritten index in the same invocation.
-    const advanced = await capture(() => runTransfer(f.dir, { managed: host, phases: "mv" }))
+    const advanced = await capture(() => transferDeterministic(f.dir, { phases: "mv" }))
     expect(advanced.code).toBe(0)
     expect(advanced.lines.some((line) => line.includes("✓ unstarted tail of round R-01 re-derived to config phases (P02-test → P02-acceptance)"))).toBe(true)
     expect(advanced.lines.some((line) => line.includes("started phases are untouched, the rewrite the driver's own commit"))).toBe(true)
     expect(await Bun.file(join(f.dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 implement\n- [ ] P02 acceptance\n")
     expect(existsSync(join(f.dir, "docs/R-01/P02-test"))).toBe(false)
     expect(existsSync(join(f.dir, "docs/R-01/P02-acceptance/tasks.md"))).toBe(true)
-    expect(advanced.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect(advanced.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
     expect(await f.git("log", "--format=%s")).toContain("PLAN resync R-01 tail to config phases (P02-test → P02-acceptance)")
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
     // The plain re-run under the same value keeps the landed todo (the
     // digest-keep, plans/0097 D6): no re-derivation — the index and the
     // value agree — and no new construction.
-    const kept = await capture(() => runTransfer(f.dir, { managed: host, phases: "mv" }))
+    const kept = await capture(() => transferDeterministic(f.dir, { phases: "mv" }))
     expect(kept.code).toBe(0)
     expect(kept.lines.some((line) => line.includes("re-derived"))).toBe(false)
-    expect(kept.lines.some((line) => line.includes("the landed formulation todo of"))).toBe(true)
+    expect(kept.lines.some((line) => line.includes("current: its todo is the review object"))).toBe(true)
     // The review stop admits a further reshape (the person moving the line
     // again), and the next advance extends the tail past the
     // ticked prefix — the floor's report duty moving to the round's new last
     // phase, the construction re-rendering for review.
-    const extended = await capture(() => runTransfer(f.dir, { managed: host, phases: "mvk" }))
+    const extended = await capture(() => transferDeterministic(f.dir, { phases: "mvk" }))
     expect(extended.code).toBe(0)
     expect(extended.lines.some((line) => line.includes("✓ unstarted tail of round R-01 re-derived to config phases (+ P03-knowledge)"))).toBe(true)
     expect(await Bun.file(join(f.dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 implement\n- [ ] P02 acceptance\n- [ ] P03 knowledge\n")
-    expect(extended.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect(extended.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
   })
 
@@ -755,7 +763,7 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     // alone — pre-0207 its pathspec-less add -A folded the dirt into `PLAN
     // resync …`.
     await Bun.write(join(dir, "src-main.ts"), "half-done\n")
-    const out = await capture(() => runTransfer(dir, { phases: "implement,analysis" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "implement,analysis" }))
     expect(out.code).toBe(2)
     expect(out.lines.some((line) => line.includes("✓ unstarted tail of round R-01 re-derived to config phases (+ P02-analysis)"))).toBe(true)
     expect(await git(dir, "log", "--format=%s")).toContain("PLAN resync R-01 tail to config phases (+ P02-analysis)")
@@ -779,7 +787,7 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     // commit before its refusal — plan no longer re-syncs (0206 D2), so
     // this arm is the mid-phase run restart's only exit; the refusal that
     // follows names run, and that run starts, the drift cleared.
-    const out = await capture(() => runTransfer(dir, { phases: "implement,analysis" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "implement,analysis" }))
     expect(out.code).toBe(2)
     expect(out.lines.some((line) => line.includes("✓ unstarted tail of round R-01 re-derived to config phases (+ P02-analysis)"))).toBe(true)
     expect(out.lines.some((line) => line.includes("nothing to advance: R-01.P01 implement still holds 1 pending task(s)"))).toBe(true)
@@ -789,7 +797,7 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     // The plain re-run without a further move: no drift, nothing re-derived,
     // the refusal byte-identical (the P10 floor — a mid-phase transfer that
     // always existed writes nothing).
-    const again = await capture(() => runTransfer(dir, { phases: "implement,analysis" }))
+    const again = await capture(() => transferDeterministic(dir, { phases: "implement,analysis" }))
     expect(again.code).toBe(2)
     expect(again.lines.some((line) => line.includes("re-derived"))).toBe(false)
     expect(again.lines.some((line) => line.includes("nothing to advance: R-01.P01 implement still holds 1 pending task(s)"))).toBe(true)
@@ -816,7 +824,7 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     // The moved line drops the ticked P01: refused (the sync's guard), the
     // index untouched.
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 test,implement — port the core"]))
-    const dropped = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const dropped = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(dropped.code).toBe(1)
     expect(dropped.lines.some((line) => line.includes('phase flow blocked: phases "test,implement" would drop the completed phase docs/R-01/P01-implement/'))).toBe(true)
     expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 implement")
@@ -824,7 +832,7 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     // holds work — the task index planning wrote): refused the same way, the
     // refusal surfacing through the drift check's own guards.
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 implement,analysis — port the core"]))
-    const started = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const started = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(started.code).toBe(1)
     expect(started.lines.some((line) => line.includes('phase flow blocked: phases "implement,analysis" would drop docs/R-01/P02-test/'))).toBe(true)
     expect(started.lines.some((line) => line.includes("it already holds work (tasks.md)"))).toBe(true)
@@ -842,7 +850,6 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
     const dir = await repo()
     await Bun.write(join(dir, ".gitignore"), ".auto/\ntmp/\n/AGENTS.md\n")
     await mkdirSync(join(dir, ".opencode/agent"), { recursive: true })
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), "contract\n")
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "ignore the render")
     return dir
@@ -870,7 +877,7 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
   test("a released proposal passes the round-start gate: installed verbatim on the driver's round-start commit, the construct follows in the same invocation", async () => {
     const dir = await cleanRepo()
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]) + BRIEFS)
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
     // Established under the roadmap's line; the gate is skipped and named.
     expect(out.lines.some((line) => line.includes("✓ round R-01 established: P01-implement, P02-test — phases from the roadmap of docs/analysis.md"))).toBe(true)
@@ -880,7 +887,7 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
     expect(out.lines.some((line) => line.includes("✓ round brief installed verbatim: docs/analysis.md `### R-01` → docs/R-01/round.md (the round-start commit; your release approved it)"))).toBe(true)
     // The same invocation continued into the construction and stopped at the
     // review seam — the release invocation advances to the next person gate.
-    expect(out.lines.some((line) => line.includes("⏸ review stop: the formulation todo"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
     // round.md carries the proposal verbatim under the title, the Close stub
     // in place by construction.
     const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
@@ -916,10 +923,10 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
       "\nNo process reference in the deliverable.\n",
     ].join("")
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]) + SECTIONED)
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
     expect(out.lines.some((line) => line.includes("✓ round brief installed verbatim: docs/analysis.md `### R-01` → docs/R-01/round.md (the round-start commit; your release approved it)"))).toBe(true)
-    expect(out.lines.some((line) => line.includes("⏸ review stop: the formulation todo"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
     // The installed round.md carries every section verbatim under the title,
     // the Close stub in place by construction.
     const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
@@ -946,15 +953,14 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
     await Bun.write(join(dir, "src/main.ts"), "fn main() { /* half-done */ }\n")
     await Bun.write(join(dir, "notes-private.txt"), "scratch\n")
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]) + BRIEFS)
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
-    // The continuation runs (the proposal passes the round-start gate), the
-    // consumptions commit, and the construct's preflight then judges the
-    // dirt the consumptions left alone — the one gate that owns it.
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
+    // The continuation commits the released inputs before construction
+    // checks the remaining worktree changes.
     expect(out.code).toBe(2)
     expect(out.lines.some((line) => line.includes("installs verbatim — the round-start gate passes (your release was its review)"))).toBe(true)
-    expect(out.lines.some((line) => line.includes("the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:"))).toBe(true)
-    expect(out.lines.some((line) => line.trim() === "src/main.ts")).toBe(true)
-    expect(out.lines.some((line) => line.trim() === "notes-private.txt")).toBe(true)
+    const refusal = out.lines.find((line) => line.includes("the repository state cannot host the formulation construction"))
+    expect(refusal).toContain("src/main.ts")
+    expect(refusal).toContain("notes-private.txt")
     // The brief install carries the brief and its approved source document
     // alone — the release's evidence, never the person's work.
     const briefFiles = (await git(dir, "show", "--name-only", "--format=", "HEAD~1")).trim().split("\n")
@@ -972,7 +978,7 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
   test("the floor stands: a released analysis without proposals keeps today's gate stop and the uncommitted setup", async () => {
     const dir = await cleanRepo()
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]))
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
     expect(out.lines.some((line) => line.includes("round-start gate): review the round setup, fill in docs/R-01/round.md"))).toBe(true)
     expect(out.lines.some((line) => line.includes("round brief installed verbatim"))).toBe(false)
@@ -981,7 +987,7 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
     // project the release gate holds it with everything else.
     const held = await cleanRepo()
     await Bun.write(join(held, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"], false) + BRIEFS)
-    const awaiting = await capture(() => runTransfer(held, { phases: "mt" }))
+    const awaiting = await capture(() => transferDeterministic(held, { phases: "mt" }))
     expect(awaiting.code).toBe(2)
     expect(awaiting.lines.some((line) => line.includes("the project analysis awaits you"))).toBe(true)
     expect(existsSync(join(held, "docs/R-01"))).toBe(false)
@@ -990,7 +996,7 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
   test("the held gate's proposal-later path: a `### R-01` drafted into the released analysis after the gate installs at the next advance", async () => {
     const dir = await cleanRepo()
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]))
-    const gate = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const gate = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(gate.lines.some((line) => line.includes("round-start gate"))).toBe(true)
     // The person commits the stub setup, then drafts the proposal into the
     // living document (no new release mark needed — the moved-line rule).
@@ -999,10 +1005,10 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]) + BRIEFS)
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "draft the round brief proposal")
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
     expect(out.lines.some((line) => line.includes("✓ round brief installed verbatim: docs/analysis.md `### R-01` → docs/R-01/round.md"))).toBe(true)
-    expect(out.lines.some((line) => line.includes("⏸ review stop: the formulation todo"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
     const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
     expect(round).toContain("retry ladder")
     expect(round).toContain("## Close")
@@ -1011,21 +1017,21 @@ describe("transfer: the round-brief proposal channel (plans/0115)", () => {
   test("a filled round.md stands: the released proposal is never installed over the person's writing", async () => {
     const dir = await cleanRepo()
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]))
-    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await capture(() => transferDeterministic(dir, { phases: "mt" }))
     await Bun.write(join(dir, "docs/R-01/round.md"), renderRoundBrief(1).replace("## Goal", "## Goal\n\nThe person's own goal for the round."))
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "hand-written brief")
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 mt — port the core"]) + BRIEFS)
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "proposal drafted later")
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
     expect(out.lines.some((line) => line.includes("round brief installed verbatim"))).toBe(false)
     const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
     expect(round).toContain("The person's own goal for the round.")
     expect(round).not.toContain("retry ladder")
     // The person's brief is the construct's input: the advance proceeds.
-    expect(out.lines.some((line) => line.includes("⏸ review stop: the formulation todo"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
   })
 })
 
@@ -1074,7 +1080,7 @@ describe("transfer: the open round (plans/0243 B — establish, absorb, close)",
 
   test("an open line establishes the light round: the Kind index, the pre-seeded brief, the open G1 channels", async () => {
     const dir = await openRepo()
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
     expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("Kind: open\n")
     expect((await readPhases(dir, 1))!.phases.map(phaseLabel)).toEqual(["P01-implement"])
@@ -1094,27 +1100,27 @@ describe("transfer: the open round (plans/0243 B — establish, absorb, close)",
 
   test("nothing to advance: the empty round and the pending round refuse teaching the open channels", async () => {
     const dir = await openRepo()
-    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await capture(() => transferDeterministic(dir, { phases: "mt" }))
     await commitAll(dir, "round start")
-    const empty = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const empty = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(empty.code).toBe(2)
     expect(empty.lines.some((line) => line.includes("nothing to advance: round R-01 is open — its single phase stays open by design"))).toBe(true)
     expect(empty.lines.some((line) => line.includes("no task is listed yet — add one with: opencode-auto plan") && line.includes("--new-task"))).toBe(true)
     expect(empty.lines.some((line) => line.includes("to close the round instead: fill the ## Close of docs/R-01/round.md"))).toBe(true)
     const state = (await readPhases(dir, 1))!
     await addTask(dir, state.phases[0]!, "fix the login crash")
-    const pending = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const pending = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(pending.code).toBe(2)
     expect(pending.lines.some((line) => line.includes("1 pending task(s) execute with: opencode-auto run"))).toBe(true)
   })
 
   test("the close is the person's: the untouched ## Close holds; the filled one closes; the next transfer is the ordinary round-open", async () => {
     const dir = await openRepo()
-    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await capture(() => transferDeterministic(dir, { phases: "mt" }))
     await commitAll(dir, "round start")
     await doneTask(dir)
     // The untouched ## Close holds the close (the round-close checks gate it).
-    const held = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const held = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(held.code).toBe(2)
     expect(held.lines.some((line) => line.includes("round R-01 does not pass its round-close checks, so the open round cannot close yet — nothing was closed"))).toBe(true)
     expect(held.lines.some((line) => line.includes("## Close"))).toBe(true)
@@ -1122,7 +1128,7 @@ describe("transfer: the open round (plans/0243 B — establish, absorb, close)",
     // The filled ## Close is the close intent: the arm lands it.
     await fillClose(dir)
     await commitAll(dir, "close listing")
-    const closed = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const closed = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(closed.code).toBe(0)
     expect(closed.lines.some((line) => line.includes("✓ open round R-01 closed"))).toBe(true)
     expect(closed.lines.some((line) => line.includes("next: open the next round with: opencode-auto transfer"))).toBe(true)
@@ -1134,20 +1140,20 @@ describe("transfer: the open round (plans/0243 B — establish, absorb, close)",
     expect(subjects).toContain("PLAN close R-01 (P01-implement Implementation, open round)")
     // The following invocation is the ordinary shape 4: the roadmap holds no
     // line for R-02 — the exhausted stop, never a silent config round.
-    const next = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const next = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(next.code).toBe(0)
     expect(next.lines.some((line) => line.includes("holds no line for round R-02"))).toBe(true)
   })
 
   test("a close over pending work refuses naming run and close, never a silent fold", async () => {
     const dir = await openRepo()
-    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await capture(() => transferDeterministic(dir, { phases: "mt" }))
     await commitAll(dir, "round start")
     const state = (await readPhases(dir, 1))!
     await addTask(dir, state.phases[0]!, "fix the login crash")
     await fillClose(dir)
     await commitAll(dir, "close intent with pending work")
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(2)
     expect(out.lines.some((line) => line.includes("still holds 1 pending task(s) and does not close on them"))).toBe(true)
     expect(out.lines.some((line) => line.includes("opencode-auto close <ref>"))).toBe(true)
@@ -1157,12 +1163,12 @@ describe("transfer: the open round (plans/0243 B — establish, absorb, close)",
   test("a released proposal beats the seed: installed verbatim at the establishment, the stop teaching the open channels", async () => {
     const dir = await openRepo()
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS([OPEN_LINE]) + BRIEFS)
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
     expect(out.lines.some((line) => line.includes("installs verbatim over the seed — the round-start gate passes"))).toBe(true)
     expect(out.lines.some((line) => line.includes("✓ round brief installed verbatim: docs/analysis.md `### R-01` → docs/R-01/round.md"))).toBe(true)
     expect(out.lines.some((line) => line.includes("next: the round is open — add tasks with: opencode-auto plan") && line.includes("--new-task"))).toBe(true)
-    expect(out.lines.some((line) => line.includes("review stop: the formulation todo"))).toBe(false)
+    expect(out.lines.some((line) => line.includes("its todo is the review object"))).toBe(false)
     const round = await Bun.file(join(dir, "docs/R-01/round.md")).text()
     expect(round).toContain("Keep the shipped tool healthy.")
     expect(round).toContain("## Close")
@@ -1172,7 +1178,7 @@ describe("transfer: the open round (plans/0243 B — establish, absorb, close)",
 
   test("the interrupted close settles on its own commit, then the ordinary round-open", async () => {
     const dir = await openRepo()
-    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await capture(() => transferDeterministic(dir, { phases: "mt" }))
     await commitAll(dir, "round start")
     await doneTask(dir)
     await fillClose(dir)
@@ -1181,7 +1187,7 @@ describe("transfer: the open round (plans/0243 B — establish, absorb, close)",
     const state = (await readPhases(dir, 1))!
     const phase = state.phases[0]!
     expect(await completePhase(dir, phase, [])).toEqual([])
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(0)
     expect(out.lines.some((line) => line.includes("✓ the interrupted close of open round R-01 settled on its own commit"))).toBe(true)
     expect(out.lines.some((line) => line.includes("holds no line for round R-02"))).toBe(true)
@@ -1206,10 +1212,8 @@ describe("transfer: the assurance cover-set gate (plans/0244 D4/D5, S4)", () => 
   const S_BLOCKS = row(["S-21", "suite green at close", "mechanical", "src, test", "every-round", "blocks", ""])
   const S_ACCRUE = row(["S-22", "interface parity", "mechanical", "include", "every-round", "accrue", ""])
 
-  test("the phased close arm: uncovered rows hold the close naming them; the close-audit unit is constructed in the re-opened terminal phase, the refusal teaching run", async () => {
-    const { fakeAgent } = await import("./fixtures/agent")
+  test("the phased close arm names uncovered rows and constructs the close-audit unit in the re-opened terminal phase", async () => {
     const dir = await repo()
-    await Bun.write(join(dir, ".opencode/agent/auto.md"), "contract\n")
     await establishRound(dir, { phases: "implement", round: 1 })
     const state = (await readPhases(dir, 1))!
     await Bun.write(join(dir, state.phases[0]!.dir, "tasks.md"), "- [x] T-001 task T-001\n")
@@ -1217,13 +1221,12 @@ describe("transfer: the assurance cover-set gate (plans/0244 D4/D5, S4)", () => 
     await Bun.write(join(dir, "docs/T-001/done.md"), taskDoc("T-001", "R-01.P01"))
     await Bun.write(join(dir, "docs/R-01/round.md"), renderRoundBrief(1).replace("## Close", "## Close\n\n- Everything restated into the target's own docs; nothing accepted as lost."))
     await Bun.write(join(dir, "docs/assurance.md"), table([S_CLOSE_DUE, S_BLOCKS, S_ACCRUE]))
+    await Bun.write(join(dir, state.phases[0]!.dir, "handover.md"), phaseHandover(state.phases[0]!.dir))
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "phase done, the assurance table declared")
-    const agent = fakeAgent({ turn: artifactTurns(dir) })
-    const host = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
-    const out = await capture(() => runTransfer(dir, { managed: host, phases: "implement" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "implement" }))
     expect(out.code).toBe(2)
-    expect(out.lines.some((line) => line.includes("round R-01 does not pass its round-close checks, so it cannot close yet — fix them, commit, then re-run: opencode-auto transfer"))).toBe(true)
+    expect(out.lines.some((line) => line.includes("round R-01 does not pass its round-close checks, so it cannot close yet — fix them, commit, then re-run the transfer"))).toBe(true)
     // The named rows: the close-due row's remedy names the constructed unit;
     // the mechanical row's names the receipt; the accrue row never blocks.
     expect(
@@ -1235,9 +1238,8 @@ describe("transfer: the assurance cover-set gate (plans/0244 D4/D5, S4)", () => 
     ).toBe(true)
     expect(out.lines.some((line) => line === "  ✗ assurance cover set: S-21 (suite green at close) is due at this close and uncovered — a green lane receipt at the closing tree deciding src, test covers it")).toBe(true)
     expect(out.lines.some((line) => line.includes("S-22"))).toBe(false)
-    // The construction: the unit in the terminal phase, the phase re-opened
-    // (its completion restored pending, the index line un-ticked) so `run`
-    // dispatches it through the ordinary pipeline.
+    // The close-audit unit sits in the terminal phase. The phase re-opens
+    // and its index entry returns to pending.
     expect(out.lines.some((line) => line.includes("✓ close-audit unit T-002 constructed in docs/R-01/P01-implement"))).toBe(true)
     expect(out.lines.some((line) => line.includes("the terminal phase P01-implement Implementation re-opened for it"))).toBe(true)
     expect(await Bun.file(join(dir, "docs/R-01/P01-implement/tasks.md")).text()).toContain("- [ ] T-002 Adjudicate the due assurance rows (R-01)")
@@ -1250,8 +1252,8 @@ describe("transfer: the assurance cover-set gate (plans/0244 D4/D5, S4)", () => 
     expect(todo).toContain("- S-20 (clean-room independence) — watched surface: crossing events; cadence: every-round; close: close-due")
     expect(todo).toContain("docs/T-002/findings.md")
     expect(todo).toContain("the round's measured delta (driver-measured)")
-    // The stale handover the advance's distillation wrote is gone (the phase
-    // distills again after the unit runs), all on the driver's own commits.
+    // Reopening retires the stale handover. The phase can distill again
+    // after the audit unit completes.
     expect(existsSync(join(dir, "docs/R-01/P01-implement/handover.md"))).toBe(false)
     expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
     const subjects = (await git(dir, "log", "--format=%s")).split("\n")
@@ -1259,7 +1261,7 @@ describe("transfer: the assurance cover-set gate (plans/0244 D4/D5, S4)", () => 
     expect(subjects).toContain("PLAN close-audit R-01: remove the stale handover")
     // The construction is idempotent: a re-run of the advance refuses the
     // same way over the standing unit, nothing re-constructed.
-    const again = await capture(() => runTransfer(dir, { managed: host, phases: "implement" }))
+    const again = await capture(() => transferDeterministic(dir, { phases: "implement" }))
     expect(again.code).toBe(2)
     expect(again.lines.some((line) => line.includes("✓ close-audit unit T-003 constructed"))).toBe(false)
     expect(existsSync(join(dir, "docs/T-003"))).toBe(false)
@@ -1271,7 +1273,7 @@ describe("transfer: the assurance cover-set gate (plans/0244 D4/D5, S4)", () => 
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "ignore the block")
     await Bun.write(join(dir, "docs/analysis.md"), ANALYSIS(["- R-01 open — absorb fixes and small features"]))
-    await capture(() => runTransfer(dir, { phases: "mt" }))
+    await capture(() => transferDeterministic(dir, { phases: "mt" }))
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "round start")
     const state = (await readPhases(dir, 1))!
@@ -1286,7 +1288,7 @@ describe("transfer: the assurance cover-set gate (plans/0244 D4/D5, S4)", () => 
     await Bun.write(join(dir, "docs/assurance.md"), table([S_CLOSE_DUE, S_ACCRUE]))
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "task done, close intent, the table declared")
-    const out = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const out = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(out.code).toBe(2)
     expect(out.lines.some((line) => line.includes("round R-01 does not pass its round-close checks, so the open round cannot close yet — nothing was closed"))).toBe(true)
     expect(out.lines.some((line) => line.includes("✗ assurance cover set: S-20 (clean-room independence) is due at this close and uncovered"))).toBe(true)
@@ -1306,7 +1308,7 @@ describe("transfer: the assurance cover-set gate (plans/0244 D4/D5, S4)", () => 
     await Bun.write(index, (await Bun.file(index).text()).replace("- [ ] T-002 Adjudicate the due assurance rows (R-01)\n", ""))
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "remove the table and the unit")
-    const floor = await capture(() => runTransfer(dir, { phases: "mt" }))
+    const floor = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(floor.code).toBe(0)
     expect(floor.lines.some((line) => line.includes("✓ open round R-01 closed"))).toBe(true)
     expect(floor.lines.some((line) => line.includes("assurance"))).toBe(false)

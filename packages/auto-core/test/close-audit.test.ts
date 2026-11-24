@@ -16,10 +16,10 @@ import { join } from "node:path"
 import { ASSURANCE_DOC } from "../src/docpaths"
 import { establishRound } from "../src/phases"
 import { renderRoundBrief } from "../src/round-brief"
-import { runTransfer } from "../src/transfer"
-import { fakeAgent, type TurnScript } from "./fixtures/agent"
+import { transferDeterministic } from "../src/transfer"
+import type { TurnScript } from "./fixtures/agent"
 import { captureRun } from "./fixtures/capture"
-import { artifactTurns, loopFixture, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { artifactTurns, loopFixture, phaseHandover, taskDoc, type LoopFixture } from "./fixtures/loop"
 
 const capture = captureRun
 
@@ -98,7 +98,7 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     await f.commit("task done, close intent, the table declared")
     // transfer: the open close arm refuses on the uncovered close-due row,
     // constructing the unit first (0243 D4's amendment).
-    const refused = await capture(() => runTransfer(f.dir, { phases: "implement" }))
+    const refused = await capture(() => transferDeterministic(f.dir, { phases: "implement" }))
     expect(refused.code).toBe(2)
     expect(refused.lines.some((line) => line.includes("round R-01 does not pass its round-close checks, so the open round cannot close yet — nothing was closed"))).toBe(true)
     expect(refused.lines.some((line) => line.includes("✗ assurance cover set: S-20 (clean-room independence) is due at this close and uncovered"))).toBe(true)
@@ -129,7 +129,7 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     expect(auditPrompt?.text).not.toContain("S-22")
     // transfer again: the findings adjudicate the row, the baseline citation
     // lands on its own commit, the open close completes.
-    const closed = await capture(() => runTransfer(f.dir, { phases: "implement" }))
+    const closed = await capture(() => transferDeterministic(f.dir, { phases: "implement" }))
     expect(closed.code).toBe(0)
     expect(closed.lines.some((line) => line.includes("✓ open round R-01 closed"))).toBe(true)
     expect(closed.lines.some((line) => line.startsWith("✓ assurance baseline of S-20 cited to R-01 audit @"))).toBe(true)
@@ -144,7 +144,7 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     // The following invocation is the ordinary shape 4 (no roadmap — the
     // config fallback opens R-02); the citation is idempotent (cited cells
     // write nothing, no second commit).
-    const next = await capture(() => runTransfer(f.dir, { phases: "implement" }))
+    const next = await capture(() => transferDeterministic(f.dir, { phases: "implement" }))
     expect(next.code).toBe(0)
     expect(next.lines.some((line) => line.includes("✓ round R-02 established"))).toBe(true)
     expect(next.lines.some((line) => line.includes("assurance baseline of S-20"))).toBe(false)
@@ -160,7 +160,7 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     await fillClose(f)
     write(f.dir, ASSURANCE_DOC, table([S_CLOSE_DUE]))
     await f.commit("task done, close intent, the table declared")
-    expect((await capture(() => runTransfer(f.dir, { phases: "implement" }))).code).toBe(2)
+    expect((await capture(() => transferDeterministic(f.dir, { phases: "implement" }))).code).toBe(2)
     // The unit runs and completes (its own work verified — the report
     // passes), but the FINDINGS' verdict is the row's adjudication: a FAIL
     // is a finding for the person, routed at the close.
@@ -168,7 +168,7 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     expect(ran.code).toBe(0)
     expect(readFileSync(join(f.dir, "docs/T-002/findings.md"), "utf8")).toContain("Result: FAIL")
     expect(existsSync(join(f.dir, "docs/T-002/done.md"))).toBe(true)
-    const held = await capture(() => runTransfer(f.dir, { phases: "implement" }))
+    const held = await capture(() => transferDeterministic(f.dir, { phases: "implement" }))
     expect(held.code).toBe(2)
     expect(held.lines.some((line) => line.includes("round R-01 does not pass its round-close checks, so the open round cannot close yet — nothing was closed"))).toBe(true)
     expect(
@@ -192,12 +192,12 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     await seedDoneTask(f)
     write(f.dir, "docs/R-01/round.md", renderRoundBrief(1).replace("## Close", "## Close\n\n- Everything restated into the target's own docs; nothing accepted as lost."))
     write(f.dir, ASSURANCE_DOC, table([S_CLOSE_DUE, S_ACCRUE]))
+    const phase = await f.phase(0)
+    write(f.dir, join(phase.dir, "handover.md"), phaseHandover(phase.dir))
     await f.commit("phase done, the table declared")
-    const host = { client: f.agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
-    // The advance (transfer's close arm inside the loop): the distillation
-    // closes the phase, the checks find the uncovered close-due row, the
-    // unit is constructed in the re-opened terminal phase, exit 2.
-    const refused = await capture(() => runTransfer(f.dir, { managed: host, phases: "implement" }))
+    // Transfer closes the phase, then the uncovered row requires a
+    // close-audit unit in the re-opened terminal phase.
+    const refused = await capture(() => transferDeterministic(f.dir, { phases: "implement" }))
     expect(refused.code).toBe(2)
     expect(refused.lines.some((line) => line.includes("✓ close-audit unit T-002 constructed in docs/R-01/P01-implement"))).toBe(true)
     expect(refused.lines.some((line) => line.includes("the terminal phase P01-implement Implementation re-opened for it"))).toBe(true)
@@ -209,11 +209,11 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     expect(ran.code).toBe(0)
     expect(readFileSync(join(f.dir, "docs/T-002/findings.md"), "utf8")).toContain("Result: PASS")
     expect(existsSync(join(f.dir, "docs/T-002/done.md"))).toBe(true)
-    // The next advance lands the close: the phase completes again at its own
-    // boundary (the distillation re-runs, the index re-ticks), the
-    // adjudication covers, the baseline cited, the review stop the person's
-    // close moment.
-    const closed = await capture(() => runTransfer(f.dir, { managed: host, phases: "implement" }))
+    write(f.dir, join(phase.dir, "handover.md"), phaseHandover(phase.dir))
+    await f.commit("distill audited phase")
+    // Transfer applies the second handover, closes the phase, and cites the
+    // adjudication in the assurance baseline.
+    const closed = await capture(() => transferDeterministic(f.dir, { phases: "implement" }))
     expect(closed.code).toBe(0)
     expect(readFileSync(join(f.dir, "docs/R-01/phases.md"), "utf8").trimEnd().endsWith("- [x] P01 implement")).toBe(true)
     expect(existsSync(join(f.dir, "docs/R-01/P01-implement/handover.md"))).toBe(true)
@@ -229,8 +229,9 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     await bare.commit("round setup")
     await seedDoneTask(bare)
     write(bare.dir, "docs/R-01/round.md", renderRoundBrief(1).replace("## Close", "## Close\n\n- Everything restated; nothing lost."))
+    write(bare.dir, join(phase.dir, "handover.md"), phaseHandover(phase.dir))
     await bare.commit("phase done")
-    const plain = await capture(() => runTransfer(bare.dir, { managed: { client: bare.agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }, phases: "implement" }))
+    const plain = await capture(() => transferDeterministic(bare.dir, { phases: "implement" }))
     expect(plain.code).toBe(0)
     expect(plain.lines.some((line) => line.includes("close-audit"))).toBe(false)
     expect(plain.lines.some((line) => line.includes("assurance"))).toBe(false)
@@ -258,9 +259,9 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     write(f.dir, "docs/T-002/done.md", taskDoc("T-002", "R-01.P02"))
     write(f.dir, "docs/R-01/round.md", renderRoundBrief(1).replace("## Close", "## Close\n\n- Everything restated; nothing lost."))
     write(f.dir, ASSURANCE_DOC, table([S_CLOSE_DUE]))
+    for (const phase of [implement, audit]) write(f.dir, join(phase.dir, "handover.md"), phaseHandover(phase.dir))
     await f.commit("phases done, the table declared")
-    const host = { client: f.agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
-    const refused = await capture(() => runTransfer(f.dir, { managed: host, phases: "implement,audit" }))
+    const refused = await capture(() => transferDeterministic(f.dir, { phases: "implement,audit" }))
     expect(refused.code).toBe(2)
     // No unit: the round's audit phase is the findings' producer, and the
     // refusal teaches exactly that.

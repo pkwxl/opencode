@@ -343,35 +343,19 @@ takes it first wins, the same rule the CLI and the daemon already share).
 
 ### The transfer surface (the advance command, plans/0101)
 
-`POST /projects/<p>/transfer` is the CLI's `transfer` — the single advance
-command, one person-bracketed boundary per invocation, resolved by state:
-the project start (the assisted analysis of plans/0084: the stub, the
-release gate, the approved brief's install, R-01's establishment under the
-roadmap's line), the phase boundary (the human gate first, then the
-handover, the phase close, the next phase's formulation todo constructed
-and stopped for review), the round close and the round open. The request
-takes one field: `"resynthesize": true|false` (the CLI's transfer-only
-flag, bypassing the digest-keep of a standing plan task).
+`POST /projects/<p>/transfer` applies the person's advance under the
+transfer lock. The daemon calls the core's `transferDeterministic` in
+process. Project start, phase transition, round close, and round opening
+are derived from the project documents. The human gate must clear before
+distillation. If a handover is missing, claim the distill grant and retry
+transfer after the share lands. A newly constructed formulation floor
+stops for review before the formulate grant.
 
-Unlike plan, the core's `runTransfer` has no prelude seam splitting the
-no-agent routes from the advance — the whole state resolution lives inside
-its one entry — so the **entire advance runs as a spawned worker run**
-(`src/worker.ts`: the worker calls `runTransfer`, one process per advance,
-the same one-run-per-process topology as every run), never an in-process
-session. The op validates the request shape and spawns; **202** carries the
-run resource, and the run's own exit vocabulary maps the outcome: 0 a
-review, round-open or roadmap-exhausted stop; 1 a state error (m mode's
-refusal among them); 2 a gate held or nothing to advance. The release
-teachings inside the run name `opencode-auto-server clarify` — a CLI-side
-command this daemon does not host; the manual path ("add the line and
-commit yourself") is the daemon's release act.
-
-This binary also ships the headless CLI form, `opencode-auto-server
-transfer <dir>` (self-spawning one worker with the transfer payload): every
-core text naming `${bin} transfer <dir>` — a phased run's boundary stop,
-the plan refusal over an unstarted project — points at a runnable command.
-It takes the target directory alone (no flags; per-run switches ride a
-daemon run request, questions ride a daemon's interactive transport).
+The operation answers **200** when the advance reaches its review,
+round-open, or roadmap-exhausted stop. It answers **409** for a held gate,
+pending work, missing distillation, or a state error. The daemon log
+carries the detailed advance output. See the standing executor protocol
+for the grant and operation contract.
 
 ### Operation status vocabulary
 
@@ -382,7 +366,7 @@ vocabulary through either shell:
 | status | meaning |
 | ------ | ------- |
 | 200 | served (`code: 0`) |
-| 202 | an operation that spawned a run (the plan operation's agent-planning route, the transfer operation's advance): the body is the run resource |
+| 202 | an operation that spawned a run (the plan operation's agent-planning route): the body is the run resource |
 | 400 | request-shape error (unknown fields, bad values) |
 | 404 | unregistered project / unknown route |
 | 409 | the target's state refuses — the CLI's exit-1/2 refusals (body carries `code` 1 or 2 and the `lines`); the clean-tree gate (`gate: "cleanTree"`); a live registry run or an in-flight operation on the directory (retryable) |
@@ -404,8 +388,8 @@ Config operations (`init`, `amend`, `fix`, `reset`) refuse with **423** while
 `liveRunLock` returns a holder, exactly the CLI's refusal (`-f` never
 overrode it, and neither field here does). `close`, `task-add` and `plan`
 acquire the lock themselves around their writes (the CLI's `close`/`plan`
-command names; the transfer operation's lock lives inside its spawned
-worker, taken by the core's `runTransfer` itself). Beside a live run of this daemon the write operations answer
+command names). The core also acquires the transfer lock inside
+`transferDeterministic`. Beside a live run of this daemon the write operations answer
 **409** (retryable, the run id in the body) — the registry is ahead of the
 lock during a run's starting window — and one write operation holds a
 directory at a time (a second answers 409; the run lock arbitrates processes,

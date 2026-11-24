@@ -9,13 +9,12 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { runTransfer } from "../src/transfer"
+import { transferDeterministic } from "../src/transfer"
 import { establishRound, readPhases } from "../src/phases"
 import { findWallCommit } from "../src/wall"
 import { saveProgress } from "../src/resume"
-import { fakeAgent } from "./fixtures/agent"
 import { captureRun } from "./fixtures/capture"
-import { artifactTurns, loopFixture, type LoopFixture } from "./fixtures/loop"
+import { artifactTurns, loopFixture, phaseHandover, type LoopFixture } from "./fixtures/loop"
 
 const made: string[] = []
 const fixtures: LoopFixture[] = []
@@ -107,10 +106,12 @@ describe("transfer: the sealed wall closes at the person's advance (plans/0132 D
     expect(stopped.lines.some((line) => line.includes("✓ phase boundary: P01-spec-read Spec read complete"))).toBe(true)
     expect(existsSync(join(f.dir, "linux"))).toBe(true)
     await sealArtifacts(f)
-    // The advance: the distillation, then the wall block — the admission
-    // scan, the wall commit — then the completion rename and the transition
-    // commit, then P02's construction and the review stop.
-    const advanced = await f.run({ stopBefore: "formulate" })
+    // Land the distill output before transfer runs the admission scan, seals
+    // the wall, and commits the phase transition.
+    const phase = await f.phase(0)
+    await Bun.write(join(f.dir, phase.dir, "handover.md"), phaseHandover(phase.dir))
+    await f.commit("distill sealing phase")
+    const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "spec-read,implement" }))
     expect(advanced.code).toBe(0)
     expect(advanced.lines.some((line) => line.includes("sealed reference wall closed (P01-spec-read Spec read)"))).toBe(true)
     expect(existsSync(join(f.dir, "linux"))).toBe(false)
@@ -133,7 +134,7 @@ describe("transfer: the sealed wall closes at the person's advance (plans/0132 D
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
     // The advance's review stop still answers: the wall never displaced the
     // construction's rhythm.
-    expect(advanced.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect(advanced.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
   })
 
   test("a reopened wall blocks transfer ahead of any session, naming the door; the removal restores the advance", async () => {
@@ -144,16 +145,13 @@ describe("transfer: the sealed wall closes at the person's advance (plans/0132 D
     expect(existsSync(join(f.dir, "linux"))).toBe(false)
     // The person's re-created door: transfer refuses before any session.
     symlinkSync(corpus, join(f.dir, "linux"))
-    const agent = fakeAgent({ turn: artifactTurns(f.dir) })
-    const host = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
-    const out = await captureRun(() => runTransfer(f.dir, { managed: host, phases: "spec-read,implement" }))
+    const out = await captureRun(() => transferDeterministic(f.dir, { phases: "spec-read,implement" }))
     expect(out.code).toBe(2)
     expect(out.lines.some((line) => line.includes("present again") && line.includes("linux"))).toBe(true)
-    expect(agent.prompts).toHaveLength(0)
     // The removal restores the advance: the next transfer proceeds (here it
     // advances P02's already-constructed state; the wall stays closed).
     rmSync(join(f.dir, "linux"))
-    const again = await captureRun(() => runTransfer(f.dir, { managed: host, phases: "spec-read,implement" }))
+    const again = await captureRun(() => transferDeterministic(f.dir, { phases: "spec-read,implement" }))
     expect(again.code).toBe(0)
     expect(again.lines.some((line) => line.includes("present again"))).toBe(false)
     const log = await f.git("log", "--format=%s")

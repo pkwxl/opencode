@@ -16,10 +16,10 @@ import { clarifyGate } from "../src/clarify"
 import { renderAnalysisStub } from "../src/analysis"
 import { CLARIFIED_MARK, clarifiedMark, establishRound, phaseGateProblems, phaseGates, readPhases } from "../src/phases"
 import { briefProposal } from "../src/brief"
-import { runTransfer } from "../src/transfer"
+import { transferDeterministic } from "../src/transfer"
 import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
 import { renderTaskIndex } from "../src/tasks"
-import { artifactTurns, loopFixture, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { artifactTurns, loopFixture, phaseHandover, taskDoc, type LoopFixture } from "./fixtures/loop"
 import { freshRepo, git } from "./fixtures/runner"
 
 const made: string[] = []
@@ -47,7 +47,7 @@ async function capture<T>(run: () => Promise<T>): Promise<{ result: T; lines: st
   }
 }
 
-// runTransfer (the release's consumer) needs the switch resets around it —
+// transferDeterministic (the release's consumer) needs the switch resets around it —
 // the transfer.test convention, its finally restoring the unfrozen snapshot.
 async function captureAdvance(run: () => Promise<number>): Promise<{ code: number; lines: string[] }> {
   const saved = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key))
@@ -161,7 +161,7 @@ describe("clarify: the analysis release (plans/0116 D1/D4)", () => {
     expect(result.lines.some((line) => line.includes(`next: opencode-auto transfer ${dir} — the approved brief installs`))).toBe(true)
     // The consumer: the release the hand edit would have made is in force —
     // the next transfer installs the brief and establishes R-01.
-    const advance = await captureAdvance(() => runTransfer(dir, { phases: "mt" }))
+    const advance = await captureAdvance(() => transferDeterministic(dir, { phases: "mt" }))
     expect(advance.code).toBe(0)
     expect(advance.lines.some((line) => line.includes("✓ round R-01 established: P01-implement, P02-test — phases from the roadmap of docs/analysis.md"))).toBe(true)
   })
@@ -404,8 +404,11 @@ describe("clarify: the survey release (plans/0116 D1/D4)", () => {
     const state = (await readPhases(f.dir, 1))!
     expect(await phaseGateProblems(f.dir, state.phases[0]!, phaseGates(state.phases[0]!, []))).toEqual([])
     expect(briefProposal(surveyText)).toContain("clean-room reimplementation")
-    // The advance completes the phase and installs the approved brief.
-    const advanced = await f.run({ stopBefore: "formulate" })
+    // The advance applies the landed handover and installs the approved brief.
+    const phase = state.phases[0]!
+    await Bun.write(join(f.dir, phase.dir, "handover.md"), phaseHandover(phase.dir))
+    await f.commit("distill released survey")
+    const advanced = await captureAdvance(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(advanced.code).toBe(0)
     expect(existsSync(join(f.dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
     expect(await Bun.file(join(f.dir, ".opencode/auto/brief.md")).text()).toContain("clean-room reimplementation")

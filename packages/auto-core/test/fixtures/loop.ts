@@ -82,6 +82,29 @@ function nextTaskNumber(dir: string): number {
   return max + 1
 }
 
+export function phaseHandover(phaseDir: string): string {
+  return [
+    `# Handover (${phaseDir})`,
+    "",
+    "## Key decisions",
+    "",
+    "- The fake agent distilled this phase.",
+    "",
+    "## Constraints and pitfalls",
+    "",
+    "- Nothing recorded.",
+    "",
+    "## Required reading for the next phase",
+    "",
+    "- This phase's directory holds the task units.",
+    "",
+    "## Artifact index",
+    "",
+    "- (none)",
+    "",
+  ].join("\n")
+}
+
 export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => {
   // The blockage diagnosis session (plans/0082 §4) never writes through
   // this script's planning branches: its prompt names the phase's task index
@@ -112,29 +135,7 @@ export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => 
     const m = new RegExp(`(${PHASE_DIR})/handover\\.md`).exec(ctx.text)
     if (m) {
       mkdirSync(join(dir, m[1]!), { recursive: true })
-      writeFileSync(
-        join(dir, m[1]!, "handover.md"),
-        [
-          `# Handover (${m[1]})`,
-          "",
-          "## Key decisions",
-          "",
-          "- The fake agent distilled this phase.",
-          "",
-          "## Constraints and pitfalls",
-          "",
-          "- Nothing recorded.",
-          "",
-          "## Required reading for the next phase",
-          "",
-          "- This phase's directory holds the task units.",
-          "",
-          "## Artifact index",
-          "",
-          "- (none)",
-          "",
-        ].join("\n"),
-      )
+      writeFileSync(join(dir, m[1]!, "handover.md"), phaseHandover(m[1]!))
     }
     return undefined
   }

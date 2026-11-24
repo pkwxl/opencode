@@ -752,12 +752,8 @@ describe("the lifecycle operations (P1d)", () => {
     })
   })
 
-  // The transfer operation (the plans/0101 absorb): the advance command as a
-  // spawned run — the whole state resolution inside the core's runTransfer
-  // (no prelude seam to split), the run's own exit vocabulary mapping the
-  // outcome. The project-start flow here is the headless phased start the
-  // plan refusal unblocks: the analysis stub, the person's release, R-01's
-  // establishment at the round-start gate.
+  // The daemon applies transfer in process. The project-start flow runs
+  // from the analysis stub through release to the R-01 round-start gate.
   test("the transfer operation — the request shape, m mode's refusal, the nothing-to-advance stop, and the headless phased start through the analysis release", async () => {
     await withOps(async (h) => {
       // The person's analysis fill (the release-ready document): every
