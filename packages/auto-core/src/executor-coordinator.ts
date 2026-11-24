@@ -10,7 +10,7 @@ import { taskDoc, taskDocPaths } from "./docpaths"
 import { namesRowId } from "./assurance"
 import { constraintPitfallResolves, handoffStatus, parkDirective, parseResult, roleOf, validHandover, HANDOVER_SECTIONS } from "./document/roles"
 import { parseIndex, tickedIndex } from "./document/unit"
-import { parkCheck, STEER_CHAIN_BOUND } from "./execute"
+import { parkCheck, STEER_CHAIN_BOUND } from "./task-handoff"
 import { composeSynthesizedTodo, readExecutorAdmissionBlock, readExecutorParkPlan, readExecutorPreview, readExecutorFollowUp, planPhaseOf, type ExecutorPreview, type FixPreview, type VerificationPreview } from "./executor-steps"
 import {
   ensureExecutorWorkspace, executorWorkspacePath, ExecutorWorktreeError, landExecutorWorkspace,

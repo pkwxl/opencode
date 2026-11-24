@@ -553,6 +553,7 @@ const CLASSIFIED: Record<string, Domain> = {
   "executor-steps": "driver",
   "executor-coordinator": "driver",
   "executor-worktree": "driver",
+  "task-handoff": "driver",
   // The blockage dossier and honest block line (plans/0082 §2 D1/D2), the
   // strict remediation-plan parser and the blockage document's shape (§4
   // D5 / §5 D6): the pure half every covered block site builds on.
@@ -808,6 +809,7 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   "work-order": "pipeline",
   "executor-steps": "pipeline",
   "executor-coordinator": "pipeline",
+  "task-handoff": "pipeline",
   // The 0082 blockage family and the charter clamp (pipeline beside the
   // loops that call them and the plan prelude that executes the marks).
   blockage: "pipeline",

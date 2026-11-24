@@ -25,16 +25,15 @@ import { handoffFile, subtaskDoc, taskDoc, taskDocPaths, testHandoffFile } from 
 import { processReferenceScan } from "./document/process-refs"
 import { fieldBlockProblems } from "./document/unit"
 import { eofScanExempt, handoffStatus, parkDirective } from "./document/roles"
-import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, directoryArtifactSpecs, subtaskStateSpec, taskArtifactSpecs } from "./document/spec"
+import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, directoryArtifactSpecs, subtaskStateSpec } from "./document/spec"
 import { checklistPrerequisites, checklistProblems, renameTodoToDone, restoreTodoFromDone, subtaskId } from "./document/state"
 import { runExecSession } from "./exec-session"
 import { formatTokens } from "./format"
-import { headText, nestedRepoPrefixes, removeIfUntracked, shortTitle, taskChangedPaths, type UnitBaseline, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles } from "./git"
+import { headText, nestedRepoPrefixes, removeIfUntracked, shortTitle, type UnitBaseline, unitAddedLines, unitChangedFiles, unitQuiet, untrackedFiles } from "./git"
 import { gitOf } from "./git-ops"
-import { pathsOverlap } from "./lanes"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts, type UnitStop } from "./opts"
-import { renderDecompose, renderFanout, renderParkRelease, renderSplitRejected, renderSubtask, renderWhole, type TaskDocs } from "./prompt"
+import { renderDecompose, renderFanout, renderSplitRejected, renderSubtask, renderWhole } from "./prompt"
 import { promptFacts } from "./prompt-facts"
 import { peekProgress } from "./resume"
 import { emitStatus } from "./run-status"
@@ -44,6 +43,7 @@ import { clientOf, forkEndedSession, seedForkSession, sessionAlive, sessionUsed 
 import { parseSplit, splitProblems, splitStateFile, writeSplitTodos } from "./split"
 import { statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
+import { parkCheck, parkReleaseNote, STEER_CHAIN_ADVISORY, STEER_CHAIN_BOUND } from "./task-handoff"
 import { handoffSteer, removeHandoffChain, type Steer } from "./testrun"
 import { liveUsage, sessionHandoverDue, splitUsageReached } from "./usage"
 import { commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
@@ -58,11 +58,13 @@ import {
   setParked,
   setSplit,
   subtasks,
-  taskStatePaths,
   tickSubtask,
   type Plan,
   type Task,
 } from "./tasks"
+
+// Preserve the execute subpath for existing callers of the shared handoff decisions.
+export { parkCheck, parkReleaseNote, STEER_CHAIN_ADVISORY, STEER_CHAIN_BOUND } from "./task-handoff"
 
 // —— The session-handover engine (D4, plans/0069 §2.2: one engine for
 // executeWhole, runSubtask's streams and the fix rounds, plans/0130 D2) ——
@@ -78,16 +80,6 @@ import {
 // consumed with the recovery document) and rewinds it inside its rollback
 // redo; the engine spends the two flags.
 export type HandoverState = { consumed: string; retried: boolean; rolled: boolean; continuations: number }
-
-// The steer chain's bounds (plans/0168 D1, finding 0165-018): past the
-// advisory count of one scope's continuations the next session's prompt
-// carries the chain's length and an honest-assessment teaching (the 0023
-// TEST_HANDOVER_ADVISORY shape, same number); past the bound the verdict
-// blocks for the person (P2's terminal — the chain is an automatic
-// escalation). Both provisional, the 0130 D5 handover journal the named
-// re-measurement basis; constants like their 0023 sibling, no switch (P21).
-export const STEER_CHAIN_ADVISORY = 10
-export const STEER_CHAIN_BOUND = 20
 
 // The engine's verdict over one ended session's handover document:
 // - natural — the end stands: nothing was due and no fresh document exists,
@@ -278,45 +270,6 @@ export async function handoverVerdict(
 
 // —— The dependency park (plans/0096 D6/D7; whole-task scopes only) ——
 
-// The park's validity over one fresh `Status: park <blocker id>` directive:
-// the blocker must be a live member of this phase's index, and every
-// `Artifacts:` entry the task declares must be on disk (the spec-driven
-// check; a task declaring nothing parks on the prose gate — the session's
-// own claim, inspected at wrap-up as any claim is). An id outside the index
-// splits on the state-file probe (plans/0237 D2): a task of this target
-// directory (a state file exists — a cross-phase task) is the foreign
-// verdict, a planning failure the person reorders; an id that exists
-// nowhere is the session's own invention — a collect problem (0096 D7's
-// deadlock letter) that joins the invalid arm's one relaunch with feedback,
-// never a thrown exit 1 after a session already spent work.
-type ParkCheck = { type: "ok" } | { type: "invalid"; problems: string[] } | { type: "foreign" }
-
-export async function parkCheck(planDir: string, plan: Plan, task: Task, blocker: string): Promise<ParkCheck> {
-  const target = plan.tasks.find((entry) => entry.id === blocker)
-  if (target === undefined) {
-    const paths = taskStatePaths(blocker)
-    const known = (await Bun.file(join(planDir, paths.pending)).exists()) || (await Bun.file(join(planDir, paths.complete)).exists())
-    if (!known) {
-      return {
-        type: "invalid",
-        problems: [
-          `${blocker} is not a task of this target directory — no ${paths.pending} or ${paths.complete} exists; the id was invented or mistyped. Park on a real blocker of this phase's index, or end with the honest status lines`,
-        ],
-      }
-    }
-    return { type: "foreign" }
-  }
-  const problems: string[] = []
-  if (blocker === task.id) problems.push("a task cannot park on itself")
-  if (target.status === "done") problems.push(`${blocker} is already closed — do not park on it; continue this task or surface the gap`)
-  const specs = taskArtifactSpecs(await Bun.file(join(planDir, taskStatePaths(task.id).pending)).text().catch(() => ""))
-  if (specs.length) {
-    const checked = await checkArtifactSpecs(specs, { dir: planDir, policy: "declared" })
-    problems.push(...checked.problems)
-  }
-  return problems.length ? { type: "invalid", problems } : { type: "ok" }
-}
-
 // The invalid-park feedback (the one relaunch with feedback, the
 // invalid-handoff path's shape): names the failing honesty gates and the
 // three honest exits.
@@ -327,28 +280,6 @@ function parkFeedback(task: Task, file: string, problems: string[]): string {
     `A park is honest only with everything of this task's scope that other tasks consume (its declared artifacts, its findings) complete and landed. ` +
     `Land the missing artifacts, or continue the task: end with \`Status: done\` when complete, \`Status: continue\` to hand over, or the park line again once the artifacts are on disk — the status line is a driver protocol string, written verbatim.`
   )
-}
-
-// The release note (D7): the resumed task's first dispatch carries the
-// blocker's id, how it ended (a `Closed:` record names its reason;
-// anything else completed), and
-// the re-merge surface — the blocker's changed paths ∩ this task's
-// `Touches:` (everything it changed when the task declares nothing): the
-// files the successor must re-read first, since they moved under a task
-// planned before the blocker existed. The successor judges whether the
-// consumable it waited for exists; it may park again or surface gaps.
-export async function parkReleaseNote(facts: ReturnType<typeof promptFacts>, dir: string, plan: Plan, task: Task, docs: TaskDocs): Promise<string> {
-  const blocker = task.parked!
-  const closed = plan.closed.get(blocker)
-  const changed = await taskChangedPaths(dir, blocker)
-  const surface = (task.touches?.length ? changed.filter((path) => task.touches!.some((touch) => pathsOverlap(touch, path))) : changed).slice(0, 15)
-  return renderParkRelease(facts, {
-    blocker,
-    ended: closed !== undefined ? `closed without completing (${closed})` : "completed",
-    files: surface,
-    handoffFile: docs.handoff,
-    more: Math.max(0, changed.length - surface.length),
-  })
 }
 
 // The execution stage for off/auto (ondemand is off's synonym since plans/

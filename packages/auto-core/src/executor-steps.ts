@@ -8,7 +8,7 @@ import { closeAuditFindingsDoc } from "./close-audit"
 import { ANALYSIS_DOC, roundBriefPath, taskDocPaths } from "./docpaths"
 import { parseUnitDoc } from "./document/unit"
 import { handoffStatus, validHandover } from "./document/roles"
-import { parkReleaseNote } from "./execute"
+import { parkReleaseNote } from "./task-handoff"
 import { awaitingFormulation, constructFormulation, formulationAcceptance, formulationNumber } from "./formulate"
 import { priorRoundBlock, readFormulationSources } from "./formulate-parts"
 import {
