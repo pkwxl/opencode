@@ -171,13 +171,9 @@ async function fillClose(dir: string, round = "R-01") {
   await Bun.write(join(dir, `docs/${round}/report-for-user.md`), `# Round report\n\nThe round's account for the person.\n\n<!-- auto: eof -->\n`)
 }
 
-// Phased flow P3 end to end (phases=mv, the m phase already done): the v
-// (acceptance) phase's tasks run as usual, the handover is the distillation
-// session's handover.md inside the phase directory (the four-section
-// protocol), the phase's done.md advances, and all phases complete with
-// exit 0.
+// A phased task run stops at the boundary for executor distill and transfer.
 test.skipIf(!E2E)(
-  "end to end: v-phase tasks and the distilled handover (phases=mv)",
+  "end to end: v-phase tasks stop at the handover boundary (phases=mv)",
   async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-e2e-phase-"))
     try {
@@ -197,21 +193,11 @@ test.skipIf(!E2E)(
         renderText(TEMPLATE_AGENT, {}),
       )
 
-      // boundary: "flow" restores the continuous crossing these tests
-      // choreograph (plans/0101 D1 made the boundary stop run's default, so
-      // a plain runAll now ends at each clean phase end ahead of the
-      // handover).
       expect(await runAll(dir, { phases: "mv", boundary: "flow" })).toBe(0)
       expect(await Bun.file(join(dir, "docs/R-01/P02-acceptance/tasks.md")).text()).toContain("- [x] T-001")
       expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
-      // Distilled handover: handover.md has all four sections; the phase's
-      // done.md advances.
-      const handover = await Bun.file(join(dir, "docs/R-01/P02-acceptance/handover.md")).text()
-      for (const section of ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]) {
-        expect(handover).toContain(section)
-      }
-      expect(await Bun.file(join(dir, "docs/R-01/P02-acceptance/done.md")).exists()).toBe(true)
-      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P02 acceptance")
+      expect(await Bun.file(join(dir, "docs/R-01/P02-acceptance/handover.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, "docs/R-01/P02-acceptance/todo.md")).exists()).toBe(true)
       expect((await Bun.file(join(dir, "acceptance.md")).text()).trim()).toBe("accepted")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -220,14 +206,9 @@ test.skipIf(!E2E)(
   { timeout: 600_000 },
 )
 
-// Custom phase types end to end (M3.8): a project-defined type runs the full
-// plan→execute→handover pipeline, proving the phase-type registry serves more
-// than the builtin admtvk — the planning duties declared in
-// .opencode/auto/phases/<type>.md drive the phase-planning session, tasks run
-// as usual, and the handover distillation likewise produces the four-section
-// protocol document.
+// The custom type's planning duties drive formulation and task execution.
 test.skipIf(!E2E)(
-  "end to end: the full pipeline of a custom phase type (plan→execute→handover)",
+  "end to end: planning and execution for a custom phase type",
   async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-e2e-custom-phase-"))
     try {
@@ -249,21 +230,11 @@ test.skipIf(!E2E)(
 
       // P01-security-review has no pre-listed tasks.md: the phase-planning
       // session must write both the task index and the task document itself.
-      // boundary: "flow" as above — the continuous crossing, not the 0101
-      // boundary-stop default.
       expect(await runAll(dir, { phases: "security-review,implement", boundary: "flow" })).toBe(0)
       expect(await Bun.file(join(dir, "docs/R-01/P01-security-review/tasks.md")).exists()).toBe(true)
       expect((await Bun.file(join(dir, "security-review.md")).text())).toContain("reviewed")
-      const handover = await Bun.file(join(dir, "docs/R-01/P01-security-review/handover.md")).text()
-      for (const section of ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]) {
-        expect(handover).toContain(section)
-      }
-      expect(await Bun.file(join(dir, "docs/R-01/P01-security-review/done.md")).exists()).toBe(true)
-      // The second phase (builtin implement, still task-less at round start)
-      // gets planned and executed the same way, proving the custom and
-      // builtin types share one pipeline.
-      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/done.md")).exists()).toBe(true)
-      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P02 implement")
+      expect(await Bun.file(join(dir, "docs/R-01/P01-security-review/handover.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/tasks.md")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -310,9 +281,14 @@ test.skipIf(!E2E)(
       await git("add", "-A")
       await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "round baseline")
 
-      // boundary: "flow" as above — one runAll crossing all three phase
-      // boundaries of the round.
-      expect(await runAll(dir, { phases: "adm", boundary: "flow" })).toBe(0)
+      // Exercise the legacy task loop once per phase. The core's executor
+      // and transfer suites cover the handover and transition.
+      for (const letter of ["a", "d", "m"]) {
+        expect(await runAll(dir, { phases: "adm" })).toBe(0)
+        await completeLetters(dir, [letter])
+        await git("add", "-A")
+        await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", `complete phase ${letter}`)
+      }
 
       // Locally numbered directories inside the round's phases plus each
       // phase's own tasks.md; task content lives permanently under docs/T-NNN/,

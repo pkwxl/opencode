@@ -8,6 +8,8 @@ import { existsSync, renameSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { FakeAgentOptions } from "./fixtures/agent"
 import { loopFixture, pastMessage, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { CONFIG_FILE } from "../src/config"
+import { readExecutorPreview } from "../src/executor-steps"
 import { unitBaseline } from "../src/git"
 import { IMPLIED_MODEL } from "../src/models"
 import { completePhase, establishRound, type PhaseUnit } from "../src/phases"
@@ -70,24 +72,17 @@ describe("plan's stop condition (plans/0053 D6)", () => {
   )
 
   test(
-    "goes through a handover as run does, and stops after the next phase's planning",
+    "stops at the boundary before planning the next phase",
     async () => {
       const f = await fixture("am")
       await seedTasks(f, await f.phase(0), [["T-001", true]])
       await f.commit("analysis tasks")
       const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(0)
-      // The handover completed: the distillation ran, the phase was archived
-      // and its index line ticked; the next phase was planned and the run
-      // stopped there.
-      expect(has(f, "docs/R-01/P01-analysis/done.md")).toBe(true)
-      expect(has(f, "docs/R-01/P01-analysis/handover.md")).toBe(true)
-      expect(await Bun.file(join(f.dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01")
-      expect(lines).toContain("✓ planned R-01.P02 implement: 1 task(s) in docs/R-01/P02-implement/tasks.md")
-      expect(f.agent.prompts.filter((p) => p.text.includes("You are the handover distiller"))).toHaveLength(1)
-      expect(f.agent.prompts[0]!.text).toContain("You are the handover distiller")
-      // No closed task: the distiller prompt carries no closed-tasks block.
-      expect(f.agent.prompts[0]!.text).not.toContain("## Closed tasks")
+      expect(lines.some((line) => line.includes('an executor "distill" grant'))).toBe(true)
+      expect(has(f, "docs/R-01/P01-analysis/done.md")).toBe(false)
+      expect(has(f, "docs/R-01/P02-implement/tasks.md")).toBe(false)
+      expect(f.agent.prompts).toEqual([])
       await clean(f)
       openStepGone(f)
     },
@@ -176,13 +171,11 @@ describe("closed tasks in the handover distillation (plans/0053 D16)", () => {
       const q = qualifiedPhase(analysis)
       const done = join(f.dir, "docs", "T-001", "done.md")
       await Bun.write(done, (await Bun.file(done).text()).replace(`Phase: ${q}\n`, `Phase: ${q}\nClosed: superseded\n`))
+      await Bun.write(join(f.dir, CONFIG_FILE), JSON.stringify({ phases: "am", subtask: "off" }))
       await f.commit("analysis tasks")
-      const { code } = await f.run({ stopBefore: "execute" })
-      expect(code).toBe(0)
-      expect(has(f, join(analysis.dir, "done.md"))).toBe(true)
-      const distillers = f.agent.prompts.filter((p) => p.text.includes("You are the handover distiller"))
-      expect(distillers).toHaveLength(1)
-      const text = distillers[0]!.text
+      const step = await readExecutorPreview(f.dir)
+      if (step.kind !== "distill") throw new Error(JSON.stringify(step))
+      const text = step.prompt
       const block = text.slice(text.indexOf("## Closed tasks"), text.indexOf("## Artifact"))
       expect(block).toContain("- T-001: task T-001 (closed without completing: superseded)")
       expect(block).not.toContain("T-002")

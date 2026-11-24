@@ -10,8 +10,10 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { artifactTurns, loopFixture, type LoopFixture } from "./fixtures/loop"
+import { artifactTurns, landPhaseHandover, loopFixture, type LoopFixture } from "./fixtures/loop"
 import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
+import { transferDeterministic } from "../src/transfer"
+import { captureRun } from "./fixtures/capture"
 import { establishRound } from "../src/phases"
 
 const made: LoopFixture[] = []
@@ -92,42 +94,6 @@ const failTurns = (failing: ReadonlySet<string>) => (dir: string): TurnScript =>
   }
 }
 
-// The verdict-gate variant: every wrap-up passes, and the acceptance phase's
-// distillation writes the phase verdict beside the handover — FAIL.
-const gateTurns = () => (dir: string): TurnScript => {
-  return (ctx) => {
-    if (ctx.text.includes("You are the handover distiller")) {
-      artifactTurns(dir)(ctx)
-      const m = /docs\/(R-\d+\/P\d+-acceptance)\/handover\.md/.exec(ctx.text)
-      if (m) writeFileSync(join(dir, "docs", m[1]!, "verdict.md"), "# Verdict\n\nResult: FAIL two criteria unmet\n")
-      return undefined
-    }
-    if (ctx.text.includes("only performs the wrap-up")) {
-      const id = /docs\/(T-\d+)\/report\.md/.exec(ctx.text)?.[1]
-      if (id) {
-        mkdirSync(join(dir, "docs", id), { recursive: true })
-        writeFileSync(
-          join(dir, "docs", id, "report.md"),
-          [
-            `# Report (${id})`,
-            "",
-            "The wrap-up session reviewed the work against the task's acceptance statements and",
-            "recorded the verification evidence: what was delivered, where it lives, and how it",
-            "was checked. The modules the task touched are listed with their outcomes.",
-            "",
-            "Result: PASS",
-            "",
-            "<!-- auto: eof -->",
-            "",
-          ].join("\n"),
-        )
-      }
-      return undefined
-    }
-    return artifactTurns(dir)(ctx)
-  }
-}
-
 const has = (f: LoopFixture, path: string) => existsSync(join(f.dir, path))
 
 describe("the FAIL verdict as state (plans/0283: the repair-append budget retired)", () => {
@@ -153,10 +119,16 @@ describe("the FAIL verdict as state (plans/0283: the repair-append budget retire
 
 describe("the held verdict gate as state (plans/0283: the repair-append budget retired)", () => {
   test("the held gate stops for the human with the rework ways listed — never a repair round", async () => {
-    // boundary flow (plans/0101 D1): the held-gate stop sits past the
-    // boundary the continuous crossing reaches.
-    const f = await fixture("mv", gateTurns())
-    const { code, lines } = await f.run({ boundary: "flow" })
+    const f = await fixture("mv", failTurns(new Set()))
+    expect((await f.run()).code).toBe(0)
+    await landPhaseHandover(f, await f.phase(0))
+    const transfer = () => captureRun(() => transferDeterministic(f.dir, { phases: "mv" }))
+    expect((await transfer()).code).toBe(0)
+    expect((await f.run()).code).toBe(0)
+    const acceptance = await f.phase(1)
+    await Bun.write(join(f.dir, acceptance.dir, "verdict.md"), "# Verdict\n\nResult: FAIL two criteria unmet\n")
+    await landPhaseHandover(f, acceptance)
+    const { code, lines } = await transfer()
     expect(code).toBe(2)
     expect(lines.some((line) => line.includes("repair round"))).toBe(false)
     expect(lines.some((line) => line.includes("is held by its gate"))).toBe(true)

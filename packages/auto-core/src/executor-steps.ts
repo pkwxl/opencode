@@ -86,6 +86,7 @@ export type ExecutorSnapshot = {
   config: Pick<ProjectConfig, "subtask" | "testByDriver" | "handoverTest" | "acceptanceGate">
   tree: "clean" | "dirty" | "unreadable"
   activeProgress: boolean
+  legacyHandover?: string
   continuationUnit?: string
   continuationHandoff?: boolean
   route?: { task: string; scoped?: boolean; followUp?: true }
@@ -151,6 +152,9 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
   if (refused) return refused
 
   const current = state.round?.current
+  if (state.legacyHandover !== undefined) {
+    return { kind: "wait", reason: "in-flight", actor: "person", detail: `An interrupted handover record for ${state.legacyHandover} needs recovery. Run the transfer operation to review and clear it before claiming work.` }
+  }
   if (state.activeProgress) {
     return { kind: "wait", reason: "in-flight", actor: "workflow", detail: "An active progress record requires continuation or settlement." }
   }
@@ -174,7 +178,7 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
   }
 
   const { phase, plan } = current
-  if (!current.indexPresent) {
+  if (!current.indexPresent && phase.entry.hasTasks) {
     return { kind: "wait", reason: "not-ready", actor: "workflow", detail: "The phase needs a task plan or formulation dispatch." }
   }
   // 0276 (0256 stage 2's first convergence kind): the phase's formulation
@@ -326,23 +330,9 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
   if (state.round?.open) {
     return { kind: "wait", reason: "not-ready", actor: "person", detail: "The open round has no pending tasks. Add work or close the round." }
   }
-  // 0277 (0256 stage 2's second convergence kind): the transfer advance's
-  // distillation session — the one that writes the phase's permanent handover
-  // document — rides the protocol beside its push twin, additive (P10 — the
-  // person's transfer path unchanged, byte-identical). The claimable keys on
-  // exactly the durable records the push dispatch keys on: the handover route
-  // (the index present, tasks listed, every one done — routePhase's own
-  // statuses) MINUS the push skip condition (validHandover of the handover
-  // document — the idempotent skip that goes straight to archiving), held
-  // behind the person's human gate (the survey-release arm above, plus the
-  // clarification problems the missing-survey shape carries — the same
-  // "human gate ahead of any session" discipline the advance itself runs).
-  // No protocol step ever *is* the advance: the completion rename, the wall's
-  // close, the brief install and the transition commit stay the person's
-  // transfer act (the apply), and the landed share composes with the push
-  // path's own interrupted-handover shape — the complete document on a
-  // committed tree skips the session and ②③ are made up push-side.
-  if (current.indexPresent && current.plan.tasks.length > 0 && current.plan.tasks.every((entry) => entry.status === "done") &&
+  // A taskless phase reaches the boundary without a formulation or task index.
+  const boundaryReady = current.plan.tasks.length > 0 ? current.indexPresent : !phase.entry.hasTasks
+  if (boundaryReady && current.plan.tasks.every((entry) => entry.status === "done") &&
       !current.handoverValid && !current.gateProblems.some((problem) => problem.startsWith("clarification:"))) {
     const handover = phaseHandoverDoc(phase)
     return {
@@ -397,7 +387,11 @@ async function readExecutorSnapshot(dir: string, continuationUnit?: string, chec
     const handoff = await Bun.file(join(checkout, taskDocPaths(continuationUnit).handoff)).text().catch(() => "")
     state.continuationHandoff = handoffStatus(handoff) === "continue"
   }
-  state.activeProgress = (await peekProgress(dir))?.active === true
+  const progress = await peekProgress(dir)
+  state.activeProgress = progress?.active === true
+  if (progress?.active && progress.phase?.kind === "step" && progress.phase.step === "phase-handover") {
+    state.legacyHandover = progress.phase.unit
+  }
   state.round = { complete: round.done.size === round.phases.length, open: round.open }
   if (phase) {
     const plan = await loadPlan(dir, phase)

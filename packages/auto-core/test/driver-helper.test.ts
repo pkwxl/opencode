@@ -229,7 +229,7 @@ describe("driver-helper: the map rows (plans/0105 D5)", () => {
     await git(dir, "commit", "-qm", "phase done")
     const lines = await renderHelperBrief(dir, { phases: "mt" })
     expect(lines).toContain("✓ phase boundary: P01-implement Implementation complete at a clean phase end — every unit closed, the lanes landed; run executes the planned work of the current phase and stops here (plans/0101 D1)")
-    expect(lines).toContain(`next: opencode-auto transfer ${dir} — it distills the handover, closes the phase, and constructs the next phase's plan task for your review`)
+    expect(lines).toContain(`next: opencode-auto transfer ${dir} — after an executor "distill" grant lands the handover, it closes the phase, and constructs the next phase's plan task for your review`)
     expect(lines.some((line) => line.startsWith("- review the completed phase — its task reports"))).toBe(true)
     expect(lines.some((line) => line.includes("ahead: docs/R-01/P02-test/plan-input.md may be written now (the next transfer's construct reads it)"))).toBe(true)
   })

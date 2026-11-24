@@ -50,7 +50,7 @@ import { releasedRoundBriefProposal, roundBriefNearMissNote } from "./analysis"
 import { ANALYSIS_DOC, roundBriefPath, roundDirName } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
 import { constructPhaseFloor } from "./executor-steps"
-import { changedFiles, commitTree } from "./git"
+import { changedFiles, commitTree, repoRoots, statusEntriesRead, workdirEntry } from "./git"
 import type { RunAllOpts } from "./loop-preflight"
 import { log } from "./log"
 import { acquireRunLock, lockLines } from "./lock"
@@ -94,7 +94,7 @@ import {
   truncateGoal,
 } from "./plan"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
-import { closeStep } from "./resume"
+import { closeStep, openStep } from "./resume"
 import { shellProfile, surfaceOf } from "./shell"
 import { autoSwitches } from "./switches"
 import { loadPlan, type Plan } from "./tasks"
@@ -144,6 +144,31 @@ async function transferAdvance(directory: string, opts: RunAllOpts): Promise<num
   if (route.type === "blocked") {
     log(phaseFlowBlockedLine(route.reason))
     return 1
+  }
+  const legacyHandover = await openStep(directory)
+  if (legacyHandover?.step === "phase-handover") {
+    const state = await readPhases(directory)
+    const owner = state?.phases.find((phase) => phaseKey(phase).id === legacyHandover.unit)
+    const boundary = route.type === "handover" || (route.type === "plan" && !route.phase.entry.hasTasks)
+    if (!owner || (!state?.done.has(owner.id) && !(boundary && route.phase.id === owner.id))) {
+      log(`⏸ interrupted handover ${legacyHandover.unit} does not match a completed phase or the current phase boundary. Review its changes and archive .auto/progress.json to resume executor work.`)
+      return 2
+    }
+    const roots = await repoRoots(directory)
+    if (!roots.includes(directory)) {
+      log("⏸ Git cannot read the interrupted handover's worktree. Inspect the repository before retrying transfer.")
+      return 2
+    }
+    for (const root of roots) {
+      const entries = await statusEntriesRead(directory, root)
+      if (!entries) return 2
+      const dirt = entries.filter(({ rel, status }) => status !== "??" || !workdirEntry(rel))
+      if (dirt.length) {
+        log(`⏸ interrupted handover ${legacyHandover.unit}: review the uncommitted changes (${dirt.map(({ rel }) => rel).join(", ")}). Commit reviewed work or set unfinished edits aside, then retry transfer.`)
+        return 2
+      }
+    }
+    await closeStep(directory, legacyHandover.step, legacyHandover.unit)
   }
   // The sealed wall's boundary check (plans/0132 D2): post-seal the closed
   // predicate re-derives at every boundary — ahead of any session, so any
@@ -222,7 +247,7 @@ async function advanceDeterministic(directory: string, round: number, opts: RunA
       return 1
     }
     if (route.type === "complete") return await roundCloseDeterministic(directory, round, opts)
-    if (route.type === "plan") {
+    if (route.type === "plan" && route.phase.entry.hasTasks) {
       // An empty index (or the open-round shape's fresh index): the floor
       // construction is this invocation's product — construct and stop for
       // review, the protocol's synthesize/formulate grants the follow-ups.

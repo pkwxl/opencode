@@ -1,10 +1,4 @@
-// The sealed wall at the person's advance path (plans/0132 D2, the
-// enactment's step 2): the three-step close integrated with the transition
-// path — the loop fixture drives the same phase loop transfer's runAll
-// hands control to, under stopBefore "formulate", so the wall commit lands
-// between the admission scan and the transition commit inside a real
-// advance; transfer's own pre-check surfaces a reopen ahead of any session;
-// and the undeclared floor is asserted as behavior on the plain "mt" shape.
+// Verify the wall and gate ordering through deterministic transfer.
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -14,7 +8,7 @@ import { establishRound, readPhases } from "../src/phases"
 import { findWallCommit } from "../src/wall"
 import { saveProgress } from "../src/resume"
 import { captureRun } from "./fixtures/capture"
-import { artifactTurns, loopFixture, phaseHandover, type LoopFixture } from "./fixtures/loop"
+import { landPhaseHandover, loopFixture, type LoopFixture } from "./fixtures/loop"
 
 const made: string[] = []
 const fixtures: LoopFixture[] = []
@@ -108,9 +102,7 @@ describe("transfer: the sealed wall closes at the person's advance (plans/0132 D
     await sealArtifacts(f)
     // Land the distill output before transfer runs the admission scan, seals
     // the wall, and commits the phase transition.
-    const phase = await f.phase(0)
-    await Bun.write(join(f.dir, phase.dir, "handover.md"), phaseHandover(phase.dir))
-    await f.commit("distill sealing phase")
+    await landPhaseHandover(f, await f.phase(0))
     const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "spec-read,implement" }))
     expect(advanced.code).toBe(0)
     expect(advanced.lines.some((line) => line.includes("sealed reference wall closed (P01-spec-read Spec read)"))).toBe(true)
@@ -141,7 +133,8 @@ describe("transfer: the sealed wall closes at the person's advance (plans/0132 D
     const { f, corpus } = await wallFixture()
     expect((await f.run()).code).toBe(0)
     await sealArtifacts(f)
-    expect((await f.run({ stopBefore: "formulate" })).code).toBe(0)
+    await landPhaseHandover(f, await f.phase(0))
+    expect((await captureRun(() => transferDeterministic(f.dir, { phases: "spec-read,implement" }))).code).toBe(0)
     expect(existsSync(join(f.dir, "linux"))).toBe(false)
     // The person's re-created door: transfer refuses before any session.
     symlinkSync(corpus, join(f.dir, "linux"))
@@ -164,7 +157,8 @@ describe("transfer: the sealed wall closes at the person's advance (plans/0132 D
     await establishRound(f.dir, { phases: "mt", round: 1 })
     await f.commit("round setup")
     expect((await f.run()).code).toBe(0)
-    const advanced = await f.run({ stopBefore: "formulate" })
+    await landPhaseHandover(f, await f.phase(0))
+    const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "mt" }))
     expect(advanced.code).toBe(0)
     expect(advanced.lines.some((line) => line.toLowerCase().includes("wall"))).toBe(false)
     expect(await findWallCommit(f.dir)).toBeUndefined()
@@ -173,67 +167,29 @@ describe("transfer: the sealed wall closes at the person's advance (plans/0132 D
   })
 })
 
-// The handover paths that are not the person's advance (plans/0189 D1,
-// 0165-008): --boundary flow and the plain run's re-entry of an interrupted
-// transfer handover once closed the phase with the door open, silently —
-// both hold at the seal now, naming transfer, and transfer's next advance
-// seals. The gates-before-wall order (plans/0189 D4, 0165-076) and the
-// re-entry's phase-closed stop variant ride the same fixture.
-describe("the seal's bracket at the handover paths (plans/0189 D1/D4)", () => {
-  test("--boundary flow holds at a due seal: exit 2, the door standing, the phase unrenamed — and the next transfer seals", async () => {
+describe("the seal's bracket at the handover boundary (plans/0189 D1/D4)", () => {
+  test("flow leaves the seal and transition to transfer, which clears an interrupted handover record", async () => {
     const { f } = await wallFixture()
-    expect((await f.run()).code).toBe(0)
-    await sealArtifacts(f)
-    const flowed = await f.run({ boundary: "flow" })
-    expect(flowed.code).toBe(2)
-    expect(flowed.lines.some((line) => line.includes("due to close") && line.includes("transfer"))).toBe(true)
+    const stopped = await f.run({ boundary: "flow" })
+    expect(stopped.code).toBe(0)
     expect(existsSync(join(f.dir, "linux"))).toBe(true)
-    expect(await findWallCommit(f.dir)).toBeUndefined()
-    expect(existsSync(join(f.dir, "docs/R-01/P01-spec-read/done.md"))).toBe(false)
-    // The person's advance seals: the wall closes and the phase completes.
-    const advanced = await f.run({ stopBefore: "formulate" })
-    expect(advanced.code).toBe(0)
-    expect(advanced.lines.some((line) => line.includes("sealed reference wall closed"))).toBe(true)
-    expect(existsSync(join(f.dir, "docs/R-01/P01-spec-read/done.md"))).toBe(true)
-    expect(existsSync(join(f.dir, "linux"))).toBe(false)
-  })
-
-  test("the plain run's re-entry of an interrupted transfer handover holds at the seal — the distillation kept, the close transfer's", async () => {
-    const { f } = await wallFixture()
-    expect((await f.run()).code).toBe(0)
+    const phase = await f.phase(0)
+    expect(existsSync(join(f.dir, phase.dir, "handover.md"))).toBe(false)
+    expect(existsSync(join(f.dir, phase.dir, "done.md"))).toBe(false)
     await sealArtifacts(f)
-    // The interrupted advance's recovery point: an active phase-handover
-    // step record the plain run re-enters (0101 D1).
     await saveProgress(f.dir, { task: "PLAN", at: 1, active: true, phase: { kind: "step", step: "phase-handover", unit: "R-01.P01" } })
-    const reentry = await f.run()
-    expect(reentry.code).toBe(2)
-    expect(reentry.lines.some((line) => line.includes("due to close") && line.includes("transfer"))).toBe(true)
-    expect(existsSync(join(f.dir, "linux"))).toBe(true)
-    expect(await findWallCommit(f.dir)).toBeUndefined()
-    expect(existsSync(join(f.dir, "docs/R-01/P01-spec-read/done.md"))).toBe(false)
-    // The handover document the re-entry distilled is kept and committed —
-    // transfer skips straight past the distillation to the seal.
-    expect(existsSync(join(f.dir, "docs/R-01/P01-spec-read/handover.md"))).toBe(true)
-    const advanced = await f.run({ stopBefore: "formulate" })
+    const record = Bun.file(join(f.dir, ".auto/progress.json"))
+    const before = await record.text()
+    const recovery = await f.run()
+    expect(recovery.code).toBe(2)
+    expect(recovery.lines.join("\n")).toContain("interrupted handover R-01.P01 needs review")
+    expect(await record.text()).toBe(before)
+    await landPhaseHandover(f, phase)
+    const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "spec-read,implement" }))
     expect(advanced.code).toBe(0)
-    expect(advanced.lines.some((line) => line.includes("skipping the distillation session"))).toBe(true)
-    expect(advanced.lines.some((line) => line.includes("sealed reference wall closed"))).toBe(true)
-    expect(existsSync(join(f.dir, "docs/R-01/P01-spec-read/done.md"))).toBe(true)
-  })
-
-  test("a completed re-entry's boundary stop prints the phase-closed variant (plans/0189 D1, the 0101 D1 re-entry truth)", async () => {
-    const { f } = await wallFixture()
-    expect((await f.run()).code).toBe(0)
-    await sealArtifacts(f)
-    expect((await f.run({ stopBefore: "formulate" })).code).toBe(0)
-    // P02's work done, its handover interrupted: the re-entry completes it
-    // (post-wall, the boundary checks pass) and stops with the truth.
-    expect((await f.run()).code).toBe(0)
-    await saveProgress(f.dir, { task: "PLAN", at: 1, active: true, phase: { kind: "step", step: "phase-handover", unit: "R-01.P02" } })
-    const reentry = await f.run()
-    expect(reentry.code).toBe(0)
-    expect(reentry.lines.some((line) => line.includes("complete and closed"))).toBe(true)
-    expect(reentry.lines.some((line) => line.includes("distills the handover"))).toBe(false)
+    expect(existsSync(join(f.dir, "linux"))).toBe(false)
+    expect(existsSync(join(f.dir, phase.dir, "done.md"))).toBe(true)
+    expect(existsSync(join(f.dir, ".auto/progress.json"))).toBe(false)
   })
 
   test("the gates hold ahead of the seal: a FAIL verdict stops with the door standing and no wall commit, and the PASS re-run closes lawfully (plans/0189 D4, 0165-076)", async () => {
@@ -243,7 +199,8 @@ describe("the seal's bracket at the handover paths (plans/0189 D1/D4)", () => {
     // The phase's verdict document concludes FAIL: the person's gate.
     await Bun.write(join(f.dir, "docs/R-01/P01-spec-read/verdict.md"), "# Verdict\n\nThe rework is not done.\n\nResult: FAIL\n")
     await f.commit("the reviewer's rejection")
-    const held = await f.run({ stopBefore: "formulate" })
+    await landPhaseHandover(f, await f.phase(0))
+    const held = await captureRun(() => transferDeterministic(f.dir, { phases: "spec-read,implement" }))
     expect(held.code).toBe(2)
     expect(held.lines.some((line) => line.includes("verdict"))).toBe(true)
     // The seal never ran: the door stands, the stamp live, no record.
@@ -253,7 +210,7 @@ describe("the seal's bracket at the handover paths (plans/0189 D1/D4)", () => {
     // The rework accepted: the wall closes and the phase completes.
     await Bun.write(join(f.dir, "docs/R-01/P01-spec-read/verdict.md"), "# Verdict\n\nThe rework landed.\n\nResult: PASS\n")
     await f.commit("the reviewer's acceptance")
-    const advanced = await f.run({ stopBefore: "formulate" })
+    const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "spec-read,implement" }))
     expect(advanced.code).toBe(0)
     expect(advanced.lines.some((line) => line.includes("sealed reference wall closed"))).toBe(true)
     expect(existsSync(join(f.dir, "docs/R-01/P01-spec-read/done.md"))).toBe(true)

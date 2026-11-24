@@ -9,6 +9,7 @@ import { transferDeterministic } from "../src/transfer"
 import { openExecutorCoordinator } from "../src/executor-coordinator"
 import { readExecutorPreview } from "../src/executor-steps"
 import { CONFIG_FILE } from "../src/config"
+import { saveProgress } from "../src/resume"
 import { addTask } from "../src/task-add"
 import { completePhase, establishRound, phaseLabel, readPhases, renderPhaseTodo, type PhaseUnit } from "../src/phases"
 import { renderRoundBrief } from "../src/round-brief"
@@ -20,7 +21,7 @@ import { services } from "../src/services"
 import { ev, type TurnScript } from "./fixtures/agent"
 import { captureRun } from "./fixtures/capture"
 import { freshRepo, git } from "./fixtures/runner"
-import { SYNTHESIS_MARK, appendOneTask, artifactTurns, loopFixture, phaseDirId, phaseHandover, promptPhaseDir, synthesisTurn, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { SYNTHESIS_MARK, artifactTurns, landPhaseHandover, loopFixture, phaseDirId, phaseHandover, promptPhaseDir, synthesisTurn, taskDoc, type LoopFixture } from "./fixtures/loop"
 
 const made: string[] = []
 const fixtures: LoopFixture[] = []
@@ -272,12 +273,25 @@ describe("transfer: applying a phase boundary (plans/0101 D2 shapes 2/3)", () =>
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "phase done")
 
+    await saveProgress(dir, { task: "PLAN", at: 1, active: true, phase: { kind: "step", step: "phase-handover", unit: "R-01.P01" } })
+    expect(await readExecutorPreview(dir)).toMatchObject({ kind: "wait", actor: "person" })
+    const partial = "unfinished handover from the interrupted session"
+    await Bun.write(join(dir, handover), partial)
+    const dirty = await capture(() => transferDeterministic(dir, { phases: "mt" }))
+    expect(dirty.code).toBe(2)
+    expect(dirty.lines.join("\n")).toContain(handover)
+    expect(await Bun.file(join(dir, handover)).text()).toBe(partial)
+    expect(existsSync(join(dir, ".auto/progress.json"))).toBe(true)
+    rmSync(join(dir, handover))
+
     const before = await git(dir, "rev-parse", "HEAD")
     const held = await capture(() => transferDeterministic(dir, { phases: "mt" }))
     expect(held.code).toBe(2)
     expect(held.lines.join("\n")).toContain('claim with kind "distill"')
     expect(await git(dir, "rev-parse", "HEAD")).toBe(before)
     expect(existsSync(join(dir, phase.dir, "done.md"))).toBe(false)
+
+    expect(existsSync(join(dir, ".auto/progress.json"))).toBe(false)
 
     const coordinator = await openExecutorCoordinator(dir)
     try {
@@ -298,54 +312,6 @@ describe("transfer: applying a phase boundary (plans/0101 D2 shapes 2/3)", () =>
     expect(await readExecutorPreview(dir)).toMatchObject({ kind: "formulate" })
     expect(await git(dir, "log", "--format=%B")).toContain("Auto-Stage: phase-transition")
     expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
-  })
-})
-
-describe("push loop: stopBefore formulation", () => {
-  test("the boundary advance distills, closes the phase and constructs the next plan task, stopping at the review seam — one advance per invocation", async () => {
-    const f = await loopFixture("mt")
-    fixtures.push(f)
-    await establishRound(f.dir, { phases: "mt", round: 1 })
-    await f.commit("round setup")
-    // run executes P01's work and stops at its boundary (D1).
-    const stopped = await f.run()
-    expect(stopped.code).toBe(0)
-    expect(stopped.lines.some((line) => line.includes("✓ phase boundary: P01-implement Implementation complete"))).toBe(true)
-    expect(existsSync(join(f.dir, "docs/R-01/P01-implement/handover.md"))).toBe(false)
-    // The advance: the distillation session runs, the phase closes, P02's
-    // plan task is constructed and reviewed — not dispatched.
-    const advanced = await f.run({ stopBefore: "formulate" })
-    expect(advanced.code).toBe(0)
-    expect(existsSync(join(f.dir, "docs/R-01/P01-implement/handover.md"))).toBe(true)
-    expect(existsSync(join(f.dir, "docs/R-01/P01-implement/done.md"))).toBe(true)
-    const implement = (await f.phase(1)).dir
-    const index = (await Bun.file(join(f.dir, implement, "tasks.md")).text()).trim().split("\n")
-    expect(index.filter((line) => /^\- \[ \] T-\d+/.test(line))).toHaveLength(1)
-    expect(advanced.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
-    expect(advanced.lines.some((line) => line.includes("dispatch it with opencode-auto plan"))).toBe(true)
-    // One advance per invocation, and the re-run is the reconstruct channel
-    // (D3): the digest-keep holds the landed todo, the same review stop
-    // answers, nothing is dispatched.
-    const again = await f.run({ stopBefore: "formulate" })
-    expect(again.code).toBe(0)
-    expect(again.lines.some((line) => line.includes("the landed formulation todo of"))).toBe(true)
-    expect(again.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
-    const after = (await Bun.file(join(f.dir, implement, "tasks.md")).text()).trim().split("\n")
-    expect(after).toEqual(index)
-    // plan dispatches the reviewed task (the stop condition's formulation
-    // route); run then executes the phase and stops at the round's last
-    // boundary.
-    const dispatched = await f.run({ stopBefore: "execute" })
-    expect(dispatched.code).toBe(0)
-    expect(dispatched.lines.some((line) => line.includes("✓ phase planning complete"))).toBe(true)
-    // A second planned task rides the phase: run executes both, and the
-    // boundary stop lands once, at the phase's clean end (never mid-phase).
-    appendOneTask(f.dir, implement)
-    await f.commit("add a second task")
-    const executed = await f.run()
-    expect(executed.code).toBe(0)
-    expect(executed.lines.filter((line) => line.includes("✓ phase boundary"))).toHaveLength(1)
-    expect(existsSync(join(f.dir, "docs/R-01/P02-test/todo.md"))).toBe(true)
   })
 })
 
@@ -381,14 +347,16 @@ describe("transfer: the review gate and the rejected-edit channel (plans/0101 D3
     // run executes P01 and stops at its boundary (D1); the advance
     // constructs P02's plan task — round.md still the stub the whole way.
     expect((await f.run()).code).toBe(0)
-    const advanced = await f.run({ stopBefore: "formulate" })
+    await landPhaseHandover(f, await f.phase(0))
+    const advanced = await capture(() => transferDeterministic(f.dir, { phases: "mt" }))
     expect(advanced.code).toBe(0)
-    expect(advanced.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect(advanced.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
     expect(advanced.lines.some((line) => line.includes("driver-owned, fix its inputs, never the todo"))).toBe(true)
     // The duty (D3): the stop says round.md is still the untouched stub,
     // names the fill and the transfer re-run whose reconstruct absorbs it.
-    expect(advanced.lines.some((line) => line.includes("⚠ the round brief docs/R-01/round.md is still the untouched stub"))).toBe(true)
-    expect(advanced.lines.some((line) => line.includes("plan refuses to dispatch while it stays a stub"))).toBe(true)
+    const reviewed = await f.run({ stopBefore: "formulate" })
+    expect(reviewed.lines.some((line) => line.includes("⚠ the round brief docs/R-01/round.md is still the untouched stub"))).toBe(true)
+    expect(reviewed.lines.some((line) => line.includes("plan refuses to dispatch while it stays a stub"))).toBe(true)
     // The audit pointer: this round holds no prompt-audit.md (the
     // charter-less construct writes no records), so the records line stays
     // quiet beside the todo — the --resynthesize case below pins the other
@@ -587,9 +555,10 @@ describe("transfer: the review seam beside a hand-added task (plans/0205)", () =
     await establishRound(f.dir, { phases: "mt" })
     await f.commit("round setup")
     expect((await f.run()).code).toBe(0)
-    const advanced = await f.run({ stopBefore: "formulate" })
+    await landPhaseHandover(f, await f.phase(0))
+    const advanced = await capture(() => transferDeterministic(f.dir, { phases: "mt" }))
     expect(advanced.code).toBe(0)
-    expect(advanced.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect(advanced.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
     const test = await f.phase(1)
     const added = await addTask(f.dir, test, "the person's hand-added task")
     expect(added.type === "added" && added.id).toBe("T-004")

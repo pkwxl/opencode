@@ -366,6 +366,7 @@ Two corpus facts have no numbered file to carry them, so they get their own rows
 | 0309-retire-push-lane-worker-entry | Removes the unused core worker entry and its unused CLI fixture after the push lane command retired. Existing stream-recovery report coverage stays. | active-authority | P10, P21 | src/loop.ts, src/loop-task.ts, auto/src/index.ts | (open — ships with the next release) |
 | 0310-retire-push-task-append | Removes the push task-append session and prompt. Legacy append records retain a recovery stop. The daemon fixture exercises task-add and close-audit through round close. | active-authority | P8, P10, P21 | src/plan.ts, src/loop-phase.ts, src/task-add.ts, ../auto-server/test/executor-e2e.test.ts | (open — ships with the next release) |
 | 0311-retire-push-transfer | Removes the legacy transfer entry and its dynamic push-loop dependency. Transfer coverage follows the deterministic entry and the distill grant. | active-authority | P10, P21 | src/transfer.ts, test/transfer.test.ts | (open — ships with the next release) |
+| 0312-retire-push-handover | Removes push handover dispatch. Executor distill serves taskless phases, and transfer recovers interrupted handover records, applies gates and seals, and commits the transition. | active-authority | P8, P10, P21 | src/loop-phase.ts, src/executor-steps.ts, src/transfer.ts, docs/protocol.md | (open — ships with the next release) |
 
 ## Maintaining this index
 

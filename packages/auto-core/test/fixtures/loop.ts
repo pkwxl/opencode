@@ -105,6 +105,11 @@ export function phaseHandover(phaseDir: string): string {
   ].join("\n")
 }
 
+export async function landPhaseHandover(fixture: LoopFixture, phase: PhaseUnit): Promise<void> {
+  await Bun.write(join(fixture.dir, phase.dir, "handover.md"), phaseHandover(phase.dir))
+  await fixture.commit("distill phase handover")
+}
+
 export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => {
   // The blockage diagnosis session (plans/0082 §4) never writes through
   // this script's planning branches: its prompt names the phase's task index

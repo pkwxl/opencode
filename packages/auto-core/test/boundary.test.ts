@@ -1,24 +1,16 @@
-// run's boundary stop (plans/0101 D1): the run ends at the current phase's
-// clean end — before the handover distillation, the phase close, the round
-// close and the next formulation, all of which are transfer's (D2) — and
-// `--boundary flow` restores today's continuous crossing. Pinned over the
-// phase loop on the native fake agent: the stop's lines and exit code, the
-// state it leaves (no handover document, the phase unit open), the crossing
-// under flow, the knowledge phase's boundary (its extraction retired with
-// plans/0283 — no session runs, the distillation after it is transfer's),
-// and the complete-route
-// pointer a plain run meets on a round already closed. The stop lands only
-// on the handover route — runTaskLoop returns 0 past the lane landings, so
-// the route itself carries D1's clean-end guarantee; the transfer suite
-// pins the mid-phase half (the boundary fires once per phase, never between
-// a phase's own tasks).
+// The legacy loop stops at the phase boundary. Executor distill and transfer
+// handle the handover and transition.
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { completePhase, establishRound, readPhases } from "../src/phases"
-import { appendOneTask, artifactTurns, loopFixture, type LoopFixture } from "./fixtures/loop"
+import { appendOneTask, artifactTurns, loopFixture, phaseHandover, type LoopFixture } from "./fixtures/loop"
 import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
 import { EOF_MARK } from "../src/doccheck"
+import { CONFIG_FILE } from "../src/config"
+import { openExecutorCoordinator } from "../src/executor-coordinator"
+import { transferDeterministic } from "../src/transfer"
+import { captureRun } from "./fixtures/capture"
 import { saveProgress } from "../src/resume"
 
 const made: LoopFixture[] = []
@@ -83,19 +75,21 @@ describe("run's boundary stop (plans/0101 D1)", () => {
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
   })
 
-  test("--boundary flow crosses as today: the handover, the next phase's planning and execution, the completed round", async () => {
+  test("flow stops at the boundary without a handover session or next phase planning", async () => {
     const f = await fixture("mt")
-    const crossed = await f.run({ boundary: "flow" })
-    expect(crossed.code).toBe(0)
-    expect(crossed.lines.some((line) => line.includes("phase handover: P01-implement Implementation → P02-test Test"))).toBe(true)
-    expect(crossed.lines.some((line) => line.includes("✓ all phases complete"))).toBe(true)
-    expect(has(f, "docs/R-01/P01-implement/done.md")).toBe(true)
-    expect(has(f, "docs/R-01/P02-test/done.md")).toBe(true)
+    const stopped = await f.run({ boundary: "flow" })
+    expect(stopped.code).toBe(0)
+    expect(stopped.lines.some((line) => line.includes('an executor "distill" grant'))).toBe(true)
+    expect(has(f, "docs/R-01/P01-implement/handover.md")).toBe(false)
+    expect(has(f, "docs/R-01/P01-implement/done.md")).toBe(false)
+    expect(has(f, "docs/R-01/P02-test/tasks.md")).toBe(false)
+    expect(f.agent.prompts.some(({ text }) => text.includes("You are the handover distiller"))).toBe(false)
   })
 
   test("a plain run on a closed round points at transfer's close (today's complete lines kept)", async () => {
     const f = await fixture("mt")
-    expect((await f.run({ boundary: "flow" })).code).toBe(0)
+    for (const phase of (await readPhases(f.dir, 1))!.phases) expect(await completePhase(f.dir, phase, [])).toEqual([])
+    await f.commit("phases complete")
     const again = await f.run()
     expect(again.code).toBe(0)
     expect(again.lines.some((line) => line.includes("✓ all phases complete"))).toBe(true)
@@ -139,5 +133,26 @@ describe("run's boundary stop (plans/0101 D1)", () => {
     expect(has(f, "docs/R-01/P03-knowledge/todo.md")).toBe(true)
     expect(stopped.lines.some((line) => line.includes("✓ phase boundary: P03-knowledge Knowledge distillation complete"))).toBe(true)
     expect(stopped.lines.some((line) => line.includes("closes the phase and the round"))).toBe(true)
+
+    await Bun.write(join(f.dir, CONFIG_FILE), JSON.stringify({ phases: "mtk", subtask: "off" }))
+    await f.commit("executor configuration")
+    const waiting = await captureRun(() => transferDeterministic(f.dir, { phases: "mtk" }))
+    expect(waiting.code).toBe(2)
+    expect(waiting.lines.join("\n")).toContain('claim with kind "distill"')
+    expect(has(f, "docs/R-01/P03-knowledge/tasks.md")).toBe(false)
+    const coordinator = await openExecutorCoordinator(f.dir)
+    try {
+      const holder = { token: "distiller", channel: "solo" }
+      const grant = await coordinator.claim(holder)
+      if (grant.kind !== "distill") throw new Error(JSON.stringify(grant))
+      expect(grant.unit).toBe("R-01.P03")
+      await Bun.write(join(f.dir, grant.handover), phaseHandover("docs/R-01/P03-knowledge"))
+      expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
+    } finally {
+      await coordinator.close()
+    }
+    const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "mtk" }))
+    expect(advanced.lines.join("\n")).toContain("close listing")
+    expect(has(f, "docs/R-01/P03-knowledge/done.md")).toBe(true)
   })
 })

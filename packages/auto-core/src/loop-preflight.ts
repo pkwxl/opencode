@@ -819,9 +819,8 @@ export async function preflight(
 // knowledge extraction retired, plans/0283 — its route goes straight to the
 // handover).
 // Run-level: the bypass one-offs in every mode (confirm turns, context-base
-// rebuilds, the dryrun precheck), the phased loop's planning and handover
-// sessions, and m mode's planning: the formulation task's session routes
-// the planning word (plans/0217 D1), so the phase-plan need — phased and m
+// rebuilds, the dryrun precheck) and the formulation task's session, which
+// routes the planning word (plans/0217 D1), so the phase-plan need — phased and m
 // mode alike — is the dispatched planning session's own coverage;
 // `implement-scan` has dispatched nothing since 0095 retired the planning
 // session.
@@ -832,8 +831,7 @@ function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[], phase
   const entries = resolvePhases(phases, types) ?? [phaseType(REQUIRED_TYPE)!]
   const phased = phases !== "m"
   const needs: DispatchNeed[] = [{ role: "bypass" }]
-  if (phased) needs.push({ role: "phase-plan" }, { role: "phase-handover" })
-  else if (opts.planInput !== undefined) needs.push({ role: "phase-plan" })
+  if (phased || opts.planInput !== undefined) needs.push({ role: "phase-plan" })
   for (const entry of entries) {
     if (!entry.hasTasks) {
       // A task-less phase (the k type) runs no session since plans/0283

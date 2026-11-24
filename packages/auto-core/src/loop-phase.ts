@@ -1,368 +1,39 @@
-// Phase loop (--phases): the phase handover (handoverPhase and its step wrapper
-// handoverWithStep) and the phase routing loop (runPhaseLoop), runAll's former
-// closures as top-level functions with their captures made explicit as LoopCtx
-// (defined in ./loop-task). Phase planning lives in ./loop-plan.
-// Since plans/0101 D1/D2 the loop also owns run's boundary stop and shapes
-// transfer's advance (stopBefore "formulate") — the two command grammars that
-// bracket the phase boundaries.
-// Split out of src/loop.ts (plans/0024-module-split-plan.md S16, pure move). Does not depend on loop.ts.
-import { mkdir, rm } from "node:fs/promises"
-import { dirname, join } from "node:path"
-import { requireArtifact } from "./artifact"
-import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
-import { acceptanceMark, ACCEPTED_MARK, constraintPitfallResolves, HANDOVER_SECTIONS, validHandover } from "./document/roles"
-import { ANALYSIS_DOC, reportForUserPath, roundDirName } from "./docpaths"
-import { hibernatePause } from "./hibernate"
+// Legacy phase routing for the remaining push planning and task loops.
+import { join } from "node:path"
+import { roundCompleteLines, roundResolveLines } from "./conclusion"
+import { reportForUserPath, roundDirName } from "./docpaths"
 import { awaitingFormulation } from "./formulate"
 import { closeAuditStopLines, ensureCloseAudit, updateAssuranceBaselines } from "./close-audit"
-import { banner, dirtyStopLines, log, unreadableStopLines } from "./log"
-import { sessionOpts } from "./opts"
+import { banner, log } from "./log"
 import { planWithStep } from "./loop-plan"
 import { runTaskLoop, type LoopCtx } from "./loop-task"
 import {
-  completePhase,
-  phaseAcceptanceDoc,
   phaseFlowBlockedLine,
   phaseGateProblems,
   phaseGates,
-  phaseHandoverDoc,
   phaseKey,
   phaseState,
   phaseTitle,
-  phaseVerdictDoc,
   roundIsOpen,
   routePhase,
   type PhaseUnit,
 } from "./phases"
-import { appendInputRetiredLine, emptyIndexNotice, executeNotice, installApprovedBrief, logGateStop, openRoundEmptyLines, openRoundWrapLines, phaseBoundaryLines, retiredAppendResumeLine, roundCompleteNext } from "./plan"
+import { appendInputRetiredLine, emptyIndexNotice, executeNotice, logGateStop, openRoundEmptyLines, openRoundWrapLines, phaseBoundaryLines, retiredAppendResumeLine, roundCompleteNext } from "./plan"
 import { readPlanInput } from "./plan-input"
-import { openBlockage } from "./blockage-diagnose"
-import { clampLine, clampedItemsOf } from "./charter-clamp"
-import { ensureRegressionGreen, regressionHoldLines } from "./regression"
-import { renderPhaseHandover } from "./prompt"
-import { promptFacts } from "./prompt-facts"
-import { emitStatus } from "./run-status"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { closeStep, openStep } from "./resume"
-import { autoSwitches } from "./switches"
-import { shellProfile } from "./shell"
+import { shellProfile, surfaceOf } from "./shell"
 import { statsPhase } from "./stats"
-import { stepPause } from "./step"
 import { loadPlan, resetPlanning } from "./tasks"
-import { wallBoundary } from "./wall"
 
 // Keep the historical loop-phase exports for callers of these shared boundary actions.
 export { installApprovedBrief, logGateStop } from "./plan"
-
-// phase handover (§F, docs never move): ① the distillation session (the AI's
-// only duty, a one-off bypass) produces the permanent handover document
-// docs/R-NN/P<nn>-<type>/handover.md inside the phase directory (settled, it
-// never moves) → ② phase completion (completePhase: todo.md → done.md + index
-// tick; the phase directory is the archive, no snapshot, no reset, M3.4) →
-// ③ the unified commit (Auto-Stage: phase-transition). Each step is
-// idempotent: after an interruption the phase is still incomplete and its
-// tasks all done, the route is handover as before, and with the handover
-// document already complete the distillation is skipped and ②③ are made up
-// directly (C.2). Returns 0 = handover complete; 2 = the distillation
-// session implicitly blocked, or a gate holds (the held gate surfaces as
-// state, plans/0283 — the repair-append budget is retired).
-async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
-  const { directory, opts, server: serverHandle } = ctx
-  const state = await phaseState(directory)
-  const following = state.phases[state.phases.findIndex((unit) => unit.id === phase.id) + 1]
-  const next = following ? phaseTitle(following) : undefined
-  const target = next ?? "flow complete"
-  banner(`phase handover: ${phaseTitle(phase)} → ${target}`)
-  // the phase directory is created at the round's start; the handover
-  // document is not on the protect list, no allowWrite needed.
-  const handover = phaseHandoverDoc(phase)
-  const handoverFile = join(directory, handover)
-  await mkdir(dirname(handoverFile), { recursive: true })
-  // Phase gates (plans/0049 G7). With the acceptance gate on, the distillation
-  // also drafts acceptance.md for the human to sign; the draft must never carry
-  // an `Accepted:` line, which only a human writes.
-  const gates = phaseGates(phase, opts.acceptanceGate)
-  const acceptance = gates.includes("acceptance") ? phaseAcceptanceDoc(phase) : undefined
-  const acceptanceFile = acceptance ? join(directory, acceptance) : undefined
-  // fresh = the output of this distillation session: it must not be signed. An
-  // existing draft on the idempotent skip path may carry the human's sign-off.
-  const draftProblem = async (fresh: boolean): Promise<string | undefined> => {
-    if (!acceptance) return undefined
-    const text = await Bun.file(acceptanceFile!).text().catch(() => undefined)
-    if (text === undefined) return `${acceptance} is missing`
-    if (fresh && acceptanceMark(text).present) return `${acceptance} carries an \`Accepted:\` line; only the human reviewer writes it — remove it`
-    if (!text.split("\n").some((line) => line.trim() && !/^#{1,6}\s/.test(line.trim()))) return `${acceptance} has no content`
-    return undefined
-  }
-  // idempotent distillation skip + ③ make-up commit
-  // (plans/0021-commit-boundary-design.md P4): with the handover document
-  // already complete (the four sections validated by validHandover) the
-  // distillation session is not reopened — a scene where the last
-  // interruption landed inside the "distillation produced, driver not closed
-  // out" interval resumes the snapshot/completion rename directly; if the
-  // document is still on the uncommitted list, the make-up commit runs first
-  // (an artifact counts as done only when on disk and committed). Partly
-  // written (sections incomplete) goes through distillation as usual: reset
-  // clears the file to start over, and the step resume point (openStep) can
-  // still reuse the original session to continue writing.
-  const distillTask = { id: "PLAN", title: `phase handover distillation (${phaseTitle(phase)})`, status: "in_progress" as const, attempts: 0, body: "" }
-  const distillCommit = { stage: "phase-handover", subject: `PLAN handover ${phaseTitle(phase)}` }
-  // The handover collect's mechanical gate (plans/0082 §10 D13): the
-  // OPEN-status lint (an AUTO-RESOLVE marker under "Constraints and
-  // pitfalls" is status laundering — the item is an open decision, never a
-  // constraint). The write-time charter check (D14a) is retired with the
-  // charter verifier (plans/0283): the handover collect is deterministic —
-  // no verifier session inside it.
-  let collectIssue: string | undefined
-  const lintHandover = constraintPitfallResolves
-  if (validHandover(await Bun.file(handoverFile).text().catch(() => "")) && !(await draftProblem(false))) {
-    const skipText = await Bun.file(handoverFile).text().catch(() => "")
-    const skipLint = validHandover(skipText) && !(await draftProblem(false)) ? lintHandover(skipText) : undefined
-    collectIssue = skipLint ?? undefined
-    if (collectIssue !== undefined) {
-      // A complete-looking handover that fails the write-time check (D14a):
-      // the phase stays on its handover route and the blockage machinery
-      // owns the person's decision instead of a raw stop.
-      const result = await openBlockage(
-        {
-          directory,
-          gate: "handover-verify",
-          step: `handover ${phaseKey(phase).id}`,
-          verdict: `INCONSISTENT — ${collectIssue}`,
-          evidence: collectIssue,
-          blockMap: [{ block: "handover", source: handover }],
-          auditTail: [],
-          intro: `⏸ the handover verification found ${handover} inconsistent with the intent charter: ${collectIssue}`,
-          next: "  rewrite the located file, or amend the intent — the driver never rewrites your words",
-        },
-        { server: serverHandle, opts: sessionOpts(ctx, { site: "diagnosis" }), ...(ctx.repl ? { repl: ctx.repl } : {}) },
-      )
-      for (const line of result.lines) log(line)
-      return 2
-    }
-    const pending = await ctx.git.commitPending(directory, opts, distillTask, distillCommit, acceptance ? [handover, acceptance] : [handover])
-    if (pending !== "clean") {
-      if (!pending.ok) {
-        log(`⏸ handover document make-up commit failed: ${pending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}, handle it manually and re-run`)
-        return 2
-      }
-      log(`✓ handover document produced but not yet committed; make-up commit done: ${handover}`)
-    }
-    log(`↻ handover document ${handover} is complete; skipping the distillation session, going straight to archiving`)
-  } else {
-    log(`▶ starting the handover distillation session to produce ${handover}${acceptance ? ` and the acceptance draft ${acceptance}` : ""}`)
-    // The phase's closed tasks are listed for the distillation as not delivered (plans/0053 D16); the route already
-    // validated the index, so a load failure only drops the list (an index-less phase has no tasks).
-    const plan = await loadPlan(directory, phase).catch(() => undefined)
-    const closedTasks = plan?.tasks.flatMap((task) => (task.closed === undefined ? [] : [{ id: task.id, title: task.title, reason: task.closed }]))
-    let draftIssue: string | undefined
-    const distilled = await requireArtifact(
-      serverHandle,
-      distillTask,
-      renderPhaseHandover(promptFacts(sessionOpts(ctx, { site: "handover" })), { phase: phase.entry, handover, next, acceptance, closedTasks }),
-      sessionOpts(ctx, { site: "handover" }),
-      {
-        kind: "handover distillation",
-        step: { step: "phase-handover", unit: phaseKey(phase).id },
-        // Independent hidden task unit: entry clean gate + SHA baseline + close-out
-        // check (plans/0021-commit-boundary-design.md; a partly written handover is
-        // cleared by reset and rewritten).
-        unitStart: true,
-        artifact: `a valid handover document ${handover} (all four mandatory sections)${acceptance ? ` and an acceptance draft ${acceptance}` : ""}`,
-        detail: acceptance ? "missing, sections incomplete, or the acceptance draft missing, empty or signed" : "missing or sections incomplete",
-        get requirement() {
-          return (
-            `write the handover document to ${handover} with four sections whose headings are exactly ` +
-            `${HANDOVER_SECTIONS.map((section) => `\`${section}\``).join(" / ")} (driver protocol strings, write them verbatim).` +
-            (acceptance ? ` Also write the acceptance draft ${acceptance} for the human reviewer, without any \`Accepted:\` line.` : "") +
-            (draftIssue ? ` Problem last time: ${draftIssue}.` : "") +
-            (collectIssue ? ` Problem last time: ${collectIssue}.` : "")
-          )
-        },
-        commit: distillCommit,
-        // The acceptance draft is not reset: on a rejected phase it holds the
-        // reviewer's notes, which the new draft must keep.
-        reset: () => rm(handoverFile, { force: true }),
-        collect: async () => {
-          const text = await Bun.file(handoverFile).text().catch(() => "")
-          draftIssue = await draftProblem(true)
-          const lint = validHandover(text) && !draftIssue ? lintHandover(text) : undefined
-          collectIssue = lint
-          return (validHandover(text) && !draftIssue && collectIssue === undefined) || undefined
-        },
-      },
-    )
-    if (distilled !== true) {
-      if (distilled.type === "dirty" || distilled.type === "unreadable") {
-        // The unreadable arm (plans/0236 D4) teaches investigation, never
-        // commit/clean.
-        for (const line of distilled.type === "unreadable"
-          ? unreadableStopLines("the repository state cannot be read before starting the handover distillation session", distilled.files)
-          : dirtyStopLines("worktree not clean before starting the handover distillation session", distilled.files)) log(line)
-      } else if (collectIssue !== undefined) {
-        // Fail-closed after one re-distill (D14a): Part I's remediation owns
-        // the decision instead of a raw blockage.
-        log(`⏸ handover distillation failed closed on the charter check after one re-distill`)
-        const result = await openBlockage(
-          {
-            directory,
-            gate: "handover-verify",
-            step: `handover ${phaseKey(phase).id}`,
-            verdict: `INCONSISTENT — ${collectIssue}`,
-            evidence: collectIssue,
-            blockMap: [{ block: "handover", source: handover }],
-            auditTail: [],
-            intro: `⏸ the handover verification found ${handover} inconsistent with the intent charter after one re-distill: ${collectIssue}`,
-            next: "  rewrite the located file, or amend the intent — the driver never rewrites your words",
-          },
-          { server: serverHandle, opts: sessionOpts(ctx, { site: "diagnosis" }), ...(ctx.repl ? { repl: ctx.repl } : {}) },
-        )
-        for (const line of result.lines) log(line)
-      } else {
-        log(`⏸ handover distillation session blocked (implicit block, investigate and re-run):\n${distilled.question}`)
-      }
-      return 2
-    }
-  }
-  // close-out: the distillation session (this step's only AI part) has
-  // produced a valid handover document and committed it, so the driver-side
-  // resume point is deleted. The completion rename and commit after it are
-  // idempotent driver bookkeeping; a re-run after an interruption completes
-  // them through the handover-complete skip above, no longer relying on
-  // session recovery.
-  await closeStep(directory, "phase-handover", phaseKey(phase).id)
-  // The regression hold (plans/0098 D5): between the distillation commit and
-  // the completion rename — the one window the full gate may still block.
-  // Covered lanes pass through (the background slot's receipts), a stale one
-  // runs now in the tree, a red holds the phase: the gate stop names the
-  // receipts, the suspects and the person's ways (the held gate surfaces as
-  // state, plans/0283 — the repair-append budget is retired).
-  {
-    const plan = await loadPlan(directory, phase).catch(() => undefined)
-    const hold = await ensureRegressionGreen(ctx, opts, phase, plan?.tasks.map((task) => ({ id: task.id, title: task.title })) ?? [])
-    if (hold.kind === "corrupted") {
-      log(`⏸ a close-time regression lane ran a git state command and moved HEAD (${hold.moved.join("; ")}); no auto-undo ran — the baseline is corrupted. Investigate the repository state manually and re-run.`)
-      return 2
-    }
-    if (hold.kind === "held") {
-      // The repair-append budget is retired (plans/0283): the held gate
-      // surfaces as state — the gate stop below names the receipts, the
-      // suspects and the person's ways.
-      for (const line of regressionHoldLines(directory, phase, hold.lanes)) log(line)
-      return 2
-    }
-  }
-  // The phase gates, read-only, AHEAD of the wall (plans/0189 D4 over
-  // 0132 D2, 0165-076): on a sealing phase that also carries a gate, the
-  // person's acceptance holds BEFORE the seal — a gate hold leaves nothing
-  // committed, nothing frozen and the door standing, so the rework a
-  // rejection asks for stays lawful instead of colliding with the
-  // sealed-channel invariant. completePhase's own re-check below stays the
-  // single choke point (its problems run the repair round and the gate
-  // stop); this pre-check only keeps the seal off a held phase.
-  if ((await phaseGateProblems(directory, phase, gates)).length === 0) {
-    // The sealed reference wall (plans/0132 D2): the wall's one boundary
-    // entry — post-wall the closed predicate re-derived (a reopen, a
-    // covering entry, the sealed channel asserted, the admission's
-    // hard-identifier class), pre-wall under the person's advance path
-    // (stopBefore "formulate" — transfer) with the seal threshold met, the
-    // three-step close itself (the admission scan → the wall commit; the
-    // transition commit below is step 3). A block holds the phase on its
-    // handover route exactly like a gate: nothing is renamed, the next
-    // advance re-derives.
-    const wallLines = await wallBoundary(ctx, phase)
-    if (wallLines.length) {
-      for (const line of wallLines) log(line)
-      return 2
-    }
-  }
-  // The survey release's other half (plans/0081 D15.2), ordered AHEAD of the
-  // completion rename (plans/0236 D6, 0165-072): the person's `Clarified:
-  // yes` approved the proposed `## Project brief` section with the forks —
-  // the driver installs it before the phase is renamed done, so every kill
-  // point re-derives. The old order (rename → install) left one window no
-  // path covered: a kill between them reads the phase done, routing moves
-  // past the survey and the next phase's formulation plans over the old
-  // brief — the person's approval silently dropped. Ahead of the rename the
-  // phase still reads pending and the re-run redoes the whole handover (the
-  // install idempotent: an equal brief writes nothing, 0209 D2); after it
-  // the brief is already committed under its own pathspec (0207 D1) and the
-  // rename, transition commit and formulation follow as before. A
-  // completePhase re-check failure after the install (the narrow race the
-  // pre-check above just cleared) holds the phase on its repair/stop path
-  // with the approved brief installed — the approval act was real (the
-  // Clarified mark the install itself re-checks), and the repair round
-  // re-derives the handover over it.
-  if (gates.includes("human")) await installApprovedBrief(ctx, phase)
-  // The completion rename goes through completePhase's own gate re-check
-  // (the round-report self-heal that once ran here retired with the
-  // report's mandate, plans/0109 D3).
-  const gated = await completePhase(directory, phase, gates)
-  if (gated.length) {
-    // The repair-append budget is retired (plans/0283): a held gate surfaces
-    // as state — the gate stop names the problems and the person's ways (the
-    // executor protocol's fix grant repairs verify FAILs on the pull path).
-    await logGateStop(directory, phase, gated, acceptance)
-    return 2
-  }
-  // The phase's unit transition (P2b, src/run-status.ts): completePhase's
-  // rename (todo.md → done.md inside the phase directory) is the fact; this
-  // is the push of the same fact, keyed by the qualified phase id the stats
-  // buckets and the fields use. A phase being handed over reads as having
-  // been in_progress (the phase index records no runtime status).
-  emitStatus({ type: "unit-transition", unit: phaseKey(phase).id, level: "phase", from: "in_progress", to: "done" })
-  // the handover commit is the phase unit's close-out booking (completion
-  // rename + index tick); commit failure → exit 2 blocked for human
-  // attention: the phase is already renamed done, a re-run routes to the
-  // next phase, and the leftover uncommitted changes continue once the human
-  // has handled them (plans/0021-commit-boundary-design.md P3). The run's
-  // git seam carries the strategy: on the no-commit double the ok answer
-  // keeps the failure branch dead.
-  const settled = await ctx.git.commitTree(directory, { id: "PLAN", title: `phase handover (${phaseTitle(phase)})` }, {
-    stage: "phase-transition",
-    subject: `PLAN transition ${phaseTitle(phase)} → ${target}`,
-  })
-  if (!settled.ok) {
-    log(
-      `⏸ phase handover commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
-        `The completion changes are kept in the worktree (the phase is already marked done); commit manually and re-run`,
-    )
-    return 2
-  }
-  // the phase boundary's OPEN questions (plans/0082 §10 D12): one line per
-  // charter-clamped default of this phase — the person's decision inbox
-  // beside the proxy-answer summary.
-  for (const item of await clampedItemsOf(directory, "phase", phaseKey(phase).id)) log(clampLine(item, item.clamp ?? ""))
-  // the phase proxy-answer summary (plans/0020-auto-resolve-design.md §H-③,
-  // H6): pinned above the ■ phase-close line.
-  for (const line of await phaseResolveLines(directory, phase)) log(line)
-  // the phase-close line (plans/0019 §F, T-006): after commitTree, before
-  // return 0 — the handover commit's duration still lands in this phase's
-  // bucket (readings extrapolated live, the currently open segment included).
-  const closing = await phaseCloseLines(directory, phase)
-  if (closing) for (const line of closing) log(line)
-  return 0
-}
 
 // Whether run's boundary-stop shape is in force (plans/0101 D1): plain run
 // with --boundary not restoring the flow. A stop condition in force (plan's
 // "execute", transfer's "formulate") runs its own grammar and never this
 // stop; the lane worker never routes phases.
 const boundaryHolds = (opts: LoopCtx["opts"]): boolean => opts.stopBefore === undefined && opts.boundary !== "flow" && opts.lane === undefined
-
-// The boundary stop's lines (plans/0101 D1): the phase's planned work is done
-// at a clean end — every unit done, lanes and doc lanes landed (the route
-// itself guarantees it: runTaskLoop returns 0 only past the landings) — and
-// everything after (the handover distillation, the phase close, the round
-// close, the next formulation) is transfer's. The stop names the command,
-// and names the round close too when the phase just finished was the round's
-// last — the person knows the next transfer closes the round and stops with
-// its report. The lines compose in plan's phaseBoundaryLines (plans/0105 D3)
-// so the person-proxy brief renders the same bytes; this wrapper keeps the
-// loop's ctx-shaped call sites.
-async function boundaryStopLines(ctx: LoopCtx, phase: PhaseUnit): Promise<string[]> {
-  return await phaseBoundaryLines(ctx.directory, phase)
-}
 
 // Run's tail since plans/0101 D1: the run ends at the current phase's clean
 // end, before the handover distillation. The human gate is checked first,
@@ -381,62 +52,7 @@ async function boundaryStop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
       return 2
     }
   }
-  for (const line of await boundaryStopLines(ctx, phase)) log(line)
-  return 0
-}
-
-// the phase loop (D.1; the no-phase mode runs this loop too, plans/0047 L2):
-// derive the current phase → with the task index listing no task, open a
-// planning session → the main loop executes → with this phase's tasks all
-// done, hand over → the phase completion rename derives the next phase; all
-// phases complete exits 0. Environment errors such as a missing or invalid
-// phase/task index exit 1 (§H).
-// no-phase mode (ctx.manual, phases = "m"): the single phase P01-implement is
-// manual — tasks are written by the human, a planning session opens only when
-// a planning input was given or the planning step is not closed out
-// (planPhase, plans/0053 D12), there is no handover, the phase stays
-// incomplete (re-running after appending tasks just continues), and with all
-// tasks done the round-complete line prints and it exits 0.
-// step pause (phase boundary, OPENCODE_AUTO_STEP ≥ phase): a hard pause after
-// the handover (completion+commit) finishes and before the next routing pass
-// — after the last phase's pause, Enter means "all phases complete" and it
-// exits.
-// plan runs the same loop under its stop condition (opts.stopBefore,
-// plans/0053 D6): it goes through handovers and knowledge phases as run does,
-// and stops after a successful planning step or where an execute route would
-// start, printing what to review; the complete route adds the next step (D8).
-// transfer (plans/0101 D2) runs it under stopBefore "formulate": it advances
-// whatever boundaries the state holds (the handover, the phase close, the
-// round close at the complete route) and stops at the construction's review
-// seam inside the planning step — never dispatching a task session.
-// run's boundary stop (plans/0101 D1): plain run (no stop condition, boundary
-// not "flow") ends at each clean phase end — before the handover — naming
-// transfer; mid-phase autonomy and interruption recovery keep today's shapes
-// (an interrupted handover is finished by the re-entry below, then stops).
-async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
-  const { directory, repl } = ctx
-  const code = await handoverPhase(ctx, phase)
-  if (code !== 0) return code
-  await stepPause("phase", `phase ${phaseTitle(phase)} handover`, { interactive: repl, dir: directory })
-  // /exit checkpoint (phase boundary): the request flag lives in the run's
-  // control service on ctx, as the router state beside it does.
-  ctx.control.maybeExit("phase", `phase ${phaseTitle(phase)} handover`)
-  // Hibernate window (phase boundary, OPENCODE_AUTO_HIBERNATE): a safe spot to
-  // check after the handover (snapshot+completion+commit) completes; sleep
-  // until wake inside the window before entering the next phase
-  // (plans/0027-hibernate-design.md).
-  await hibernatePause(`phase ${phaseTitle(phase)} handover boundary`, { dir: directory, control: ctx.control })
-  // /exit may have cut the window short (plans/0182 D1): the probe after the
-  // sleep takes it, the same checkpoint the boundary runs before it.
-  ctx.control.maybeExit("phase", `phase ${phaseTitle(phase)} handover`)
-  // failback retry (phase boundary): every scope resets at the phase
-  // boundary; /failback requests are consumed at the same point. Registry
-  // routing (plans/0055 §6.4): every scope covers the phase boundary, so
-  // the model down marks clear here (key state never clears at a boundary,
-  // plans/0144 D1; /failback below clears it wholesale and rewinds the
-  // rings).
-  ctx.router.clearDownMarks("phase", autoSwitches().modelFailbackScope)
-  ctx.router.consumeFailback()
+  for (const line of await phaseBoundaryLines(ctx.directory, phase)) log(line)
   return 0
 }
 
@@ -452,7 +68,7 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
 }
 
 async function phaseLoop(ctx: LoopCtx): Promise<number> {
-  const { directory, opts, server: serverHandle } = ctx
+  const { directory, opts } = ctx
   for (;;) {
     const route = await routePhase(directory, { loadPlan, bin: shellProfile().bin, phases: ctx.phases })
     if (route.type === "blocked") {
@@ -521,67 +137,23 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
     // blocked has already returned and complete is about to exit, neither
     // needs the switch.
     await statsPhase(directory, phaseKey(route.phase).id)
-    // Session resume takes precedence over file-derived routing
-    // (plans/0018-session-resume-precedence-design.md): an unclosed phase-step
-    // resume point on the driver side (the last run's planning or
-    // handover session was interrupted before the driver closed it out) →
-    // re-enter that step and reuse the interrupted session, even if the
-    // task/phase index has already moved file routing on. Task units and
-    // handover docs are written by the AI (or patched by the driver after the
-    // interruption) and cannot prove the session closed out; only closeStep
-    // deleting the resume point does. It applies only when the step's phase is
-    // the current routed phase and is not done: another phase (manual
-    // rollback, stale record) lets file routing win, and a done phase clears
-    // the stale record. The point is keyed by the qualified phase id R-NN.P<nn>
-    // (a type may repeat within a round); a record without one (pre-M3.6
-    // `letter`) matches no phase and file routing wins.
+    // Keep a retired handover record available for deterministic transfer.
     const open = await openStep(directory)
     if (open?.step === "phase-append") {
       log(retiredAppendResumeLine(open.unit))
       return 2
     }
-    if (open) {
+    if (open?.step === "phase-plan") {
       const state = await phaseState(directory)
       const owner = state.phases.find((unit) => phaseKey(unit).id === open.unit)
-      if (owner && state.done.has(owner.id)) {
-        await closeStep(directory, open.step, open.unit)
-      } else if (open.step === "phase-plan") {
-        // The retired planning step (plans/0095 D4): a record a release
-        // before the formulation task left. Its session is superseded — the
-        // phase plans again as its first task unit — so the record closes
-        // and the partial planning output clears (resetPlanning, kept as
-        // this legacy migration helper); file routing then finds the empty
-        // index and the formulation step takes over.
+      await closeStep(directory, open.step, open.unit)
+      if (!owner || !state.done.has(owner.id)) {
         log(`↻ unclosed planning resume point (${open.unit}) predates the formulation task (plans/0095); closing it and clearing its partial output — the phase plans again as its first task unit`)
-        await closeStep(directory, open.step, open.unit)
         if (owner) await resetPlanning(directory, owner)
-      } else if (open.unit === phaseKey(route.phase).id) {
-        log(`↻ session resume point takes precedence: the phase handover session(${phaseTitle(route.phase)}) was not closed out; re-entering that step to continue`)
-        // handover re-entry only when file routing is handover too (this
-        // phase's tasks all done): otherwise (the anomalous state of
-        // unfinished tasks remaining) the handover would mark a phase with
-        // unfinished tasks complete, so file routing wins and a warning
-        // prints.
-        if (route.type === "handover") {
-          const code = await handoverWithStep(ctx, route.phase)
-          if (code !== 0) return code
-          // The boundary stop (plans/0101 D1): the re-entry finished the
-          // interrupted handover — interruption recovery keeps today's
-          // shape — and the phase reached its clean end; the loop stops
-          // here instead of crossing into the next phase.
-          if (boundaryHolds(opts)) return await boundaryStop(ctx, route.phase)
-          continue
-        }
-        log(
-          `⚠ unclosed handover resume point (${open.unit}) is inconsistent with the current route (${route.type})` +
-            `(unfinished tasks remain?); continuing with the file-derived route, not re-entering the handover to avoid losing unfinished tasks`,
-        )
-      } else {
-        log(
-          `⚠ unclosed phase-step resume point (${open.step} ${open.unit}) is inconsistent with the current route phase (${phaseTitle(route.phase)}); ` +
-            `continuing with the file-derived route (ignore if this was a manual rollback; otherwise check .auto/progress.json)`,
-        )
       }
+    } else if (open?.step === "phase-handover") {
+      log(`⏸ interrupted handover ${open.unit} needs review. Recover it with ${surfaceOf().transfer(directory)}.`)
+      return 2
     }
     const openRound = !ctx.manual && (await roundIsOpen(directory))
     if (ctx.input !== undefined && (openRound || (ctx.manual && route.type !== "plan"))) {
@@ -632,33 +204,10 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       return 0
     }
     if (route.type === "plan") {
-      // a k (knowledge distillation) phase claims the whole --extract-knowledge
-      // design (P4): no planning session, no task index written — the plan
-      // route goes straight into the knowledge-extraction bypass session (the
-      // artifact is the type's standard artifact P<nn>-knowledge/kb.md inside
-      // the phase directory; already produced = idempotent skip), then hands
-      // over as usual. Extraction failure only prints a ⚠ warning and does
-      // not pollute the exit code (a successful migration is not polluted in
-      // turn by a document generation failure); when the human writes the task
-      // index in the k phase by hand, the generic execute/handover routes
-      // apply and the extraction hook point does not fire.
-      // the criterion is the registry's hasTasks: false (M3.2); the direct
-      // session is knowledge-extraction-only — among the builtin types only
-      // knowledge has no tasks, custom types always have tasks (M3.6,
-      // src/phases/custom.ts), so the session choice needs no generalization.
+      // The retired knowledge phase has no session work.
       if (!route.phase.entry.hasTasks) {
-        // The knowledge extraction is retired (plans/0283, confirming
-        // 0277's residual): a task-less phase runs no session — its route
-        // goes straight to the boundary stop and the handover (an existing
-        // kb.md from a retired run stays what it is, the committed record
-        // the digest readers read).
         banner(`${phaseTitle(route.phase)} phase: no session (the knowledge extraction retired, plans/0283)`)
-        // The boundary stop (plans/0101 D1) lands after the phase's work
-        // and before its handover: the distillation is transfer's.
-        if (boundaryHolds(opts)) return await boundaryStop(ctx, route.phase)
-        const code = await handoverWithStep(ctx, route.phase)
-        if (code !== 0) return code
-        continue
+        return await boundaryStop(ctx, route.phase)
       }
       banner(`${phaseTitle(route.phase)} phase planning`)
       const code = await planWithStep(ctx, route.phase)
@@ -702,12 +251,6 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       if (code !== 0 || ctx.stopAfterDone) return code
       continue
     }
-    // The boundary stop (plans/0101 D1): the phase's last task unit closed
-    // and the loop routed to its handover — run ends here, everything from
-    // the distillation on is transfer's. Under --boundary flow (or a stop
-    // condition's own grammar) the crossing continues as before.
-    if (boundaryHolds(opts)) return await boundaryStop(ctx, route.phase)
-    const code = await handoverWithStep(ctx, route.phase)
-    if (code !== 0) return code
+    return await boundaryStop(ctx, route.phase)
   }
 }

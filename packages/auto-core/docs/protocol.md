@@ -177,7 +177,12 @@ audit
 - **distill** — the phase-boundary distillation (the handover document).
   Address: the phase's qualified id; `handover` (the one write path) rides
   the grant. Terminal: no verify share follows a distillation; the
-  completion rename and tick are the person's transfer act.
+  completion rename and tick are the person's transfer act. A taskless phase
+  can claim distill without a task index. For a matching interrupted push
+  handover, transfer asks the person to review and resolve uncommitted
+  changes before retrying. On a clean tree, transfer clears the retired
+  session record and either advances using the handover already on disk or
+  directs the person to claim distill.
 - **audit** — the round's standing close-audit adjudication session.
   Address: the standing unit's task id; `findings` and `round` ride the
   grant. The share lands whatever its verdict (the no-fix rule: a FAIL
