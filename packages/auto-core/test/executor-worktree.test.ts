@@ -387,7 +387,7 @@ test("a driver-grammar commit outside the ledger still blocks the walk terminall
     git(first.workspace, "-c", "user.name=Session", "-c", "user.email=session@example.invalid",
       "commit", "-m", "Forged share", "-m", "Auto-Task: T-001", "-m", "Auto-Stage: exec")
     expect(await coordinator.claim(verifier, first.unit, "verify")).toEqual({
-      kind: "blocked", reason: "isolation", detail: "The recorded execute share no longer matches Git history.",
+      kind: "blocked", reason: "isolation", actor: "person", detail: "The recorded execute share no longer matches Git history.",
     })
   } finally {
     await coordinator.close()
@@ -411,7 +411,7 @@ test("a merge the walk cannot read blocks; a prose trailer mention stays the per
     git(first.workspace, "checkout", "-q", lane)
     git(first.workspace, ...personIdentity, "merge", "--no-ff", "-m", "Person merge", "side")
     expect(await coordinator.claim(verifier, first.unit, "verify")).toEqual({
-      kind: "blocked", reason: "isolation", detail: "The recorded execute share no longer matches Git history.",
+      kind: "blocked", reason: "isolation", actor: "person", detail: "The recorded execute share no longer matches Git history.",
     })
     // Undone, a plain commit whose prose merely mentions the driver's mark
     // is the amendment — the trailer block's grammar (0173 D2), not a

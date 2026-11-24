@@ -4,7 +4,10 @@
 // 0260 renewal reads — the site measured null against the heartbeat letter's
 // documented derivation), and (d) the execute grant's landed context riding
 // the re-grant over a unit with a landed share, the key itself absent on a
-// fresh unit (never a null).
+// fresh unit (never a null). 0308 adds the addressing pins: the `actor`
+// field carried on every wait/blocked arm, and `retryAfter` stamped only on
+// the workflow-addressed waits (a person-act wait carrying one taught the
+// reading agent to poll a gate forever — the ruled defect).
 import { expect, test } from "bun:test"
 import { wireStep } from "../src/executor-worker"
 
@@ -39,4 +42,23 @@ test("the verify grant carries no budget — the clock rides deadline (the heart
   expect(wire.baseline).toBe("base")
   expect(wire.head).toBe("head")
   expect(wire.deadline).toBe(1)
+})
+
+test("the addressing pins (plans/0308): actor rides every stop arm, retryAfter stamps only workflow waits", () => {
+  // blocked: the renamed pair (code/remedy) carries the actor beside them.
+  const blocked = wireStep({ kind: "blocked", reason: "isolation", actor: "person", detail: "Inspect the state." })
+  expect(blocked).toEqual({ kind: "blocked", code: "isolation", actor: "person", remedy: "Inspect the state." })
+  // A workflow wait keeps the poll clock; a person-act wait never carries
+  // one (end the session, render the remedy — the field, never prose
+  // inference, keys the regime).
+  expect(wireStep({ kind: "wait", reason: "not-ready", actor: "workflow", detail: "Waiting on T-001." }))
+    .toEqual({ kind: "wait", reason: "not-ready", actor: "workflow", detail: "Waiting on T-001.", retryAfter: 2 })
+  expect(wireStep({ kind: "wait", reason: "not-ready", actor: "person", detail: "Add work or close the round." }))
+    .toEqual({ kind: "wait", reason: "not-ready", actor: "person", detail: "Add work or close the round." })
+  expect(wireStep({ kind: "wait", reason: "lease-held", actor: "executor", detail: "Retry the claim.", deadline: 1 }))
+    .toEqual({ kind: "wait", reason: "lease-held", actor: "executor", detail: "Retry the claim." })
+  // The human gate renders as the wait/gate answer carrying its person
+  // actor — the field generalizing what that arm's detail already taught.
+  expect(wireStep({ kind: "human", gate: "survey-release", document: "docs/R-01/survey.md" }))
+    .toEqual({ kind: "wait", reason: "gate", actor: "person", detail: expect.stringContaining("A person must attend survey-release in docs/R-01/survey.md") })
 })

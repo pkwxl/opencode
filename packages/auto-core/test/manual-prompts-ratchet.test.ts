@@ -354,6 +354,28 @@ describe("manual prompt ratchet", () => {
     expect(coordinator).toContain("The cause is outside this lease's permitted writes — a person must inspect the state; retrying cannot fix it.")
   })
 
+  // plans/0308 (the addressing of stops): the executor prompt's actor
+  // regime, pinned beside the producer's anchors — the vocabulary and the
+  // family-default table one home in executor-steps.ts, the field required
+  // on every menu wait/blocked row in the coordinator. The wire's
+  // retryAfter discipline and the serializer's carry live in auto-server's
+  // executor-wire pins; the doc's both-directions table in the
+  // protocol-doc ratchet.
+  test("the executor prompt teaches the actor regime — every stop names the role whose move clears it (plans/0308)", () => {
+    const executor = text("executor.md")
+    const steps = src("executor-steps.ts")
+    const coordinator = src("executor-coordinator.ts")
+    expect(executor).toContain('Every `wait` and `blocked` answer carries an `actor` field naming the role whose move clears it (plans/0308)')
+    expect(executor).toContain('For `actor: "workflow"`, sleep `retryAfter` seconds (stamped only on these waits)')
+    expect(executor).toContain('For `actor: "executor"`, the move is yours alone')
+    expect(executor).toContain('For `actor: "person"` or `actor: "operator"`, render the remedy and end the session')
+    expect(executor).toContain("the menu's `waiting` rows (parked units naming their blocker) are this class read as data")
+    expect(steps).toContain('export const ACTORS = ["workflow", "executor", "person", "operator"] as const')
+    expect(steps).toContain("export const ACTOR_OF_REASON")
+    expect(coordinator).toContain('| { kind: "wait"; reason: "lease-held" | "in-flight" | "not-ready"; actor: Actor; detail: string }')
+    expect(coordinator).toContain('waiting: { unit: string; title: string; blocker: string }[]')
+  })
+
   // plans/0273 (0264-05's fix): the settled-holder terminal on the executor
   // prompt, pinned beside the producer's anchors — the same-token verify
   // claim over a booked report answering with the additive `settled` step

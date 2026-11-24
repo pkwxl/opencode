@@ -13,6 +13,7 @@ import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { EXECUTOR_PROTOCOL, executorTypeCatalog, SHARE_STAGE_WORDS, WORK_TYPE_IDS } from "../src/executor-coordinator"
+import { ACTOR_OF_REASON, ACTORS, BLOCK_REASONS, WAIT_REASONS } from "../src/executor-steps"
 
 const doc = readFileSync(join(import.meta.dir, "..", "docs", "protocol.md"), "utf8")
 
@@ -44,6 +45,18 @@ describe("protocol-doc ratchet (core, plans/0280)", () => {
 
   test("the doc's stage words equal the coordinator's table", () => {
     expect(block("Share stage words")).toEqual([...SHARE_STAGE_WORDS])
+  })
+
+  // 0308: the stop addressing — the actor vocabulary and the family-default
+  // table ride the same both-directions pin as every other vocabulary, so
+  // no stop reason and no actor lands without its doc line, and no doc
+  // line names a word the code does not carry. The Record's own totality
+  // (compile-enforced) guarantees the table covers every reason.
+  test("the doc's stop addressing equals the code's actors and default table (plans/0308)", () => {
+    const entries = block("Gates and terminal steps")
+    expect(entries.filter((line) => line.startsWith("actor "))).toEqual([...ACTORS].map((actor) => `actor ${actor}`))
+    expect(entries.filter((line) => line.startsWith("wait "))).toEqual([...WAIT_REASONS].map((reason) => `wait ${reason} ${ACTOR_OF_REASON[reason]}`))
+    expect(entries.filter((line) => line.startsWith("blocked "))).toEqual([...BLOCK_REASONS].map((reason) => `blocked ${reason} ${ACTOR_OF_REASON[reason]}`))
   })
 
   test("the tombstone section names the retired pre-0280 version literal", () => {

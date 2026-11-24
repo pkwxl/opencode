@@ -77,7 +77,7 @@ test("the daemon routes authenticated executor requests to one launcher-confined
     // author; a client that ignores the block reads the pre-change menu.
     // 0271's additive half rides the same menu: the pending person items,
     // the empty floor here (nothing pending on a bare project).
-    expect(Object.keys(ready.menu).sort()).toEqual(["claimable", "leases", "pending", "types"])
+    expect(Object.keys(ready.menu).sort()).toEqual(["claimable", "leases", "pending", "types", "waiting"])
     expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "synthesize", "verify"])
     // 0281's wire pin: the synthesize kind joins the claim vocabulary — a
     // targeted ask parses (never the pre-change 400 of an unknown word) and
@@ -85,9 +85,10 @@ test("the daemon routes authenticated executor requests to one launcher-confined
     // stands, so no synthesize step derives); an unknown word still 400s.
     expect(await call("claim", { kind: "synthesize" }, verifier)).toMatchObject({ protocol: 0.1, step: { kind: "wait" } })
     expect((await call("claim", { kind: "telepath" }, verifier, 400)).error).toContain("synthesize")
-    const { types, pending, ...menuBefore } = ready.menu
+    const { types, pending, waiting, ...menuBefore } = ready.menu
     expect(Object.keys(menuBefore).sort()).toEqual(["claimable", "leases"])
     expect(pending).toEqual([])
+    expect(waiting).toEqual([])
     expect(claimed).toMatchObject({ protocol: 0.1, step: { kind: "execute", unit: TASK, workspace: directory } })
     expect(liveRunLock(directory)).toBeDefined()
     const lease = { step: claimed.step.id, lease: claimed.step.lease }
@@ -129,8 +130,8 @@ test("the daemon routes authenticated executor requests to one launcher-confined
 
     daemon = await start()
     expect((await call("ready", {}, verifier)).menu).toEqual({
-      claimable: [], leases: [], types: executorTypeCatalog(),
-      pending: [{ kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." }],
+      claimable: [], leases: [], types: executorTypeCatalog(), waiting: [],
+      pending: [{ kind: "wait", reason: "in-flight", actor: "workflow", detail: "A previous share requires settlement." }],
     })
     expect(await git("rev-parse", "HEAD")).toBe(beforeReport)
     // 0273 on the wire: the same-token verify claim over the booked report

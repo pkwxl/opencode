@@ -200,7 +200,7 @@ test("a live lease is never the sweep's — the person's mid-lease completion su
     const menu = await coordinator.ready(peer)
     expect(menu.claimable).toEqual([])
     expect(menu.pending).toContainEqual({
-      kind: "wait", reason: "lease-held", detail: expect.stringContaining("channel work") && expect.any(String),
+      kind: "wait", reason: "lease-held", actor: "workflow", detail: expect.stringContaining("channel work") && expect.any(String),
     })
     expect(ledger(dir).every(({ booking }) => booking === undefined)).toBe(true)
   } finally {

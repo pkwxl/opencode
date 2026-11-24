@@ -316,7 +316,7 @@ test("the fence: an edit beside the reply channel is refused, the never-set caus
     // the whole surface; 0287's held row names the booked settlement the
     // lane waits on.
     expect((await coordinator.ready(WORKER)).pending).toEqual([
-      { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." },
+      { kind: "wait", reason: "in-flight", actor: "workflow", detail: "A previous share requires settlement." },
     ])
   } finally {
     await coordinator.close()

@@ -166,7 +166,7 @@ test("the floor: a phase with no standing formulation is byte-identical (no form
   // The index absent: the pre-change wait, byte-identical — the
   // construction stays the person's transfer/plan act (P2/P6).
   expect(await readExecutorPreview(dir)).toEqual({
-    kind: "wait", reason: "not-ready", detail: "The phase needs a task plan or formulation dispatch.",
+    kind: "wait", reason: "not-ready", actor: "workflow", detail: "The phase needs a task plan or formulation dispatch.",
   })
   // The formulation done: the planned batch's ordinary execute rows.
   write(dir, PHASE_INDEX, renderTaskIndex("R-01.P01", [
@@ -267,7 +267,7 @@ test("the fence: the unit's own input todo and every never-set path are refused,
     // document-derived and none awaits here); 0287's held row names the
     // booked settlement the lane waits on.
     expect((await coordinator.ready({ token: "reader", channel: "menu" })).pending).toEqual([
-      { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." },
+      { kind: "wait", reason: "in-flight", actor: "workflow", detail: "A previous share requires settlement." },
     ])
   } finally {
     await coordinator.close()

@@ -362,6 +362,7 @@ Two corpus facts have no numbered file to carry them, so they get their own rows
 | 0305-shared-task-handoff | Moves the shared dependency-park decisions, release note and continuation limits out of push execution. | active-authority | P10, P21 | src/task-handoff.ts, src/executor-coordinator.ts, src/executor-steps.ts | (open — ships with the next release) |
 | 0306-shared-lane-scope | Separates documentation lane scope and path overlap decisions from push lane dispatch. | active-authority | P10, P21 | src/lane-scope.ts, src/lanes.ts, src/executor-coordinator.ts, src/task-handoff.ts | (open — ships with the next release) |
 | 0307-separate-transfer-from-push-loop | Removes eager push-loop imports from deterministic transfer and retains the legacy entry. | active-authority | P10, P21 | src/transfer.ts, src/plan.ts, src/loop-phase.ts | (open — ships with the next release) |
+| 0308-addressed-stops | The addressing of stops: every wait/blocked answer and held row carries `actor` (workflow/executor/person/operator, per-site over family defaults), retryAfter stamps only workflow waits, the menu gains parked `waiting` rows. | active-authority | P2, P5, P8, P13, P19 | src/executor-steps.ts, src/executor-coordinator.ts, src/tasks.ts, ../auto-server/src/executor-worker.ts | (open — ships with the next release) |
 
 ## Maintaining this index
 

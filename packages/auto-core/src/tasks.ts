@@ -748,18 +748,27 @@ export function withParked(tasks: readonly Task[], done: ReadonlySet<string>): S
   return out
 }
 
-// The tasks still held by an unlifted park after the pick found nothing
-// ready (plans/0096 D7): with a checked graph these are exactly the mutual
-// parks — any other blocker is either done (which would have released its
-// parked unit into the pick) or runnable (which the pick would have taken).
-// The loops block (exit 2) naming them, the person's call.
-export function strandedParks(plan: Plan): Task[] {
+// The parked waits (0308): every parked unit whose blocker is not done —
+// the executor menu's `waiting` rows, workflow-addressed by definition (the
+// blocker's completion is ordinary claimable work). The mutual subset —
+// this list read at the pick's empty moment, when nothing else is ready —
+// is the person's blocked answer, never this list's meaning.
+export function parkedWaiting(plan: Plan): Task[] {
   const own = new Set(plan.tasks.map((task) => task.id))
   const done = new Set(plan.tasks.filter((task) => task.status === "done").map((task) => task.id))
   for (const task of plan.tasks) {
     if (Array.isArray(task.depends)) for (const dep of task.depends) if (!own.has(dep)) done.add(dep)
   }
   return plan.tasks.filter((task) => task.parked !== undefined && !done.has(task.id) && !done.has(task.parked))
+}
+
+// The tasks still held by an unlifted park after the pick found nothing
+// ready (plans/0096 D7): with a checked graph these are exactly the mutual
+// parks — any other blocker is either done (which would have released its
+// parked unit into the pick) or runnable (which the pick would have taken).
+// The loops block (exit 2) naming them, the person's call.
+export function strandedParks(plan: Plan): Task[] {
+  return parkedWaiting(plan)
 }
 
 // The next task to run: the first one in index order that is not done and

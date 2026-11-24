@@ -169,14 +169,14 @@ test("the floor and the person bracket: no standing unit, nothing due, or an aud
   // empty menu, byte-identical.
   const pending = await closingProject()
   expect(await readExecutorPreview(pending)).toEqual({
-    kind: "wait", reason: "not-ready", detail: "The open round has no pending tasks. Add work or close the round.",
+    kind: "wait", reason: "not-ready", actor: "person", detail: "The open round has no pending tasks. Add work or close the round.",
   })
   const coordinator = await openExecutorCoordinator(pending)
   try {
     const menu = await coordinator.ready({ token: "reader", channel: "menu" })
     expect(menu.claimable).toEqual([])
     expect(await coordinator.claim(worker)).toMatchObject({
-      kind: "wait", reason: "not-ready", detail: "The open round has no pending tasks. Add work or close the round.",
+      kind: "wait", reason: "not-ready", actor: "person", detail: "The open round has no pending tasks. Add work or close the round.",
     })
     // The types block carries the audit entry beside the standing six — the
     // additive growth, one rendering.
@@ -190,7 +190,7 @@ test("the floor and the person bracket: no standing unit, nothing due, or an aud
   const bare = await closingProject({ table: false })
   expect(await ensureCloseAudit(bare, 1)).toEqual({ type: "none" })
   expect(await readExecutorPreview(bare)).toEqual({
-    kind: "wait", reason: "not-ready", detail: "The open round has no pending tasks. Add work or close the round.",
+    kind: "wait", reason: "not-ready", actor: "person", detail: "The open round has no pending tasks. Add work or close the round.",
   })
 
   // An audit phase present: the round's findings' producer is the phase,
@@ -198,7 +198,7 @@ test("the floor and the person bracket: no standing unit, nothing due, or an aud
   const phased = await closingProject({ auditPhase: true })
   expect(await ensureCloseAudit(phased, 1)).toEqual({ type: "none" })
   expect(await readExecutorPreview(phased)).toEqual({
-    kind: "wait", reason: "not-ready", detail: "The open round has no pending tasks. Add work or close the round.",
+    kind: "wait", reason: "not-ready", actor: "person", detail: "The open round has no pending tasks. Add work or close the round.",
   })
 })
 
@@ -315,7 +315,7 @@ test("the fence: a never-set write escalates to the person (0272 composed); an o
     // the whole surface; 0287's held row names the booked settlement the
     // lane waits on.
     expect((await coordinator.ready({ token: "reader", channel: "menu" })).pending).toEqual([
-      { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." },
+      { kind: "wait", reason: "in-flight", actor: "workflow", detail: "A previous share requires settlement." },
     ])
 
     // Another unit's findings document: refused, but not never-set (no arm

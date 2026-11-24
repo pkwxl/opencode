@@ -31,13 +31,49 @@ import { peekProgress } from "./resume"
 import { autoSwitches } from "./switches"
 import { loadPlan, next, promptViews, readyTasks, strandedParks, taskIndexPath, taskStatePaths, unmetDepends, type Plan } from "./tasks"
 
-type BlockReason = "config" | "subtask" | "unreadable" | "cleanTree" | "mutualPark"
-type Blocked = { kind: "blocked"; reason: BlockReason; detail: string }
+// 0308: the stop vocabulary's addressing — every wait/blocked answer names
+// the role whose move clears it (the person's liveness ruling: a role
+// playing properly can only play a move the wire names). `workflow` is the
+// null addressee — ordinary progress clears the wait, no one must act;
+// `executor` addresses the lease's own holder (the artifact it may correct
+// and re-report); `person` the project's authority (documents, config, the
+// deterministic ops); `operator` the daemon's human (runs, restarts, the
+// tool tree). The map below is the family DEFAULT (the doc's pinned
+// table); splitting sites — settlement refusals the holder corrects, claim
+// guards, person-act not-readies — carry the authoritative literal at
+// construction, the field always winning over the family.
+export type Actor = "workflow" | "executor" | "person" | "operator"
+export const ACTORS = ["workflow", "executor", "person", "operator"] as const
+// The wire-wide reason vocabularies (WAIT_REASONS including the two words
+// other constructors own — the coordinator's `lease-held`, the worker's
+// gate rendering — so the doc's pinned table is one home, P5). The ratchet
+// pins both directions against docs/protocol.md's fenced block.
+export const WAIT_REASONS = ["lease-held", "in-flight", "gate", "not-ready"] as const
+export const BLOCK_REASONS = ["isolation", "commitFailed", "attemptsExhausted", "fixBudget", "config", "subtask", "unreadable", "cleanTree", "mutualPark"] as const
+export type WaitReason = (typeof WAIT_REASONS)[number]
+export type BlockReason = (typeof BLOCK_REASONS)[number]
+export const ACTOR_OF_REASON: Record<WaitReason | BlockReason, Actor> = {
+  "lease-held": "workflow",
+  "in-flight": "workflow",
+  gate: "person",
+  "not-ready": "workflow",
+  isolation: "person",
+  commitFailed: "person",
+  attemptsExhausted: "person",
+  fixBudget: "person",
+  config: "person",
+  subtask: "person",
+  unreadable: "person",
+  cleanTree: "person",
+  mutualPark: "person",
+}
+
+type Blocked = { kind: "blocked"; reason: BlockReason; actor: Actor; detail: string }
 
 export type ExecutorPreview =
   | Blocked
   | { kind: "human"; gate: "project-start" | "survey-release"; document: string; detail?: string }
-  | { kind: "wait"; reason: "not-ready" | "in-flight"; detail: string }
+  | { kind: "wait"; reason: "not-ready" | "in-flight"; actor: Actor; detail: string }
   | { kind: "execute"; unit: string; title: string; touches?: readonly string[]; landed?: { id: string; commit: string }; prompt: string }
   | { kind: "formulate"; unit: string; title: string; phase: string; index: string; prompt: string }
   | { kind: "synthesize"; unit: string; title: string; phase: string; index: string; prompt: string }
@@ -86,10 +122,10 @@ export type ExecutorSnapshot = {
 
 function configBlock(config: ExecutorSnapshot["config"]): Blocked | undefined {
   if (config.testByDriver || config.handoverTest || config.acceptanceGate?.length) {
-    return { kind: "blocked", reason: "config", detail: "Executor mode requires testByDriver, handoverTest, and acceptanceGate to be disabled." }
+    return { kind: "blocked", reason: "config", actor: "person", detail: "Executor mode requires testByDriver, handoverTest, and acceptanceGate to be disabled." }
   }
   if (config.subtask !== "off") {
-    return { kind: "blocked", reason: "subtask", detail: "Executor mode requires subtask: off." }
+    return { kind: "blocked", reason: "subtask", actor: "person", detail: "Executor mode requires subtask: off." }
   }
 }
 
@@ -97,7 +133,7 @@ function admissionBlock(state: ExecutorSnapshot): Extract<ExecutorPreview, { kin
   const refused = configBlock(state.config)
   if (refused) return refused
   if (state.tree === "unreadable") {
-    return { kind: "blocked", reason: "unreadable", detail: "Git cannot read the workspace. Inspect the repository before resuming." }
+    return { kind: "blocked", reason: "unreadable", actor: "person", detail: "Git cannot read the workspace. Inspect the repository before resuming." }
   }
   if (!state.round) return { kind: "human", gate: "project-start", document: ANALYSIS_DOC }
 
@@ -116,7 +152,7 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
 
   const current = state.round?.current
   if (state.activeProgress) {
-    return { kind: "wait", reason: "in-flight", detail: "An active progress record requires continuation or settlement." }
+    return { kind: "wait", reason: "in-flight", actor: "workflow", detail: "An active progress record requires continuation or settlement." }
   }
   const task = current && (state.route
     ? readyTasks(current.plan).find(({ id }) => id === state.route?.task)
@@ -129,17 +165,17 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
   // meeting the clean-tree block a fresh reader cannot remedy.
   const boundaryContinuation = state.route?.task === current?.plan.phase && state.continuationUnit === current?.plan.phase
   if (state.tree === "dirty" && !continuation && !boundaryContinuation && !state.route?.scoped) {
-    return { kind: "blocked", reason: "cleanTree", detail: "Inspect and resolve uncommitted changes before starting work." }
+    return { kind: "blocked", reason: "cleanTree", actor: "person", detail: "Inspect and resolve uncommitted changes before starting work." }
   }
   if (!current) {
     return state.round?.complete
       ? { kind: "done" }
-      : { kind: "wait", reason: "not-ready", detail: "No phase is ready." }
+      : { kind: "wait", reason: "not-ready", actor: "workflow", detail: "No phase is ready." }
   }
 
   const { phase, plan } = current
   if (!current.indexPresent) {
-    return { kind: "wait", reason: "not-ready", detail: "The phase needs a task plan or formulation dispatch." }
+    return { kind: "wait", reason: "not-ready", actor: "workflow", detail: "The phase needs a task plan or formulation dispatch." }
   }
   // 0276 (0256 stage 2's first convergence kind): the phase's formulation
   // unit standing in the index is claimable coordinator work — the planning
@@ -240,7 +276,7 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
           }),
         }
       }
-      return { kind: "wait", reason: "not-ready", detail: `${task.id} requires specialized routing before a whole-task brief can be rendered.` }
+      return { kind: "wait", reason: "not-ready", actor: "workflow", detail: `${task.id} requires specialized routing before a whole-task brief can be rendered.` }
     }
     // The follow-up derivation (a landed share's verification or fix round)
     // renders below even over the formulation unit: the bypass is the
@@ -248,7 +284,7 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
     // (a landed executor share leaves its unit pending — the driver, never
     // the session, writes the in_progress state).
     if ((task.status === "in_progress" || task.formulate) && !state.route?.followUp) {
-      return { kind: "wait", reason: "not-ready", detail: `${task.id} requires specialized routing before a whole-task brief can be rendered.` }
+      return { kind: "wait", reason: "not-ready", actor: "workflow", detail: `${task.id} requires specialized routing before a whole-task brief can be rendered.` }
     }
     const views = promptViews(plan, task)
     const prompt = renderWhole(current.facts, views.plan, views.task, taskDocPaths(task.id), { phase, mode: current.mode, continuation: continuation && state.continuationHandoff })
@@ -271,24 +307,24 @@ export function deriveExecutorPreview(state: ExecutorSnapshot): ExecutorPreview 
       // the family's releases: the person's document channels (0289), the
       // sweep's own record-completion arm, and the takeover share (0287's
       // designed recovery).
-      return { kind: "wait", reason: "not-ready", detail: `${target} is held by the ledger's continuation claim — the person's handoff Status amendment or the unit's completion releases it, or a takeover share lands over the unit.` }
+      return { kind: "wait", reason: "not-ready", actor: "person", detail: `${target} is held by the ledger's continuation claim — the person's handoff Status amendment or the unit's completion releases it, or a takeover share lands over the unit.` }
     }
     const routed = plan.tasks.find(({ id }) => id === target)
     if (!routed) {
-      return { kind: "wait", reason: "not-ready", detail: `${target} is not a task in this phase's index.` }
+      return { kind: "wait", reason: "not-ready", actor: "person", detail: `${target} is not a task in this phase's index.` }
     }
     const waiting = unmetDepends(plan, routed)
     if (waiting.length) {
-      return { kind: "wait", reason: "not-ready", detail: `${routed.id} is not ready — waiting on ${waiting.join(", ")}.` }
+      return { kind: "wait", reason: "not-ready", actor: "workflow", detail: `${routed.id} is not ready — waiting on ${waiting.join(", ")}.` }
     }
-    return { kind: "wait", reason: "not-ready", detail: `${routed.id} is not ready (its status in this phase's index: ${routed.status}).` }
+    return { kind: "wait", reason: "not-ready", actor: "workflow", detail: `${routed.id} is not ready (its status in this phase's index: ${routed.status}).` }
   }
   const parks = strandedParks(plan)
   if (parks.length) {
-    return { kind: "blocked", reason: "mutualPark", detail: parks.map((task) => `${task.id} parks on ${task.parked}`).join(", ") }
+    return { kind: "blocked", reason: "mutualPark", actor: "person", detail: parks.map((task) => `${task.id} parks on ${task.parked}`).join(", ") }
   }
   if (state.round?.open) {
-    return { kind: "wait", reason: "not-ready", detail: "The open round has no pending tasks. Add work or close the round." }
+    return { kind: "wait", reason: "not-ready", actor: "person", detail: "The open round has no pending tasks. Add work or close the round." }
   }
   // 0277 (0256 stage 2's second convergence kind): the transfer advance's
   // distillation session — the one that writes the phase's permanent handover
@@ -339,13 +375,13 @@ async function readExecutorTree(dir: string): Promise<ExecutorSnapshot["tree"]> 
 
 async function readExecutorSnapshot(dir: string, continuationUnit?: string, checkout = dir): Promise<ExecutorSnapshot | Blocked> {
   if (!(await Bun.file(join(dir, CONFIG_FILE)).exists())) {
-    return { kind: "blocked", reason: "config", detail: `Initialize the project to create ${CONFIG_FILE}.` }
+    return { kind: "blocked", reason: "config", actor: "person", detail: `Initialize the project to create ${CONFIG_FILE}.` }
   }
   let config: ProjectConfig
   try {
     config = await loadProjectConfig(dir)
   } catch (error) {
-    return { kind: "blocked", reason: "config", detail: String(error) }
+    return { kind: "blocked", reason: "config", actor: "person", detail: String(error) }
   }
   const refused = configBlock(config)
   if (refused) return refused
@@ -797,13 +833,13 @@ export async function readExecutorFollowUp(
   // flag's own bypass (0281): the awaiting branch is the fresh-claim route's
   // alone.
   if (step.kind === "formulate" || step.kind === "distill" || step.kind === "audit" || step.kind === "synthesize") {
-    return { kind: "wait", reason: "not-ready", detail: `${share.unit} is outside the current phase route.` }
+    return { kind: "wait", reason: "not-ready", actor: "workflow", detail: `${share.unit} is outside the current phase route.` }
   }
   if (step.kind !== "execute") return step
   const current = state.round?.current
   const task = current?.plan.tasks.find(({ id }) => id === share.unit)
   if (!current || !task || step.unit !== share.unit) {
-    return { kind: "wait", reason: "not-ready", detail: `${share.unit} is outside the current phase route.` }
+    return { kind: "wait", reason: "not-ready", actor: "workflow", detail: `${share.unit} is outside the current phase route.` }
   }
   const views = promptViews(current.plan, task)
   if (share.kind === "fix") {

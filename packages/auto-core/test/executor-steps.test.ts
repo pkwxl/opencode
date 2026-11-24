@@ -90,18 +90,18 @@ test("the not-ready wait names its cause class: the plan's edge, the ledger's pi
   // The plan's edge: a targeted claim at the dependent unit names the unmet
   // dependency (the pre-fix letter named the unit alone).
   expect(await readExecutorPreview(dir, undefined, { task: "T-002" })).toEqual({
-    kind: "wait", reason: "not-ready", detail: "T-002 is not ready — waiting on T-001.",
+    kind: "wait", reason: "not-ready", actor: "workflow", detail: "T-002 is not ready — waiting on T-001.",
   })
   // The ledger's class: the same target routed by the coordinator's
   // continuation arm (the route equal to the ledger's continuation unit)
   // names the pin and teaches its releases — the field's held-row shape.
   expect(await readExecutorPreview(dir, "T-002", { task: "T-002" })).toEqual({
-    kind: "wait", reason: "not-ready",
+    kind: "wait", reason: "not-ready", actor: "person",
     detail: "T-002 is held by the ledger's continuation claim — the person's handoff Status amendment or the unit's completion releases it, or a takeover share lands over the unit.",
   })
   // A task the plan does not carry names its absence.
   expect(await readExecutorPreview(dir, undefined, { task: "T-999" })).toEqual({
-    kind: "wait", reason: "not-ready", detail: "T-999 is not a task in this phase's index.",
+    kind: "wait", reason: "not-ready", actor: "person", detail: "T-999 is not a task in this phase's index.",
   })
   // The index's own status: a completed unit targeted fresh (the person's
   // completion, no continuation routing) names its status.
@@ -109,7 +109,7 @@ test("the not-ready wait names its cause class: the plan's edge, the ledger's pi
   write(dir, `${path}/tasks.md`, "# Tasks\n\n- [x] T-001 Ready\n- [ ] T-002 Dependent\n")
   commitFixture(dir)
   expect(await readExecutorPreview(dir, undefined, { task: "T-001" })).toEqual({
-    kind: "wait", reason: "not-ready", detail: "T-001 is not ready (its status in this phase's index: done).",
+    kind: "wait", reason: "not-ready", actor: "workflow", detail: "T-001 is not ready (its status in this phase's index: done).",
   })
 })
 
@@ -249,8 +249,8 @@ for (const point of ["booked", "committed"] as const) {
       // answer for why nothing is claimable, surfaced instead of a silent
       // empty list).
       expect(await recovered.ready(replacement)).toEqual({
-        claimable: [], leases: [], types: executorTypeCatalog(),
-        pending: [{ kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." }],
+        claimable: [], leases: [], types: executorTypeCatalog(), waiting: [],
+        pending: [{ kind: "wait", reason: "in-flight", actor: "workflow", detail: "A previous share requires settlement." }],
       })
       expect(git(dir, "rev-parse", "HEAD").trim()).toBe(crashHead)
       expect(await recovered.claim(replacement)).toMatchObject({ kind: "verify", unit: grant.unit })
@@ -627,7 +627,7 @@ test("a booked report answers a same-token verify claim with the settled termina
     // a same-token verify claim reads today's lease-held wait byte-identical,
     // whatever channel it arrives on — nothing raised, nothing changed.
     const held = {
-      kind: "wait", reason: "lease-held", deadline: grant.deadline,
+      kind: "wait", reason: "lease-held", actor: "workflow", deadline: grant.deadline,
       detail: `Lease held by channel ${holder.channel} until ${new Date(grant.deadline).toISOString()}.`,
     } as const
     expect(await coordinator.claim(holder, "T-001", "verify")).toEqual(held)
@@ -1060,14 +1060,14 @@ test("a blocked settlement outside the holder's permitted set names the person-n
     // written — the plain blocked answer naming the person-necessary cause
     // is the whole surface, the round waiting until a person looks.
     expect(blocked).toEqual({
-      kind: "blocked", reason: "isolation",
+      kind: "blocked", reason: "isolation", actor: "person",
       detail: "HEAD moved outside the booked share. Inspect the commit and executor progress before resuming. The cause is outside this lease's permitted writes — a person must inspect the state; retrying cannot fix it.",
     })
     expect(await Bun.file(join(dir, ".auto/executor-questions.json")).exists()).toBe(false)
     // 0287's held row: the booked-but-blocked settlement is the lane's own
     // answer, surfaced on the menu beside the empty claimable set.
     expect((await coordinator.ready({ ...holder, token: "worker-2" })).pending).toEqual([
-      { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." },
+      { kind: "wait", reason: "in-flight", actor: "workflow", detail: "A previous share requires settlement." },
     ])
     // The retry's replay is byte-identical (P10), through both settlement
     // entries — the report replay and a successor claim's settle.
@@ -1095,19 +1095,19 @@ test("replayable causes keep today's blocked answer byte-identical and raise not
     write(dir, "src/widget.ts", "export const widget = 1\n")
     write(dir, "src/other.ts", "export const other = 1\n")
     expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toEqual({
-      kind: "blocked", reason: "isolation", detail: "Resolve out-of-scope edits before replaying: src/other.ts.",
+      kind: "blocked", reason: "isolation", actor: "executor", detail: "Resolve out-of-scope edits before replaying: src/other.ts.",
     })
     // The mixed boundary: the holder's own out-of-scope edit beside a
     // never-set path — conservative, replay-side.
     write(dir, "AGENTS.md", "person edit\n")
     expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toEqual({
-      kind: "blocked", reason: "isolation", detail: "Resolve out-of-scope edits before replaying: AGENTS.md, src/other.ts.",
+      kind: "blocked", reason: "isolation", actor: "executor", detail: "Resolve out-of-scope edits before replaying: AGENTS.md, src/other.ts.",
     })
     expect(existsSync(join(dir, ".auto/executor-questions.json"))).toBe(false)
     // 0287's held row (the booked report awaiting settlement); no question
     // item is raised beside it.
     expect((await coordinator.ready(holder)).pending).toEqual([
-      { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." },
+      { kind: "wait", reason: "in-flight", actor: "workflow", detail: "A previous share requires settlement." },
     ])
     // The never-set alone is the person's remedy (0248 D5): the same cause
     // site escalates once the holder's own edit is gone.
@@ -1116,7 +1116,7 @@ test("replayable causes keep today's blocked answer byte-identical and raise not
     // blocked answer (plans/0282: no raise, no store, the round waiting).
     const escalated = await coordinator.report(holder, grant.id, grant.lease, "ended")
     expect(escalated).toEqual({
-      kind: "blocked", reason: "isolation",
+      kind: "blocked", reason: "isolation", actor: "person",
       detail: "Resolve out-of-scope edits before replaying: AGENTS.md. The cause is outside this lease's permitted writes — a person must inspect the state; retrying cannot fix it.",
     })
     expect(existsSync(join(dir, ".auto/executor-questions.json"))).toBe(false)
@@ -1190,7 +1190,29 @@ test("mutual dependency parks block further dispatch", async () => {
       write(dir, `docs/${unit}/handoff.md`, `# Handoff\n\nStatus: park ${blocker}\n`)
       expect(await coordinator.report(holder, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed", parked: blocker })
     }
-    expect(await coordinator.claim(holder)).toMatchObject({ kind: "blocked", reason: "mutualPark" })
+    expect(await coordinator.claim(holder)).toMatchObject({ kind: "blocked", reason: "mutualPark", actor: "person" })
+  } finally {
+    await coordinator.close()
+  }
+})
+
+// 0308: the parked unit reads as a workflow wait on the menu — the row
+// naming its blocker beside the blocker's own claimable work, so a
+// non-claimable unit is waiting rather than absent; the person's mutual
+// park stays the blocked answer, never a waiting row's meaning.
+test("the menu names parked units as workflow waits (plans/0308)", async () => {
+  const dir = parkProject()
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const first = await coordinator.claim(holder)
+    if (first.kind !== "execute") throw new Error(JSON.stringify(first))
+    write(dir, "src/first.ts", "export const first = 1\n")
+    write(dir, "docs/T-001/handoff.md", "# Handoff\n\nStatus: park T-002\n")
+    expect(await coordinator.report(holder, first.id, first.lease, "ended")).toMatchObject({ kind: "landed", parked: "T-002" })
+    const menu = await coordinator.ready(holder)
+    expect(menu.waiting).toEqual([{ unit: "T-001", title: "Parked task", blocker: "T-002" }])
+    expect(menu.claimable).toMatchObject([{ unit: "T-002", title: "Blocker", kinds: ["execute"] }])
+    expect(menu.pending).toEqual([])
   } finally {
     await coordinator.close()
   }
@@ -1207,7 +1229,7 @@ test("a dependency park cannot land before its declared artifacts exist", async 
     if (first.kind !== "execute") throw new Error(JSON.stringify(first))
     const base = git(dir, "rev-parse", "HEAD")
     write(dir, "docs/T-001/handoff.md", "# Handoff\n\nStatus: park T-002\n")
-    expect(await coordinator.report(holder, first.id, first.lease, "ended")).toMatchObject({ kind: "blocked", reason: "commitFailed" })
+    expect(await coordinator.report(holder, first.id, first.lease, "ended")).toMatchObject({ kind: "blocked", reason: "commitFailed", actor: "executor" })
     expect(git(dir, "rev-parse", "HEAD")).toBe(base)
     write(dir, "src/first.ts", "export const first = 1\n")
     expect(await coordinator.report(holder, first.id, first.lease, "ended")).toMatchObject({ kind: "landed", parked: "T-002" })

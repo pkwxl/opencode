@@ -70,11 +70,18 @@ export function wireStep(step: Step): Record<string, unknown> {
       }
     }
     case "blocked":
-      return { kind: "blocked", code: step.reason, remedy: step.detail }
+      // 0308: the addressing `actor` rides beside the renamed pair — the
+      // reading agent's regime (end the session for person/operator, correct
+      // and re-report for executor) keyed off the field, never prose
+      // inference over the remedy.
+      return { kind: "blocked", code: step.reason, actor: step.actor, remedy: step.detail }
     case "wait":
-      return { kind: "wait", reason: step.reason, detail: step.detail, retryAfter: 2 }
+      // 0308: `retryAfter` stamps only the workflow-addressed waits — a
+      // person-act wait carrying one taught the agent to poll a gate
+      // forever (the ruled defect this fixes; the floor exemption).
+      return { kind: "wait", reason: step.reason, actor: step.actor, detail: step.detail, ...(step.actor === "workflow" ? { retryAfter: 2 } : {}) }
     case "human":
-      return { kind: "wait", reason: "gate", detail: `A person must attend ${step.gate} in ${step.document} — release it with the deterministic clarify op (POST /projects/<project>/clarify) or the document edit itself, then claim again.`, retryAfter: 2 }
+      return { kind: "wait", reason: "gate", actor: "person", detail: `A person must attend ${step.gate} in ${step.document} — release it with the deterministic clarify op (POST /projects/<project>/clarify) or the document edit itself, then claim again.` }
     case "phase-boundary":
       return { kind: "phase-boundary", phase: step.phase, remedy: step.problems.join("\n") || "Advance it with POST /projects/<project>/transfer." }
     // 0273's additive terminal (0264-05's fix): a same-token claim over a

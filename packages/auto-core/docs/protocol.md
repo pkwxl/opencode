@@ -201,12 +201,20 @@ qualified phase id for the boundary (distill).
 - **`pending`** — the pending person items: `gate` rows (the gate and its
   document), derived from the documents, and — when the claimable set is
   empty — the lane's own held row (plans/0287): the derivation's first
-  `wait`/`blocked` answer (`kind`, `reason`, `detail` — the step
+  `wait`/`blocked` answer (`kind`, `reason`, `actor`, `detail` — the step
   vocabulary's own shapes), so an empty `claimable` never sits beside a
   silent cause (0285's honesty gap). The `not-ready` detail names its
   cause class (plans/0294): the ledger's continuation pin — its remedy
   the person's document channels — the plan's dependency edge naming the
   units waited on, or the index's own status.
+- **`waiting`** — the parked units (plans/0308): `{ unit, title, blocker }`
+  rows for every unit whose recorded park names a blocker not yet done —
+  the dependency waits ordinary progress clears (the blocker is, or
+  becomes, claimable work), surfaced so a non-claimable unit reads as
+  waiting instead of absent. Workflow-addressed by definition: no row is
+  ever the person's move. The mutual-park exception — this list with
+  nothing else ready — answers as the `blocked` `mutualPark` held row,
+  the person's reorder.
 
 The landing fence admits per grant exactly: the standing refusal set
 refused for every kind (the driver workdir `.auto/`/`tmp/`, the config
@@ -257,6 +265,65 @@ The step vocabulary a claim can answer beside the grants: `wait` (with
 `phase-boundary` (the phase awaiting the person's transfer), `settled` (the
 same-token terminal naming the booked commit), and `done` (the round
 complete).
+
+### The addressing of stops (plans/0308)
+
+Every `wait` and `blocked` answer carries an `actor` field — the role
+whose move clears the stop, the protocol's liveness ruling: **with every
+role playing properly, the workflow never halts**, because every answer is
+progress, a workflow wait grounded in claimable work, or a stop naming an
+actor whose repertoire can clear it. No unaddressed stop exists. The
+vocabulary:
+
+```protocol
+actor workflow
+actor executor
+actor person
+actor operator
+wait lease-held workflow
+wait in-flight workflow
+wait gate person
+wait not-ready workflow
+blocked isolation person
+blocked commitFailed person
+blocked attemptsExhausted person
+blocked fixBudget person
+blocked config person
+blocked subtask person
+blocked unreadable person
+blocked cleanTree person
+blocked mutualPark person
+```
+
+The table is the family **default**; the field is authoritative per
+answer — the splitting causes carry their literal at construction (a
+`commitFailed` settlement refusal the holder corrects answers `executor`
+against the git-mechanical family default; an `isolation` whose workspace
+the holder can restore likewise; the person-act `not-ready` waits — an
+open round with no pending tasks, the ledger's continuation pin, a target
+no index carries — answer `person` against the dependency family's
+default). Each actor's clearing repertoire:
+
+- **workflow** — no one must act: the dependency's completion, the lease
+  deadline, the sweep, or the next wire act clears it. `retryAfter` stamps
+  only these waits (a person-act wait carrying one taught the reading
+  agent to poll a gate forever — the ruled defect this fixed).
+- **executor** — the lease's own holder: correct its own artifact and
+  retry the same report, release the lease, or park the unit. Never a
+  write outside the grant's own surface.
+- **person** — the project's authority: the document writes, the
+  `clarify`/`transfer`/`reconcile` operations, config amendment,
+  replanning, closing a unit, direct git on the project.
+- **operator** — the daemon's human: stop the run (`DELETE /runs/<id>`),
+  restart the daemon, inspect the tool tree. The rare invariant-violation
+  and worktree-machinery causes.
+
+The gate and boundary kinds name the person by their own semantics
+(`human`, `phase-boundary`, `done`); `settled` names the holder's ended
+claim; the grants are progress. A reading agent ends its session for
+`person` and `operator` answers (rendering the remedy for the named
+role), corrects and retries for `executor`, and polls or takes other work
+for `workflow`.
 
 ## Share stage words
 

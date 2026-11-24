@@ -11,7 +11,7 @@ import { namesRowId } from "./assurance"
 import { constraintPitfallResolves, handoffStatus, parkDirective, parseResult, roleOf, validHandover, HANDOVER_SECTIONS } from "./document/roles"
 import { parseIndex, tickedIndex } from "./document/unit"
 import { parkCheck, STEER_CHAIN_BOUND } from "./task-handoff"
-import { composeSynthesizedTodo, readExecutorAdmissionBlock, readExecutorParkPlan, readExecutorPreview, readExecutorFollowUp, planPhaseOf, type ExecutorPreview, type FixPreview, type VerificationPreview } from "./executor-steps"
+import { ACTOR_OF_REASON, composeSynthesizedTodo, readExecutorAdmissionBlock, readExecutorParkPlan, readExecutorPreview, readExecutorFollowUp, planPhaseOf, type Actor, type ExecutorPreview, type FixPreview, type VerificationPreview } from "./executor-steps"
 import {
   ensureExecutorWorkspace, executorWorkspacePath, ExecutorWorktreeError, landExecutorWorkspace,
   prepareExecutorLanding, removeExecutorWorkspace, validExecutorLanding, validExecutorWorkspace,
@@ -25,7 +25,7 @@ import { docEligible, docScope, scopesDisjoint } from "./lane-scope"
 import { acquireRunLock, liveRunLock } from "./lock"
 import { readPhases } from "./phases"
 import { taskNumber } from "./numbering"
-import { markDone, plannedTaskProblems, readyTasks, runtimeParked, setParked, takenTaskIds, taskStatePaths, type Task } from "./tasks"
+import { markDone, parkedWaiting, plannedTaskProblems, readyTasks, runtimeParked, setParked, takenTaskIds, taskStatePaths, type Task } from "./tasks"
 
 export class ExecutorRequestError extends Error {}
 
@@ -100,7 +100,7 @@ type Audit = Extract<ExecutorPreview, { kind: "audit" }>
 type Synthesize = Extract<ExecutorPreview, { kind: "synthesize" }>
 type Candidate = Execute | Formulate | Synthesize | Distill | Audit | FixPreview | VerificationPreview
 type Grant = (Omit<Execute, "touches"> | Formulate | Synthesize | Distill | Audit | Omit<FixPreview, "touches"> | VerificationPreview) & { id: string; lease: string; attempt: number; workspace: string; deadline: number; budget: number; answerCursor?: string | null }
-type BlockedReport = { kind: "blocked"; reason: "isolation" | "commitFailed"; detail: string }
+type BlockedReport = { kind: "blocked"; reason: "isolation" | "commitFailed"; actor: Actor; detail: string }
 // The blocked-cause classification (0272, 0262-03's fix): `escalated` marks
 // the settlement causes whose remedy would require a write the holder's
 // grant kind cannot make — Git ground truth (history, HEAD, the index), the
@@ -154,8 +154,8 @@ type Entry = {
   released?: true
   booking?: Booking
 }
-type LeaseWait = { kind: "wait"; reason: "lease-held"; detail: string; deadline: number }
-type BudgetBlock = { kind: "blocked"; reason: "attemptsExhausted" | "fixBudget"; detail: string }
+type LeaseWait = { kind: "wait"; reason: "lease-held"; actor: Actor; detail: string; deadline: number }
+type BudgetBlock = { kind: "blocked"; reason: "attemptsExhausted" | "fixBudget"; actor: Actor; detail: string }
 // The settled-holder terminal (0273, 0264-05's fix): the additive step kind
 // answering a same-token verify claim over an already booked report — the
 // share's own producer (or its same-token successor) reading back its
@@ -180,13 +180,24 @@ type LeaseKey = { step: string; lease: string }
 // menu as a row — an empty `claimable` beside a silent cause was 0285's
 // honesty gap (P12: uncertainty never swallowed into a clean-looking
 // verdict), the step vocabulary's own shapes reused, never a second meaning.
+// 0308: every wait/blocked row carries the addressing `actor` beside its
+// reason (the liveness ruling — a held row the reading agent cannot act on
+// is the silent cause again, named for a role that cannot clear it).
 type MenuPending =
   | { kind: "gate"; gate: "project-start" | "survey-release"; document: string }
-  | { kind: "wait"; reason: "lease-held" | "in-flight" | "not-ready"; detail: string }
-  | { kind: "blocked"; reason: "isolation" | "commitFailed" | "attemptsExhausted" | "fixBudget" | "config" | "subtask" | "unreadable" | "cleanTree" | "mutualPark"; detail: string }
+  | { kind: "wait"; reason: "lease-held" | "in-flight" | "not-ready"; actor: Actor; detail: string }
+  | { kind: "blocked"; reason: "isolation" | "commitFailed" | "attemptsExhausted" | "fixBudget" | "config" | "subtask" | "unreadable" | "cleanTree" | "mutualPark"; actor: Actor; detail: string }
 type Menu = {
   claimable: { unit: string; title: string; kinds: [Grant["kind"]]; touches?: readonly string[] }[]
   leases: (LeaseKey & Pick<Grant, "kind" | "deadline" | "attempt">)[]
+  // 0308: the parked units as additive menu rows — the dependency waits the
+  // workflow itself clears (the blocker's completion, ordinary claimable
+  // work), named with their blocker so a reading agent sees a non-claimable
+  // unit as waiting rather than absent. Workflow-addressed by definition:
+  // the person-visible exception (a mutual park stranding the lane) is the
+  // blocked held row's own answer, never this list. A reader that ignores
+  // it behaves byte-identically (P10).
+  waiting: { unit: string; title: string; blocker: string }[]
   // 0261 D2's additive `types` block (enacted by 0269, under the
   // `protocol` wire version — P13): the restriction catalog rides the menu, the single
   // dispatch-time payload (0246 D4 b's "hub-as-scheduler's menu" letter); a
@@ -884,7 +895,7 @@ export async function openExecutorCoordinator(
   function withAnswers(holder: Holder, grant: Grant): Grant | Extract<ExecutorPreview, { kind: "blocked" }> {
     void holder
     if (Buffer.byteLength(JSON.stringify({ protocol: EXECUTOR_PROTOCOL, step: grant })) > MAX_RESPONSE_BYTES) {
-      return { kind: "blocked", reason: "config", detail: "The rendered brief exceeds the 256 KiB executor response limit. Shorten the project or task inputs." }
+      return { kind: "blocked", reason: "config", actor: "person", detail: "The rendered brief exceeds the 256 KiB executor response limit. Shorten the project or task inputs." }
     }
     return grant
   }
@@ -898,7 +909,7 @@ export async function openExecutorCoordinator(
 
   function workspaceBlock(error: unknown): BlockedReport {
     if (!(error instanceof ExecutorWorktreeError)) throw error
-    return { kind: "blocked", reason: "isolation", detail: error.message }
+    return { kind: "blocked", reason: "isolation", actor: "operator", detail: error.message }
   }
 
   async function openCheckout(entry: Entry): Promise<string | BlockedReport> {
@@ -1228,7 +1239,11 @@ export async function openExecutorCoordinator(
       await book(entry, { ...booking, receipt })
       return receipt
     }
-    const blocked = (detail: string): BlockedReport => ({ kind: "blocked", reason: "isolation", detail })
+    // 0308: the actor defaults to the family's table entry (isolation →
+    // person — the escalated perimeter arm every outsidePerimeter call
+    // carries); the holder-replayable sites (a workspace the holder can
+    // restore, a share it can re-land) pass their literal explicitly.
+    const blocked = (detail: string, actor: Actor = ACTOR_OF_REASON.isolation): BlockedReport => ({ kind: "blocked", reason: "isolation", actor, detail })
     if (booking.landing && booking.intent) {
       const { share } = booking.landing
       const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", share)
@@ -1270,7 +1285,7 @@ export async function openExecutorCoordinator(
       return blocked("The executor requires a single repository inside a lane checkout.")
     }
     let status = await workspaceStatus(checkout, roots)
-    if (!status) return outsidePerimeter({ kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable. Inspect the index before replaying." })
+    if (!status) return outsidePerimeter({ kind: "blocked", reason: "commitFailed", actor: "person", detail: "Git status is unreadable. Inspect the index before replaying." })
     const { gaps, handoff } = taskDocPaths(grant.unit)
     let changes = [...reportedChanges(entry, status), ...await ignoredArtifactRows(checkout, grant, status)]
     const rejected = changes.filter(({ rel, status }) =>
@@ -1278,7 +1293,7 @@ export async function openExecutorCoordinator(
     )
     if (rejected.length) {
       const detail = `Resolve out-of-scope edits before replaying: ${rejected.map(({ rel }) => rel).join(", ")}.`
-      return neverSetRows(rejected) ? outsidePerimeter(blocked(detail)) : blocked(detail)
+      return neverSetRows(rejected) ? outsidePerimeter(blocked(detail)) : blocked(detail, "executor")
     }
     const handoffOnly = changes.length === 1 && changes[0]!.rel === handoff
     let continuation: true | undefined
@@ -1297,7 +1312,7 @@ export async function openExecutorCoordinator(
         if (!plan || !task) return blocked("The parked task is outside the current phase.")
         const check = await parkCheck(checkout, plan, task, blocker)
         if (check.type !== "ok") return {
-          kind: "blocked", reason: "commitFailed",
+          kind: "blocked", reason: "commitFailed", actor: "executor",
           detail: check.type === "foreign" ? `${blocker} is outside this phase's index.` : check.problems.join("; "),
         }
         park = { blocker, previous: task.parked }
@@ -1305,7 +1320,7 @@ export async function openExecutorCoordinator(
       } else {
         const status = handoffStatus(text)
         if (text && (!status || blocker)) {
-          return { kind: "blocked", reason: "commitFailed", detail: "The handoff needs a recognized Status line for this step." }
+          return { kind: "blocked", reason: "commitFailed", actor: "executor", detail: "The handoff needs a recognized Status line for this step." }
         }
         if (status === "continue") {
           continuation = true
@@ -1319,7 +1334,7 @@ export async function openExecutorCoordinator(
     if (grant.kind === "formulate" && !(continuation && handoffOnly)) {
       const problems = await formulationProblems(dir, grant, base)
       if (problems.length) {
-        return { kind: "blocked", reason: "commitFailed", detail: `the formulation output is invalid: ${problems.join("; ")}` }
+        return { kind: "blocked", reason: "commitFailed", actor: "executor", detail: `the formulation output is invalid: ${problems.join("; ")}` }
       }
     }
     if (grant.kind === "fix" && !continuation && changes.some(({ rel }) => rel !== gaps)) {
@@ -1334,12 +1349,12 @@ export async function openExecutorCoordinator(
       }
       await rm(join(checkout, gaps), { force: true })
       status = await workspaceStatus(checkout, roots)
-      if (!status) return outsidePerimeter({ kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable after retiring the gap list." })
+      if (!status) return outsidePerimeter({ kind: "blocked", reason: "commitFailed", actor: "person", detail: "Git status is unreadable after retiring the gap list." })
       changes = [...reportedChanges(entry, status), ...await ignoredArtifactRows(checkout, grant, status)]
     }
     const paths = changes.map(({ rel }) => rel)
     if (booking.retireGaps && !paths.some((path) => path !== gaps)) {
-      return blocked("The booked fix's changes are missing. Restore them before replaying.")
+      return blocked("The booked fix's changes are missing. Restore them before replaying.", "executor")
     }
     let verdict: VerifyVerdict | undefined
     let gapCount: number | undefined
@@ -1382,11 +1397,11 @@ export async function openExecutorCoordinator(
             problems.push(`${gaps} carries no \`### Gap\` heading — each countable gap is one \`### Gap\` heading`)
           }
         }
-        return { kind: "blocked", reason: "commitFailed", detail: `the verification output is invalid: ${problems.join("; ")}` }
+        return { kind: "blocked", reason: "commitFailed", actor: "executor", detail: `the verification output is invalid: ${problems.join("; ")}` }
       }
     }
     if (!paths.length) {
-      if (booking.intent) return blocked("The booked share's changes are missing. Restore them before replaying.")
+      if (booking.intent) return blocked("The booked share's changes are missing. Restore them before replaying.", "executor")
       return finish({ kind: "without-landing", reason: "zero-write" })
     }
     // The distillation output's collect (0277): grammars alone, ahead of any
@@ -1399,7 +1414,7 @@ export async function openExecutorCoordinator(
     if (grant.kind === "distill") {
       const problems = await distillationProblems(checkout, grant)
       if (problems.length) {
-        return { kind: "blocked", reason: "commitFailed", detail: `the handover distillation is invalid: ${problems.join("; ")}` }
+        return { kind: "blocked", reason: "commitFailed", actor: "executor", detail: `the handover distillation is invalid: ${problems.join("; ")}` }
       }
     }
     // The audit output's collect (0278): grammars alone, in the distill
@@ -1412,7 +1427,7 @@ export async function openExecutorCoordinator(
     if (grant.kind === "audit") {
       const problems = await auditProblems(checkout, grant)
       if (problems.length) {
-        return { kind: "blocked", reason: "commitFailed", detail: `the close-audit findings are invalid: ${problems.join("; ")}` }
+        return { kind: "blocked", reason: "commitFailed", actor: "executor", detail: `the close-audit findings are invalid: ${problems.join("; ")}` }
       }
     }
 
@@ -1447,15 +1462,15 @@ export async function openExecutorCoordinator(
       if (root !== checkout) {
         const record = bookedRoots.find((item) => item.root === prefix)
         if (booking.intent && (!record || record.base !== rootBase || record.tree !== rootTree)) {
-          return blocked("The workspace no longer matches the booked share. Restore its contents before replaying.")
+          return blocked("The workspace no longer matches the booked share. Restore its contents before replaying.", "executor")
         }
       }
       shares.push({ root, prefix, base: rootBase, tree: rootTree, staged })
     }
     const top = shares.find((share) => share.root === checkout)
     if (!top) {
-      if (booking.intent) return blocked("The booked share's changes are missing. Restore them before replaying.")
-      return blocked("The share's landing anchors the target repository's own commit; a settlement that changes only nested repositories cannot witness one. Include a top-repository path such as the unit's handoff.")
+      if (booking.intent) return blocked("The booked share's changes are missing. Restore them before replaying.", "executor")
+      return blocked("The share's landing anchors the target repository's own commit; a settlement that changes only nested repositories cannot witness one. Include a top-repository path such as the unit's handoff.", "executor")
     }
     const tree = top.tree
     for (const record of bookedRoots) {
@@ -1469,23 +1484,23 @@ export async function openExecutorCoordinator(
       const messageText = shareMessage(grant, !!booking.intent?.park)
       const expected = record.base ? `${record.base}\n${record.tree}\n${messageText}` : `${record.tree}\n${messageText}`
       if (head === record.base || witness !== expected) {
-        return blocked("The booked share's changes are missing. Restore them before replaying.")
+        return blocked("The booked share's changes are missing. Restore them before replaying.", "executor")
       }
     }
     if (booking.intent && (tree !== booking.intent.tree || verdict !== booking.intent.verdict || gapCount !== booking.intent.gapCount || continuation !== booking.intent.continuation || park?.blocker !== booking.intent.park?.blocker || park?.previous !== booking.intent.park?.previous)) {
-      return blocked("The workspace no longer matches the booked share. Restore its contents before replaying.")
+      return blocked("The workspace no longer matches the booked share. Restore its contents before replaying.", "executor")
     }
     if (booking.retireGaps) {
       const retired = await git(checkout, ["ls-tree", tree, "--", gaps])
       const work = shares.some((share) => share.staged.some((path) => share.root !== checkout || path !== gaps))
       if (retired.code !== 0 || retired.out || !work) {
-        return blocked("The staged fix must include work and retire the previous gap list.")
+        return blocked("The staged fix must include work and retire the previous gap list.", "executor")
       }
     }
     if (artifact) {
       const stagedArtifact = await git(checkout, ["show", `${tree}:${artifact.path}`])
       if (stagedArtifact.code !== 0 || !sameDocument(stagedArtifact.out, artifact.text)) {
-        return blocked("The staged verdict or handoff differs from the evidence read on disk.")
+        return blocked("The staged verdict or handoff differs from the evidence read on disk.", "executor")
       }
     }
     if (!top.staged.length) return finish({ kind: "without-landing", reason: "zero-write" })
@@ -1502,7 +1517,7 @@ export async function openExecutorCoordinator(
       const specs = share.staged.map((path) => `:(literal)${path}`)
       const committed = await git(share.root, [...await identityArgs(share.root), "commit", "-m", commitMessage, "--", ...specs])
       if (committed.code !== 0) {
-        return { kind: "blocked", reason: "commitFailed", detail: committed.err.trim() || committed.out.trim() }
+        return { kind: "blocked", reason: "commitFailed", actor: "person", detail: committed.err.trim() || committed.out.trim() }
       }
       if (share.root !== checkout) checkpoint?.("nested-committed")
     }
@@ -1543,7 +1558,9 @@ export async function openExecutorCoordinator(
       await book(entry, { ...booking, receipt })
       return receipt
     }
-    const blocked = (detail: string): BlockedReport => ({ kind: "blocked", reason: "commitFailed", detail })
+    // 0308: commitFailed's family default is person (the git-mechanical
+    // arm); the reply-channel refusals the holder corrects pass executor.
+    const blocked = (detail: string, actor: Actor = ACTOR_OF_REASON.commitFailed): BlockedReport => ({ kind: "blocked", reason: "commitFailed", actor, detail })
     const todo = taskStatePaths(grant.unit).pending
     // A prior settlement's construction already landed: the witness is the
     // commit's own shape — the booked parent beside the construction's
@@ -1562,18 +1579,21 @@ export async function openExecutorCoordinator(
     // Out-of-scope edits beside the reply channel refuse exactly as the
     // standing settlement does (the fence admits only the todo path).
     const status = await workspaceStatus(checkout)
-    if (!status) return outsidePerimeter({ kind: "blocked", reason: "commitFailed", detail: "Git status is unreadable. Inspect the index before replaying." })
+    if (!status) return outsidePerimeter({ kind: "blocked", reason: "commitFailed", actor: "person", detail: "Git status is unreadable. Inspect the index before replaying." })
     const dirt = status.filter(({ rel, status: row }) => !(row === "??" && workdirEntry(rel)))
     const rejected = dirt.filter(({ rel }) => rel !== todo)
     if (rejected.length) {
       const detail = `Resolve out-of-scope edits before replaying: ${rejected.map(({ rel }) => rel).join(", ")}.`
-      const report: BlockedReport = { kind: "blocked", reason: "isolation", detail }
-      return neverSetRows(rejected) ? outsidePerimeter(report) : report
+      // 0308: the arms split their addressee — the holder can revert its own
+      // out-of-scope edits and re-report; a never-set row is the person's.
+      return neverSetRows(rejected)
+        ? outsidePerimeter({ kind: "blocked", reason: "isolation", actor: "person", detail })
+        : { kind: "blocked", reason: "isolation", actor: "executor", detail }
     }
     if (!dirt.some(({ rel }) => rel === todo)) return finish({ kind: "without-landing", reason: "zero-write" })
     // The reply, read off the channel before anything touches it.
     const replyText = await Bun.file(join(checkout, todo)).text().catch(() => undefined)
-    if (replyText === undefined) return blocked(`The reply is missing: rewrite ${todo} with the prescribed reply shape, then re-report.`)
+    if (replyText === undefined) return blocked(`The reply is missing: rewrite ${todo} with the prescribed reply shape, then re-report.`, "executor")
     // The landing's first act restores the channel to the booked floor —
     // the session's write is the channel, never the document, and every
     // derivation below (the assembly, the plan loads) reads the clean
@@ -1583,10 +1603,10 @@ export async function openExecutorCoordinator(
     // restore and the commit voids the attempt honestly (the zero-write
     // floor; the floor stands again for a fresh claim).
     const restore = await git(checkout, ["restore", "--source", base, "--", `:(literal)${todo}`])
-    if (restore.code !== 0) return blocked(restore.err.trim() || "The reply channel could not be restored to the booked floor.")
+    if (restore.code !== 0) return blocked(restore.err.trim() || "The reply channel could not be restored to the booked floor.", "operator")
     const composed = await composeSynthesizedTodo(checkout, replyText)
     if (composed.kind === "problems") {
-      return blocked(`the synthesis reply is invalid: ${composed.problems.join("; ")}. The submitted reply was consumed and ${todo} was restored. Write the complete corrected reply at ${todo}, then retry the original report.`)
+      return blocked(`the synthesis reply is invalid: ${composed.problems.join("; ")}. The submitted reply was consumed and ${todo} was restored. Write the complete corrected reply at ${todo}, then retry the original report.`, "executor")
     }
     const construction = composed.construction
     const landedDoc = await constructFormulation(checkout, construction.phase, construction.todo, construction.record)
@@ -1598,7 +1618,7 @@ export async function openExecutorCoordinator(
       // so the next attempt starts clean (the reply is consumed either
       // way — a fresh claim re-runs the session over the standing floor).
       await git(checkout, ["restore", "--source", base, "--", `:(literal)${todo}`]).catch(() => undefined)
-      return blocked(landedDoc.question)
+      return blocked(landedDoc.question, "executor")
     }
     const commit = await gitRead(checkout, "rev-parse", "HEAD")
     return finish({ kind: "landed", commit })
@@ -1606,7 +1626,7 @@ export async function openExecutorCoordinator(
 
   async function closeVerified(entry: Entry, booking: EndedBooking, intent: CloseIntent): Promise<Receipt | SettlementBlocked> {
     const grant = entry.grant
-    const block = (detail: string): BlockedReport => ({ kind: "blocked", reason: "isolation", detail })
+    const block = (detail: string, actor: Actor = ACTOR_OF_REASON.isolation): BlockedReport => ({ kind: "blocked", reason: "isolation", actor, detail })
     if (grant.kind !== "verify") return outsidePerimeter(block("A close-out has no verification grant."))
     const { unit, index } = grant
     const { pending, complete } = taskStatePaths(unit)
@@ -1644,7 +1664,7 @@ export async function openExecutorCoordinator(
     const unexpected = status ? reportedChanges(entry, status).filter(({ rel }) => !paths.has(rel)) : []
     if (todo.code !== 0 || oldIndex.code !== 0 || !status || unexpected.length) {
       const detail = "Inspect unexpected workspace changes before replaying task close-out."
-      return neverSetRows(unexpected) ? outsidePerimeter(block(detail)) : block(detail)
+      return neverSetRows(unexpected) ? outsidePerimeter(block(detail)) : block(detail, "executor")
     }
 
     const [pendingText, doneText, indexText, gapText] = await Promise.all(
@@ -1674,7 +1694,7 @@ export async function openExecutorCoordinator(
     const appeared = changed ? reportedChanges(entry, changed).filter(({ rel }) => !paths.has(rel)) : []
     if (!changed || appeared.length) {
       const detail = "Unexpected workspace changes appeared during task close-out."
-      return neverSetRows(appeared) ? outsidePerimeter(block(detail)) : block(detail)
+      return neverSetRows(appeared) ? outsidePerimeter(block(detail)) : block(detail, "executor")
     }
     const prepare = changed.filter(({ rel, status }) => paths.has(rel) && status[1] !== " ").map(({ rel }) => `:(literal)${rel}`)
     if (prepare.length) await gitRead(dir, "add", "-A", "--", ...prepare)
@@ -1698,7 +1718,7 @@ export async function openExecutorCoordinator(
       entry = await book(entry, booking)
     }
     const commit = await git(dir, [...await identityArgs(dir), "commit", "-m", commitMessage, "--", ...staged.map((path) => `:(literal)${path}`)])
-    if (commit.code !== 0) return { kind: "blocked", reason: "commitFailed", detail: commit.err.trim() || commit.out.trim() }
+    if (commit.code !== 0) return { kind: "blocked", reason: "commitFailed", actor: "person", detail: commit.err.trim() || commit.out.trim() }
     checkpoint?.("closed-commit")
     const landed = await gitRead(dir, "rev-parse", "HEAD")
     const witness = await gitRead(dir, "show", "-s", "--format=%P%n%T%n%B", landed)
@@ -1733,7 +1753,7 @@ export async function openExecutorCoordinator(
   }
 
   function leaseWait(entry: Entry): LeaseWait {
-    return { kind: "wait", reason: "lease-held", deadline: entry.grant.deadline, detail: `Lease held by channel ${entry.holder.channel || "default"} until ${new Date(entry.grant.deadline).toISOString()}.` }
+    return { kind: "wait", reason: "lease-held", actor: "workflow", deadline: entry.grant.deadline, detail: `Lease held by channel ${entry.holder.channel || "default"} until ${new Date(entry.grant.deadline).toISOString()}.` }
   }
 
   function lookup(step: string, lease: string): Entry {
@@ -1781,7 +1801,7 @@ export async function openExecutorCoordinator(
     // (0287): the landed arm below already refuses it — its booking asserts
     // no share — so the wait never fires over a reconciliation.
     if (last?.booking && (!previous || (previous.kind === "landed" && !closedUnit && !previous.continuation && !previous.parked))) {
-      return { kind: "wait", reason: "in-flight", detail: "The previous share requires settlement or verification." }
+      return { kind: "wait", reason: "in-flight", actor: "workflow", detail: "The previous share requires settlement or verification." }
     }
 
     // A failed, expired, or released lease can leave a continuation. Its
@@ -1794,7 +1814,7 @@ export async function openExecutorCoordinator(
     // audit session is an ordinary whole-task session, its handed-over
     // continuation resuming as the next audit attempt on the same unit.
     if (last && last.grant.kind !== "execute" && last.grant.kind !== "formulate" && last.grant.kind !== "synthesize" && last.grant.kind !== "distill" && last.grant.kind !== "audit" && !closedUnit) {
-      return { kind: "wait", reason: "in-flight", detail: "The execute share has advanced to verification." }
+      return { kind: "wait", reason: "in-flight", actor: "workflow", detail: "The execute share has advanced to verification." }
     }
     // A reconciled entry is never a continuation (0287): its claim ended —
     // the unbooked-expired-released shapes alone continue (the takeover's
@@ -1815,7 +1835,7 @@ export async function openExecutorCoordinator(
     const step = await readExecutorPreview(dir, resumeUnit, route ? { task: route, scoped } : undefined, checkout)
     if (step.kind !== "execute" && step.kind !== "formulate" && step.kind !== "synthesize" && step.kind !== "distill" && step.kind !== "audit") return step
     if (attempts(stepID(step)) >= MAX_ATTEMPTS) {
-      return { kind: "blocked", reason: "attemptsExhausted", detail: `${step.unit} has reached the ${MAX_ATTEMPTS}-attempt limit.` }
+      return { kind: "blocked", reason: "attemptsExhausted", actor: "person", detail: `${step.unit} has reached the ${MAX_ATTEMPTS}-attempt limit.` }
     }
     // The admission shape (0258): the target directory must itself be a Git
     // work-tree root — the git-anchored settlement posture (P4). Repositories
@@ -1824,7 +1844,7 @@ export async function openExecutorCoordinator(
     // never an admission criterion.
     const top = await gitRead(dir, "rev-parse", "--show-toplevel")
     if (top !== dir) {
-      return { kind: "blocked", reason: "isolation", detail: "The executor requires the target directory to be its own Git work-tree root." }
+      return { kind: "blocked", reason: "isolation", actor: "person", detail: "The executor requires the target directory to be its own Git work-tree root." }
     }
     const handoff = handedOver ?? priorHandoff
     if (handoff?.grant.unit === step.unit) {
@@ -1833,11 +1853,11 @@ export async function openExecutorCoordinator(
       const receipt = handoff.booking?.receipt
       if (!status || receipt?.kind !== "landed" || !(scoped && !handoff.worktree ? await knownHead(receipt.commit, head) : (await settledChain(checkout, receipt.commit, head)) !== undefined) ||
           (!continuation && reportedChanges(handoff, status).length > 0)) {
-        return { kind: "blocked", reason: "isolation", detail: "The handed-over workspace must still match the landed share." }
+        return { kind: "blocked", reason: "isolation", actor: "person", detail: "The handed-over workspace must still match the landed share." }
       }
       if (entries.filter(({ grant, booking }) => grant.unit === step.unit &&
           booking?.receipt?.kind === "landed" && booking.receipt.continuation).length >= STEER_CHAIN_BOUND) {
-        return { kind: "blocked", reason: "attemptsExhausted", detail: "The execution handover chain reached its bound." }
+        return { kind: "blocked", reason: "attemptsExhausted", actor: "person", detail: "The execution handover chain reached its bound." }
       }
     }
     if (continuation?.grant.unit === step.unit && (!continuation.worktree || continuation.worktree.established)) {
@@ -1845,7 +1865,7 @@ export async function openExecutorCoordinator(
       const head = await gitRead(checkout, "rev-parse", "HEAD")
       if (!status || !(scoped && !continuation.worktree ? await knownHead(continuation.base, head) : (await settledChain(checkout, continuation.base, head)) !== undefined) ||
           reportedChanges(continuation, status).some(({ rel }) => !permitted(continuation, rel))) {
-        return { kind: "blocked", reason: "isolation", detail: "The previous attempt's workspace needs inspection before continuation." }
+        return { kind: "blocked", reason: "isolation", actor: "person", detail: "The previous attempt's workspace needs inspection before continuation." }
       }
     }
     return step
@@ -1860,9 +1880,15 @@ export async function openExecutorCoordinator(
     const pending: MenuPending[] = admission?.kind === "human"
       ? [{ kind: "gate", gate: admission.gate, document: admission.document }]
       : []
+    // 0308: the parked waits ride both menu arms — a holder with live
+    // leases reads the same lane state a fresh claimant does.
+    const parkPlan = await readExecutorParkPlan(dir)
+    const waiting: Menu["waiting"] = parkPlan
+      ? parkedWaiting(parkPlan).map(({ id, title, parked }) => ({ unit: id, title, blocker: parked! }))
+      : []
     const leases = entries.filter((entry) => live(entry, at) && sameHolder(entry.holder, holder))
       .map(({ grant: { id: step, lease, kind, deadline, attempt } }) => ({ step, lease, kind, deadline, attempt }))
-    if (leases.length) return { claimable: [], leases, types, pending }
+    if (leases.length) return { claimable: [], leases, types, waiting, pending }
     const claimable: Menu["claimable"] = []
     let held: MenuPending | undefined
     const tasks = await scopeCandidates()
@@ -1882,17 +1908,17 @@ export async function openExecutorCoordinator(
         // menu when nothing is claimable — the lane's own answer, never a
         // silent empty list.
         const row: MenuPending = step.kind === "wait"
-          ? { kind: "wait", reason: step.reason, detail: step.detail }
-          : { kind: "blocked", reason: step.reason, detail: step.detail }
+          ? { kind: "wait", reason: step.reason, actor: step.actor, detail: step.detail }
+          : { kind: "blocked", reason: step.reason, actor: step.actor, detail: step.detail }
         held ??= row
       }
     }
-    return { claimable, leases, types, pending: held && !claimable.length ? [...pending, held] : pending }
+    return { claimable, leases, types, waiting, pending: held && !claimable.length ? [...pending, held] : pending }
   }
 
   function withoutGrant(step: Decision): DerivedStep {
     return step.kind === "execute" || step.kind === "verify" || step.kind === "fix" || step.kind === "formulate" || step.kind === "synthesize" || step.kind === "distill" || step.kind === "audit"
-      ? { kind: "wait", reason: "not-ready", detail: `${step.unit} is available for a new claim.` }
+      ? { kind: "wait", reason: "not-ready", actor: "workflow", detail: `${step.unit} is available for a new claim.` }
       : step
   }
 
@@ -1912,7 +1938,7 @@ export async function openExecutorCoordinator(
     if (last.grant.kind === "verify" && last.booking?.receipt?.kind === "landed") {
       return last.booking.receipt.closeCommit
         ? nextWithoutGrant(at)
-        : { kind: "wait", reason: "in-flight", detail: "The verification verdict awaits fix routing." }
+        : { kind: "wait", reason: "in-flight", actor: "workflow", detail: "The verification verdict awaits fix routing." }
     }
     if (last.grant.kind !== "verify" && last.booking?.receipt?.kind !== "landed") return nextWithoutGrant(at)
     const producer = entries.findLast((entry) => entry.grant.unit === last.grant.unit && entry.grant.kind !== "verify" && entry.booking?.receipt?.kind === "landed")
@@ -1930,14 +1956,14 @@ export async function openExecutorCoordinator(
     // step naming the person's transfer).
     if (producer.grant.kind === "distill" || producer.grant.kind === "synthesize") return nextWithoutGrant(at)
     if (booking?.outcome !== "ended" || !booking.intent || !producer.holder.token) {
-      return { kind: "blocked", reason: "isolation", detail: "The landed share lacks durable producer provenance." }
+      return { kind: "blocked", reason: "isolation", actor: "person", detail: "The landed share lacks durable producer provenance." }
     }
     const checkout = await openCheckout(producer)
     if (typeof checkout !== "string") return checkout
     const head = await gitRead(checkout, "rev-parse", "HEAD")
     const witness = await gitRead(checkout, "show", "-s", "--format=%P%n%T%n%B", receipt.commit)
     if (!(producer.scope && !producer.worktree ? await knownHead(receipt.commit, head) : (await settledChain(checkout, receipt.commit, head)) !== undefined) || witness !== `${booking.parent ?? producer.base}\n${booking.intent.tree}\n${shareMessage(producer.grant)}`) {
-      return { kind: "blocked", reason: "isolation", detail: "The recorded execute share no longer matches Git history." }
+      return { kind: "blocked", reason: "isolation", actor: "person", detail: "The recorded execute share no longer matches Git history." }
     }
     if (producer.holder.token === holder.token) {
       // The settled-holder terminal (0273, 0264-05's fix). The producer this
@@ -1959,7 +1985,7 @@ export async function openExecutorCoordinator(
       }
     }
     if (attempts(verifyID(producer.grant.unit)) >= MAX_ATTEMPTS) {
-      return { kind: "blocked", reason: "attemptsExhausted", detail: `${producer.grant.unit} has reached the ${MAX_ATTEMPTS}-attempt verification limit.` }
+      return { kind: "blocked", reason: "attemptsExhausted", actor: "person", detail: `${producer.grant.unit} has reached the ${MAX_ATTEMPTS}-attempt verification limit.` }
     }
     // The verify share's charter baseline: the unit's true start — its first
     // landed producer share (execute, formulate, or audit; 0184's adoption
@@ -1987,7 +2013,7 @@ export async function openExecutorCoordinator(
     for (const entry of failures) {
       const evidence = entry.booking?.receipt
       if (evidence?.kind !== "landed" || !evidence.gapCount) {
-        return { kind: "blocked", reason: "isolation", detail: "A verification gap count is missing." }
+        return { kind: "blocked", reason: "isolation", actor: "operator", detail: "A verification gap count is missing." }
       }
       if (evidence.gapCount < best) {
         best = evidence.gapCount
@@ -1997,7 +2023,7 @@ export async function openExecutorCoordinator(
       }
     }
     if (noProgress >= 2) {
-      return { kind: "blocked", reason: "fixBudget", detail: "Two fix rounds made no progress against the best recorded gap count." }
+      return { kind: "blocked", reason: "fixBudget", actor: "person", detail: "Two fix rounds made no progress against the best recorded gap count." }
     }
     const unit = last.grant.unit
     const round = failures.length
@@ -2005,7 +2031,7 @@ export async function openExecutorCoordinator(
       booking?.receipt?.kind === "landed" && booking.receipt.continuation)
     if (fixChain.length >= STEER_CHAIN_BOUND ||
         attempts(`${unit} fix ${round}.${fixChain.length + 1}`) >= MAX_ATTEMPTS) {
-      return { kind: "blocked", reason: "attemptsExhausted", detail: `${unit} has reached the fix attempt limit.` }
+      return { kind: "blocked", reason: "attemptsExhausted", actor: "person", detail: `${unit} has reached the fix attempt limit.` }
     }
     const checkout = await openCheckout(last)
     if (typeof checkout !== "string") return checkout
@@ -2013,14 +2039,14 @@ export async function openExecutorCoordinator(
     const handedOver = fixChain.at(-1)?.booking?.receipt
     const expected = handedOver?.kind === "landed" ? handedOver.commit : receipt.commit
     if (!(last.scope && !last.worktree ? await knownHead(expected, head) : (await settledChain(checkout, expected, head)) !== undefined)) {
-      return { kind: "blocked", reason: "isolation", detail: "HEAD no longer matches the landed gap list or fix handover." }
+      return { kind: "blocked", reason: "isolation", actor: "person", detail: "HEAD no longer matches the landed gap list or fix handover." }
     }
     const dirty = await workspaceStatus(checkout)
     const continuation = last.grant.kind === "fix"
     const ownedDirt = latest?.kind !== "landed"
     if (!dirty || (continuation && reportedChanges(last, dirty).some(({ rel }) => !ownedDirt || !permitted(last, rel)
     ))) {
-      return { kind: "blocked", reason: "isolation", detail: "Inspect the fix workspace before continuing." }
+      return { kind: "blocked", reason: "isolation", actor: "person", detail: "Inspect the fix workspace before continuing." }
     }
     return readExecutorFollowUp(dir, { kind: "fix", unit, round, head }, continuation, !!last.scope, checkout)
   }
@@ -2081,22 +2107,22 @@ export async function openExecutorCoordinator(
     const neighbors = reserved().filter(({ grant }) => grant.unit !== task)
     if (!route) {
       const held = neighbors.find((entry) => live(entry, at))
-      return held ? leaseWait(held) : { kind: "wait", reason: "not-ready", detail: `${task} is not ready in the current workspace tier.` }
+      return held ? leaseWait(held) : { kind: "wait", reason: "not-ready", actor: "workflow", detail: `${task} is not ready in the current workspace tier.` }
     }
     const scope = reservation?.scope ?? docScope(route.task)
     const conflict = neighbors.find((entry) => !scopesDisjoint(scope, entry.scope!))
     if (conflict || (reservation && live(reservation, at))) {
       const held = conflict ?? reservation!
-      return live(held, at) ? leaseWait(held) : { kind: "wait", reason: "in-flight", detail: `${held.grant.unit} reserves an overlapping scope until settlement.` }
+      return live(held, at) ? leaseWait(held) : { kind: "wait", reason: "in-flight", actor: "workflow", detail: `${held.grant.unit} reserves an overlapping scope until settlement.` }
     }
     const status = await workspaceStatus(dir)
     let dirt = status?.filter(({ rel, status }) => !(status === "??" && workdirEntry(rel)) && !siblingDirt(task, rel, status))
     if (route.worktree) {
-      if (!dirt || dirt.length) return { kind: "blocked", reason: "isolation", detail: "Resolve main checkout changes before continuing worktree leases." }
+      if (!dirt || dirt.length) return { kind: "blocked", reason: "isolation", actor: "person", detail: "Resolve main checkout changes before continuing worktree leases." }
       const head = await gitRead(dir, "rev-parse", "HEAD")
       for (const { worktree } of reserved()) {
         if (worktree && !await knownHead(worktree.start, head)) {
-          return { kind: "blocked", reason: "isolation", detail: "Main HEAD moved outside the executor's settled shares. Inspect the retained lanes before retrying." }
+          return { kind: "blocked", reason: "isolation", actor: "person", detail: "Main HEAD moved outside the executor's settled shares. Inspect the retained lanes before retrying." }
         }
       }
       if (reservation?.worktree?.established) {
@@ -2109,7 +2135,7 @@ export async function openExecutorCoordinator(
     const previous = reservation?.booking?.receipt
     const continuing = reservation && previous?.kind !== "landed"
     if (!dirt || dirt.some(({ rel }) => !continuing || !permitted(reservation, rel))) {
-      return { kind: "blocked", reason: "isolation", detail: "Resolve workspace changes outside the reserved scopes before continuing." }
+      return { kind: "blocked", reason: "isolation", actor: "person", detail: "Resolve workspace changes outside the reserved scopes before continuing." }
     }
     const step = await unitDecision(holder, at, kind, reservation, task, true)
     return step.kind === "execute" || step.kind === "verify" || step.kind === "fix"
@@ -2145,7 +2171,7 @@ export async function openExecutorCoordinator(
     const last = entries.at(-1)
     const serial = serialReservation()
     if (serial && live(serial, at)) return leaseWait(serial)
-    if (pendingReport()) return { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." }
+    if (pendingReport()) return { kind: "wait", reason: "in-flight", actor: "workflow", detail: "A previous share requires settlement." }
 
     const admission = await readExecutorAdmissionBlock(dir)
     if (admission) return admission
@@ -2163,7 +2189,7 @@ export async function openExecutorCoordinator(
       const declaration = plan?.tasks.find(({ id }) => id === task)
       if (declaration && docEligible(declaration)) return scopedDecision(holder, at, kind, task)
       if (kind === undefined || kind === "execute" || kind === "formulate" || kind === "synthesize" || kind === "distill" || kind === "audit") return preview(at, null, task)
-      return { kind: "wait", reason: "not-ready", detail: `${task} has no ${kind} step to claim.` }
+      return { kind: "wait", reason: "not-ready", actor: "executor", detail: `${task} has no ${kind} step to claim.` }
     }
     if (hasReservations || scopedTasks.length) {
       if (task) return scopedDecision(holder, at, kind, task, route)
@@ -2181,7 +2207,7 @@ export async function openExecutorCoordinator(
         wait ??= step.kind === "formulate" || step.kind === "synthesize" || step.kind === "distill" || step.kind === "audit" ? withoutGrant(step) : step
       }
       if (wait) return wait
-      return { kind: "wait", reason: "in-flight", detail: "The current workspace tier must settle before other work starts." }
+      return { kind: "wait", reason: "in-flight", actor: "workflow", detail: "The current workspace tier must settle before other work starts." }
     }
     return unitDecision(holder, at, kind, last)
   }
@@ -2215,10 +2241,10 @@ export async function openExecutorCoordinator(
       // it too (0278): an audit ask before the close arms construct the
       // unit, an execute ask while the standing unit routes the phase.
       if (kind !== undefined && step.kind !== kind) {
-        return { kind: "wait", reason: "not-ready", detail: `${step.unit} has no ${kind} step to claim.` }
+        return { kind: "wait", reason: "not-ready", actor: "executor", detail: `${step.unit} has no ${kind} step to claim.` }
       }
       if (task !== undefined && task !== step.unit) {
-        return { kind: "wait", reason: "not-ready", detail: `${task} is not the next serial unit.` }
+        return { kind: "wait", reason: "not-ready", actor: "executor", detail: `${task} is not the next serial unit.` }
       }
       const last = latest(step.unit)
       const retained = step.worktree && last && !terminal(last) ? last.worktree : undefined
@@ -2229,7 +2255,7 @@ export async function openExecutorCoordinator(
       if (typeof checkout !== "string") return checkout
       const base = workspace && !workspace.established ? workspace.start : await gitRead(checkout, "rev-parse", "HEAD")
       if (step.kind !== "execute" && step.kind !== "formulate" && step.kind !== "synthesize" && step.kind !== "distill" && step.kind !== "audit" && base !== step.head) {
-        return { kind: "blocked", reason: "isolation", detail: "HEAD moved before the grant." }
+        return { kind: "blocked", reason: "isolation", actor: "person", detail: "HEAD moved before the grant." }
       }
       const { touches, scope, worktree: _, ...work } = step.kind === "verify" || step.kind === "formulate" || step.kind === "synthesize" || step.kind === "distill" || step.kind === "audit" ? { ...step, touches: undefined } : step
       // The grant's budget is the project's declared executorLease (0260);
@@ -2275,12 +2301,12 @@ export async function openExecutorCoordinator(
       if (last && (kind === undefined || kind === last.grant.kind) && live(last, now())) {
         if (!sameHolder(last.holder, holder)) return leaseWait(last)
         if (last.worktree && !last.worktree.established) {
-          return { kind: "wait", reason: "in-flight", detail: "Retry the claim to complete workspace creation." }
+          return { kind: "wait", reason: "in-flight", actor: "executor", detail: "Retry the claim to complete workspace creation." }
         }
         const checkout = await openCheckout(last)
         return typeof checkout === "string" ? withAnswers(holder, last.grant) : checkout
       }
-      return { kind: "wait", reason: "not-ready", detail: `This channel has no live brief for ${task}.` }
+      return { kind: "wait", reason: "not-ready", actor: "executor", detail: `This channel has no live brief for ${task}.` }
     }),
     verification: (holder) => serialize(async () => {
       const step = await select(holder, now(), "verify")
@@ -2316,7 +2342,7 @@ export async function openExecutorCoordinator(
       if (outcome !== "ended" && outcome !== "failed") throw new Error("Invalid report outcome.")
       if (!sameHolder(entry.holder, holder)) return live(entry, at) ? leaseWait(entry) : withoutGrant(await select(holder, at))
       if (entry.worktree && !entry.worktree.established) {
-        return { kind: "wait", reason: "in-flight", detail: "Retry the claim to complete workspace creation before reporting." }
+        return { kind: "wait", reason: "in-flight", actor: "executor", detail: "Retry the claim to complete workspace creation before reporting." }
       }
       if (entry.booking) {
         // A reconciled entry answers its (late) holder with the
@@ -2328,7 +2354,7 @@ export async function openExecutorCoordinator(
         if (entry.booking.receipt) return entry.booking.receipt
       } else {
         if (!live(entry, at)) return waitForSuccessor(entry, at) ?? withoutGrant(await select(holder, at))
-        if (pendingReport()) return { kind: "wait", reason: "in-flight", detail: "A previous report requires settlement first." }
+        if (pendingReport()) return { kind: "wait", reason: "in-flight", actor: "workflow", detail: "A previous report requires settlement first." }
         entry = await book(entry, outcome === "failed"
           ? { outcome, note, receipt: { kind: "without-landing", reason: "failed" } }
           : { outcome, note })

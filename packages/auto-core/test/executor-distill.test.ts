@@ -148,7 +148,7 @@ test("the floor: every state that is not the claimable boundary is byte-identica
   write(open, "docs/T-001/done.md", "# Ship the widget\n")
   commitFixture(open)
   expect(await readExecutorPreview(open)).toEqual({
-    kind: "wait", reason: "not-ready", detail: "The open round has no pending tasks. Add work or close the round.",
+    kind: "wait", reason: "not-ready", actor: "person", detail: "The open round has no pending tasks. Add work or close the round.",
   })
 
   const coordinator = await openExecutorCoordinator(done)
@@ -250,7 +250,7 @@ test("the fence: a never-set write escalates to the person (0272 composed); anot
     // the whole surface; 0287's held row names the booked settlement the
     // lane waits on.
     expect((await coordinator.ready({ token: "reader", channel: "menu" })).pending).toEqual([
-      { kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." },
+      { kind: "wait", reason: "in-flight", actor: "workflow", detail: "A previous share requires settlement." },
     ])
 
     // Another phase's handover document: refused, but not never-set (no arm
