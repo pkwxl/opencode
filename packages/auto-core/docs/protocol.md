@@ -380,6 +380,13 @@ named) and beside a run lock held by a driver the daemon does not know (the
 same shared condition the CLI's `unregister` meets); past both, the entry
 is removed — the directory itself is never touched.
 
+Add one task to the current phase with `POST /projects/<project>/tasks`
+using the `control` scope and a one-line `title`. The push append planner
+is retired. If the plan operation receives an input that would have
+started an implied append, it returns 409 and points to task-add. To
+revise a phase plan through formulation, update the phase's planning
+inputs.
+
 ## Tombstones
 
 The compatibility record — vocabulary this spec has removed. A removed

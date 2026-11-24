@@ -24,7 +24,6 @@ export const REPO_LANE: readonly string[] = [
   "test/agent-fake.test.ts",
   "test/agent-pool.test.ts",
   "test/agent-server.test.ts",
-  "test/append-loop.test.ts",
   // The assurance family (plans/0244): the delta measurement drives real
   // git repositories (establishment anchors, nested repositories).
   "test/assurance.test.ts",
@@ -184,7 +183,6 @@ export const UNIT_LANE: readonly string[] = [
   // The pre-round analysis document's pure grammar (plans/0084); the route
   // halves live in test/plan.test.ts's lanes.
   "test/analysis.test.ts",
-  "test/append.test.ts",
   // The project brief's direct home (plans/0215 D3): the install's write
   // discipline over a temp directory, no repository, no spawn.
   "test/brief.test.ts",

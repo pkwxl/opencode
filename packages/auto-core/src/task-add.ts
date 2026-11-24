@@ -39,8 +39,7 @@ export async function addTask(dir: string, phase: PhaseUnit, title: string): Pro
   const id = `T-${String(n).padStart(3, "0")}`
   // The stale handover (plans/0053 D25/F13) goes first, in its own commit: a
   // phase that was already distilled would archive the handover unchanged
-  // while the new task runs. First — unlike appendPlan, which removes it
-  // after the append unit — because this path has no resume record: a kill
+  // while the new task runs. This path has no resume record, so a kill
   // between two commits must leave a state a plain re-run completes, and
   // removal-first means the retry cannot add the task twice. A failed
   // removal commit aborts with nothing added.

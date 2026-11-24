@@ -46,7 +46,8 @@ import type { UnitBaseline } from "./git"
 // task index and task documents), phase-handover = the handover-distillation
 // session (produces the handover document), phase-append = the append-planning
 // session (plans/0053 D23: appends new tasks after the existing task index,
-// model routing reuses the phase-plan role). These sessions previously wrote
+// model routing reuses the phase-plan role). Since 0310, phase-append is
+// accepted only to identify older records during recovery. These sessions previously wrote
 // no recovery point; after an interruption the flow derived the route purely
 // from the AI-written files (task units / the handover document) and silently
 // skipped the session never closed out — see

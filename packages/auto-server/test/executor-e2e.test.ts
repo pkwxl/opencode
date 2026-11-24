@@ -564,6 +564,110 @@ test("the audit grant kind rides the wire beside the standing kinds", async () =
   }
 }, 20_000)
 
+test("an open round accepts a task, constructs its close audit, and closes after audit verification", async () => {
+  const directory = await fixtureProject("auto-executor-round-", { phases: "implement", subtask: "off" })
+  const dataDir = await mkdtemp(join(tmpdir(), "auto-executor-data-"))
+  const git = gitOf(directory)
+  const store = new DaemonStore(dataDir)
+  const project = store.register(directory)
+  const executor = store.issueToken("executor", "producer").token
+  const verifier = store.issueToken("executor", "verifier").token
+  const control = store.issueToken("control", "operator").token
+  const path = (relative: string) => join(directory, relative)
+  const file = (relative: string) => Bun.file(path(relative))
+  const indexPath = "docs/R-01/P01-implement/tasks.md"
+  const auditUnit = "T-003"
+  const start = () => startDaemon({ dataDir, port: 0 })
+  let daemon: DaemonHandle | undefined
+  try {
+    const phases = await file("docs/R-01/phases.md").text()
+    await file("docs/R-01/phases.md").write(phases.replace("# Phases (R-01)\n", "# Phases (R-01)\nKind: open\n"))
+    const index = "# Tasks\n\n- [x] T-001 the widget\n"
+    const original = await file("docs/T-001/todo.md").text()
+    await file("docs/T-001/done.md").write(original)
+    await rm(path("docs/T-001/todo.md"))
+    await file(indexPath).write(index)
+    await file("docs/R-01/round.md").write("# Round R-01\n\n## Goal\n\nDocument the widget.\n\n## Close\n\n- The widget documentation records the round's work.\n")
+    await file("docs/assurance.md").write([
+      "# Assurance", "",
+      "| id | invariant | kind | watched surface | cadence | close | baseline |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| S-20 | widget documentation | judgment | README.md | every-round | close-due |  |",
+      "",
+    ].join("\n"))
+    await git("add", "-A")
+    await git("commit", "-qm", "prepare the open round and its assurance row")
+    daemon = await start()
+
+    async function post(operation: string, token: string, body: unknown = {}, status = 200) {
+      const response = await fetch(`${daemon!.url}/projects/${encodeURIComponent(project.name)}/${operation}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      })
+      const result = await response.json()
+      expect(response.status, JSON.stringify(result)).toBe(status)
+      return result
+    }
+    async function claim(task: string, kind: string, token = executor) {
+      const { step } = await post("executor/claim", token, { task, kind })
+      expect(step).toMatchObject({ kind, unit: task })
+      return step
+    }
+    async function report(grant: { id: string; lease: string }, token: string) {
+      return (await post("executor/report", token, { step: grant.id, lease: grant.lease, outcome: "ended" })).step
+    }
+    async function verify(task: string, evidence: string) {
+      const grant = await claim(task, "verify", verifier)
+      await file(`docs/${task}/report.md`).write(`# Verification\n\n${evidence}\n\nResult: PASS\n\n<!-- auto: eof -->\n`)
+      await report(grant, verifier)
+      expect(await file(`docs/${task}/done.md`).exists()).toBe(true)
+    }
+
+    await post("tasks", control, { title: "Document the widget" })
+    expect(await file(indexPath).text()).toBe(`${index}- [ ] ${TASK_2} Document the widget\n`)
+    expect(await file("docs/T-001/done.md").text()).toBe(original)
+    const taskPath = `docs/${TASK_2}/todo.md`
+    await file(taskPath).write((await file(taskPath).text()).replace("\n\n## Goal", "\nTouches: README.md\n\n## Goal"))
+    await git("add", taskPath)
+    await git("commit", "-qm", "declare the documentation path")
+    const execute = await claim(TASK_2, "execute")
+    await file("README.md").write("# Widget\n\nThe widget reports whether it is available.\n")
+    expect((await report(execute, executor)).kind).toBe("settled")
+    await verify(TASK_2, "README.md documents what the widget reports, and the share changes only the declared documentation path.")
+
+    // Transfer is a person's write operation. Restarting the daemon ends the
+    // coordinator run while preserving the project and settlement ledger.
+    await daemon.stop()
+    daemon = await start()
+    expect(await file(`docs/${auditUnit}/todo.md`).exists()).toBe(false)
+    expect(await post("transfer", control, {}, 409)).toMatchObject({ code: 2 })
+    expect(await file(`docs/${auditUnit}/todo.md`).text()).toContain("Close-audit: R-01")
+    expect(await file("docs/R-01/P01-implement/done.md").exists()).toBe(false)
+
+    const audit = await claim(auditUnit, "audit")
+    expect(audit.prompt).toContain("S-20")
+    await file(audit.findings).write("# Findings\n\n## S-20 — Widget documentation\n\nREADME.md describes what the widget reports.\n\nResult: PASS\n")
+    const audited = await report(audit, executor)
+    expect(audited.kind).toBe("settled")
+    expect(typeof audited.commit).toBe("string")
+    await verify(auditUnit, "The findings name S-20, and the evidence in README.md supports the audit's PASS adjudication.")
+
+    await daemon.stop()
+    daemon = await start()
+    expect(await post("transfer", control)).toMatchObject({ code: 0 })
+    expect(await file("docs/R-01/phases.md").text()).toContain("- [x] P01 implement")
+    const auditCommit = (await git("rev-parse", "--short", audited.commit)).trim()
+    expect(await file("docs/assurance.md").text()).toContain(`R-01 audit @${auditCommit}`)
+    expect((await post("executor/claim", executor)).step.kind).toBe("done")
+    expect(await git("status", "--porcelain")).toBe("")
+  } finally {
+    await daemon?.stop()
+    await rm(dataDir, { recursive: true, force: true })
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 20_000)
+
 // The lifecycle's removal over REST (plans/0284): DELETE /projects/<project>
 // is the projects scope's act; beside the live coordinator this daemon
 // spawned it refuses 409 teaching the stop (DELETE /runs/<id>, the run id

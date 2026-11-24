@@ -53,7 +53,6 @@ import tplModeBrief from "../templates/prompts/_mode-brief.md" with { type: "fil
 import tplParkRelease from "../templates/prompts/park-release.md" with { type: "file" }
 import tplPartials from "../templates/prompts/_partials.md" with { type: "file" }
 import tplPlanVerify from "../templates/prompts/plan-verify.md" with { type: "file" }
-import tplPhaseAppend from "../templates/prompts/phase-append.md" with { type: "file" }
 import tplPhaseHandover from "../templates/prompts/phase-handover.md" with { type: "file" }
 import tplSplitRejected from "../templates/prompts/split-rejected.md" with { type: "file" }
 import tplStepUp from "../templates/prompts/step-up.md" with { type: "file" }
@@ -129,7 +128,6 @@ const embedded: Record<string, string> = {
   // re-merge surface (the blocker's changed paths ∩ the task's Touches:).
   "park-release": tplParkRelease,
   "plan-verify": tplPlanVerify,
-  "phase-append": tplPhaseAppend,
   "phase-handover": tplPhaseHandover,
   "split-rejected": tplSplitRejected,
   "step-up": tplStepUp,
@@ -205,10 +203,6 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // `Fidelity:` line verbatim, and an override must still show the sources
   // and the brief + ledger under review — a verdict judged against nothing.
   "formulate-fidelity": ["Fidelity:", "{{sources}}", "{{brief}}", "{{ledger}}"],
-  // The append planner (plans/0053 D27): the phase-plan task-document skeleton
-  // plus the slots an override must keep rendering — the index path, the
-  // existing-task list and the planning input.
-  "phase-append": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}", "{{existingTasks}}", "{{input}}"],
   // Literal copy of document/roles HANDOVER_SECTIONS (template is
   // intent-domain with frozen imports; test/template.test.ts pins the match).
   "phase-handover": ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index", "{{handover}}"],

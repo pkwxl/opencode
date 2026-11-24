@@ -6,7 +6,7 @@
 // remediable sources re-read before every compose pass
 // (readFormulationSources — plans/0208 D2's split of 0156 D4's captured
 // set), the floor's block map, and the verify-time preview document.
-// Direction: loop-plan/loop-append → formulate-parts → the provider
+// Direction: loop-plan → formulate-parts → the provider
 // domains; never imports the loops.
 import { join } from "node:path"
 import { analysisText } from "./analysis"

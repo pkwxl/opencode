@@ -94,26 +94,26 @@ type PlanPrelude = { type: "loop" } | PlanStop
 //      apply (plans/0206 D2); m mode keeps the D34 uncommitted re-sync
 //      (unreachable — its tail is the single phase);
 //   4. the route is blocked → exit 1;
-//   5. an open step record → the loop finishes it first;
+//   5. an open step record → the loop finishes it first; retired append
+//      records require review and manual recovery;
 //  14. --round → the assisted round-brief preparation stop: the AGENTS.md
 //      round guidance (and the m-mode stub establishment never wrote);
 //  15. --phase → the assisted planning-input preparation stop for the next
 //      phase to plan: the AGENTS.md phase guidance with the pack's scaffold;
-//   6. phased, plan or handover without --append → refuse exit 1 naming
+//   6. phased, plan or handover → refuse exit 1 naming
 //      transfer (nothing is constructed, or the phase is at its boundary);
 //      an input's home is the phase's plan-input.md;
-//   7. phased, execute without --append → an awaiting formulation task of
+//   7. phased, execute → an awaiting formulation task of
 //      the phase the route names dispatches (the loop); the input must equal
 //      the persisted plan-input.md (an input that changes what the todo
 //      rendered refuses naming the transfer re-run, plans/0101 D4), and the
 //      round brief must be filled (the untouched stub refuses exit 2 naming
 //      the fill, plans/0101 D3); otherwise exit 1 naming run and transfer;
 //   8. m mode, empty task index → input: the loop; else a notice;
-//   9. m mode, tasks listed → input: the loop (an append, D23; --append implied, the flag redundant); else a notice;
-//  10. phased, --append on execute or handover → the loop (an append to the phase the route names now, D23).
+//   9. m mode, tasks listed → refuse a planning input with the task-add remedy; else a notice;
+//  10. --append is retired on all routes (plans/0283).
 //  11. --new-task <title> → add one task the person names, with no session,
-//      to the phase the route names now (task-add, the mechanical half of
-//      append planning) and stop for review.
+//      to the phase the route names now (task-add) and stop for review.
 //  12. --export <T-NNN> → render the ready unit's standalone work order
 //      (constitution preamble + the whole-task session's prompt under the
 //      attended flag, src/work-order.ts) and stop, the order on stdout
@@ -124,8 +124,7 @@ type PlanPrelude = { type: "loop" } | PlanStop
 //      may be taken (ruling 4), and adopt re-checks readiness — the export
 //      may have aged.
 // Input is refused before any write on the round-setup rows (D5, rows 1–3);
-// rows 9–11 apply the progress-record guard (D26); --append without input
-// is a usage error everywhere; row 11 refuses while a step is open (its
+// row 11 applies the progress-record guard (D26) and refuses while a step is open (its
 // snapshot and resume machinery must not be bypassed); rows 12–13 refuse the
 // planning input and an open step alike (the step machinery owns the phase's
 // index; a work order renders or closes one unit, a session never plans
@@ -168,14 +167,9 @@ export async function planPrelude(dir: string, opts: {
   const { bin } = shellProfile()
   const surface = surfaceOf()
   const manual = opts.phases === "m"
-  // --append without input is a usage error (D23): appending adds the tasks
-  // planned from the input. The shell checks this before the lock; this
-  // backstops other shells and direct callers, before any route logic.
   // --new-task (the no-session add): the shell checks the shape and the
   // mutual exclusions before the lock; this backstops other shells and
-  // direct callers, before any route logic — including the append backstop,
-  // so a direct --new-task --append call hears the exclusion, not the
-  // append's missing-input line.
+  // direct callers before the retired append flag is checked.
   if (opts.newTask !== undefined) {
     if (!opts.newTask.trim() || opts.newTask.includes("\n")) {
       return stop(1, [`--new-task requires a one-line task title (it becomes the index line and the task document's title); longer context goes into docs/T-NNN/todo.md after the add`])
@@ -190,9 +184,7 @@ export async function planPrelude(dir: string, opts: {
   // The task-append session is retired (plans/0283, the standing
   // disposition): appends ride task-add (one task at a time, no session) and
   // re-formulation (a changed planning input re-formulates the phase's plan
-  // through its formulation). Refused before any route logic, the prelude's
-  // own door — the pull path (a daemon's plan operation) never reaches the
-  // loop's append arms.
+  // through its formulation). Refuse the flag before any route logic.
   if (opts.append) {
     return stop(1, [
       `--append is retired (plans/0283): the task-append session no longer runs — ` +
@@ -435,26 +427,14 @@ export async function planPrelude(dir: string, opts: {
   // must not run under an open step: its snapshot and resume machinery
   // assume they own the phase's index, so --new-task waits until the step is
   // closed out.
-  if (opts.newTask !== undefined) {
-    const open = await openStep(dir)
-    if (open) return stop(1, [openStepRefusal(dir, open, "add the task with --new-task")])
+  const open = await openStep(dir)
+  if (open?.step === "phase-append") return stop(2, [retiredAppendResumeLine(open.unit)])
+  if (open) {
+    if (opts.newTask !== undefined) return stop(1, [openStepRefusal(dir, open, "add the task with --new-task")])
+    if (opts.export !== undefined || opts.adopt !== undefined) return stop(1, [openStepRefusal(dir, open, "export or adopt the unit")])
+    if (opts.round || opts.phase) return stop(1, [openStepRefusal(dir, open, "run the preparation flag again")])
+    return { type: "loop" }
   }
-  // Rows 12–13's open-step refusal: the same reasoning as --new-task's —
-  // the step's snapshot and resume machinery own the phase's index until it
-  // closes, and a work order rendered or adopted under them would bypass
-  // both (returning the loop here would silently ignore the flag).
-  if (opts.export !== undefined || opts.adopt !== undefined) {
-    const open = await openStep(dir)
-    if (open) return stop(1, [openStepRefusal(dir, open, "export or adopt the unit")])
-  }
-  // The assisted-preparation flags' open-step refusal (plans/0084), the same
-  // reasoning as --new-task's: returning the loop here would silently ignore
-  // the flag, so the person hears the step first.
-  if (opts.round || opts.phase) {
-    const open = await openStep(dir)
-    if (open) return stop(1, [openStepRefusal(dir, open, "run the preparation flag again")])
-  }
-  if (await openStep(dir)) return { type: "loop" }
   // Row 14 (--round, plans/0084): the assisted round-brief preparation stop.
   // The route reaching here means the round is established and not complete:
   // point the AGENTS.md guidance at its brief — writing the m-mode stub
@@ -612,43 +592,15 @@ export async function planPrelude(dir: string, opts: {
     })
     return adopted.ok ? stop(0, adopted.lines) : stop(adopted.code, adopted.lines)
   }
-  // The open-round rows (plans/0243 B): an open round has no formulation to
-  // dispatch and no boundary to hold, so the phased rows 6/7/10 below do not
-  // apply to it. Task entry is --new-task (row 11 above, route-unaware) and
-  // --append; a planning input implies the append (m mode's D23 rule, scoped
-  // to the round kind); an empty index teaches the first --new-task; with
-  // the work all done (execute route exhausted or the handover route), the
-  // stop teaches run — the round never advances here, transfer owns its
-  // close. --export / --adopt (--rows 12-13 above) and the preparation
-  // flags keep their own rows: their refusals already speak the truth of an
-  // open round's routes.
+  // Open rounds accept hand-added tasks and leave closing to transfer.
   if (!manual && (await roundIsOpen(dir))) {
-    if (opts.input !== undefined || opts.append) {
-      if (route.type === "plan") {
-        return stop(1, [
-          `the open round lists no task yet: add the first with ${surface.tasks(dir, "--new-task \"<title>\"")} ` +
-            `(one task at a time — the task-append session is retired, plans/0283)`,
-        ])
-      }
-      const mid = await midPipelineTask(dir)
-      if (mid) return stop(1, [midPipelineLine(mid)])
-      return { type: "loop" }
-    }
+    if (opts.input !== undefined) return stop(1, [appendInputRetiredLine(dir)])
     if (route.type === "plan") return stop(0, await openRoundEmptyLines(dir, route.plan.index))
     const pending = route.plan.tasks.filter((task) => task.status !== "done").length
     if (pending > 0) return stop(0, executeNotice(dir, route, true))
     return stop(0, await openRoundWrapLines(dir))
   }
   if (!manual) {
-    // Row 10 (plans/0053 D23): --append on the execute or handover route
-    // appends to the phase the route names now — never advancing to another
-    // phase, including one on the handover route whose handover exists or
-    // whose gate stopped it. The D26 guard applies.
-    if (opts.append && (route.type === "execute" || route.type === "handover")) {
-      const mid = await midPipelineTask(dir)
-      if (mid) return stop(1, [midPipelineLine(mid)])
-      return { type: "loop" }
-    }
     // Row 6 (plans/0101 D4): the plan and handover routes hold no dispatched
     // work — the phase is unplanned (transfer constructs its plan task and
     // stops for review) or at its boundary (transfer distills the handover,
@@ -698,14 +650,16 @@ export async function planPrelude(dir: string, opts: {
   }
   // Row 8.
   if (route.type === "plan") return opts.input ? { type: "loop" } : stop(0, emptyIndexNotice(dir, route.plan.index))
-  // Row 9: input on a non-empty index is an append (D23) — implied in m mode,
-  // --append accepted as redundant; the D26 guard applies.
-  if (opts.input) {
-    const mid = await midPipelineTask(dir)
-    if (mid) return stop(1, [midPipelineLine(mid)])
-    return { type: "loop" }
-  }
+  if (opts.input) return stop(1, [appendInputRetiredLine(dir)])
   return stop(0, executeNotice(dir, route, true))
+}
+
+export function appendInputRetiredLine(dir: string): string {
+  return `the task-append session is retired (plans/0283); add one task at a time with ${surfaceOf().tasks(dir, '--new-task "<title>"')}`
+}
+
+export function retiredAppendResumeLine(unit: string): string {
+  return `the task appending step of ${unit} was interrupted and the session is retired; review and commit or revert its partial task changes, then move .auto/progress.json out of the project and retry`
 }
 
 const stop = (code: number, lines: string[]): PlanStop => ({ type: "stop", code, lines })
@@ -731,10 +685,8 @@ async function planningNotices(dir: string, phase: PhaseUnit | undefined, input:
   return lines
 }
 
-// The progress-record guard of rows 9–10 (plans/0053 D26): an append step
-// writes its own resume record, and .auto/progress.json holds one record (F2)
-// — appending while a task is mid-pipeline would overwrite the task's resume
-// point. A record naming a task whose done.md does not exist (active or
+// Task add retains the progress-record guard (plans/0053 D26). A record
+// naming a task whose done.md does not exist (active or
 // summary, this phase or another) stops the prelude; a step record (task
 // PLAN) is the step machinery's own and no task's resume point, and a
 // leftover record of a done task is inert. New tasks go after a blocked task
@@ -845,7 +797,7 @@ function driftRefusal(dir: string, drift: PhaseTailDrift, from: string, flag: st
 function openStepRefusal(dir: string, open: { step: string; unit: string }, tail: string): string {
   const { bin } = shellProfile()
   const surface = surfaceOf()
-  const name = open.step === "phase-plan" ? "phase planning" : open.step === "phase-append" ? "task appending" : "phase handover"
+  const name = open.step === "phase-plan" ? "phase planning" : "phase handover"
   return (
     `the ${name} step of ${open.unit} was interrupted and is not closed out; ` +
     `finish it first (run: ${surface.plan(dir)}), then ${tail}`
@@ -1428,10 +1380,8 @@ export function executeNotice(dir: string, route: Extract<PhaseRoute<Plan>, { ty
   const surface = surfaceOf()
   const total = route.plan.tasks.length
   const pending = route.plan.tasks.filter((task) => task.status !== "done").length
-  // In m mode input on a non-empty index is an append already (D23), so the
-  // pointer is plan's plain input form.
   if (manual) {
-    return [`ℹ ${route.plan.index} lists ${total} task(s) (${pending} pending); next: ${surface.run(dir)}, or add tasks with ${surface.plan(dir, "-p <text> | --file <path>")}`]
+    return [`ℹ ${route.plan.index} lists ${total} task(s) (${pending} pending); next: ${surface.run(dir)}, or add tasks with ${surface.tasks(dir, '--new-task "<title>"')}`]
   }
   return [
     `ℹ ${phaseRefText(route.phase)} is planned (${pending} of ${total} tasks pending); next: ${surface.run(dir)} ` +

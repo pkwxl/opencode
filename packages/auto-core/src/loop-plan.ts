@@ -1,13 +1,9 @@
 // Phase planning: the planning session (planPhase) and its step wrapper
 // (planWithStep), moved out of src/loop-phase.ts (plans/0053 A2). It is the
 // one planner: m mode plans here too (A4, D12). The module keeps itself
-// under 600 lines — the size promise its header has carried since 0053 A2,
-// honored by plans/0235's split: the append step lives in src/loop-append.ts
-// (plans/0053 D23–D25), the plan-step gate both planning sessions pass in
-// src/plan-gate.ts (plans/0080 §5), the formulation composition state in
-// src/formulate-parts.ts (plans/0097 D3). Direction: loop-phase → loop-plan
-// → plan-gate/formulate-parts/loop-task; never imports loop-phase, loop or
-// loop-append.
+// under 600 lines. See plan-gate.ts for planning helpers and
+// formulate-parts.ts for formulation source assembly.
+// Direction: loop-phase → loop-plan → plan-gate/formulate-parts/loop-task.
 import { dirname, join } from "node:path"
 import type { BlockMapEntry } from "./blockage"
 import { roundDeltaBlock } from "./assurance"

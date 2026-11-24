@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle } from "../src/bundle"
 import { renderPhaseHandover } from "../src/prompt"
-import { existingTaskList, planDutyText, renderFormulationTodo, renderPhaseAppend } from "../src/prompt-plan"
+import { planDutyText, renderFormulationTodo } from "../src/prompt-plan"
 import { planDuties } from "../src/plan-gate"
 import { formulationAcceptance } from "../src/formulate"
 import { promptFacts } from "../src/prompt-facts"
@@ -271,110 +271,6 @@ describe("renderFormulationTodo, m mode (the implicit P01-implement, plans/0095 
   })
 })
 
-describe("existingTaskList / renderPhaseAppend (append planning session, 0053 D23/D27)", () => {
-  const phaseAppend = (input: Omit<Parameters<typeof renderPhaseAppend>[1], "phaseId" | "taskIndex" | "input" | "inputPath" | "existingTasks" | "planDuties"> & { phase?: PhaseTypeEntry }) =>
-    renderPhaseAppend(facts, {
-      planDuties: input.phase ? duties(input.phase) : undefined,
-      phaseId: "R-01.P02",
-      taskIndex: "docs/R-01/P02-implement/tasks.md",
-      input: "Fill in the lexical fallback first.",
-      inputPath: "docs/R-01/P02-implement/plan-input.md",
-      existingTasks: "- [done] T-004: migrate the parser\n- [pending] T-005: wire up the pipeline",
-      ...input,
-    })
-
-  test("existingTaskList: one line per task with a status label; closed carries its reason (0053 D27/D16 wording)", () => {
-    expect(
-      existingTaskList([
-        { id: "T-004", title: "migrate the parser", status: "done" },
-        { id: "T-005", title: "wire up the pipeline", status: "pending" },
-        { id: "T-006", title: "fix the cache", status: "blocked" },
-        { id: "T-007", title: "the old approach", status: "done", closed: "superseded by T-009" },
-      ]),
-    ).toBe(
-      "- [done] T-004: migrate the parser\n" +
-        "- [pending] T-005: wire up the pipeline\n" +
-        "- [blocked] T-006: fix the cache\n" +
-        "- [closed] T-007: the old approach (closed without completing: superseded by T-009)",
-    )
-  })
-
-  test("phased: phase signature / existing-task list / planning input / duties paragraph and task-unit format protocol all present", () => {
-    const text = phaseAppend({
-      phase: L("m"),
-      brief: "migrate legacy to bun",
-      handovers: "### P01-analysis Analysis (docs/R-01/P01-analysis/handover.md)\n\n- Decision A: chose X",
-      mode: migrate,
-      numberStart: 6,
-    })
-    expect(text).toContain("\"Implementation\" phase (m)")
-    expect(text).toContain("this phase's tasks are already planned")
-    // The existing-task list (the anchor of the append contract) and the append discipline
-    expect(text).toContain("## Input: the task index as it stands (docs/R-01/P02-implement/tasks.md)")
-    expect(text).toContain("- [done] T-004: migrate the parser")
-    expect(text).toContain("appended after them, never before or between them")
-    // The planning input is a mandatory block (0053 D23: --append with no input is a usage error)
-    expect(text).toContain("## Input: planning input (docs/R-01/P02-implement/plan-input.md)")
-    expect(text).toContain("Fill in the lexical fallback first.")
-    expect(text).toContain("scenario-mode preamble (migrate)")
-    expect(text).toContain("prior-phase handovers")
-    expect(text).toContain("Complete the implementation work")
-    // Task-unit format protocol (tier-1 markers) and the append wording
-    for (const marker of ["# T-NNN: <task title>", "Phase: R-01.P02", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "<!-- auto: eof -->"]) {
-      expect(text).toContain(marker)
-    }
-    expect(text).toContain("appended after the last existing line")
-    expect(text).toContain("Task numbers increment continuously from T-006")
-    expect(text).toContain("never edit, reorder or renumber an existing index line")
-    // Depends seam guidance: default Depends = the line above; the first new task depends on the last existing task by default
-    expect(text).toContain("the first new task")
-    expect(text).toContain("without the field depends on the last existing task")
-    expect(text).toContain("write `Depends:` explicitly")
-    expect(text).toContain("The append must add at least one new task")
-    expect(text).toContain("AUTO-DECISION")
-  })
-
-  test("m mode: no phase signature / duties / round handover, implement-plan tone; the mandatory slots remain", () => {
-    const text = renderPhaseAppend(facts, {
-      phaseId: "R-01.P01",
-      taskIndex: "docs/R-01/P01-implement/tasks.md",
-      input: "Migrate one more module.",
-      inputPath: "docs/R-01/P01-implement/plan-input.md",
-      existingTasks: "- [done] T-001: scaffolding",
-      numberStart: 2,
-    })
-    expect(text).toContain("You are the planner for this implementation plan")
-    expect(text).toContain("- [done] T-001: scaffolding")
-    expect(text).toContain("Migrate one more module.")
-    expect(text).toContain("Task numbers increment continuously from T-002")
-    // m mode has no duties paragraph (same as implement-plan): no phase signature or duties wording; the round/handover blocks do not render
-    expect(text).not.toContain("\"Implementation\" phase")
-    expect(text).not.toContain("Phase duties and artifact conventions")
-    expect(text).not.toContain("prior-phase handovers")
-    expect(text).not.toContain("round brief")
-    for (const marker of ["# T-NNN: <task title>", "Phase: R-01.P01", "- [ ] T-NNN <task title>", "<!-- auto: eof -->"]) {
-      expect(text).toContain(marker)
-    }
-  })
-
-  test("representative parameter combinations render with no leftover template tags", () => {
-    for (const text of [
-      phaseAppend({ phase: L("a"), numberStart: 12 }),
-      phaseAppend({ phase: L("m"), brief: "intent", handovers: "### a Analysis (x)\n\n- decision", mode: migrate, parallel: "high" }),
-      renderPhaseAppend(facts, {
-        phaseId: "R-01.P01",
-        taskIndex: "docs/R-01/P01-implement/tasks.md",
-        input: "x",
-        inputPath: "docs/R-01/P01-implement/plan-input.md",
-        existingTasks: "- [pending] T-001: A",
-        parallel: "medium",
-      }),
-    ]) {
-      expect(text).not.toMatch(/\{\{|\}\}/)
-    }
-  })
-})
-
 describe("renderPhaseHandover (phase handover distillation session, F.1)", () => {
   test("injects the phase / the handover permanent path / the four-section protocol and the only-writable-file constraint", () => {
     const text = renderPhaseHandover(facts, { phase: L("a"), handover: "docs/R-01/P01-analysis/handover.md", next: "m Implementation" })
@@ -627,8 +523,7 @@ describe("planDutyText tiers (plans/0080 §4)", () => {
       expect(floor.scope.replace(/\s+/g, " ")).not.toContain("once per tree state")
       expect(floor.scope).toContain("- Bring the test suite to cover the delivered work")
     })
-    // The append side threads the same fact (plan-gate's planDuties is the
-    // append prompt's duty render; loop-append passes its measured delta).
+    // The legacy planning path also threads the measured delta.
     const dir = mkdtempSync(join(tmpdir(), "auto-duty-delta-"))
     try {
       mkdirSync(join(dir, ".opencode", "auto", "intents"), { recursive: true })

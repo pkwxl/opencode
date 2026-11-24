@@ -618,12 +618,15 @@ describe("the lifecycle operations (P1d)", () => {
       expect(listed.status).toBe(200)
       expect(has(listed.body, "lists 1 task(s) (1 pending)")).toBe(true)
       // The served surface (plans/0193 D3 / 0165-056's S30-04): the next-act
-      // line names this shell's true channels — the daemon's run and plan
+      // line names this shell's true channels — the daemon's executor and task-add
       // protocol — never `opencode-auto-server run <dir>`, the subcommand
       // this binary refuses with its usage error (the run operation itself
       // retired with POST /runs, plans/0282; execute grants run the phase).
       expect(has(listed.body, "the executor protocol (POST /projects/<p>/executor/claim — execute grants)")).toBe(true)
-      expect(has(listed.body, "the plan operation (POST /projects/<p>/plan)")).toBe(true)
+      expect(has(listed.body, "the task-add operation (POST /projects/<p>/tasks)")).toBe(true)
+      const implicitAppend = await h.call("POST", `/projects/${manualName}/plan`, h.control, { input: "Add another task" })
+      expect(implicitAppend.status).toBe(409)
+      expect(has(implicitAppend.body, "the task-add operation (POST /projects/<p>/tasks)")).toBe(true)
       expect(has(listed.body, "opencode-auto-server run")).toBe(false)
       await rm(join(manual, "docs", "R-01", "P01-implement", "tasks.md"))
       const empty = await h.call("POST", `/projects/${manualName}/plan`, h.control)

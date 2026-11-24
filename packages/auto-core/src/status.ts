@@ -133,7 +133,7 @@ export async function renderStatus(dir: string): Promise<string[]> {
   // of reading as a stalled round.
   lines.push(
     state.open
-      ? `${roundDirName(round)} (open round — absorbs tasks with plan --new-task / --append, executes with run, closes at its round.md ## Close via transfer)`
+      ? `${roundDirName(round)} (open round — absorbs tasks through task-add, executes with run, closes at its round.md ## Close via transfer)`
       : `${roundDirName(round)} (${state.done.size}/${state.phases.length} phases done)`,
   )
   for (const phase of state.phases) {

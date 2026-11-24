@@ -42,7 +42,7 @@ export const normalizeNewlines = (text: string): string => text.replace(/\r\n/g,
 // table (src/phases/registry.ts, plans/0243 B): the reserved word alone in a
 // line's phases slot — `- R-05 open — <goal>` — marks the light round kind
 // (a single implicit implement phase that never hands over or auto-closes;
-// tasks enter by `plan --new-task` / `--append`, the round closes by
+// tasks enter through task-add, the round closes by
 // transfer once the person fills `## Close`). The word establishes phases
 // "implement" by definition; it is never a phase-type id, and `open` beside
 // other tokens is a release problem analysis.ts names (one legal spelling).

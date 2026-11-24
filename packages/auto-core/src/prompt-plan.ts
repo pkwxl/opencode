@@ -1,15 +1,12 @@
 // Planning-side prompts: the formulation task's single-input todo
 // (renderFormulationTodo, plans/0095 — phased and m-mode planning unified as
-// the phase's first task unit) and append planning (renderPhaseAppend, the
-// --append half, plans/0053 D23–D27, unchanged by 0095). The former planning
+// the phase's first task unit). The former planning
 // templates (phase-plan.md / implement-plan.md) retired with their renderers:
 // the composed block stack became the formulation todo's Scope, assembled
 // here as data — the assembly's protocol prose is driver document-grammar
 // teaching, consciously renderer-owned under P15's named boundary
 // (plans/0095 D4; plans/0221 D2), while the policy content it joins flows
-// from the packs and partials as always. Rendering of the surviving prompt
-// surfaces goes through prompt.ts's single exit (renderPrompt) and its
-// intent-pack helpers.
+// from the packs and partials as always.
 // Off the driver with E2 (plans/0061 §6.3): the phase entry and the duty
 // paragraph arrive as data (the caller renders the registry's duty text),
 // and every render takes the PromptFacts value the caller built.
@@ -17,7 +14,7 @@ import type { ModeSpec } from "./mode"
 import { dutiesForPhase } from "./intent/load"
 import { guaranteeViolation, parseGuaranteeAsserts, PromptGuaranteeError } from "./intent/guarantees"
 import type { ParallelLevel } from "./intent/types"
-import { docConcurrencyVars, intentText, modeText, parallelismVars, phaseTag, renderPrompt, type PhaseEntry, type PromptFacts } from "./prompt"
+import { docConcurrencyVars, intentText, modeText, parallelismVars, phaseTag, type PhaseEntry, type PromptFacts } from "./prompt"
 import { renderText, type Ctx } from "./template"
 
 // The phase-plan duty paragraph's resolution (plans/0080 §4): the custom
@@ -38,17 +35,10 @@ export function planDutyText(facts: PromptFacts, entry: PhaseEntry, ctx: Ctx = {
   return renderText(own ?? `{{> plan-duties-${entry.dutiesRef}}}`, ctx).trimEnd()
 }
 
-// The task fields the append prompt's existing-task lines read (the task
-// store's Task satisfies the shape structurally).
 type ExistingTask = { id: string; title: string; status: string; closed?: string }
 
-// The existing-task lines of the append prompt's existingTasks slot
-// (plans/0053 D27): one line per task of the current index, in index order,
-// labelled by its current status; a closed task (done for scheduling, not
-// delivered) carries its reason. The label is session-facing prose, not a
-// protocol string. An in_progress task (transient runtime state, impossible
-// at an append step — a task mid-pipeline blocks the append, D26) would show
-// its own label unchanged.
+// Render existing task rows in index order for formulation. Closed tasks
+// carry the reason they were closed without delivery.
 export function existingTaskList(tasks: readonly ExistingTask[]): string {
   return tasks
     .map((task) =>
@@ -57,84 +47,6 @@ export function existingTaskList(tasks: readonly ExistingTask[]): string {
         : `- [${task.status}] ${task.id}: ${task.title}`,
     )
     .join("\n")
-}
-
-// Append planning (plans/0053 D23/D27): the planner that adds tasks to a
-// phase whose index already lists some, rendered from the shared
-// phase-append template by both modes. Phased sessions pass the phase entry
-// (the phase naming) and the pre-rendered duty paragraph (as renderPhasePlan
-// formerly did; an m-mode session passes neither — as implement-plan, it has
-// no duties, round or handovers — so the template drops those blocks).
-// input/inputPath are required (append always plans against a planning
-// input: --append without input is a usage error, D23), and existingTasks is
-// the pre-joined line list of the index as it stands (existingTaskList).
-// numberStart is the append numbering start (the deterministic floor under
-// autoNumber — the highest number any index lists or any docs/T-* path
-// holds, + 1, plans/0150; otherwise the highest taken or listed id + 1,
-// D25); it always exists in practice, hence the single unconditional
-// numbering clause.
-// AUTO-DECISION: the mode split lives entirely in optional slots — a two-branch
-// intro on {{#if phase}}, the whole duties section (placement paragraph and
-// planDuties together) behind {{#if planDuties}}, no phase-plan-style
-// "brief not provided" fallback, and one unconditional numbering clause instead
-// of phase-plan's two branches (the append start is always computed; the
-// fallback branch would name T-001 under an index that already lists it).
-// The rejected alternative was two separate templates per mode, which D27
-// rules out; per-block negative fallbacks were dropped because m mode must
-// render the shared blocks' absence silently, as implement-plan did.
-export function renderPhaseAppend(facts: PromptFacts, input: {
-  phase?: PhaseEntry
-  planDuties?: string
-  phaseId: string
-  taskIndex: string
-  numberStart?: number
-  input: string
-  inputPath: string
-  existingTasks: string
-  brief?: string
-  // The round brief docs/R-NN/round.md, comments stripped (plans/0049 G3).
-  round?: string
-  handovers?: string
-  mode?: ModeSpec
-  parallel?: ParallelLevel
-  // The run's width (plans/0126 D1): the doc-concurrency teaching renders
-  // for doc phases at --max-sessions ≥ 2 — the width that executes doc lanes.
-  maxSessions?: number
-  // The round's measured delta (plans/0244 D1): the pre-rendered block
-  // (assurance.renderDeltaBlock) spliced verbatim — the driver-measured
-  // commit range / grouped stat / changed names the appended plan keys its
-  // verification to. Absent or blank = nothing measured (or a quiet round)
-  // and the prompt renders byte-identically (the P10 floor).
-  delta?: string
-}): string {
-  const type = input.phase
-  // The two guidance blocks split by phase kind (plans/0126 D1/D2): the
-  // level's depth guidance for code-work phases and m mode, the width-keyed
-  // doc-concurrency teaching for doc phases.
-  const codePhase = type === undefined || type.codeWork === true
-  return renderPrompt(facts, "phase-append", {
-    phase: type ? phaseTag(type) : undefined,
-    phaseName: type?.name,
-    phaseId: input.phaseId,
-    taskIndex: input.taskIndex,
-    // The precedence block, same subsection as the formulation todo: an
-    // append plans against a human input too (plan --append, or a repair
-    // round's evidence), so the authority order rides along.
-    precedence: intentText(facts, "guarantees", "precedence", {}),
-    numberStart: String(input.numberStart ?? 1).padStart(3, "0"),
-    input: input.input.trim(),
-    inputPath: input.inputPath,
-    existingTasks: input.existingTasks.trim(),
-    brief: input.brief?.trim() || undefined,
-    round: input.round?.trim() || undefined,
-    handovers: input.handovers?.trim() || undefined,
-    modeName: input.mode?.name,
-    modeInit: input.mode && modeText(input.mode.init),
-    planDuties: input.planDuties,
-    delta: input.delta?.trim() || undefined,
-    ...(codePhase ? parallelismVars(facts, input.parallel) : {}),
-    ...(!codePhase ? docConcurrencyVars(facts, input.maxSessions) : {}),
-  })
 }
 
 // The formulation task's single-input todo (plans/0095 D1): the deterministic

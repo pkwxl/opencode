@@ -28,7 +28,7 @@ import { clientOf, renameSession, sessionAlive, sessionUsage } from "./session-a
 import { emitStatus } from "./run-status"
 import { statsDecomposeRun, statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
-import { shellProfile } from "./shell"
+import { shellProfile, surfaceOf } from "./shell"
 import { stepPause } from "./step"
 import { cleanTestHandoffs, restoreTestHandoffs, testHandoffExists } from "./testrun"
 import { reportResult, runWrapup } from "./wrapup"
@@ -1106,8 +1106,8 @@ async function runCloseout(
   // still read here unchanged, and every loop-exiting verdict was already
   // acted on inside runWrapup (a loop PASS re-reads as PASS, a loop FAIL
   // never reaches this line). A person then decides: `close` accepts the
-  // result (the Closed: field records why); `plan --force-close … --append
-  // -p` replaces the task with a better one; listing fix tasks before it in
+  // result (the Closed: field records why). Task-add can add a replacement.
+  // Listing fix tasks before it in
   // tasks.md gets the gap fixed first (a hand-added checklist item is
   // illegal subtask state in true mode, so fixes are planned as tasks).
   // The phase is rewound to wrapup, so re-running the task itself only
@@ -1130,7 +1130,7 @@ async function runCloseout(
       question:
         `the task report concluded Result: FAIL${result.reason ? ` (${result.reason})` : ""}. The report and the work are committed; ` +
         `accept the result with ${bin} close ${task.id} --reason <text>; ` +
-        `or replace the task with ${bin} plan --force-close ${task.id} --reason <text> --append -p <what to do instead>; ` +
+        `after closing it, add a replacement with ${surfaceOf().tasks(input.dir, '--new-task "<title>"')}; ` +
         `or list fix tasks before it in ${plan.index} by hand; then re-run.`,
     }
   }

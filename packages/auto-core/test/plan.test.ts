@@ -478,20 +478,20 @@ describe("planPrelude: routes (rows 4–9)", () => {
   )
 
   test(
-    "row 9, m mode with tasks listed: input implies the append and goes to the loop; without it, a notice",
+    "row 9, m mode with tasks listed: input is refused with the task-add remedy; without it, a notice",
     withDir(async (dir) => {
       await establishRound(dir, { phases: "m" })
       const [implement] = await phasesOf(dir)
       await listTasks(dir, implement!, [["T-001", true], ["T-002", false]])
       const notice =
         `ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (1 pending); next: opencode-auto run ${dir}, ` +
-        `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`
+        `or add tasks with opencode-auto plan ${dir} --new-task "<title>"`
       expect(await planPrelude(dir, { phases: "m" })).toEqual({ type: "stop", code: 0, lines: [notice] })
-      // In m mode the input on a non-empty index is an append (D23): the
-      // flag is implied — the input alone rides the implied append, while
-      // the explicit flag itself is refused at the door (the task-append
-      // session retired, plans/0283).
-      expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({ type: "loop" })
+      const head = await read(dir, "docs/R-01/P01-implement/tasks.md")
+      expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({ type: "stop", code: 1, lines: [
+        `the task-append session is retired (plans/0283); add one task at a time with opencode-auto plan ${dir} --new-task "<title>"`,
+      ] })
+      expect(await read(dir, "docs/R-01/P01-implement/tasks.md")).toBe(head)
       expect(await planPrelude(dir, { phases: "m", input: INPUT, append: true })).toEqual(retired(dir))
       // All done: m mode's phase stays open, so this is still row 9.
       await listTasks(dir, implement!, [["T-001", true], ["T-002", true]])
@@ -500,33 +500,10 @@ describe("planPrelude: routes (rows 4–9)", () => {
         code: 0,
         lines: [
           `ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (0 pending); next: opencode-auto run ${dir}, ` +
-            `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`,
+            `or add tasks with opencode-auto plan ${dir} --new-task "<title>"`,
         ],
       })
       expect(await planPrelude(dir, { phases: "m", input: INPUT, append: true })).toEqual(retired(dir))
-    }),
-  )
-
-  test(
-    "row 9 D26: a record of an open task stops the append; a step record or a done task's does not",
-    withDir(async (dir) => {
-      await establishRound(dir, { phases: "m" })
-      const [implement] = await phasesOf(dir)
-      await listTasks(dir, implement!, [["T-001", true], ["T-002", false]])
-      for (const active of [true, false]) {
-        await saveProgress(dir, { task: "T-002", at: 1, active, phase: { kind: "subtasks", index: 1 } })
-        expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({
-          type: "stop",
-          code: 1,
-          lines: ["T-002 is mid-pipeline (its resume point is in .auto/progress.json); finish it with run, or close it, before appending"],
-        })
-      }
-      // A step record (task PLAN) is the step machinery's own, and the done
-      // task's leftover record names a task that is no longer open.
-      await saveProgress(dir, { task: "PLAN", at: 1, active: true, phase: { kind: "step", step: "phase-append", unit: "R-01.P01" } })
-      expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({ type: "loop" })
-      await saveProgress(dir, { task: "T-001", at: 1, active: true, phase: { kind: "subtasks", index: 1 } })
-      expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({ type: "loop" })
     }),
   )
 
@@ -732,18 +709,19 @@ describe("planPrelude: --new-task (row 11, plans/0058)", () => {
     expect(await read(dir, "docs/R-01/phases.md")).toBe(before)
   }))
 
-  test("an open step or a mid-pipeline task refuses the add", withDir(async (dir) => {
+  test("an interrupted append or a mid-pipeline task refuses the add", withDir(async (dir) => {
     await establishRound(dir, { phases: "m" })
     const [implement] = await phasesOf(dir)
     await listTasks(dir, implement!, [["T-001", true], ["T-002", false]])
     await saveProgress(dir, { task: "PLAN", session: "ses", at: 1, active: true, phase: { kind: "step", step: "phase-append", unit: "R-01.P01" } })
     expect(await planPrelude(dir, { phases: "m", newTask: TITLE })).toEqual({
       type: "stop",
-      code: 1,
+      code: 2,
       lines: [
-        `the task appending step of R-01.P01 was interrupted and is not closed out; finish it first (run: opencode-auto plan ${dir}), then add the task with --new-task`,
+        "the task appending step of R-01.P01 was interrupted and the session is retired; review and commit or revert its partial task changes, then move .auto/progress.json out of the project and retry",
       ],
     })
+    expect(await read(dir, ".auto/progress.json")).toContain("phase-append")
     await saveProgress(dir, { task: "T-002", at: 1, active: true, phase: { kind: "subtasks", index: 1 } })
     expect(await planPrelude(dir, { phases: "m", newTask: TITLE })).toEqual({
       type: "stop",
@@ -1284,8 +1262,7 @@ describe("planPrelude: the open-round rows (plans/0243 B)", () => {
       type: "stop",
       code: 1,
       lines: [
-        `the open round lists no task yet: add the first with opencode-auto plan ${dir} --new-task "<title>" ` +
-          `(one task at a time — the task-append session is retired, plans/0283)`,
+        `the task-append session is retired (plans/0283); add one task at a time with opencode-auto plan ${dir} --new-task "<title>"`,
       ],
     })
     // The explicit flag never reaches the open-round arm — the retirement
@@ -1301,11 +1278,13 @@ describe("planPrelude: the open-round rows (plans/0243 B)", () => {
     })
   }))
 
-  test("a working open round: an input implies the append (the loop's open arm takes it); the explicit flag is retired; bare plan points at run; all done teaches the wrap-up", withDir(async (dir) => {
+  test("a working open round: an input points to task-add; the explicit flag is retired; bare plan points at run; all done teaches the wrap-up", withDir(async (dir) => {
     await establishRound(dir, { phases: "implement", open: { goal: "absorb fixes" } })
     const [implement] = await phasesOf(dir)
     await listTasks(dir, implement!, [["T-001", false]])
-    expect(await planPrelude(dir, { phases: "mt", input: INPUT })).toEqual({ type: "loop" })
+    expect(await planPrelude(dir, { phases: "mt", input: INPUT })).toEqual({ type: "stop", code: 1, lines: [
+        `the task-append session is retired (plans/0283); add one task at a time with opencode-auto plan ${dir} --new-task "<title>"`,
+      ] })
     expect(await planPrelude(dir, { phases: "mt", append: true, input: INPUT })).toEqual({
       type: "stop",
       code: 1,

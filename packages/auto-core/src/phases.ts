@@ -175,7 +175,7 @@ export type PhaseState = {
   closed: Map<string, string>
   // The open-round kind (plans/0243 B): the index's `Kind: open` line — the
   // round's single implicit implement phase never hands over or auto-closes;
-  // tasks enter by `plan --new-task` / `--append`, the round closes by
+  // tasks enter through task-add, and the round closes by
   // transfer at the person's `## Close`.
   open: boolean
 }

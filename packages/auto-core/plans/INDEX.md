@@ -364,6 +364,7 @@ Two corpus facts have no numbered file to carry them, so they get their own rows
 | 0307-separate-transfer-from-push-loop | Removes eager push-loop imports from deterministic transfer and retains the legacy entry. | active-authority | P10, P21 | src/transfer.ts, src/plan.ts, src/loop-phase.ts | (open — ships with the next release) |
 | 0308-addressed-stops | The addressing of stops: every wait/blocked answer and held row carries `actor` (workflow/executor/person/operator, per-site over family defaults), retryAfter stamps only workflow waits, the menu gains parked `waiting` rows. | active-authority | P2, P5, P8, P13, P19 | src/executor-steps.ts, src/executor-coordinator.ts, src/tasks.ts, ../auto-server/src/executor-worker.ts | (open — ships with the next release) |
 | 0309-retire-push-lane-worker-entry | Removes the unused core worker entry and its unused CLI fixture after the push lane command retired. Existing stream-recovery report coverage stays. | active-authority | P10, P21 | src/loop.ts, src/loop-task.ts, auto/src/index.ts | (open — ships with the next release) |
+| 0310-retire-push-task-append | Removes the push task-append session and prompt. Legacy append records retain a recovery stop. The daemon fixture exercises task-add and close-audit through round close. | active-authority | P8, P10, P21 | src/plan.ts, src/loop-phase.ts, src/task-add.ts, ../auto-server/test/executor-e2e.test.ts | (open — ships with the next release) |
 
 ## Maintaining this index
 

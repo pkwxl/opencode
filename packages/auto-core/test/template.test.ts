@@ -96,7 +96,7 @@ describe("shared partial parsing", () => {
 })
 
 describe("built-in template registry", () => {
-  test("all 37 templates present (33 session templates plus _partials and the 0082 family: default-check / diagnose / _mode-brief; understand merged into decompose since M1.0; phase-append see 0053 D27; step-up and classify-error see 0055 §4.5, §7.1; usage notes see 0056; split-rejected see 0059 D4; fanout see 0059 D5; digest-index see 0061 R3; plan-verify see 0080 §5; fix see 0083 D4; the 0082 trio see §3-§5; park-release see 0096 D7; formulate-synthesize / formulate-fidelity see 0097 D3/D5; phase-plan and implement-plan retired by plans/0095, knowledge / prior-knowledge by plans/0283; close-audit see 0244 D5)", () => {
+  test("all 36 templates present (32 session templates plus _partials and the 0082 family: default-check / diagnose / _mode-brief; understand merged into decompose since M1.0; step-up and classify-error see 0055 §4.5, §7.1; usage notes see 0056; split-rejected see 0059 D4; fanout see 0059 D5; digest-index see 0061 R3; plan-verify see 0080 §5; fix see 0083 D4; the 0082 trio see §3-§5; park-release see 0096 D7; formulate-synthesize / formulate-fidelity see 0097 D3/D5; phase-plan and implement-plan retired by plans/0095, knowledge / prior-knowledge by plans/0283; close-audit see 0244 D5)", () => {
     expect(promptTemplateNames()).toEqual([
       "_mode-brief",
       "_partials",
@@ -120,7 +120,6 @@ describe("built-in template registry", () => {
       "formulate-synthesize",
       "handoff-steer",
       "park-release",
-      "phase-append",
       "phase-handover",
       "plan-verify",
       "split-rejected",
@@ -460,47 +459,6 @@ describe("target-directory overrides (.opencode/auto/prompts/)", () => {
       usePromptLibrary(undefined)
       writeFileSync(join(overlay, "usage-note-winddown.md"), "[DRIVER] context: {{used}} tokens ({{pct}}% of {{wall}}); hand over via {{handoffFile}} ending `Status: continue` or `Status: done`.")
       expect(() => usePromptLibrary(dir)).toThrow(/usage-note-winddown\.md is missing required protocol content: \{\{remaining\}\}/)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a phase-append override missing a tier-1 marker (skeleton + {{taskIndex}}/{{existingTasks}}/{{input}}) errors (0053 D27/§6)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
-    try {
-      const overlay = join(dir, ".opencode", "auto", "prompts")
-      mkdirSync(overlay, { recursive: true })
-      // The task-unit skeleton is complete but {{existingTasks}} is gone (the existing-task list is the append contract's anchor)
-      writeFileSync(
-        join(overlay, "phase-append.md"),
-        ["Append planning: {{taskIndex}} writes {{input}}", "# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>"].join("\n"),
-      )
-      expect(() => usePromptLibrary(dir)).toThrow(/phase-append\.md is missing required protocol content/)
-      expect(() => usePromptLibrary(dir)).toThrow(/\{\{existingTasks\}\}/)
-      usePromptLibrary(undefined)
-      // Skeleton and {{taskIndex}} present, but {{input}} gone (appending always targets the planning input, D23)
-      writeFileSync(
-        join(overlay, "phase-append.md"),
-        ["Append planning: {{taskIndex}}", "# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{existingTasks}}"].join("\n"),
-      )
-      expect(() => usePromptLibrary(dir)).toThrow(/\{\{input\}\}/)
-      // Complete (three skeleton sections + index line + three slots) → loads and renders
-      writeFileSync(
-        join(overlay, "phase-append.md"),
-        [
-          "Append planning: append after {{taskIndex}}",
-          "# T-NNN: <task title>",
-          "Phase: {{phaseId}}",
-          "## Goal",
-          "## Scope",
-          "## Acceptance",
-          "- [ ] T-NNN <task title>",
-          "Existing: {{existingTasks}}",
-          "Input: {{input}}",
-        ].join("\n"),
-      )
-      usePromptLibrary(dir)
-      expect(renderTemplate("phase-append", { taskIndex: "docs/R-01/P02-implement/tasks.md", existingTasks: "- [pending] T-004: A", input: "B" })).toContain("Existing: - [pending] T-004: A")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

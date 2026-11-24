@@ -344,8 +344,7 @@ export type SessionCtx = {
 }
 
 // Which loop session is asking for its options: one id per call site the
-// builder serves (phase-append is that session's resume-point step name;
-// the phase-plan site retired with the bypass planning session — plans/0095,
+// builder serves (the phase-plan site retired with the bypass planning session — plans/0095,
 // the formulation task runs under the task site — and the plan-numbering /
 // append-numbering sites with the numbering record — plans/0150, the number
 // is derived, no restore session opens). The task variant carries its phase
@@ -358,7 +357,6 @@ export type SessionCtx = {
 // refusal fact).
 type SessionSite =
   | { site: "task"; phase: PhaseKey; stream?: number; docLane?: boolean; siblingScopes?: readonly string[] }
-  | { site: "phase-append" }
   | { site: "handover" }
   | { site: "knowledge" }
   | { site: "diagnosis" }

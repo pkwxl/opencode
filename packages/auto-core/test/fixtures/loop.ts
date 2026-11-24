@@ -139,7 +139,7 @@ export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => 
     return undefined
   }
   const index = new RegExp(`(${PHASE_DIR})/tasks\\.md`).exec(ctx.text)
-  if (index && !ctx.text.includes(APPEND_MARK)) {
+  if (index) {
     const phaseDir = index[1]!
     const task = padTask(nextTaskNumber(dir))
     mkdirSync(join(dir, "docs", task), { recursive: true })
@@ -225,25 +225,6 @@ export const synthesisTurn = (brief: string, rows: readonly string[], rationale 
   ]
 }
 
-// —— Append turns (plans/0053 §8, B6) ——
-// The appending prompt is told apart from the fresh planning prompts by its
-// unique "the task index as it stands" heading: both name the phase's task
-// index, but only the append session is shown the index it must build on.
-
-const APPEND_MARK = "## Input: the task index as it stands"
-
-// One accepted append: a single new line goes after the index's last line and
-// the new task's document is written — nothing else is touched (D24's
-// contract). The new number is the highest on disk + 1 (the append prompt's
-// fallback start without the numbering record). Exported for composed turn
-// scripts (the repair-loop suite rides it beside its own report turns).
-export const appendTurn = (dir: string): TurnScript => (ctx: TurnContext) => {
-  if (!ctx.text.includes(APPEND_MARK)) return undefined
-  const phaseDir = promptPhaseDir(ctx.text)
-  if (phaseDir) appendOneTask(dir, phaseDir)
-  return undefined
-}
-
 export function appendOneTask(dir: string, phaseDir: string): string {
   const file = join(dir, phaseDir, "tasks.md")
   const task = padTask(nextTaskNumber(dir))
@@ -255,48 +236,6 @@ export function appendOneTask(dir: string, phaseDir: string): string {
   mkdirSync(join(dir, "docs", task), { recursive: true })
   writeFileSync(join(dir, "docs", task, "todo.md"), taskDoc(task, phaseDirId(phaseDir)))
   return task
-}
-
-// A first appending session that misbehaves (plans/0053 §8, "a session that
-// edits an existing line"): it renames the first existing index line, edits
-// the last existing task's document and leaves a stray file next to the new
-// task's document. The collect refuses (the edited line and the changed
-// document are exactly what D24's prefix and file-identity checks look for),
-// the retry requirement carries the problems, and the reset must restore the
-// snapshot — index text, existing files, the stray directory — before the
-// retry turn, which then appends cleanly (the good turn above).
-export const badAppendTurns = (dir: string): TurnScript => {
-  let misbehaved = false
-  return (ctx: TurnContext) => {
-    if (!ctx.text.includes(APPEND_MARK)) return undefined
-    if (misbehaved) {
-      const phaseDir = promptPhaseDir(ctx.text)
-      if (phaseDir) appendOneTask(dir, phaseDir)
-      return undefined
-    }
-    misbehaved = true
-    const phaseDir = promptPhaseDir(ctx.text)
-    if (!phaseDir) return undefined
-    const index = readFileSync(join(dir, phaseDir, "tasks.md"), "utf8")
-    const lines = index.split("\n")
-    // Rename the first task line while appending the new one.
-    const first = lines.findIndex((line) => /^- \[.\] T-\d{3} /.test(line))
-    if (first >= 0) lines[first] = lines[first]!.replace(/^(- \[.\] T-\d{3}) .*$/, "$1 renamed by the session")
-    const file = join(dir, phaseDir, "tasks.md")
-    const task = padTask(nextTaskNumber(dir))
-    writeFileSync(file, `${lines.join("\n").slice(0, -1)}\n- [ ] ${task} task ${task}\n`)
-    // The new task's directory: a valid document plus a stray file the reset
-    // must remove with it.
-    mkdirSync(join(dir, "docs", task), { recursive: true })
-    writeFileSync(join(dir, "docs", task, "todo.md"), taskDoc(task, phaseDirId(phaseDir)))
-    writeFileSync(join(dir, "docs", task, "stray.md"), "left by the failed attempt\n")
-    // Edit the last existing task's pending document.
-    const listed = [...index.matchAll(/^- \[.\] (T-\d{3}) /gm)].map((m) => m[1]!)
-    const last = listed[listed.length - 1]
-    const doc = last ? join(dir, "docs", last, "todo.md") : undefined
-    if (doc && existsSync(doc)) writeFileSync(doc, readFileSync(doc, "utf8").replace("## Goal", "## Aim"))
-    return undefined
-  }
 }
 
 // A completed past assistant message with real context usage, so a session id
@@ -357,7 +296,7 @@ async function withQuietConsole(run: () => Promise<number>): Promise<LoopRunResu
 }
 
 // agentOptions may be a factory over the fixture directory, so a turn script
-// that writes into the repository (appendTurn and friends) can be built before
+// that writes into the repository (artifact turns) can be built before
 // the agent exists.
 export async function loopFixture(
   phases: string,
@@ -384,7 +323,7 @@ export async function loopFixture(
       await git(dir, "commit", "-qm", subject)
     },
     async run(opts = {}) {
-      const { planInput, append, routing, repl, git, ...rest } = opts
+      const { planInput, routing, repl, git, ...rest } = opts
       const ctx: LoopCtx = {
         directory: dir,
         opts: { phases, ...rest },
@@ -413,8 +352,6 @@ export async function loopFixture(
         // production instance is the right member here — a case observing a
         // commit seam passes its wrapper (plans/0236 D6).
         git: git ?? services().git,
-        // plan --append rides the ctx (loop.ts seeds it from RunAllOpts).
-        ...(append ? { append: true } : {}),
       }
       return withQuietConsole(() => runPhaseLoop(ctx))
     },

@@ -27,7 +27,7 @@ import {
 } from "../src/assurance"
 import { ASSURANCE_DOC } from "../src/docpaths"
 import { phaseTypeOfLetter } from "../src/phases/registry"
-import { renderFormulationTodo, renderPhaseAppend } from "../src/prompt-plan"
+import { renderFormulationTodo } from "../src/prompt-plan"
 import { promptFacts } from "../src/prompt-facts"
 import { formulationAcceptance } from "../src/formulate"
 import { git } from "./fixtures/runner"
@@ -240,22 +240,6 @@ describe("the delta block's prompt slots (plans/0244 D1)", () => {
     expect(floor.scope).not.toContain("measured delta")
   })
 
-  test("the append prompt splices the block and stays byte-identical without one", () => {
-    const base2 = {
-      phaseId: "R-01.P01",
-      taskIndex: "docs/R-01/P01-implement/tasks.md",
-      numberStart: 3,
-      input: "More work.",
-      inputPath: "docs/R-01/P01-implement/plan-input.md",
-      existingTasks: "- [pending] T-002: there",
-      brief: "Project intent (fixed input).",
-    }
-    const floor = renderPhaseAppend(facts, base2)
-    expect(renderPhaseAppend(facts, { ...base2, delta: block })).toContain(block.trimEnd())
-    expect(renderPhaseAppend(facts, { ...base2, delta: undefined })).toBe(floor)
-    expect(renderPhaseAppend(facts, { ...base2, delta: " " })).toBe(floor)
-    expect(floor).not.toContain("measured delta")
-  })
 })
 
 // —— S3: the table (D2), the due set and the cover set (D4) ——

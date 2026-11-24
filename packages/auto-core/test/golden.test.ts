@@ -35,7 +35,7 @@ import {
   renderWrapup,
   type ScriptRun,
 } from "../src/prompt"
-import { renderFormulationTodo, renderPhaseAppend, existingTaskList } from "../src/prompt-plan"
+import { renderFormulationTodo } from "../src/prompt-plan"
 import { formulationAcceptance } from "../src/formulate"
 import { protocolFrameText, renderLedger, seededLedgerRows } from "../src/formulate-synthesis"
 import { renderTaskTodo } from "../src/tasks"
@@ -356,42 +356,6 @@ describe("golden render snapshots", () => {
     golden(
       "phase-handover",
       renderPhaseHandover(facts, { phase: phaseTypeOfLetter("m"), handover: "docs/R-01/P02-implement/handover.md", next: "P03-test Testing" }),
-    )
-    // Append planning (plans/0053 D27): the shared phase-append template, both
-    // modes byte-stable. The existing-task lines come from existingTaskList
-    // over a fixed task set (a closed task with its reason, a done and a
-    // pending one).
-    const existingTasks = existingTaskList([
-      { id: "T-004", title: "sort out the lexer", status: "done", closed: "superseded by T-006" },
-      { id: "T-005", title: "migrate the parser", status: "done" },
-      { id: "T-006", title: "wire up the pipeline", status: "pending" },
-    ])
-    golden(
-      "phase-append",
-      renderPhaseAppend(facts, {
-        phase: phaseTypeOfLetter("m"),
-        planDuties: duties("m"),
-        brief: "Project intent (fixed input).",
-        handovers: "Prior phase handover (fixed input).",
-        mode: migrate,
-        phaseId: "R-01.P02",
-        taskIndex: "docs/R-01/P02-implement/tasks.md",
-        numberStart: 5,
-        input: "Append input (fixed input).",
-        inputPath: "docs/R-01/P02-implement/plan-input.md",
-        existingTasks,
-      }),
-    )
-    golden(
-      "phase-append-m",
-      renderPhaseAppend(facts, {
-        phaseId: "R-01.P01",
-        taskIndex: "docs/R-01/P01-implement/tasks.md",
-        numberStart: 4,
-        input: "Append input (fixed input).",
-        inputPath: "docs/R-01/P01-implement/plan-input.md",
-        existingTasks,
-      }),
     )
     // The capped digest's index form (plans/0061 R3/A7): what fills the
     // phase-plan prevRound slot when the joined digest exceeds the cap.

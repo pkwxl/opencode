@@ -82,7 +82,7 @@ const taskSet = (c: SessionCtx): Opts => ({
   git: c.git,
 })
 
-// The shared bypass set (planning, appending, handover
+// The shared bypass set (planning, handover
 // distillation, knowledge extraction): plan's stop condition owns their
 // questions; no task-execution fields, no phase, no control. idleMs and mode
 // ride on every site per the ruled merge — the probe interval follows the
@@ -106,7 +106,7 @@ const bypassSet = (c: SessionCtx): Opts => ({
   intent: c.opts.intent,
 })
 
-describe("sessionOpts (the six-site field-set pin)", () => {
+describe("sessionOpts (the session field-set pin)", () => {
   test("task site: the full execution set, leadSplit absent while the fleet can fork", () => {
     expect(sessionOpts(ctx, { site: "task", phase })).toStrictEqual(taskSet(ctx))
   })
@@ -124,10 +124,6 @@ describe("sessionOpts (the six-site field-set pin)", () => {
     expect(sessionOpts(ctx, { site: "task", phase })).toStrictEqual(taskSet(ctx))
     const running: SessionCtx = { ...ctx, opts: { ...ctx.opts, stopBefore: undefined } }
     expect("humanQuestions" in sessionOpts(running, { site: "task", phase })).toBe(false)
-  })
-
-  test("phase-append site (the appending session)", () => {
-    expect(sessionOpts(ctx, { site: "phase-append" })).toStrictEqual(bypassSet(ctx))
   })
 
   test("handover site: carries mode since the ruled merge (the one omission it removed)", () => {
@@ -183,7 +179,7 @@ describe("sessionOpts (the six-site field-set pin)", () => {
     expect(task.control).toBe(ctx.control)
     expect(task.git).toBe(ctx.git)
     expect(task.phase).toBe(phase)
-    const bypass = sessionOpts(ctx, { site: "phase-append" })
+    const bypass = sessionOpts(ctx, { site: "handover" })
     expect(bypass.server).toBe(ctx.server)
     expect(bypass.router).toBe(ctx.router)
     expect(bypass.git).toBe(ctx.git)

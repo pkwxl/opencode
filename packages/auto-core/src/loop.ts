@@ -350,7 +350,6 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
       repl,
       ran: 0,
       input: opts.planInput,
-      append: opts.append,
       routing,
       // The run's router (the installed holder's): the loop's boundary hooks
       // and every opts literal the loop builds carry it — the pipeline below

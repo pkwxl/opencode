@@ -238,11 +238,6 @@ export type RunAllOpts = {
   // The planning input plan hands the run (plans/0053 D9): the first planning
   // step persists it to its phase's plan-input.md and plans against it.
   planInput?: PlanInput
-  // plan --append (plans/0053 D23): with planInput, the planning step appends
-  // tasks to the phase the route names now instead of planning it afresh; m
-  // mode implies the append from an input on a non-empty index, so the flag
-  // only matters for the phased execute and handover routes.
-  append?: boolean
   // The unit-scoped lane entry (plans/0068 §6.3, D2): internal, never
   // constitutional — set only by a lane launcher (the shell's `_lane`
   // subcommand or a host's own worker entry), never by a person's CLI. With
@@ -260,7 +255,7 @@ export type RunAllOpts = {
 // one home for the threading both shells' `runOptions` builders mirrored (the
 // plans/0160 absorb's own words: "a dropped key is a silently different run").
 // The per-run halves (session flags vs request options, the transport's
-// interactive channel, a plan payload's stop/input/append, run's widths) stay
+// interactive channel, a plan payload's stop/input, run's widths) stay
 // each shell's — they spread this object and add theirs.
 export function configRunOptions(config: ProjectConfig, mode: ModeSpec): RunAllOpts {
   return {

@@ -108,6 +108,10 @@ The dated blocks below are historical absorb notices, newest governing: where a 
 - **Push lane worker retirement** (0283, 0309). The 0068 requirement to provide a hidden `_lane` command ended with its CLI tombstone. Shells use executor grants for worktree and documentation lane concurrency.
 - **Status, events and teardown around lanes**: the read-only status tree opens with an in-flight lanes section while the registry holds lane records, the parent re-emits every lane worker output line through its own log with a `[<task-id>]` prefix (the lane's own `.auto/logs/` is discarded at teardown — §11 item 6's choice), and the driver-status vocabulary gains the parent-level `lane-dispatch`/`lane-exit`/`lane-landing`/`lane-block` events. Worktree teardown is best-effort with the Windows AV/file-lock retry schedule, the park is pruned at preflight, and every terminal failure names the park path — nothing a shell renders itself, recorded here so the surfaces read as designed.
 
+**Push task-append retirement (0283, 0310)**
+
+Shells add tasks through task-add and revise phase plans through formulation inputs. The push append option and session are retired.
+
 ## D. Branches and merge flow
 
 | Branch | Responsibility |

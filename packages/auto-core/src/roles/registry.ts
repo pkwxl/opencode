@@ -106,7 +106,7 @@ export const COLLECT_POLICIES = [
   // wrapup.ts reportProblems.
   "report-shape",
   // The task index lines and each task document validated against the unit
-  // grammar — tasks.ts plannedTaskProblems / loop-append.ts appendProblems.
+  // grammar — tasks.ts plannedTaskProblems.
   "index-docs",
   // The four mandatory handover sections (document/roles.ts validHandover)
   // and the acceptance-draft rules — loop-phase.ts.
@@ -149,10 +149,8 @@ export type SessionRoleEntry = {
   routing: readonly ModelRole[]
   // Templates that render this role. The decompose family's per-phase
   // variant comes from the phase registry (PhaseTypeEntry.decomposeTemplate,
-  // with the family base as the fallback); every other name is the whole
-  // template for the role's session (a fanout/a phase-append/
-  // an implement-plan is a variant prompt of its role, not a role of its
-  // own).
+  // with the family base as the fallback). A variant such as fanout still
+  // belongs to its session role.
   templates: readonly string[]
   // The program-default tier of the role's sessions: a fixed tier, or
   // "execute" = the current phase type's execute tier (src/tier.ts
@@ -240,15 +238,8 @@ export const SESSION_ROLE_DESCRIPTORS: readonly SessionRoleEntry[] = [
     // phase-append routes under phase-plan by design (plans/0053 D23/F6: no
     // new role word); implement-scan is the m-mode planning scan.
     routing: ["phase-plan", "implement-scan"],
-    // implement-plan = the m-mode variant against the planning input;
-    // phase-append = the append variant.
-    // plans/0095 retired the planning templates (the m-mode implement-plan
-    // variant with the unified formulation todo; phase-append remains this
-    // role's one template); since plans/0217 D1 the formulation task's
-    // session rides this role's phase-plan word — a chain role override at
-    // the recognition — instead of the whole-task role 0095's relocation
-    // left it on.
-    templates: ["phase-append"],
+    // Formulation reads its constructed todo through the task session.
+    templates: ["whole"],
     tier: "deep",
     usage: { handover: false, testHandover: false, forkGuard: false, splitGuard: false },
     collect: "index-docs",

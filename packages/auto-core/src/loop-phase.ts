@@ -1,8 +1,7 @@
 // Phase loop (--phases): the phase handover (handoverPhase and its step wrapper
 // handoverWithStep) and the phase routing loop (runPhaseLoop), runAll's former
 // closures as top-level functions with their captures made explicit as LoopCtx
-// (defined in ./loop-task). Phase planning lives in ./loop-plan, the append
-// step in ./loop-append (plans/0053 A2; split by plans/0235).
+// (defined in ./loop-task). Phase planning lives in ./loop-plan.
 // Since plans/0101 D1/D2 the loop also owns run's boundary stop and shapes
 // transfer's advance (stopBefore "formulate") — the two command grammars that
 // bracket the phase boundaries.
@@ -18,7 +17,6 @@ import { awaitingFormulation } from "./formulate"
 import { closeAuditStopLines, ensureCloseAudit, updateAssuranceBaselines } from "./close-audit"
 import { banner, dirtyStopLines, log, unreadableStopLines } from "./log"
 import { sessionOpts } from "./opts"
-import { appendWithStep } from "./loop-append"
 import { planWithStep } from "./loop-plan"
 import { runTaskLoop, type LoopCtx } from "./loop-task"
 import {
@@ -36,8 +34,8 @@ import {
   routePhase,
   type PhaseUnit,
 } from "./phases"
-import { emptyIndexNotice, executeNotice, installApprovedBrief, logGateStop, openRoundEmptyLines, openRoundWrapLines, phaseBoundaryLines, roundCompleteNext } from "./plan"
-import { planInputPath, readPlanInput } from "./plan-input"
+import { appendInputRetiredLine, emptyIndexNotice, executeNotice, installApprovedBrief, logGateStop, openRoundEmptyLines, openRoundWrapLines, phaseBoundaryLines, retiredAppendResumeLine, roundCompleteNext } from "./plan"
+import { readPlanInput } from "./plan-input"
 import { openBlockage } from "./blockage-diagnose"
 import { clampLine, clampedItemsOf } from "./charter-clamp"
 import { ensureRegressionGreen, regressionHoldLines } from "./regression"
@@ -525,7 +523,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
     await statsPhase(directory, phaseKey(route.phase).id)
     // Session resume takes precedence over file-derived routing
     // (plans/0018-session-resume-precedence-design.md): an unclosed phase-step
-    // resume point on the driver side (the last run's planning/appending/
+    // resume point on the driver side (the last run's planning or
     // handover session was interrupted before the driver closed it out) →
     // re-enter that step and reuse the interrupted session, even if the
     // task/phase index has already moved file routing on. Task units and
@@ -537,13 +535,11 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
     // the stale record. The point is keyed by the qualified phase id R-NN.P<nn>
     // (a type may repeat within a round); a record without one (pre-M3.6
     // `letter`) matches no phase and file routing wins.
-    // The check precedes the m-mode branch below (plans/0053 D12), so an
-    // interrupted m-mode planning or appending step is finished by whichever
-    // command runs next, from its persisted planning input; a record with no
-    // input to plan against (it predates the input) is closed, and file
-    // routing continues. An interrupted append re-enters through appendPlan
-    // (plans/0053 D23), never a full planPhase.
     const open = await openStep(directory)
+    if (open?.step === "phase-append") {
+      log(retiredAppendResumeLine(open.unit))
+      return 2
+    }
     if (open) {
       const state = await phaseState(directory)
       const owner = state.phases.find((unit) => phaseKey(unit).id === open.unit)
@@ -559,27 +555,8 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
         log(`↻ unclosed planning resume point (${open.unit}) predates the formulation task (plans/0095); closing it and clearing its partial output — the phase plans again as its first task unit`)
         await closeStep(directory, open.step, open.unit)
         if (owner) await resetPlanning(directory, owner)
-      } else if (
-        ctx.manual &&
-        open.step === "phase-append" &&
-        open.unit === phaseKey(route.phase).id &&
-        !ctx.input &&
-        !(await readPlanInput(directory, route.phase))?.trim()
-      ) {
-        log(
-          `⚠ unclosed m-mode appending resume point (${open.unit}) has no planning input (${planInputPath(route.phase)}) to plan against; ` +
-            `closing it and continuing with the file-derived route`,
-        )
-        await closeStep(directory, open.step, open.unit)
       } else if (open.unit === phaseKey(route.phase).id) {
-        const stepName = open.step === "phase-append" ? "task appending" : "phase handover"
-        log(`↻ session resume point takes precedence: the ${stepName} session(${phaseTitle(route.phase)}) was not closed out; re-entering that step to continue`)
-        if (open.step === "phase-append") {
-          banner(`${phaseTitle(route.phase)} task append`)
-          const code = await appendWithStep(ctx, route.phase)
-          if (code !== 0 || opts.stopBefore !== undefined) return code
-          continue
-        }
+        log(`↻ session resume point takes precedence: the phase handover session(${phaseTitle(route.phase)}) was not closed out; re-entering that step to continue`)
         // handover re-entry only when file routing is handover too (this
         // phase's tasks all done): otherwise (the anomalous state of
         // unfinished tasks remaining) the handover would mark a phase with
@@ -606,27 +583,11 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
         )
       }
     }
-    // The open-round kind (plans/0243 B), derived once per routing pass: an
-    // open round's single implicit implement phase never hands over and never
-    // auto-closes, so the loop's open arms below ride this flag — the implied
-    // append (an input is an append, m mode's D23 rule scoped to the kind)
-    // and the never-closing wrap-up. Everything else (task pipeline, gates,
-    // regression) runs exactly as in any phase.
     const openRound = !ctx.manual && (await roundIsOpen(directory))
-    // An append this run was asked for (plans/0053 D23): the phase the route
-    // names now already has its index written — tasks pending (execute route)
-    // or the phase distilled / gate-stopped (handover route) — so new tasks
-    // are appended to it, never a full planning step and never another phase.
-    // It always rides an input (the prelude refuses --append without one, and
-    // m mode implies the append from an input on a non-empty index), so the
-    // input still being unconsumed is what makes this an append: a planning
-    // step consumed it otherwise, and appendPlan consumes it here. An open
-    // round implies the append the same way (plans/0243 B).
-    if (ctx.input !== undefined && route.type !== "plan" && (ctx.append || ctx.manual || openRound)) {
-      banner(`${phaseTitle(route.phase)} task append`)
-      const code = await appendWithStep(ctx, route.phase)
-      if (code !== 0 || opts.stopBefore !== undefined) return code
-      continue
+    if (ctx.input !== undefined && (openRound || (ctx.manual && route.type !== "plan"))) {
+      log(appendInputRetiredLine(directory))
+      ctx.input = undefined
+      return 1
     }
     // An open round (plans/0243 B) rides m mode's never-closing semantics
     // scoped to the round kind: no formulation constructs, no handover, no

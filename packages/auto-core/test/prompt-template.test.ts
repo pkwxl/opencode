@@ -61,12 +61,11 @@ describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, p
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> question-rule}}"))
     .sort()
 
-  test("exactly 12 templates reference the partial (survey conclusion §J-3; M1.0 merging understand -1, M2.2 retiring six -6, plans/0052 D5 deleting infer-source -1, plans/0053 D27 adding phase-append +1, plans/0068 S5 adding fanout's cold delta +1, plans/0095 retiring phase-plan and implement-plan -2, plans/0150 retiring number-recovery -1, plans/0283 retiring knowledge and prior-knowledge -2; a new reference needs the design document updated in step)", () => {
-    expect(consumers.length).toBe(12)
+  test("exactly 11 templates reference the partial (survey conclusion §J-3; M1.0 merging understand -1, M2.2 retiring six -6, plans/0052 D5 deleting infer-source -1, plans/0053 D27 adding phase-append +1, plans/0068 S5 adding fanout's cold delta +1, plans/0095 retiring phase-plan and implement-plan -2, plans/0150 retiring number-recovery -1, plans/0283 retiring knowledge and prior-knowledge -2; plans/0310 retiring phase-append -1; a new reference needs the design document updated in step)", () => {
+    expect(consumers.length).toBe(11)
     expect(consumers).toContain("decompose-m.md")
     expect(consumers).toContain("whole.md")
     expect(consumers).toContain("subtask.md")
-    expect(consumers).toContain("phase-append.md")
     // fanout's reference sits inside the cold-start block (plans/0068 S5): a
     // fresh stream lane session has no fork holding the task's rules, so the
     // cold delta is the stream's whole prompt and carries the question rule

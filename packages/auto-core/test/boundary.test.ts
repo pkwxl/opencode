@@ -16,9 +16,10 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { completePhase, establishRound, readPhases } from "../src/phases"
-import { appendOneTask, artifactTurns, loopFixture, promptPhaseDir, type LoopFixture } from "./fixtures/loop"
+import { appendOneTask, artifactTurns, loopFixture, type LoopFixture } from "./fixtures/loop"
 import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
 import { EOF_MARK } from "../src/doccheck"
+import { saveProgress } from "../src/resume"
 
 const made: LoopFixture[] = []
 afterEach(() => {
@@ -49,19 +50,23 @@ const knowledgeTurn = (dir: string): TurnScript => (ctx) => {
   return undefined
 }
 
-// The round-report self-heal's append (plans/0081 D4): the final
-// task-bearing phase's completion appends one report task — the fake session
-// writes it and the report (survey-gate's turn, extracted).
-const reportHealTurn = (dir: string): TurnScript => (ctx) => {
-  if (ctx.text.includes("## Input: the task index as it stands") && ctx.text.includes("Round report self-heal")) {
-    const phaseDir = promptPhaseDir(ctx.text)
-    if (phaseDir) {
-      appendOneTask(dir, phaseDir)
-      writeFileSync(join(dir, "docs/R-01/report-for-user.md"), ["# Round report", "", "The round's account for the person.", "", EOF_MARK, ""].join("\n"))
-    }
-  }
-  return undefined
-}
+test("the phase loop preserves a retired append record and its partial task", async () => {
+  const f = await fixture("m")
+  const phase = await f.phase(0)
+  await Bun.write(join(f.dir, phase.dir, "tasks.md"), "# Tasks\n")
+  const task = appendOneTask(f.dir, phase.dir)
+  const record = Bun.file(join(f.dir, ".auto/progress.json"))
+  const todo = Bun.file(join(f.dir, "docs", task, "todo.md"))
+  await saveProgress(f.dir, { task: "PLAN", session: "interrupted", at: 1, active: true, phase: { kind: "step", step: "phase-append", unit: "R-01.P01" } })
+  const before = await record.text()
+  const partial = await todo.text()
+
+  const stopped = await f.run()
+  expect(stopped.code).toBe(2)
+  expect(stopped.lines.join("\n")).toContain("the task appending step of R-01.P01 was interrupted and the session is retired")
+  expect(await record.text()).toBe(before)
+  expect(await todo.text()).toBe(partial)
+})
 
 describe("run's boundary stop (plans/0101 D1)", () => {
   test("the run ends at the phase's clean end, exit 0, naming transfer — no distillation, no close, no next formulation", async () => {
@@ -79,7 +84,7 @@ describe("run's boundary stop (plans/0101 D1)", () => {
   })
 
   test("--boundary flow crosses as today: the handover, the next phase's planning and execution, the completed round", async () => {
-    const f = await fixture("mt", (dir) => ({ turn: (ctx) => reportHealTurn(dir)(ctx) ?? artifactTurns(dir)(ctx) }))
+    const f = await fixture("mt")
     const crossed = await f.run({ boundary: "flow" })
     expect(crossed.code).toBe(0)
     expect(crossed.lines.some((line) => line.includes("phase handover: P01-implement Implementation → P02-test Test"))).toBe(true)
@@ -89,7 +94,7 @@ describe("run's boundary stop (plans/0101 D1)", () => {
   })
 
   test("a plain run on a closed round points at transfer's close (today's complete lines kept)", async () => {
-    const f = await fixture("mt", (dir) => ({ turn: (ctx) => reportHealTurn(dir)(ctx) ?? artifactTurns(dir)(ctx) }))
+    const f = await fixture("mt")
     expect((await f.run({ boundary: "flow" })).code).toBe(0)
     const again = await f.run()
     expect(again.code).toBe(0)

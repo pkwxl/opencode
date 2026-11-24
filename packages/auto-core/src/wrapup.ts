@@ -69,7 +69,7 @@ import { runExecSession } from "./exec-session"
 import { runTestLanes, type LaneRun } from "./script"
 import { runSession } from "./session"
 import { forkEndedSession } from "./session-api"
-import { shellProfile } from "./shell"
+import { shellProfile, surfaceOf } from "./shell"
 import { statsModelEvent } from "./stats"
 import { consumeDeadTestMarker, handoffSteer } from "./testrun"
 import { autoSwitches } from "./switches"
@@ -709,7 +709,7 @@ export async function runWrapup(
         question:
           `${lead} and the last two fix rounds closed no gap (${round} fix rounds spent, the gap list still counts ${gapsNow} gap${gapsNow === 1 ? "" : "s"}); the remaining gaps are listed in ${taskDoc(task.id, "gaps")}. ` +
           `The work and the gap list are committed; accept the result with ${bin} close ${task.id} --reason <text>; ` +
-          `or replace the task with ${bin} plan --force-close ${task.id} --reason <text> --append -p <what to do instead>; ` +
+          `after closing it, add a replacement with ${surfaceOf().tasks(dir, '--new-task "<title>"')}; ` +
           `or list fix tasks before it in ${plan.index} by hand; then re-run.`,
       }
     }
