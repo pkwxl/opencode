@@ -1600,8 +1600,7 @@ async function runDocUnit(
 // the lane naming it (the semantic resolution a session would perform over
 // the conflicted tree is future wiring; inventing an automatic resolution is
 // exactly what D21 rejects).
-// Every return is a controlled exit; the lane report is the caller's to
-// write (runLaneWorker).
+// Every return is a controlled exit. The caller writes the lane report.
 export async function runLaneUnit(ctx: LoopCtx): Promise<number> {
   const { directory, opts, server: serverHandle } = ctx
   const unit = opts.lane!.unit

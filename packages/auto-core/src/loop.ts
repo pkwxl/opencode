@@ -11,9 +11,8 @@ import { checkTextAgainstCharter } from "./prompt-verify"
 import { runLaneUnit, type LoopCtx } from "./loop-task"
 import { runPhaseLoop } from "./loop-phase"
 import { log } from "./log"
-import { headSha } from "./git"
 import { commitsSince } from "./git-worktree"
-import { streamUnitOf, writeLaneReport, type LaneReport } from "./lanes"
+import { streamUnitOf, type LaneReport } from "./lanes"
 import { currentRound, phaseFlowBlockedLine, phaseFlowBlockedText, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
 import { anyCodeWork, resolvePhases } from "./phases/registry"
 import { loadPhaseTypes } from "./phases/custom"
@@ -442,41 +441,6 @@ async function driveRun(directory: string, opts: RunAllOpts, pre: Preinitialized
     // holder-using caller — a test — restores the caller's holder.
     uninstallServices()
   }
-}
-
-// —— The lane worker entry (plans/0068 §6.3/D8) —— //
-
-// What a shell's hidden `_lane <dir> --unit <id>` subcommand — and any
-// bootstrap that imports the core, no shell involved — calls: runAll scoped
-// to the one unit, then the lane report written at this controlled exit (the
-// report is the only contract the parent reads; its absence is the orphan
-// signal, so an unexpected throw here is caught and reported as an
-// environment failure rather than left report-less).
-// AUTO-DECISION (the report's commits list): the baseline is the worktree's
-// HEAD when this worker starts, so a resumed lane (a re-dispatch over an
-// earlier attempt's commits) lists this run's commits, not the branch's
-// whole history — the parent derives the branch baseline itself at landing
-// (merge-base), and no S2 consumer reads the list; D8 keeps the field for
-// the observability stage.
-export async function runLaneWorker(directory: string, opts: RunAllOpts & { lane: { unit: string } }): Promise<number> {
-  const unit = opts.lane.unit
-  const start = Date.now()
-  const base = (await headSha(directory)) ?? ""
-  let code: number
-  try {
-    code = await runAll(directory, opts)
-  } catch (error) {
-    log(`⚠ lane worker failed unexpectedly: ${error instanceof Error ? error.message : String(error)}`)
-    code = 1
-  }
-  try {
-    await writeLaneReport(directory, await laneReportOf(directory, opts, unit, code, base, start))
-  } catch (error) {
-    // The writer failing must not mask the run's own exit code; the parent
-    // reads the absent report as the orphan signal and keeps the scene.
-    log(`⚠ writing the lane report failed: ${error instanceof Error ? error.message : String(error)}`)
-  }
-  return code
 }
 
 // The report of one lane run (D8's fields): the unit's own task bucket of the

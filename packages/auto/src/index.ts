@@ -1213,17 +1213,6 @@ if (command === "init" || command === "amend" || command === "reset" || (command
   }
 }
 
-// `_lane <dir> --unit <id> [--merge <branch>]` (hidden, auto-core plans/0068
-// §6.4/D2): the lane worker entry the parent run's default lane launcher
-// re-invokes this CLI with — a machine surface, never a person's (absent from
-// the usage text; the shell contract's §E obligation makes providing it part
-// of being a shell). It loads the project config like run (the worktree
-// received it by the scaffolding copy), then runs the one unit through
-// runLaneWorker, which writes the lane report the parent reads after this
-// process exits. Session flags take their defaults; everything the lane needs
-// beyond them rides the copied scaffolding and the inherited environment.
-// --merge (D7's conflict path) rides only a conflict repair's re-dispatch:
-// the parent's current main branch the lane merges into its branch first.
 // plan (auto-core plans/0053 D14, D23, D28; --new-task plans/0058): plan the
 // current phase and stop before execution, for review. It is run with a stop
 // condition: the same options (the builder is shared), preceded by the prelude
