@@ -31,10 +31,12 @@ The honest limits, which the DRIVER enforces mechanically: every quote must loca
 The DRIVER has already seeded these protocol rows into the ledger (shown so you know where your numbering continues — never repeat them, never renumber them):
 {{seeded}}
 
-Your rows continue the O sequence at {{nextId}}; C rows open at C-01. Row grammar, exactly (the pipes and quotes are DRIVER-parsed):
+Your rows continue the O sequence at {{nextId}}. C rows open at C-01. Start each row with a literal dash and space (`- `). Preserve the pipes and quotes as shown.
 
+```text
 - O-<nn> | <source name, exactly as headed above> | "<verbatim quote from that source>" | <what the plan must cover>
 - C-<nn> | <source A> vs <source B> | "<quote from A>" / "<quote from B>" | <the authority order's verdict; what the plan must record>
+```
 
 Reply with exactly this shape and nothing else — the delimiter lines and the closing Rationale line are DRIVER protocol strings, written verbatim, untranslated:
 

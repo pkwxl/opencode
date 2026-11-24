@@ -7,7 +7,7 @@ import { executorTypeCatalog } from "@opencode-ai/auto-core/executor-coordinator
 import { buildFingerprint, VERSION } from "../src/version"
 import { startDaemon, type DaemonHandle } from "../src/daemon"
 import { DaemonStore } from "../src/store"
-import { fixtureProject, gitOf, TASK, TASK_2 } from "./fixtures/project"
+import { fixtureProject, gitOf, TASK, TASK_2, TASK_2_DOC } from "./fixtures/project"
 
 test("the daemon routes authenticated executor requests to one launcher-confined coordinator and recovers across restarts", async () => {
   const directory = await fixtureProject("auto-executor-e2e-", { subtask: "off" })
@@ -128,7 +128,10 @@ test("the daemon routes authenticated executor requests to one launcher-confined
     expect(liveRunLock(directory)).toBeUndefined()
 
     daemon = await start()
-    expect((await call("ready", {}, verifier)).menu).toEqual({ claimable: [], leases: [], pending: [], types: executorTypeCatalog() })
+    expect((await call("ready", {}, verifier)).menu).toEqual({
+      claimable: [], leases: [], types: executorTypeCatalog(),
+      pending: [{ kind: "wait", reason: "in-flight", detail: "A previous share requires settlement." }],
+    })
     expect(await git("rev-parse", "HEAD")).toBe(beforeReport)
     // 0273 on the wire: the same-token verify claim over the booked report
     // (the claim itself settling the replayed share above) renders the
@@ -241,11 +244,11 @@ test("the daemon grants and settles concurrent worktree leases through protocol 
 // carrying the phase identity (the qualified id and the task-index path)
 // beside the standing execute-shaped fields, and the kind vocabulary the
 // request layer admits (the unknown word still stops and asks).
-test("the formulate grant kind rides the wire beside the standing kinds", async () => {
+test("formulation can stop before output and a successor can recover a pending settlement through the wire", async () => {
   const directory = await fixtureProject("auto-executor-formulate-", { subtask: "off" })
   const git = gitOf(directory)
   // The phase's standing formulation unit (the driver-written Formulate:
-// field carrying the owning phase's qualified id) over the fixture's
+  // field carrying the owning phase's qualified id) over the fixture's
   // implicit implement phase.
   await Bun.write(join(directory, "docs", TASK, "todo.md"), [
     `# ${TASK}: Formulate the Implement tasks`,
@@ -259,6 +262,10 @@ test("the formulate grant kind rides the wire beside the standing kinds", async 
     "## Scope",
     "",
     "The planning input, the project brief and the round brief.",
+    "",
+    "## Obligations ledger",
+    "",
+    '- O-01 | phase duties | "widget" | plan the second widget',
     "",
     "## Acceptance",
     "",
@@ -295,7 +302,7 @@ test("the formulate grant kind rides the wire beside the standing kinds", async 
     expect(Object.keys(ready.menu.types).sort()).toEqual(["audit", "distill", "execute", "fix", "formulate", "synthesize", "verify"])
     expect(ready.menu.types.formulate).toMatchObject({ id: "formulate", writes: { scope: "none" } })
     const claimed = await call("claim", { channel: "solo", task: TASK, kind: "formulate" })
-    expect(claimed.step).toMatchObject({
+    expect({ ...claimed.step }).toMatchObject({
       kind: "formulate", unit: TASK, title: "Formulate the Implement tasks",
       phase: "R-01.P01", index: "docs/R-01/P01-implement/tasks.md",
       workspace: directory, attempt: 1, budget: expect.any(Number),
@@ -307,6 +314,62 @@ test("the formulate grant kind rides the wire beside the standing kinds", async 
     // an unknown one.
     expect(await call("brief", { channel: "solo", task: TASK, kind: "formulate" })).toMatchObject({ step: claimed.step })
     await call("claim", { channel: "solo", kind: "inaugurate" }, worker, 400)
+
+    const query = { channel: "solo", task: TASK, kind: "formulate" }
+    const handoff = join(directory, "docs", TASK, "handoff.md")
+    await Bun.write(handoff, "# Handoff\n\nResume the survey before writing task documents.\n\nStatus: continue\n")
+    const report = (step: { id: string; lease: string }) => call("report", {
+      channel: "solo", step: step.id, lease: step.lease, outcome: "ended",
+    })
+    await report(claimed.step)
+    const checkpoint = (await git("rev-parse", "HEAD")).trim()
+    const resumed = (await call("claim", query)).step
+    expect(resumed).toMatchObject({ kind: "formulate", id: `${TASK} formulate 2` })
+    expect(resumed.prompt).toContain(`docs/${TASK}/handoff.md`)
+
+    const index = join(directory, resumed.index)
+    await Bun.write(index, (await Bun.file(index).text()) + `- [ ] ${TASK_2} the second widget\n`)
+    await Bun.write(join(directory, "docs", TASK_2, "todo.md"), TASK_2_DOC)
+    await Bun.write(handoff, "# Handoff\n\nStatus: done\n")
+    expect((await report(resumed)).step).toMatchObject({ kind: "blocked", code: "commitFailed", remedy: expect.stringContaining("coverage map is missing") })
+
+    // Follow the operator's remedy while the report is pending. Stopping
+    // the worker releases the run lock; the booked report survives it.
+    const control = store.issueToken("control", "operator").token
+    const reader = store.issueToken("read", "reader").token
+    const reconcile = () => fetch(`${daemon!.url}/projects/${encodeURIComponent(project.name)}/reconcile`, {
+      method: "POST", headers: { authorization: `Bearer ${control}` }, body: "{}",
+    })
+    const refused = await reconcile()
+    expect(refused.status).toBe(409)
+    const { run, retry } = await refused.json()
+    expect(retry).toContain(`DELETE /runs/${run.id}`)
+    const url = `${daemon.url}/runs/${run.id}`
+    expect((await fetch(url, { method: "DELETE", headers: { authorization: `Bearer ${control}` } })).status).toBe(202)
+    const deadline = Date.now() + 5_000
+    while ((await (await fetch(url, { headers: { authorization: `Bearer ${reader}` } })).json()).live) {
+      if (Date.now() > deadline) throw new Error("The stopped coordinator is still live")
+      await Bun.sleep(50)
+    }
+    expect((await reconcile()).status).toBe(200)
+
+    const other = store.issueToken("executor", "other worker").token
+    for (const response of [
+      await call("brief", query, other),
+      await call("brief", { ...query, channel: "another" }),
+      await call("brief", { ...query, kind: "verify" }),
+    ]) expect(response.step).toMatchObject({ kind: "wait", reason: "not-ready" })
+    const recovered = (await call("brief", query)).step
+    expect(recovered).toEqual(resumed)
+    expect((await call("ready", { channel: "solo" })).menu.leases).toEqual([])
+    expect((await git("rev-parse", "HEAD")).trim()).toBe(checkpoint)
+
+    await Bun.write(join(directory, "docs", TASK, "coverage.md"), `- O-01 -> ${TASK_2}\n`)
+    expect((await report(recovered)).step.kind).toBe("settled")
+    expect((await report(recovered)).step.kind).toBe("settled")
+    expect((await git("rev-list", "--count", `${checkpoint}..HEAD`)).trim()).toBe("1")
+    expect((await call("brief", query)).step.kind).toBe("wait")
+    expect((await call("claim", { task: TASK, kind: "verify" }, other)).step.kind).toBe("verify")
   } finally {
     await daemon?.stop()
     await rm(dataDir, { recursive: true, force: true })

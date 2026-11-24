@@ -91,16 +91,24 @@ export function renderLedger(rows: readonly LedgerRow[]): string {
 // and only the sequence holds (a constructor session's rows continue past
 // the seeded ones, after any verbatim echo of them). Only `- `-prefixed
 // lines are rows — the landed section carries the DRIVER's prose (the intro
-// and boundaries paragraphs) around them; a `- ` line that does not parse is
-// a named problem.
-export function parseLedger(body: string, from?: { O: number; C: number }): { rows: LedgerRow[]; problems: string[] } {
+// and boundaries paragraphs) around them. A constructor reply contains
+// only rows, blank lines and headings inside its ledger delimiters.
+export function parseLedger(body: string, from?: { O: number; C: number }, source: "document" | "reply" = "document"): { rows: LedgerRow[]; problems: string[] } {
   const rows: LedgerRow[] = []
   const problems: string[] = []
   const seen = new Set<string>()
+  let missingPrefixReported = false
   const last: Record<"O" | "C", number | undefined> = { O: from?.O ? from.O - 1 : undefined, C: from?.C ? from.C - 1 : undefined }
   body.split("\n").forEach((raw, i) => {
     const line = raw.trim()
-    if (!line || line.startsWith("#") || !line.startsWith("- ")) return
+    if (!line || line.startsWith("#")) return
+    if (!line.startsWith("- ")) {
+      if (source === "reply" && !missingPrefixReported) {
+        problems.push(`ledger line ${i + 1} is missing the literal \`- \` prefix required on each row: ${line.slice(0, 120)}`)
+        missingPrefixReported = true
+      }
+      return
+    }
     const o = O_ROW.exec(line)
     const c = !o ? C_ROW.exec(line) : undefined
     const match = o ?? c
@@ -324,7 +332,7 @@ export function checkSynthesisReply(replyText: string, seeded: readonly LedgerRo
   const parsed = parseSynthesisReply(replyText)
   if ("problems" in parsed) return { problems: parsed.problems }
   const seededText = new Set(seeded.map(renderLedgerRow))
-  const { rows, problems } = parseLedger(parsed.parsed.ledgerBody)
+  const { rows, problems } = parseLedger(parsed.parsed.ledgerBody, undefined, "reply")
   let echoed = 0
   while (echoed < rows.length && seededText.has(renderLedgerRow(rows[echoed]!))) echoed++
   const own = rows.slice(echoed)
@@ -337,7 +345,7 @@ export function checkSynthesisReply(replyText: string, seeded: readonly LedgerRo
     ...(firstC !== undefined && firstC.n !== 1 ? [`the first C row is ${ledgerRowId(firstC)} — the C sequence opens at C-01`] : []),
     ...sessionRowProblems(own, sources),
   ]
-  if (!own.length) validation.push("the ledger carries no row of the session's own — every obligation the sources name needs one")
+  if (!own.length && !problems.length) validation.push("the ledger carries no row of the session's own — every obligation the sources name needs one")
   if (!parsed.parsed.brief.trim()) validation.push("the sources brief is empty")
   return validation.length ? { problems: validation } : { brief: parsed.parsed.brief, own, rationale: parsed.parsed.rationale }
 }

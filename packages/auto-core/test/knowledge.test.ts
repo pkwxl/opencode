@@ -2,187 +2,30 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
-import { opencodeAgent } from "../src/agent/opencode/client"
 import {
   digestIndexEntries,
-  existingDistilledDocs,
-  existingKnowledge,
-  existingPriorKnowledge,
   isKnowledgeDoc,
-  knowledgeFile,
-  priorKnowledgeComplete,
   priorKnowledgeDigest,
-  priorKnowledgeFile,
   priorKnowledgeParts,
   renderDigestIndex,
 } from "../src/knowledge"
-import { noCommitGit } from "../src/git-ops"
-import { syncPhaseIndex } from "../src/phases"
-import { git } from "./fixtures/runner"
+import { phaseArtifacts, syncPhaseIndex } from "../src/phases"
 
-// A round established with phases "amk": the knowledge phase is P03.
-async function knowledgePhase(dir: string, round: number) {
-  return (await syncPhaseIndex(dir, round, "amk")).find((unit) => unit.type === "knowledge")!
-}
-
-describe("knowledgeFile / priorKnowledgeFile (output paths)", () => {
-  function tempDir() {
-    return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
+test("isKnowledgeDoc recognizes the knowledge phase's registry artifact", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "auto-knowledge-"))
+  try {
+    const phase = (await syncPhaseIndex(dir, 2, "amk")).find(unit => unit.type === "knowledge")!
+    const artifact = phaseArtifacts(phase)[0]!.path
+    expect(artifact).toBe("docs/R-02/P03-knowledge/kb.md")
+    expect(isKnowledgeDoc(artifact)).toBe(true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
-
-  test("knowledgeFile = the knowledge phase's standard artifact kb.md inside its phase directory", async () => {
-    const dir = tempDir()
-    try {
-      expect(knowledgeFile(await knowledgePhase(dir, 2))).toBe("docs/R-02/P03-knowledge/kb.md")
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("priorKnowledgeFile = docs/R-NN/prior-kb.md", () => {
-    expect(priorKnowledgeFile(1)).toBe(join("docs", "R-01", "prior-kb.md"))
-    expect(priorKnowledgeFile(3)).toBe(join("docs", "R-03", "prior-kb.md"))
-  })
-
-  // plans/0236 D5: the start clean gate's leftover classifier recognizes the
-  // knowledge artifact by path shape — pinned against the same constructed
-  // path knowledgeFile builds (the registry's knowledge entry), so the two
-  // spellings cannot drift apart; near shapes stay unrecognized.
-  test("isKnowledgeDoc matches exactly the constructed knowledge paths (the classifier and knowledgeFile pinned together)", async () => {
-    const dir = tempDir()
-    try {
-      expect(isKnowledgeDoc(await knowledgeFile(await knowledgePhase(dir, 2)))).toBe(true)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-    expect(isKnowledgeDoc("docs/R-01/P03-knowledge/kb.md")).toBe(true)
-    expect(isKnowledgeDoc("docs\\R-01\\P03-knowledge\\kb.md")).toBe(true)
-    expect(isKnowledgeDoc("docs/R-01/P03-implement/kb.md")).toBe(false)
-    expect(isKnowledgeDoc("docs/R-01/P03-knowledge/notes.md")).toBe(false)
-    expect(isKnowledgeDoc("docs/R-01/regression/3-verify-full.md")).toBe(false)
-  })
-})
-
-describe("existingKnowledge (this phase's idempotence check)", () => {
-  function tempDir() {
-    return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
-  }
-
-  test("the phase's kb.md non-empty → its path; missing / blank → undefined; legacy flat documents do not count", async () => {
-    const dir = tempDir()
-    try {
-      const phase = await knowledgePhase(dir, 1)
-      expect(await existingKnowledge(dir, phase)).toBeUndefined()
-      mkdirSync(join(dir, "docs/migration-kb"), { recursive: true })
-      writeFileSync(join(dir, "docs/migration-kb/R1-migration-a.md"), "legacy flat knowledge")
-      writeFileSync(join(dir, "docs/R-01/migration-kb.md"), "letter-layout-era in-round knowledge")
-      expect(await existingKnowledge(dir, phase)).toBeUndefined()
-      writeFileSync(join(dir, knowledgeFile(phase)), " \n")
-      expect(await existingKnowledge(dir, phase)).toBeUndefined()
-      writeFileSync(join(dir, knowledgeFile(phase)), "this round's knowledge")
-      expect(await existingKnowledge(dir, phase)).toBe("docs/R-01/P03-knowledge/kb.md")
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-describe("existingPriorKnowledge (this round's idempotence check, the same guard as existingKnowledge)", () => {
-  function tempDir() {
-    return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
-  }
-
-  test("this round's docs/R-NN/prior-kb.md non-empty → returned; an empty file, a missing one and legacy flat docs/prior-kb/ stock do not count (M3.7)", async () => {
-    const dir = tempDir()
-    try {
-      expect(await existingPriorKnowledge(dir, 1)).toBeUndefined()
-      mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
-      writeFileSync(join(dir, "docs/prior-kb/R1-prior-a.md"), "legacy flat prior knowledge")
-      mkdirSync(join(dir, "docs/R-01"), { recursive: true })
-      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), " \n")
-      expect(await existingPriorKnowledge(dir, 1)).toBeUndefined()
-      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "round 1 prior knowledge")
-      expect(await existingPriorKnowledge(dir, 1)).toBe(join("docs", "R-01", "prior-kb.md"))
-      expect(await existingPriorKnowledge(dir, 2)).toBeUndefined()
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("the new layout structurally eliminates the old-round misjudgment: round R-05's directory established + old-round R4-prior stock → must distill again (2026-09-08 incident regression)", async () => {
-    const dir = tempDir()
-    try {
-      // The kernel-dm-stripe incident scene: the old round (docs/prior-kb/R4-prior-*.md,
-      // including the simple verdict) kept in place; the new round R-05 established at
-      // round start (the in-round prior-kb.md is always empty)
-      mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
-      writeFileSync(join(dir, "docs/prior-kb/R4-prior-2026.md"), "# Round 4 prior knowledge\n\nProcess advice: simple\n")
-      mkdirSync(join(dir, "docs/R-05"), { recursive: true })
-      expect(await existingPriorKnowledge(dir, 5)).toBeUndefined()
-      // Idempotent hit once the in-round document exists
-      writeFileSync(join(dir, "docs/R-05/prior-kb.md"), "this round's prior knowledge")
-      expect(await existingPriorKnowledge(dir, 5)).toBe(join("docs", "R-05", "prior-kb.md"))
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("temp-kb.md (the extraction intermediate, not yet finalized) never counts as an existing artifact", async () => {
-    const dir = tempDir()
-    try {
-      mkdirSync(join(dir, "docs/R-01"), { recursive: true })
-      writeFileSync(join(dir, "docs/R-01/temp-kb.md"), "an abandoned intermediate")
-      expect(await existingPriorKnowledge(dir, 1)).toBeUndefined()
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-describe("existingDistilledDocs (the list of existing distilled artifacts, referenced input of the extraction session)", () => {
-  function tempDir() {
-    return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
-  }
-
-  test("directory missing → an empty array; the legacy flat migration-kb/handovers/prior-kb are no longer collected (M3.7)", async () => {
-    const dir = tempDir()
-    try {
-      expect(await existingDistilledDocs(dir, 2)).toEqual([])
-      mkdirSync(join(dir, "docs/migration-kb"), { recursive: true })
-      mkdirSync(join(dir, "docs/handovers"), { recursive: true })
-      mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
-      writeFileSync(join(dir, "docs/migration-kb", "R1-migration-a.md"), "previous round's knowledge")
-      writeFileSync(join(dir, "docs/handovers", "R1-m-migrate.md"), "previous round's handover")
-      writeFileSync(join(dir, "docs/prior-kb", "R1-prior-old.md"), "old prior knowledge")
-      expect(await existingDistilledDocs(dir, 2)).toEqual([])
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("round directories: every prior round's prior-kb.md, each phase directory's handover.md and the knowledge phase's kb.md collected together; this round's prior-kb excluded", async () => {
-    const dir = tempDir()
-    try {
-      await syncPhaseIndex(dir, 1, "mk")
-      writeFileSync(join(dir, "docs/R-01/P02-knowledge/kb.md"), "round 1 knowledge")
-      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "round 1 prior knowledge")
-      writeFileSync(join(dir, "docs/R-01/P01-implement/handover.md"), "round 1 handover")
-      writeFileSync(join(dir, "docs/R-01/P01-implement/notes.md"), "a free artifact does not count")
-      await syncPhaseIndex(dir, 2, "mk")
-      writeFileSync(join(dir, "docs/R-02/prior-kb.md"), "this round's prior knowledge does not count")
-      writeFileSync(join(dir, "docs/R-02/P02-knowledge/kb.md"), " \n") // an empty file does not count
-      writeFileSync(join(dir, "docs/R-02/P01-implement/handover.md"), "this round's completed-phase handover")
-      expect(await existingDistilledDocs(dir, 2)).toEqual([
-        join("docs/R-01", "P01-implement", "handover.md"),
-        join("docs/R-01", "P02-knowledge", "kb.md"),
-        join("docs/R-01", "prior-kb.md"),
-        join("docs/R-02", "P01-implement", "handover.md"),
-      ])
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
+  expect(isKnowledgeDoc("docs/R-01/P03-knowledge/kb.md")).toBe(true)
+  expect(isKnowledgeDoc("docs\\R-01\\P03-knowledge\\kb.md")).toBe(true)
+  expect(isKnowledgeDoc("docs/R-01/P03-implement/kb.md")).toBe(false)
+  expect(isKnowledgeDoc("docs/R-01/P03-knowledge/notes.md")).toBe(false)
+  expect(isKnowledgeDoc("docs/R-01/regression/3-verify-full.md")).toBe(false)
 })
 
 describe("priorKnowledgeDigest (the prior-knowledge digest, accumulated injection across rounds)", () => {
@@ -211,20 +54,6 @@ describe("priorKnowledgeDigest (the prior-knowledge digest, accumulated injectio
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
-})
-
-describe("priorKnowledgeComplete (the finalized-marker check)", () => {
-  test("the last non-empty line exactly DONE → true; an empty document / no marker / a marker with a tail → false", () => {
-    expect(priorKnowledgeComplete("")).toBe(false)
-    expect(priorKnowledgeComplete("  \n")).toBe(false)
-    expect(priorKnowledgeComplete("DONE")).toBe(true)
-    expect(priorKnowledgeComplete("# Knowledge base\n\nBody\n\nDONE")).toBe(true)
-    expect(priorKnowledgeComplete("Body\nDONE\n\n  \n")).toBe(true)
-    expect(priorKnowledgeComplete("Body\n  DONE  ")).toBe(true)
-    expect(priorKnowledgeComplete("Body, done.")).toBe(false)
-    expect(priorKnowledgeComplete("Body\nDONE.")).toBe(false)
-    expect(priorKnowledgeComplete("DONE\nanother paragraph of body")).toBe(false)
   })
 })
 

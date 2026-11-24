@@ -377,6 +377,34 @@ test("a formulate share hands over and resumes as the next attempt on the same u
   }
 })
 
+test("only a handoff-only continuation can suspend formulation before the ledger is covered", async () => {
+  const todo = formulationTodo().replace("## Acceptance", '## Obligations ledger\n\n- O-01 | phase duties | "module" | plan the module\n\n## Acceptance')
+  const dir = formulationProject(["T-004"], { "T-004": todo })
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await coordinator.claim(worker)
+    if (grant.kind !== "formulate") throw new Error(JSON.stringify(grant))
+    const base = git(dir, "rev-parse", "HEAD")
+    const report = () => coordinator.report(worker, grant.id, grant.lease, "ended")
+    const missingCoverage = { kind: "blocked", reason: "commitFailed", detail: expect.stringContaining("coverage map is missing") }
+    write(dir, "docs/T-004/handoff.md", "# Handoff\n\nStatus: done\n")
+    expect(await report()).toMatchObject(missingCoverage)
+    write(dir, "docs/T-004/handoff.md", "# Handoff\n\nStatus: continue\n")
+    const index = readFileSync(join(dir, PHASE_INDEX), "utf8")
+    write(dir, PHASE_INDEX, index + "\n")
+    expect(await report()).toMatchObject(missingCoverage)
+    expect(git(dir, "rev-parse", "HEAD")).toBe(base)
+
+    write(dir, PHASE_INDEX, index)
+    const receipt = await report()
+    expect(receipt).toMatchObject({ kind: "landed", continuation: true })
+    expect(await report()).toEqual(receipt)
+    expect(await coordinator.claim(worker)).toMatchObject({ kind: "formulate", id: "T-004 formulate 2" })
+  } finally {
+    await coordinator.close()
+  }
+})
+
 test("the verify FAIL opens a fix round carrying the formulation context; the repaired plan re-verifies and closes", async () => {
   const dir = formulationProject()
   const coordinator = await openExecutorCoordinator(dir)

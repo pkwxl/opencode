@@ -1280,6 +1280,7 @@ export async function openExecutorCoordinator(
       const detail = `Resolve out-of-scope edits before replaying: ${rejected.map(({ rel }) => rel).join(", ")}.`
       return neverSetRows(rejected) ? outsidePerimeter(blocked(detail)) : blocked(detail)
     }
+    const handoffOnly = changes.length === 1 && changes[0]!.rel === handoff
     let continuation: true | undefined
     let park: NonNullable<EndedBooking["intent"]>["park"]
     let artifact: { path: string; text: string } | undefined
@@ -1306,16 +1307,16 @@ export async function openExecutorCoordinator(
         if (text && (!status || blocker)) {
           return { kind: "blocked", reason: "commitFailed", detail: "The handoff needs a recognized Status line for this step." }
         }
-        if (status === "continue") continuation = true
+        if (status === "continue") {
+          continuation = true
+          if (grant.kind === "formulate" && handoffOnly) artifact = { path: handoff, text }
+        }
       }
     }
-    // The formulation output's collect (0276): grammars alone, before any
-    // staging — the share lands only over an index that passes the same
-    // mechanical checks the push path's collect enforces. Replayable by
-    // classification (every remedy is a write inside the holder's own
-    // formulation family), so the plain blocked answer — 0272's ladder, the
-    // details themselves teaching the holder's remedy.
-    if (grant.kind === "formulate") {
+    // A formulation interrupted before writing plan output can land its
+    // handoff alone. Any change beside it, or a terminal handoff, still
+    // submits the plan to the full collect before staging.
+    if (grant.kind === "formulate" && !(continuation && handoffOnly)) {
       const problems = await formulationProblems(dir, grant, base)
       if (problems.length) {
         return { kind: "blocked", reason: "commitFailed", detail: `the formulation output is invalid: ${problems.join("; ")}` }
@@ -1585,7 +1586,7 @@ export async function openExecutorCoordinator(
     if (restore.code !== 0) return blocked(restore.err.trim() || "The reply channel could not be restored to the booked floor.")
     const composed = await composeSynthesizedTodo(checkout, replyText)
     if (composed.kind === "problems") {
-      return blocked(`the synthesis reply is invalid: ${composed.problems.join("; ")} — rewrite the reply at ${todo} in the exact prescribed shape, fixing exactly these findings`)
+      return blocked(`the synthesis reply is invalid: ${composed.problems.join("; ")}. The submitted reply was consumed and ${todo} was restored. Write the complete corrected reply at ${todo}, then retry the original report.`)
     }
     const construction = composed.construction
     const landedDoc = await constructFormulation(checkout, construction.phase, construction.todo, construction.record)
@@ -2265,6 +2266,12 @@ export async function openExecutorCoordinator(
     ready: (holder) => serialize(() => menu(holder, now())),
     brief: (holder, task, kind) => serialize(async () => {
       const last = latest(task)
+      // Booking ended the lease, but a retry still requires this exact
+      // pair. Reading it back neither renews the lease nor runs settlement.
+      if (last?.booking?.outcome === "ended" && !last.booking.receipt &&
+          (kind === undefined || kind === last.grant.kind) && sameHolder(last.holder, holder)) {
+        return withAnswers(holder, last.grant)
+      }
       if (last && (kind === undefined || kind === last.grant.kind) && live(last, now())) {
         if (!sameHolder(last.holder, holder)) return leaseWait(last)
         if (last.worktree && !last.worktree.established) {

@@ -16,9 +16,10 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { BRIEF_FILE } from "../src/brief"
 import { CONFIG_FILE } from "../src/config"
 import { constructFormulation } from "../src/formulate"
-import { seededLedgerRows } from "../src/formulate-synthesis"
+import { ledgerOf, seededLedgerRows } from "../src/formulate-synthesis"
 import { readExecutorPreview } from "../src/executor-steps"
 import { executorTypeCatalog, openExecutorCoordinator } from "../src/executor-coordinator"
 import { clampSwitches } from "../src/switches"
@@ -106,7 +107,7 @@ async function synthesisProject() {
 // The constructor's reply (the push fixture's own shape): the two blocks
 // plus the closing Rationale line, the session's rows continuing the
 // seeded sequence, the quote locating in the plan input verbatim.
-function reply(quote = PLAN_INPUT) {
+function reply(quote = PLAN_INPUT, rows?: string[]) {
   const entry = phaseType("implement")!
   const nextO = seededLedgerRows(entry).filter((row) => row.kind === "O").length + 1
   return [
@@ -114,7 +115,7 @@ function reply(quote = PLAN_INPUT) {
     `The input demands the widget's reimplementation: ${quote}`,
     "SOURCES-BRIEF>>>",
     "<<<LEDGER",
-    `- O-${String(nextO).padStart(2, "0")} | docs/R-01/P01-implement/plan-input.md | "${quote}" | a task that reimplements the widget from the specification alone`,
+    ...(rows ?? [`- O-${String(nextO).padStart(2, "0")} | docs/R-01/P01-implement/plan-input.md | "${quote}" | a task that reimplements the widget from the specification alone`]),
     "LEDGER>>>",
     "Rationale: the sources demand a specification-only reimplementation",
     "",
@@ -246,6 +247,51 @@ test("the collect: an invalid reply blocks replayable with the push loop's own f
     // The remedy holds: the rewritten reply lands.
     write(dir, `docs/${unit}/todo.md`, reply())
     expect(await coordinator.report(WORKER, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
+  } finally {
+    await coordinator.close()
+  }
+})
+
+test("a 111-row ledger missing its dashes names the first bad line and the consumed reply can be resubmitted", async () => {
+  const { dir, unit } = await synthesisProject()
+  const brief = "Keep the existing widget implementation."
+  write(dir, BRIEF_FILE, brief)
+  commitFixture(dir, "add the project brief")
+  const coordinator = await openExecutorCoordinator(dir)
+  try {
+    const grant = await coordinator.claim(WORKER)
+    if (grant.kind !== "synthesize") throw new Error(JSON.stringify(grant))
+    expect(grant.prompt).toContain("Start each row with a literal dash and space")
+    const path = `docs/${unit}/todo.md`
+    const floor = readFileSync(join(dir, path), "utf8")
+    const base = git(dir, "rev-parse", "HEAD").trim()
+    const seeded = seededLedgerRows(PHASE.entry)
+    const input = `${PHASE.dir}/plan-input.md`
+    const rows = [
+      ...Array.from({ length: 108 }, (_, i) => `O-${String(seeded.length + i + 1).padStart(2, "0")} | ${input} | "${PLAN_INPUT}" | plan widget part ${i + 1}`),
+      ...Array.from({ length: 3 }, (_, i) => `C-0${i + 1} | ${input} vs ${BRIEF_FILE} | "${PLAN_INPUT}" / "${brief}" | record the deviation for widget part ${i + 1}`),
+    ]
+    const ledgerReply = (lines: string[]) => reply(PLAN_INPUT, ["# Widget obligations", "", ...lines])
+    write(dir, path, ledgerReply(rows))
+    const report = () => coordinator.report(WORKER, grant.id, grant.lease, "ended")
+    const refused = await report()
+    if (refused.kind !== "blocked") throw new Error(JSON.stringify(refused))
+    expect(refused.reason).toBe("commitFailed")
+    expect(refused.detail).toContain("ledger line 3 is missing the literal `- ` prefix")
+    expect(refused.detail).toContain(rows[0]!.slice(0, 50))
+    expect(refused.detail).not.toContain("ledger line 4")
+    expect(refused.detail).toContain(`The submitted reply was consumed and ${path} was restored`)
+    expect(readFileSync(join(dir, path), "utf8")).toBe(floor)
+    expect(git(dir, "rev-parse", "HEAD").trim()).toBe(base)
+
+    write(dir, path, ledgerReply(rows.map(row => `- ${row}`)))
+    const landed = await report()
+    expect(landed).toMatchObject({ kind: "landed" })
+    expect(await report()).toEqual(landed)
+    const ledger = ledgerOf(readFileSync(join(dir, path), "utf8"))
+    expect(ledger?.problems).toEqual([])
+    expect(ledger?.rows).toHaveLength(seeded.length + 111)
+    expect(git(dir, "rev-list", "--count", `${base}..HEAD`).trim()).toBe("1")
   } finally {
     await coordinator.close()
   }

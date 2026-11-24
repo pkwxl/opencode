@@ -111,8 +111,7 @@ export const COLLECT_POLICIES = [
   // The four mandatory handover sections (document/roles.ts validHandover)
   // and the acceptance-draft rules — loop-phase.ts.
   "handover-sections",
-  // A non-empty document, or the session-written closing mark the driver
-  // confirms (document/roles.ts PRIOR_KB_DONE) — knowledge.ts.
+  // The diagnosis session collects its one artifact through requireArtifact.
   "document-marker",
 ] as const
 type CollectPolicy = (typeof COLLECT_POLICIES)[number]
@@ -135,9 +134,7 @@ export const VERDICT_POLICIES = [
   // after the distillation: the verdict.md result line and the acceptance
   // sign-off.
   "phase-gates",
-  // A session-written closing mark the driver confirms before promoting the
-  // document (prior-knowledge's DONE; the k-phase kb.md is validated
-  // non-empty the same way).
+  // The diagnosis document's parser judges the collected artifact.
   "document-marker",
 ] as const
 type VerdictPolicy = (typeof VERDICT_POLICIES)[number]

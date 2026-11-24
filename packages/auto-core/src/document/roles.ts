@@ -350,12 +350,6 @@ export function parkDirective(text: string): string | undefined {
 // no dual-read.
 export const HANDOVER_SECTIONS = ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]
 
-// The closing mark of the prior-knowledge document: its last non-empty line
-// (src/knowledge.ts priorKnowledgeComplete; prior-knowledge.md tier-1 marker).
-// Driver protocol string (0035 §4 phase face), flipped from `完成` in M3.8 with
-// no dual-read.
-export const PRIOR_KB_DONE = "DONE"
-
 // Whether a phase handover has all four sections: each heading must be an
 // exact standalone line (a ### subheading does not count — "### Key decisions"
 // contains the substring but is not a compliant heading).

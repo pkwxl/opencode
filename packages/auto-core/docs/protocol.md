@@ -71,7 +71,10 @@ release
   wait/blocked/terminal notice. A held lease answers the same grant
   (brief refresh) for its holder.
 - **brief** — re-read the live grant's brief for `{ task, kind }`; for a
-  held lease the same grant is re-answered for its holder. The ask
+  held lease the same grant is re-answered for its holder. If a report is
+  booked and still lacks a receipt, the original token and channel can also
+  retrieve that grant to recover its step id and lease for a settlement
+  retry. Booking ends lease renewal. The ask
   channel's paging arms (`cursor`, the `answers`/`next` walk) died with
   the question route (plans/0282): the request carries no `cursor` field
   and the reply attaches no answers.
@@ -146,7 +149,11 @@ audit
   the formulation unit's own task id; `phase` and `index` ride the grant.
   Writes the formulation family: the phase's task index, the planned tasks'
   pending documents (minus the unit's own input todo), the coverage map,
-  the handoff.
+  the handoff. If a graceful stop precedes planning output, the holder can
+  write only the unit's handoff with `Status: continue` and report `ended`.
+  The continuation lands and the next formulation share resumes planning.
+  A share that changes planning output still passes the full formulation
+  checks, including coverage when its input carries an obligations ledger.
 - **synthesize** — the formulation construction's re-voicing session (the
   constructor one-shot converged). Address: the construction unit's own
   task id; `phase` and `index` ride the grant; the brief is the identical
@@ -154,6 +161,10 @@ audit
   compose renders. The holder writes its reply (the prescribed
   `<<<SOURCES-BRIEF …` / `<<<LEDGER …` blocks plus the `Rationale:` line)
   at the unit's `todo.md` path — the one write surface, the reply channel.
+  Each obligation or conflict row begins with a literal dash and space.
+  Settlement reads the reply and restores the booked input todo before
+  validation. On a validation refusal, write the complete corrected reply
+  at the same path before retrying the original report.
   The settlement validates mechanically (the ledger grammar, the seeded
   sequence, the quote anchoring, the guarantee asserts), composes the
   synthesized todo and lands it through the standing construction path —
@@ -232,6 +243,11 @@ person corrected — the handoff's Status line amended, or the unit completed
 (plans/0289; evidence-gated alone, the operation naming a unit whose
 continuation still stands answering with the two document channels); the
 menu's `pending` list names the awaiting gate and its document.
+
+A pending settlement keeps its coordinator run active. When this prevents
+a project write operation, the daemon’s HTTP 409 response identifies the
+run to stop with `DELETE /runs/<id>` (control scope). The operator can
+retry the operation once that run reaches a terminal state.
 
 The step vocabulary a claim can answer beside the grants: `wait` (with
 `reason`: `lease-held`, `in-flight`, `gate`, `not-ready` and a

@@ -837,7 +837,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
           return json(409, {
             error: `a run is already active on ${project.name}: run ${live.id} is ${live.state}`,
             run: { id: live.id, state: live.state },
-            retry: "retry once the active run reaches a terminal state (GET the run to observe it); read-only operations (fix dryrun) run beside it",
+            retry: `To stop the active coordinator, DELETE /runs/${live.id} with control scope. Once GET /runs/${live.id} (read scope) shows a terminal state, retry the operation. Read-only fix dryrun can run beside the coordinator.`,
           })
         }
         opInFlight.add(project.directory)

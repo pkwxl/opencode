@@ -164,27 +164,9 @@ export function roundDir(round: number): string {
   return join("docs", roundDirName(round))
 }
 
-// docs/R-NN/prior-kb.md (the prior-knowledge document; a fixed name within
-// the round — a new round's directory is always empty, so prior knowledge
-// must be distilled anew, replacing the old round-prefix guard).
+// The permanent in-round path of historical prior-knowledge documents.
 export function priorKnowledgeDoc(round: number): string {
   return join(roundDir(round), "prior-kb.md")
-}
-
-// The intermediate artifact of prior-knowledge extraction (not yet
-// pen-down; robustness protocol, see specialized-tool-design §3): the AI
-// writes only this file, and only after the driver confirms the trailing
-// `DONE` closing mark is it renamed to the formal knowledge document
-// (completion = the rename on disk + the commit). Fixed name, appearing in
-// no existing-content scan (existingDistilledDocs/priorKnowledgeDigest read
-// only the formal artifact), never treated as existing knowledge.
-const TEMP_KB_NAME = "temp-kb.md"
-
-// The intermediate artifact shares the formal artifact's directory:
-// docs/R-NN/temp-kb.md. final is the formal artifact's relative path
-// (priorKnowledgeFile).
-export function tempPriorKnowledgeDoc(final: string): string {
-  return join(dirname(final), TEMP_KB_NAME)
 }
 
 // File name of a phase's acceptance record (the phaseAcceptance role, M2.3,

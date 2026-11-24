@@ -209,9 +209,10 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // plus the slots an override must keep rendering — the index path, the
   // existing-task list and the planning input.
   "phase-append": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}", "{{existingTasks}}", "{{input}}"],
-  // Literal copies of document/roles HANDOVER_SECTIONS / PRIOR_KB_DONE (template
-  // is intent-domain with frozen imports; test/template.test.ts pins the match).
+  // Literal copy of document/roles HANDOVER_SECTIONS (template is
+  // intent-domain with frozen imports; test/template.test.ts pins the match).
   "phase-handover": ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index", "{{handover}}"],
+  // Retained for overrides of the retired prior-knowledge session.
   "prior-knowledge": ["DONE", "{{file}}"],
   // The failure-message classifier (plans/0055 §7.1): the driver parses the
   // reply's one JSON line by these two keys, and an override must still show

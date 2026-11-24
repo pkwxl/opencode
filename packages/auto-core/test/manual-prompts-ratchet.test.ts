@@ -63,6 +63,7 @@ describe("manual prompt ratchet", () => {
     // A replay settles the original booking, while the next verification needs an independent producer.
     expect(executor).toContain("Retry a lost report or release with its original pair and the same report outcome.")
     expect(executor).toContain("a fresh agent context and a different token from the producer of the immediately preceding execute, fix, formulate, or audit share")
+    expect(executor).toContain("use `brief` with the original token, channel, task and kind")
     expect(coordinator).toContain("entry.booking.outcome !== outcome")
     expect(coordinator).toContain("if (entry.booking.receipt) return entry.booking.receipt")
     // 0273 moved the same-token answer's rendering from the retired wait line
@@ -149,6 +150,8 @@ describe("manual prompt ratchet", () => {
     expect(executor).toContain("For `execute`, `verify`, `fix`, `formulate`, `synthesize`, `distill`, or `audit`, work in the returned `workspace` and follow `prompt`.")
     expect(executor).toContain("Formulation may write only the granted phase's planning documents — the `index` path the grant names, the planned tasks' `todo.md` files, and its coverage map and handoff")
     expect(executor).toContain("never its own input `todo.md`, and never a `done.md`, a tick, or a rename")
+    expect(executor).toContain("write the unit's handoff with `Status: continue` and the steps to resume, then report `ended`")
+    expect(executor).toContain("If you changed planning documents, settlement checks the full formulation output.")
     // The producer's anchors: the family table and the exclusion, the
     // catalog's formulate letter and its never rendering, the derivation's
     // predicate and the grant's carried identity.
@@ -257,6 +260,8 @@ describe("manual prompt ratchet", () => {
     // reply shape taught, the landing the driver's alone.
     expect(executor).toContain("Synthesis may write only the granted unit's own `todo.md` path")
     expect(executor).toContain("the driver parses the reply, validates it mechanically (every quote must locate in its named source), composes the real synthesized todo and lands the construction itself")
+    expect(executor).toContain("Validation consumes the submitted reply and restores the input todo.")
+    expect(executor).toContain("compose the complete corrected reply at that path before retrying the original report")
     expect(executor).toContain("A landed synthesis ends the unit's claim — no verification share follows it")
     // The producer's anchors: the fence's one-path arm, the catalog's
     // placeholder anchor, the stage word (the construction family's own

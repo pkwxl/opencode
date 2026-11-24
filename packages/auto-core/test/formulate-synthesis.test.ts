@@ -77,7 +77,7 @@ describe("the obligation ledger grammar (0097 D2)", () => {
   })
 
   test("ledgerSection/ledgerOf read the section back out of a todo body (absent on the floor)", () => {
-    const body = ["## Goal", "", "G.", "", "## Scope", "", "Frame text.", "", LEDGER_HEADING, "", O, C, "", "## Acceptance", "", "A."].join("\n")
+    const body = ["## Goal", "", "G.", "", "## Scope", "", "Frame text.", "", LEDGER_HEADING, "", "The driver introduces these rows.", O, C, "The driver states the boundaries here.", "", "## Acceptance", "", "A."].join("\n")
     const section = ledgerSection(body)
     expect(section).toContain('- O-01 | round.md | "error semantics preserved for the parser"')
     expect(section).not.toContain("## Acceptance")

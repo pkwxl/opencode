@@ -10,7 +10,6 @@ import {
   roundDirName,
   subtaskDir,
   subtaskDoc,
-  tempPriorKnowledgeDoc,
   taskDir,
   taskDoc,
 } from "../src/docpaths"
@@ -45,10 +44,6 @@ describe("round-specific directories and in-round knowledge documents (new layou
 
   test("priorKnowledgeDoc: a fixed name within the round (the old timestamped name is gone; the k-phase knowledge document became kb.md inside the phase directory, see phases.test)", () => {
     expect(priorKnowledgeDoc(5)).toBe(join("docs", "R-05", "prior-kb.md"))
-  })
-
-  test("tempPriorKnowledgeDoc: the intermediate artifact lives in the same directory as the final one", () => {
-    expect(tempPriorKnowledgeDoc(priorKnowledgeDoc(5))).toBe(join("docs", "R-05", "temp-kb.md"))
   })
 })
 

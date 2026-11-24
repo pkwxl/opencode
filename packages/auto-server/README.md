@@ -182,7 +182,7 @@ default channel.
 | --- | --- | --- |
 | `ready` | none | `menu` |
 | `claim` | optional `task` and `kind` (`execute`, `verify`, `fix`, `formulate`, `synthesize`, `distill`, or `audit`) | `step` |
-| `brief` | `task`, `kind`, optional `cursor` | `step` |
+| `brief` | `task`, `kind` | `step` |
 | `heartbeat` | `leases`, an array of `{ step, lease }` pairs | `menu` |
 | `report` | `step`, `lease`, `outcome` (`ended` or `failed`), optional `note` | `step` |
 | `release` | `step`, `lease` | `step` |
@@ -206,7 +206,14 @@ reconcile `menu.leases` with `ready` before claiming again. Retry a report
 or release with its original step and lease. If a report was accepted
 before an interruption, a later claim resumes settlement before new work
 can be granted. A claim returns the specific block if settlement cannot
-proceed. Verification requires a different token from the execute or fix
+proceed. A successor using the same token and channel can use `brief` for
+the original task and kind to recover a pending report’s exact step and
+lease. Address the reported finding and retry the original report. If an
+operator needs a project write operation while settlement is pending, the
+409 response gives the coordinator’s stop route. Stop it with a control
+token and retry the operation once the run is terminal.
+
+Verification requires a different token from the execute or fix
 producer and a fresh agent context. A same-token claim over its own booked
 report answers the terminal `settled`, naming the booked commit — that
 token's work on the unit has ended.

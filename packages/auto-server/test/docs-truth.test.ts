@@ -20,10 +20,9 @@ const TRUTH_PINS: [name: string, doc: string, needle: string][] = [
   // five standing rows (the section's own standard: stated once and plainly).
   ["daemon.md release row", daemon, "`release` (the person's release gate"],
   ["daemon.md install-prompts row", daemon, "`install-prompts` (the manual-driver prompt suite's resync"],
-  // ops.ts's 501 parenthetical without the probe clause (the probe has been
-  // served since P4b — the module's own header and daemon.md's 501 row say
-  // so).
-  ["ops.ts 501 parenthetical", ops, "501 a route this version refuses (agent planning needs\n// the interactive transport of P3)."],
+  // The deterministic plan operation replaced push planning. The remaining
+  // 501 guards an unexpected loop outcome from task-add.
+  ["ops.ts 501 fallback", ops, "501 a routing fact this version does not serve (the\n// task-add fallback guard)."],
 ]
 
 // The retired wordings: the drift the findings measured. Their return is the
