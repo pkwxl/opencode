@@ -21,35 +21,11 @@ import { mkdir, mkdtemp, readdir, readlink, rename, rm, stat, symlink, writeFile
 import { createHash } from "node:crypto"
 import { hostname, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import {
-  dispatchLane,
-  laneBranch,
-  laneEligible,
-  laneExit,
-  laneOutcome,
-  lanePark,
-  laneParkProblem,
-  landLane,
-  LANE_DISPATCH_CAP,
-  parseLaneReport,
-  readyUnits,
-  relayLaneOutput,
-  resolveLaneBranch,
-  streamUnitOf,
-  streamUnits,
-  syncIndexTicks,
-  WINDOWS_MAX_PATH,
-  PARK_PATH_MARGIN,
-  writeLaneReport,
-  type InFlightLane,
-  type LaneReport,
-  type LaneRuntime,
-} from "../src/lanes"
+import { dispatchLane, laneBranch, laneEligible, laneExit, laneOutcome, lanePark, laneParkProblem, landLane, LANE_DISPATCH_CAP, parseLaneReport, readyUnits, relayLaneOutput, resolveLaneBranch, streamUnitOf, streamUnits, syncIndexTicks, WINDOWS_MAX_PATH, PARK_PATH_MARGIN, writeLaneReport, type InFlightLane, type LaneReport, type LaneRuntime } from "../src/lanes"
 import { RUN_STATUS_FILE, startRunStatus, stopRunStatus } from "../src/run-status"
 import type { RunStatusEvent } from "../src/run-status-schema"
-import { changedFiles, commitTree, headSha, unitBaseline, type GitOps } from "../src/git"
+import { changedFiles, commitTree, unitBaseline, type GitOps } from "../src/git"
 import { createGitOps } from "../src/git-ops"
-import { laneReportOf } from "../src/loop"
 import { setShellProfile, type LaneWorker } from "../src/shell"
 import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
 import { begin, clearLane, laneRecords, loadPlan, markDone, next, readChecklist, renderTaskIndex, setLane, setSplit, tickSubtask, UNITS_FILE, unitAttempts, type Plan, type Task } from "../src/tasks"
@@ -1615,10 +1591,11 @@ describe("recoverOrphanLanes (D14)", () => {
     await Bun.write(join(park, "src", "widget.ts"), "export const done = \"T-001.S01\"\n")
     const settled = await commitTree(park, { id: unit, title: "the widget" }, { stage: "done", subject: `${unit} done stream 1 of the widget` })
     expect(settled.ok).toBe(true)
-    // The report through the real writer — the phase must name the owning
-    // task's phase, read from docs/T-001/{todo,done}.md.
-    const report = await laneReportOf(park, {}, unit, 0, (await headSha(park)) ?? "", Date.now())
-    expect(report.phase).toBe("R-01.P01")
+    // The finished stream's report in the lane worker's own shape (its
+    // writer retired with the loop, plans/0314): a PASS naming the owning
+    // task's phase — the field the landing resolves, where the never-existing
+    // docs/T-NNN.S<nn>/ read once carried phase "".
+    const report: LaneReport = { unit, phase: "R-01.P01", ok: true, result: "PASS", usage: { tokens: 0, wallMs: 0 }, sessions: 0, commits: [], agent: "opencode", models: [] }
     await writeLaneReport(park, report)
     await begin(dir, unit)
     await setLane(dir, unit, { worktree: lanePark(unit), pid: await deadPid() })

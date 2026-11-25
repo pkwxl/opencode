@@ -11,7 +11,7 @@ import { setAuditLog } from "./log"
 
 // The process a lane launcher returns (plans/0068 §6.4, D2): the pid the
 // dispatch registry records, the exit promise the lane loop awaits and the
-// piped output streams the loop drains (a full pipe would deadlock the
+// piped output streams the dispatch drains (a full pipe would deadlock the
 // worker) and reads back for the failure matrix's relays. Structural on
 // purpose: Bun.spawn with `stdout: "pipe"` satisfies it, and a test double
 // satisfies it with an already-exited stub and no process at all — the
@@ -56,17 +56,18 @@ export type ShellProfile = {
   // false = detail recorded only under --verbose.
   auditLog: boolean
   // Agent profile (MA.4, plans/0040): the coding agent this shell drives.
-  // Absent = the built-in opencode adapter (loop.ts falls back to it), so a
-  // shell that never sets it behaves exactly as before. What the agent can do
-  // is not declared here: it comes from the host's client capabilities and the
-  // driver degrades per flag at run start (src/capability.ts).
+  // Absent = the built-in opencode adapter (src/agent-choice.ts falls back to
+  // it), so a shell that never sets it behaves exactly as before. What the
+  // agent can do is not declared here: it comes from the host's client
+  // capabilities and the session layer degrades per flag at its start
+  // (src/capability.ts — push-mode machinery, demolition-docketed 0297+).
   agent?: AgentProfile
   // The directory under $XDG_CONFIG_HOME (default ~/.config) that holds the
   // operator layer of the model registry, `<configDir>/models.json`
   // (src/models.ts). OPENCODE_AUTO_MODELS overrides the whole path.
   configDir: string
   // The lane worker launcher (plans/0068 §6.4, D2): spawns the child process
-  // that runs one lane's unit-scoped runAll in its worktree. The default
+  // that runs one lane's unit-scoped push run in its worktree. The default
   // launcher is retired (plans/0283 — the push lane workers are demolished;
   // lanes ride the executor protocol's scoped/doc tiers), so no shell
   // registers one: a host that owns worker processes (a test's bootstrap

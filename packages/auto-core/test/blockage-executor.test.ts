@@ -7,17 +7,15 @@
 // already executed) runs through planPrelude itself, the row the design
 // names (D7: after round establishment, immediately before the drift
 // re-sync).
-import { afterAll, describe, expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { executeBlockageChoices, executionLines, planInputPhase } from "../src/blockage-execute"
 import { appendExecuted } from "../src/blockage-execute"
-import { choiceMark, executedMark, parseRemediationPlan, rejectedMark } from "../src/blockage"
-import { appendChoiceLine, renderBlockageDocument } from "../src/blockage-diagnose"
+import { executedMark } from "../src/blockage"
 import { planPrelude } from "../src/plan"
 import { establishRound } from "../src/phases"
-import { autoSwitches, clampSwitches } from "../src/switches"
 import { git } from "./fixtures/runner"
 
 async function repo(): Promise<string> {
@@ -424,75 +422,5 @@ describe("prelude row routing (plans/0082 §5 D7: mark present / absent / alread
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
-  })
-})
-
-// The kill switch (D8): off returns today's exact behavior — the executor is
-// not the switch's subject (it executes marks the person wrote either way),
-// the diagnosis is; the switch's own arm lives in the diagnosis suite. What
-// pins here: the switch parses, defaults on, and only removes.
-describe("the remediation kill switch (plans/0082 §5 D8)", () => {
-  afterAll(() => {
-    clampSwitches({ remediate: true })
-  })
-  test("OPENCODE_AUTO_REMEDIATE clamps off without touching the rest of the snapshot", async () => {
-    clampSwitches({ remediate: false })
-    expect(autoSwitches().remediate).toBe(false)
-    clampSwitches({ remediate: true })
-    expect(autoSwitches().remediate).toBe(true)
-  })
-})
-
-// The blockage document's mark-head grammar (moved from the retired
-// verifier-driven diagnosis suite, plans/0283): the renderer and the
-// session-side mark parses stay pinned while the diagnosis session's
-// loop-driven tests retired with the charter verifier.
-describe("the blockage document's mark-head neutralization (plans/0170 D3)", () => {
-  test("a session's verbatim Choice/Executed lines render indented and never parse; the person's one line under Decision does", () => {
-    const plan = parseRemediationPlan(
-      [
-        "## Analysis",
-        "",
-        "Choice: A is the obvious fix here.",
-        "Executed: A (deadbeef)",
-        "Rejected: A — never happened",
-        "Notes: the session's own note",
-        "",
-        "## Options",
-        "",
-        "### A Amend by hand",
-        "Channel: advice",
-        "Advice: fix the handover by hand",
-        "Consequences: the wall is strict",
-        "Recommendation: A",
-      ].join("\n"),
-    )!
-    expect(plan).toBeDefined()
-    const doc = renderBlockageDocument({
-      seq: 1,
-      round: 1,
-      gate: "plan-verify",
-      step: "phase-plan R-01.P01",
-      verdict: "INCONSISTENT",
-      blockMap: [],
-      hits: [],
-      state: "",
-      plan,
-    })
-    // The verbatim session lines are indented (display-only) …
-    expect(doc).toMatch(/^ Choice: A is the obvious fix here\.$/m)
-    expect(doc).toMatch(/^ Executed: A \(deadbeef\)$/m)
-    expect(doc).toMatch(/^ Rejected: A — never happened$/m)
-    // … the flush-left heads exist only in the Decision section's own
-    // placeholder …
-    expect(doc).toMatch(/^Choice: <one option letter>$/m)
-    expect(doc).toMatch(/^Notes: <optional>$/m)
-    // … and the un-answered document parses as un-marked.
-    expect(choiceMark(doc)).toBeUndefined()
-    expect(executedMark(doc)).toBeUndefined()
-    expect(rejectedMark(doc)).toBe(false)
-    // The person's act — one line under Decision — is the mark that parses.
-    const answered = appendChoiceLine(doc, "A")
-    expect(choiceMark(answered)).toEqual({ choice: "A" })
   })
 })

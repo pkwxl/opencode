@@ -27,20 +27,20 @@ export const REPO_LANE: readonly string[] = [
   // The assurance family (plans/0244): the delta measurement drives real
   // git repositories (establishment anchors, nested repositories).
   "test/assurance.test.ts",
-  "test/artifact.test.ts",
   "test/auto-doc-shape.test.ts",
-  // The 0082 consented-remediation family: the executor and the diagnosis
-  // suites drive real git repositories (remediation commits, the loop
-  // harness's freshRepo fixtures); the pure halves stay in the unit lane.
+  // The 0082 consented-remediation executor suite drives real git
+  // repositories (remediation commits); its pure half stays in the unit lane,
+  // and the diagnosis suite retired with the push loop (plans/0314).
   "test/blockage-executor.test.ts",
-  // run's boundary stop (plans/0101 D1): the loop harness over real git
-  // repositories — the boundary state's commits and handover documents.
+  // The phase boundary at transfer (plans/0101 D1; 0311): hand-seeded
+  // boundary state over real git repositories — the commits and the handover
+  // documents.
   "test/boundary.test.ts",
   "test/capability.test.ts",
   "test/close.test.ts",
-  // The close-audit unit's lifecycle (plans/0244 D5): the loop harness over
-  // real git repositories — the construction commits, the re-opened phase,
-  // the ordinary pipeline's dispatch and the baseline citations.
+  // The close-audit unit's lifecycle (plans/0244 D5; 0278): real git
+  // repositories — the construction commits, the re-opened phase, the
+  // coordinator's audit grant and the baseline citations.
   "test/close-audit.test.ts",
   // The person's release command (plans/0116): real git repositories — the
   // release commits, the fold of the person's uncommitted fill, and the
@@ -99,7 +99,6 @@ export const REPO_LANE: readonly string[] = [
   // choreography over real git repositories (worktrees, merges); the
   // manifest classifies a file by what it actually does at runtime.
   "test/lanes-scheduler.test.ts",
-  "test/interactive-seam.test.ts",
   // Branch isolation (plans/0074 U-L1): git repositories under temp dirs —
   // the config validation probes real .git directories, the isolation
   // primitive and the establish route run branch/checkout operations.
@@ -113,14 +112,11 @@ export const REPO_LANE: readonly string[] = [
   // the worktree adds/removes over real git repositories under temp dirs
   // (the sibling fork paths are cleaned by the tests themselves).
   "test/fork.test.ts",
-  // --stop-after (plans/0128): the loop harness over the fake agent on real
-  // git repositories — the serial stop's commits and task documents.
-  "test/stop-after.test.ts",
   // The sealed reference wall (plans/0132): the lifecycle suite drives the
   // close, the predicate and the admission over real git repositories with
   // real commitTree — the wall commit is git state — beside corpus
-  // directories under temp; the transfer integration rides the loop harness
-  // the same way.
+  // directories under temp; the transfer integration rides the repository
+  // harness the same way.
   "test/wall.test.ts",
   "test/transfer-wall.test.ts",
   "test/lock.test.ts",
@@ -136,21 +132,22 @@ export const REPO_LANE: readonly string[] = [
   "test/loop-preflight.test.ts",
   "test/models-describe.test.ts",
   "test/plan-input.test.ts",
-  "test/plan-loop.test.ts",
   "test/plan.test.ts",
-  // The bounded repair run option (plans/0079 §4): drives the loop harness
-  // over real git repositories, close and append commits included.
+  // The repair-append retirement's residue (plans/0079 §4; 0283): the FAIL
+  // verdict and its handover seeded over a real git repository, the advance's
+  // held stop.
   "test/repair-loop.test.ts",
   // The dependency park (plans/0096 D7): drives executeWhole and the phase
   // loop over real git repositories — the park commit's landing shape, the
   // release note's re-merge surface, the loop-level mutual-park block.
   "test/park.test.ts",
   // The survey phase and the human clarification gate (plans/0081 D14/D15):
-  // the unit-suites lane like the repair loop it extends.
+  // the survey boundary seeded over a real git repository, transfer's held
+  // stops the pin.
   "test/survey-gate.test.ts",
   // transfer, the single advance command (plans/0101 D2): real git
   // repositories — establish leaves the round setup uncommitted, the brief
-  // install commits, the advance's loop harness rides freshRepo.
+  // install commits, the advance's repository harness rides freshRepo.
   "test/transfer.test.ts",
   "test/reset.test.ts",
   "test/resolve.test.ts",

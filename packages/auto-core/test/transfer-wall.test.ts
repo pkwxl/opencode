@@ -1,4 +1,6 @@
-// Verify the wall and gate ordering through deterministic transfer.
+// Verify the wall and gate ordering through deterministic transfer. The
+// sealing phase's work stands done by seed (the task loop retired,
+// plans/0314): the advance under test is the person's alone.
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -8,7 +10,7 @@ import { establishRound, readPhases } from "../src/phases"
 import { findWallCommit } from "../src/wall"
 import { saveProgress } from "../src/resume"
 import { captureRun } from "./fixtures/capture"
-import { landPhaseHandover, loopFixture, type LoopFixture } from "./fixtures/loop"
+import { donePhase, landPhaseHandover, loopFixture, type LoopFixture } from "./fixtures/loop"
 
 const made: string[] = []
 const fixtures: LoopFixture[] = []
@@ -39,9 +41,8 @@ async function wallFixture(gate?: string): Promise<{ f: LoopFixture; corpus: str
     ["# Spec read", "", ...(gate ? [`Gate: ${gate}`] : []), "Wall: seal linux", "Phase-artifacts: spec-notes.md", "Task-artifacts: notes.md", "", "## plan duties", "", "Read the reference, distill the notes.", "", "<!-- auto: eof -->", ""].join("\n"),
   )
   mkdirSync(join(f.dir, ".opencode/auto/intents"), { recursive: true })
-  // The pack keeps the default's result-line rule beside the lane row: the
-  // wrap-up verification session's prompt carries its marker (an override
-  // replaces the built-in wholesale).
+  // The pack keeps the default's result-line rule beside the lane row (an
+  // override replaces the built-in wholesale).
   writeFileSync(
     join(f.dir, ".opencode/auto/intents/default.md"),
     [
@@ -67,8 +68,8 @@ async function wallFixture(gate?: string): Promise<{ f: LoopFixture; corpus: str
   )
   symlinkSync(corpus, join(f.dir, "linux"))
   await Bun.write(join(f.dir, "opencode.json"), JSON.stringify({ permission: { external_directory: { [`${corpus}/**`]: "allow" } } }, null, 2) + "\n")
-  // The agent contract runAll's preflight compares against (the first
-  // transfer test's shape).
+  // The agent contract the round's scans read (the first transfer test's
+  // shape).
   await Bun.write(join(f.dir, ".opencode/agent/auto.md"), "contract\n")
   await establishRound(f.dir, { phases: "spec-read,implement", round: 1 })
   await f.commit("wall project setup, door standing")
@@ -93,11 +94,9 @@ async function sealArtifacts(f: LoopFixture): Promise<void> {
 describe("transfer: the sealed wall closes at the person's advance (plans/0132 D2)", () => {
   test("the three-step close rides the transition path: admission → wall commit → transition, the room going clean mid-advance", async () => {
     const { f, corpus } = await wallFixture()
-    // run executes P01-spec-read's work (the spec room reads lawfully, door
-    // standing) and stops at the phase's clean end.
-    const stopped = await f.run()
-    expect(stopped.code).toBe(0)
-    expect(stopped.lines.some((line) => line.includes("✓ phase boundary: P01-spec-read Spec read complete"))).toBe(true)
+    // P01-spec-read's work stands done at its clean end (seeded): the spec
+    // room read lawfully, the door standing.
+    await donePhase(f, await f.phase(0), ["T-001"])
     expect(existsSync(join(f.dir, "linux"))).toBe(true)
     await sealArtifacts(f)
     // Land the distill output before transfer runs the admission scan, seals
@@ -131,7 +130,7 @@ describe("transfer: the sealed wall closes at the person's advance (plans/0132 D
 
   test("a reopened wall blocks transfer ahead of any session, naming the door; the removal restores the advance", async () => {
     const { f, corpus } = await wallFixture()
-    expect((await f.run()).code).toBe(0)
+    await donePhase(f, await f.phase(0), ["T-001"])
     await sealArtifacts(f)
     await landPhaseHandover(f, await f.phase(0))
     expect((await captureRun(() => transferDeterministic(f.dir, { phases: "spec-read,implement" }))).code).toBe(0)
@@ -156,7 +155,7 @@ describe("transfer: the sealed wall closes at the person's advance (plans/0132 D
     fixtures.push(f)
     await establishRound(f.dir, { phases: "mt", round: 1 })
     await f.commit("round setup")
-    expect((await f.run()).code).toBe(0)
+    await donePhase(f, await f.phase(0), ["T-001", "T-002"])
     await landPhaseHandover(f, await f.phase(0))
     const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "mt" }))
     expect(advanced.code).toBe(0)
@@ -168,22 +167,16 @@ describe("transfer: the sealed wall closes at the person's advance (plans/0132 D
 })
 
 describe("the seal's bracket at the handover boundary (plans/0189 D1/D4)", () => {
-  test("flow leaves the seal and transition to transfer, which clears an interrupted handover record", async () => {
+  test("the advance leaves the seal and transition to transfer, which clears an interrupted handover record", async () => {
     const { f } = await wallFixture()
-    const stopped = await f.run({ boundary: "flow" })
-    expect(stopped.code).toBe(0)
+    await donePhase(f, await f.phase(0), ["T-001"])
     expect(existsSync(join(f.dir, "linux"))).toBe(true)
     const phase = await f.phase(0)
     expect(existsSync(join(f.dir, phase.dir, "handover.md"))).toBe(false)
     expect(existsSync(join(f.dir, phase.dir, "done.md"))).toBe(false)
     await sealArtifacts(f)
     await saveProgress(f.dir, { task: "PLAN", at: 1, active: true, phase: { kind: "step", step: "phase-handover", unit: "R-01.P01" } })
-    const record = Bun.file(join(f.dir, ".auto/progress.json"))
-    const before = await record.text()
-    const recovery = await f.run()
-    expect(recovery.code).toBe(2)
-    expect(recovery.lines.join("\n")).toContain("interrupted handover R-01.P01 needs review")
-    expect(await record.text()).toBe(before)
+    expect(existsSync(join(f.dir, ".auto/progress.json"))).toBe(true)
     await landPhaseHandover(f, phase)
     const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "spec-read,implement" }))
     expect(advanced.code).toBe(0)
@@ -194,7 +187,7 @@ describe("the seal's bracket at the handover boundary (plans/0189 D1/D4)", () =>
 
   test("the gates hold ahead of the seal: a FAIL verdict stops with the door standing and no wall commit, and the PASS re-run closes lawfully (plans/0189 D4, 0165-076)", async () => {
     const { f } = await wallFixture("verdict")
-    expect((await f.run()).code).toBe(0)
+    await donePhase(f, await f.phase(0), ["T-001"])
     await sealArtifacts(f)
     // The phase's verdict document concludes FAIL: the person's gate.
     await Bun.write(join(f.dir, "docs/R-01/P01-spec-read/verdict.md"), "# Verdict\n\nThe rework is not done.\n\nResult: FAIL\n")

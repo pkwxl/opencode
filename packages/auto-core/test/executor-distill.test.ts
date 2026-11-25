@@ -124,6 +124,23 @@ test("the boundary distillation is claimable distill work addressed by the phase
   }
 })
 
+// plans/0053 D16: the phase's closed task is listed for the distiller with
+// its reason, a delivered task is not (the pin moved here from the retired
+// loop suite, plans/0314 — the brief is the push distiller prompt's own
+// composition).
+test("the brief lists the phase's closed tasks for the distiller with their reasons; delivered tasks are not", async () => {
+  const dir = boundaryProject()
+  write(dir, `${PHASE}/tasks.md`, "# Tasks\n\n- [x] T-001 Ship the widget\n- [x] T-002 Verify the widget\n")
+  write(dir, "docs/T-001/done.md", "# T-001: Ship the widget\nPhase: R-01.P01\nClosed: superseded\n")
+  write(dir, "docs/T-002/done.md", "# T-002: Verify the widget\nPhase: R-01.P01\n")
+  commitFixture(dir)
+  const step = await readExecutorPreview(dir)
+  if (step.kind !== "distill") throw new Error(JSON.stringify(step))
+  const block = step.prompt.slice(step.prompt.indexOf("## Closed tasks"), step.prompt.indexOf("## Artifact"))
+  expect(block).toContain("- T-001: Ship the widget (closed without completing: superseded)")
+  expect(block).not.toContain("T-002")
+})
+
 test("the floor: every state that is not the claimable boundary is byte-identical", async () => {
   // Pending work: the standing execute row, no distill step.
   const dir = boundaryProject()

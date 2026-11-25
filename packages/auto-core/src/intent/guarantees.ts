@@ -6,18 +6,22 @@
 //   ### asserts      machine-checked lines the render gate evaluates against
 //                   every composed prompt (renderPrompt, the single render
 //                   exit);
-//   ### verify-plan  the charter paragraph the plan-step verifier session
-//                   judges the composed planning prompt against; its presence
-//                   is what activates the verifier (src/prompt-verify.ts);
+//   ### verify-plan  the charter paragraph the composed planning prompt is
+//                   held to; the resolved charter is what activates the
+//                   formulation synthesis for a phase (the synthesize grant,
+//                   src/executor-steps.ts) and rides the formulation's
+//                   Acceptance (src/formulate.ts) — the charter verifier
+//                   session that judged the prompt against it retired with
+//                   plans/0283, its parser with plans/0314;
 //   ### verify-plan-<phaseKey>
 //                   the per-phase refinement (plans/0097 D1) — the resolved
-//                   charter (global + phase) is what activates the verifier
-//                   and the formulation synthesis for that phase. The key is
-//                   the phase type id (plans/0100 D8: `verify-plan-test`);
+//                   charter is the global paragraph plus the phase's. The key
+//                   is the phase type id (plans/0100 D8: `verify-plan-test`);
 //                   a builtin's preset letter is an accepted legacy spelling.
 // This module is the pure half: parse the assert lines, evaluate them against
 // a rendered prompt, and name the violation. The throwing/catching halves
-// live at the render exit (prompt.ts) and the run boundary (loop.ts).
+// live at the render exit (prompt.ts) and the executor's synthesize step,
+// which reports a violation as the grant's problems.
 //
 // Authoring rule (plans/0082 D11): every term the verifier will enforce is
 // defined by the charter itself — walls, permissions and carve-outs are
@@ -58,9 +62,11 @@ type GuaranteeAssert = {
 }
 
 // Thrown by the render gate (prompt.ts) when a composed prompt violates the
-// active pack's asserts; the run boundary (loop.ts) maps it to a blocked exit
-// (exit 2) with the violation text — a guarantee violation is a human problem
-// (the intent's content and the prompt sources disagree), never a retry.
+// active pack's asserts; the executor's synthesize step reports it as the
+// grant's problems (the push run boundary mapped it to a blocked exit, exit
+// 2, until the loop retired with plans/0314) — a guarantee violation is a
+// human problem (the intent's content and the prompt sources disagree),
+// never a retry.
 export class PromptGuaranteeError extends Error {
   constructor(violation: string) {
     super(violation)

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { mkdtemp, mkdir, readdir, rm, chmod } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { requireArtifact } from "../src/artifact"
 import { unitBaseline } from "../src/git"
 import { noCommitGit } from "../src/git-ops"
 import { runTask } from "../src/runner"
@@ -409,67 +408,6 @@ describe("recovery through the shared ladder: the task caller (runTask)", () => 
     })
   })
 })
-
-describe("recovery through the shared ladder: the step caller (requireArtifact)", () => {
-  const planTask = { id: "PLAN", title: "phase planning", status: "in_progress" as const, attempts: 0, body: "" }
-  const spec = (reset: () => void) => ({
-    kind: "phase planning",
-    step: { step: "phase-plan" as const, unit: "R-01.P01" },
-    artifact: "a filled task index",
-    requirement: "write the index",
-    reset: async () => {
-      reset()
-    },
-    collect: async () => 4,
-  })
-
-  const setup = async (progress: Progress, gone: string[] = []) => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-step-resume-"))
-    await saveProgress(dir, progress)
-    const agent = fakeAgent({ gone, history: { ses_old: [pastMessage("ses_old", 5000)] } })
-    const lines: string[] = []
-    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-      lines.push(args.map(String).join(" "))
-    })
-    return { dir, agent, lines, printed }
-  }
-
-  test("a live step record reuses its session and the log names the session kind (spec.kind precision, never the phase description)", async () => {
-    const { dir, agent, lines, printed } = await setup({ task: "PLAN", session: "ses_old", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
-    let resetCalled = false
-    try {
-      expect(await requireArtifact(agent.client, planTask, "planning prompt", { dir, git: noCommitGit() }, spec(() => (resetCalled = true)))).toBe(4)
-      expect(resetCalled).toBe(false) // reuse keeps the artifact scene
-      expect(agent.prompts).toHaveLength(1)
-      expect(agent.prompts[0]!.session).toBe("ses_old")
-      // The step caller's precision: its session kind, not the recorded
-      // phase's phaseText wording.
-      const line = lines.find((value) => value.includes("resuming the interruption point"))
-      expect(line).toContain("PLAN phase planning session resuming the interruption point, reusing session ses_old (context intact")
-      expect(line).not.toContain("phase planning step (phase R-01.P01")
-    } finally {
-      printed.mockRestore()
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a dead step record redoes in a new session: the same shared cause string as the task caller renders with the step caller's action tail, and no resume note is attached", async () => {
-    const { dir, agent, lines, printed } = await setup({ task: "PLAN", session: "ses_old", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } }, ["ses_old"])
-    let resetCalled = false
-    try {
-      expect(await requireArtifact(agent.client, planTask, "planning prompt", { dir, git: noCommitGit() }, spec(() => (resetCalled = true)))).toBe(4)
-      expect(resetCalled).toBe(true)
-      expect(agent.prompts[0]!.session).not.toBe("ses_old")
-      expect(agent.prompts[0]!.text).not.toContain("[DRIVER]") // the note belongs to the task-level resume
-      const line = lines.find((value) => value.includes("resuming the interruption point"))
-      expect(line).toContain("PLAN phase planning session resuming the interruption point (the original session is not reusable; redoing this step in a new session)")
-    } finally {
-      printed.mockRestore()
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
-
 
 // The strict-resume invalid-handover log beside the read names the read's
 // own document — the one 0156 D5 surface the ruling missed, completed at

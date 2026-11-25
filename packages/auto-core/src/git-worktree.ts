@@ -212,15 +212,6 @@ export async function mergeBaseSha(dir: string, a: string, b: string): Promise<s
   return sha ? sha.slice(0, 7) : undefined
 }
 
-// The short SHAs of the commits in `<sha>..HEAD` (the lane report's `commits`
-// list, D8: what the lane worker's run posted since it started — an empty
-// baseline sha lists the whole history). Read-only; never a seam member.
-export async function commitsSince(dir: string, sha: string): Promise<string[]> {
-  const listed = await git(dir, ["log", "--format=%h", ...(sha ? [`${sha}..HEAD`] : ["HEAD"])]).catch(() => undefined)
-  if (!listed || listed.code !== 0) return []
-  return listed.out.split("\n").map((line) => line.trim()).filter(Boolean)
-}
-
 // Delete a lane branch (D7's landing step ⑤; called only after the branch
 // merged, so -d would do — -D keeps a decided teardown from failing on a
 // hand-moved ref and silently keeping park state alive).

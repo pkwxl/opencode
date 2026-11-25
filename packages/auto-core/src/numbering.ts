@@ -23,8 +23,8 @@ import { parseIndex } from "./document/unit"
 // Concurrency: the derivation needs no queue — during a task loop only a
 // formulation unit's collect validates new numbers (runner.ts), a phase holds
 // at most one formulation unit (its first task unit), and every other
-// derivation belongs to planning-time moments the phase loop owns before or
-// after the loop, never beside a doc lane.
+// derivation belongs to planning-time moments the advance or an executor
+// grant owns before or after a session, never beside a doc lane.
 
 // Task-number extraction: only the T-<digits-only> form counts (final-audit
 // ids like T-F are a separate derivation namespace, not part of the auto

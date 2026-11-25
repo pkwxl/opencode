@@ -27,7 +27,7 @@
 // transport resumes after).
 //
 // Terminal-behavior invariant: an unstarted emitter is a no-op (the non-run
-// commands, tests that drive the pipeline below runAll) — byte-identical
+// commands, tests that drive a unit below any run bracket) — byte-identical
 // behavior, the goldens the proof.
 //
 // AUTO-DECISION (the question seam is the questions concern, not askHuman):

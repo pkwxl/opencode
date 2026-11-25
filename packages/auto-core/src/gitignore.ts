@@ -1,9 +1,9 @@
 // Maintenance of the driver's .gitignore entries (paired with reset, hence a
 // near-leaf module — its only internal dependency is git.ts's repository
-// discovery: exporting from loop.ts would drag reset.ts into the whole
-// loop → runner → … chain, the same reason changedFiles was lifted into
-// git.ts). loop.ts re-exports ensureGitignore so the existing import path
-// @opencode-ai/auto-core/loop stays valid.
+// discovery: it was split out of the former loop module so reset.ts was not
+// dragged into the whole loop → runner → … chain, the same reason
+// changedFiles was lifted into git.ts; the loop itself retired with
+// plans/0314).
 import { rm, stat } from "node:fs/promises"
 import { join, relative, sep } from "node:path"
 import { repoRoots } from "./git"

@@ -162,13 +162,12 @@ describe("resumeNote (interruption-recovery note)", () => {
 
 // ---- The shared recovery ladder (plans/0069 §2.2 D6 / §2.3 R3): the one ----
 // ---- decision the task caller (runner) and the step caller              ----
-// ---- (requireArtifact) both run. The verdicts carry no phase wording — ----
-// ---- each caller renders its own precision (the task caller phaseText, ----
-// ---- the step caller its session kind), pinned by the caller drives in  ----
-// ---- test/resume.test.ts. The adoption arm (drift since the recorded    ----
-// ---- baseline needs a real repository) is pinned below with a seeded    ----
-// ---- temp repository and through the step caller by                     ----
-// ---- test/artifact.test.ts's strict suite.                              ----
+// ---- (requireArtifact) both ran. The verdicts carry no phase wording —  ----
+// ---- each caller renders its own precision (the task caller phaseText),  ----
+// ---- pinned by the caller drives in test/resume.test.ts. The step caller ----
+// ---- and its strict suite retired with the push loop (plans/0314). The   ----
+// ---- adoption arm (drift since the recorded baseline needs a real       ----
+// ---- repository) is pinned below with a seeded temp repository.         ----
 
 describe("recoveryLadder (the shared reuse/rollback/fresh decision)", () => {
   // Routing over the implicit registry (the record's model is its wildcard

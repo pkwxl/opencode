@@ -13,26 +13,21 @@
 // a collect problem. The end-to-end halves run on the native fake agent
 // over real git repositories (the loop harness); the pure halves in memory.
 import { afterEach, describe, expect, test } from "bun:test"
-import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionChain } from "../src/chain"
 import { executeWhole } from "../src/execute"
-import { ExitRequested } from "../src/exit"
 import { noCommitGit } from "../src/git-ops"
-import { services } from "../src/services"
 import { unitBaseline, unitViolations } from "../src/git"
 import { loadPlan, next, runtimeParked, setParked, strandedParks, withParked, type Task } from "../src/tasks"
 import { unitProblems } from "../src/document/unit"
 import { handoffStatus, parkDirective } from "../src/document/roles"
 import { clampSwitches, SWITCH_ENV } from "../src/switches"
-import { ev, fakeAgent, type FakeAgentOptions, type TurnScript } from "./fixtures/agent"
+import { ev, fakeAgent, type TurnScript } from "./fixtures/agent"
 import { planOf } from "./fixtures/units"
-import { artifactTurns, loopFixture, phaseDirId, promptPhaseDir, taskDoc, type LoopFixture } from "./fixtures/loop"
 import { git } from "./fixtures/runner"
-import { establishRound } from "../src/phases"
 
 // —— the directive's parse (pure) ——
 
@@ -443,182 +438,6 @@ describe("the park commit and the release note (real repositories)", () => {
     expect(await runtimeParked(dir, "T-001")).toBeUndefined()
   })
 })
-
-// —— the end-to-end lifecycle through the phase loop (loop harness) ——
-//
-// The formulation task (0095) is T-001 itself, so the planned pair is
-// T-002 / T-003: the formulation session's whole prompt is recognized by its
-// todo's opening ("Formulate the"), the planning branch appends both tasks
-// with `Depends: none` so each is selectable the moment the pick allows,
-// and the wrap-ups pass through artifactTurns' verification branch. The
-// lifecycle script parks T-002's first whole session on T-003; the mutual
-// script parks each on the other.
-
-const made: LoopFixture[] = []
-afterEach(() => {
-  for (const fixture of made.splice(0)) rmSync(fixture.dir, { recursive: true, force: true })
-})
-
-// Plans the two tasks of this scenario (appended after the formulation
-// line, like artifactTurns' planning branch); returns their ids.
-const planTwo = (dir: string, phaseDir: string): [string, string] => {
-  // promptPhaseDir's match already carries the docs/ prefix — the fixture's
-  // phaseDirId reads the qualified id straight off it.
-  const qualified = phaseDirId(phaseDir)
-  const first = "T-002"
-  const second = "T-003"
-  const file = join(dir, phaseDir, "tasks.md")
-  const current = existsSync(file) ? readFileSync(file, "utf8") : `# Tasks (${qualified})\n\n`
-  if (!current.includes(`- [ ] ${first} `)) writeFileSync(file, `${current.endsWith("\n") ? current : `${current}\n`}- [ ] ${first} first\n- [ ] ${second} second\n`)
-  for (const id of [first, second]) {
-    mkdirSync(join(dir, "docs", id), { recursive: true })
-    writeFileSync(join(dir, "docs", id, "todo.md"), taskDoc(id, qualified))
-  }
-  return [first, second]
-}
-
-const parkTurns = (dir: string): TurnScript => {
-  const parkedOnce = new Set<string>()
-  return (ctx) => {
-    // The formulation session's whole prompt: the phase's task index path
-    // AND the todo body's own "complete task plan" phrase — the index path
-    // alone also appears in a release note's re-merge surface (the blocker
-    // ticks the index), and the wrap-up embeds the same todo as its task
-    // block (the wrap-up marker excludes that one).
-    if (promptPhaseDir(ctx.text) !== undefined && ctx.text.includes("complete task plan") && !ctx.text.includes("only performs the wrap-up")) {
-      const phaseDir = promptPhaseDir(ctx.text)
-      if (phaseDir) planTwo(dir, phaseDir)
-      return undefined
-    }
-    if (ctx.text.includes("Dependency park:")) {
-      const id = /its document is docs\/(T-\d+)\/todo\.md/.exec(ctx.text)?.[1]
-      if (id === "T-002" && !parkedOnce.has(id)) {
-        parkedOnce.add(id)
-        writeFileSync(join(dir, "docs", id, "handoff.md"), "# Parked\n\nBlocked on T-003's output; resume: consume it.\n\nStatus: park T-003\n")
-        return undefined
-      }
-      if (id) {
-        mkdirSync(join(dir, "docs", id), { recursive: true })
-        writeFileSync(join(dir, "docs", id, "artifact.md"), `# ${id} artifact\n\nDone.\n\n<!-- auto: eof -->\n`)
-      }
-    }
-    return artifactTurns(dir)(ctx)
-  }
-}
-
-describe("the park through the phase loop (m mode, real repository)", () => {
-  test("T-002 parks on T-003, T-003 completes, T-002 resumes with the release note and completes: code 0, all done, the park commit landed", async () => {
-    const f = await loopFixture("m", (dir): FakeAgentOptions => ({ turn: parkTurns(dir) }))
-    made.push(f)
-    await establishRound(f.dir, { phases: "m" })
-    await f.commit("round setup")
-    const { code, lines } = await f.run({ planInput: { text: "migrate the widget" } })
-    expect(code).toBe(0)
-    // The park: the loop logged it, the park commit landed under its grammar.
-    expect(lines.some((line) => line.includes("T-002 parked on T-003"))).toBe(true)
-    const park = (await f.git("log", "--format=%s%x00%B%x00", "--grep=^T-002 park", "-z")).split("\0")
-    expect(park.some((entry) => entry.includes("Auto-Stage: park"))).toBe(true)
-    // The release: the resumed dispatch carried the note.
-    expect(f.agent.prompts.some((prompt) => prompt.text.includes("Release note — this task parked on T-003"))).toBe(true)
-    // Every unit completed — the formulation task, the parked-then-resumed
-    // task and the blocker.
-    expect(existsSync(join(f.dir, "docs/T-001/done.md"))).toBe(true)
-    expect(existsSync(join(f.dir, "docs/T-002/done.md"))).toBe(true)
-    expect(existsSync(join(f.dir, "docs/T-003/done.md"))).toBe(true)
-  })
-
-  test("mutual parks: nothing ready with parked units remaining — the run blocks (exit 2) naming the pair", async () => {
-    const f = await loopFixture("m", (dir): FakeAgentOptions => ({ turn: mutualTurns(dir) }))
-    made.push(f)
-    await establishRound(f.dir, { phases: "m" })
-    await f.commit("round setup")
-    const { code, lines } = await f.run({ planInput: { text: "migrate the widget" } })
-    expect(code).toBe(2)
-    expect(lines.some((line) => line.includes("mutual park: T-002 parks on T-003, T-003 parks on T-002"))).toBe(true)
-    expect(lines.some((line) => line.includes("nothing is ready with parked units remaining"))).toBe(true)
-  })
-
-  // —— The parked landing's boundary machinery (plans/0211 D2, 0165-082) —— //
-
-  test("a /exit requested during a parked unit's session lands at the parked boundary itself, before the next unit runs (plans/0211 D2)", async () => {
-    const f = await loopFixture("m", (dir): FakeAgentOptions => ({
-      turn: (ctx) => {
-        const base = parkTurns(dir)(ctx)
-        // Arm the request exactly at the park turn: between it and the
-        // parked landing there is no other checkpoint, so where the exit
-        // lands names which arm ran the hooks.
-        if (ctx.text.includes("Dependency park:")) {
-          const id = /its document is docs\/(T-\d+)\/todo\.md/.exec(ctx.text)?.[1]
-          if (id === "T-002") services().control.requestExit()
-        }
-        return base
-      },
-    }))
-    made.push(f)
-    await establishRound(f.dir, { phases: "m" })
-    await f.commit("round setup")
-    let caught: unknown
-    try {
-      await f.run({ planInput: { text: "migrate the widget" } })
-    } catch (error) {
-      caught = error
-    }
-    // The parked unit's own boundary — pre-fix the request waited through
-    // T-003's whole run and landed at its done boundary instead.
-    expect(caught).toBeInstanceOf(ExitRequested)
-    expect((caught as ExitRequested).label).toContain("task T-002")
-    expect((caught as ExitRequested).label).not.toContain("T-003")
-    // The blocker never dispatched: the exit preceded it.
-    expect(f.agent.prompts.some((prompt) => prompt.text.includes("its document is docs/T-003/todo.md"))).toBe(false)
-  })
-
-  test("a foreign commit during a parked unit's session fails its close-out audit at the parked landing (plans/0211 D2)", async () => {
-    let foreignDone = false
-    const f = await loopFixture("m", (dir): FakeAgentOptions => ({
-      turn: (ctx) => {
-        const base = parkTurns(dir)(ctx)
-        if (ctx.text.includes("Dependency park:")) {
-          const id = /its document is docs\/(T-\d+)\/todo\.md/.exec(ctx.text)?.[1]
-          // Inside T-002's unit, after its baseline: a person's own commit —
-          // no Auto-Stage trailer, inside the unit's range, foreign to it.
-          if (id === "T-002" && !foreignDone) {
-            foreignDone = true
-            execFileSync("git", ["-C", dir, "commit", "--allow-empty", "-qm", "person commit during the parked unit"])
-          }
-        }
-        return base
-      },
-    }))
-    made.push(f)
-    await establishRound(f.dir, { phases: "m" })
-    await f.commit("round setup")
-    const { code, lines } = await f.run({ planInput: { text: "migrate the widget" } })
-    // The parked arm runs the done arm's close-out audit: the foreign commit
-    // surfaces here — pre-fix the run completed (code 0) without ever
-    // checking the parked unit's range.
-    expect(code).toBe(2)
-    expect(lines.some((line) => line.includes("T-002 unit close-out check failed"))).toBe(true)
-    expect(lines.some((line) => line.includes("non-driver commit(s) detected"))).toBe(true)
-  })
-})
-
-// The mutual-park turn script: each planned task's whole session parks on
-// the other.
-const mutualTurns = (dir: string): TurnScript => (ctx) => {
-  // The formulation session's whole prompt (the same guards as parkTurns').
-  if (promptPhaseDir(ctx.text) !== undefined && ctx.text.includes("complete task plan") && !ctx.text.includes("only performs the wrap-up")) {
-    const phaseDir = promptPhaseDir(ctx.text)
-    if (phaseDir) planTwo(dir, phaseDir)
-    return undefined
-  }
-  if (ctx.text.includes("Dependency park:")) {
-    const id = /its document is docs\/(T-\d+)\/todo\.md/.exec(ctx.text)?.[1]
-    if (id) {
-      writeFileSync(join(dir, "docs", id, "handoff.md"), `# Parked\n\nBlocked the other way round.\n\nStatus: park ${id === "T-002" ? "T-003" : "T-002"}\n`)
-    }
-  }
-  return artifactTurns(dir)(ctx)
-}
 
 // —— the plan-time inversion warn (D6, pure over a temp directory) ——
 

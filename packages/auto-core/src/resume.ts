@@ -52,7 +52,7 @@ import type { UnitBaseline } from "./git"
 // from the AI-written files (task units / the handover document) and silently
 // skipped the session never closed out — see
 // plans/0018-session-resume-precedence-design.md.
-export type StepKind = "phase-plan" | "phase-handover" | "phase-append"
+type StepKind = "phase-plan" | "phase-handover" | "phase-append"
 
 // Phase markers of the task pipeline:
 // - decompose: the true-mode phase (the pipeline, the auto mode before
@@ -84,8 +84,8 @@ export type StepKind = "phase-plan" | "phase-handover" | "phase-append"
 //   the wrap-up) are mapped to this phase when read
 // - step: a phase-level bypass step (phase-plan/phase-handover/phase-append);
 //   unit is the owning phase's qualified id R-NN.P<nn> (before M3.6 a preset
-//   letter; old records lack unit, match no phase, and the loop warns then
-//   continues by file-derived routing);
+//   letter; old records lack unit and match no phase — the push loop warned
+//   and continued by file-derived routing before plans/0314 retired it);
 //   the record stays active until the driver's close-out, so that after an
 //   interruption session recovery takes precedence over file-derived routing
 //
@@ -205,9 +205,11 @@ export async function peekProgress(dir: string): Promise<Progress | undefined> {
 }
 
 // The recovery point of a phase step not yet closed out: when the record is an
-// active step variant, returns its step identity and session (for the loop to
-// let session recovery take precedence over file-derived routing, see
-// plans/0018-session-resume-precedence-design.md); returns undefined for a
+// active step variant, returns its step identity and session (so that session
+// recovery takes precedence over file-derived routing, see
+// plans/0018-session-resume-precedence-design.md — the push loop's reader
+// retired with plans/0314; plan's prelude, transfer's advance and the
+// executor's preview read it today); returns undefined for a
 // non-step record, a closed-out one (active=false), or no record.
 export async function openStep(dir: string): Promise<{ step: StepKind; unit: string; session?: string } | undefined> {
   const record = await peekProgress(dir)
@@ -260,8 +262,8 @@ function sanitizePhaseRound(phase: Phase | undefined): Phase | undefined {
 // wrote always carries one of these — or one of the legacy words mapped
 // above). A "step" phase additionally requires its own grammar: a StepKind
 // word and a string unit (an old or hand-made record missing either matches
-// no phase — the loop warns and continues by file-derived routing, the
-// documented pre-M3.6 degradation).
+// no phase — the push loop warned and continued by file-derived routing, the
+// documented pre-M3.6 degradation, until plans/0314 retired it).
 const PHASE_KINDS = new Set(["decompose", "whole", "subtasks", "wrapup", "closeout", "step"])
 const STEP_KINDS: readonly StepKind[] = ["phase-plan", "phase-handover", "phase-append"]
 function validPhase(phase: unknown): boolean {

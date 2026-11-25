@@ -263,8 +263,8 @@ const command = args[0]
 // reads per request, so a registration or a token issued beside a live
 // daemon takes effect on the next request with no restart.
 
-// The worker entry (P1b): parse, validate, run, exit — one runAll per child
-// process, the unit the daemon (P1c) supervises. (Every path through
+// The worker entry (P1b): parse, validate, run, exit — one worker span per
+// child process, the unit the daemon (P1c) supervises. (Every path through
 // runWorker exits; if one ever returned, the refusal at the bottom would
 // catch the fallthrough.)
 if (command === "worker") {

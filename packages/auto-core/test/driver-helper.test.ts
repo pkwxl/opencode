@@ -651,7 +651,7 @@ describe("driver-helper: D4 — read-only, nothing parsed back (plans/0105 D4)",
   test("the module imports no writer: no loop, no session-driving layer, no task pipeline", async () => {
     const source = await Bun.file(join(import.meta.dir, "../src/driver-helper.ts")).text()
     const imports = [...source.matchAll(/from "(\.\/[^"]+)"/g)].map((match) => match[1]!)
-    const forbidden = ["./loop", "./loop-phase", "./loop-plan", "./loop-task", "./loop-preflight", "./runner", "./execute", "./exec-session", "./session", "./attempt", "./watch", "./artifact", "./blockage-diagnose", "./blockage-execute", "./task-add", "./work-order", "./land", "./close"]
+    const forbidden = ["./loop-task", "./loop-preflight", "./runner", "./execute", "./exec-session", "./session", "./attempt", "./watch", "./blockage-execute", "./task-add", "./work-order", "./land", "./close"]
     for (const module of imports) expect(forbidden).not.toContain(module)
   })
 

@@ -98,7 +98,6 @@ describe("shared partial parsing", () => {
 describe("built-in template registry", () => {
   test("registers the remaining built-in templates", () => {
     expect(promptTemplateNames()).toEqual([
-      "_mode-brief",
       "_partials",
       "classify-error",
       "close-audit",
@@ -110,7 +109,6 @@ describe("built-in template registry", () => {
       "decompose-m",
       "decompose-t",
       "decompose-v",
-      "default-check",
       "diagnose",
       "digest-index",
       "dryrun",

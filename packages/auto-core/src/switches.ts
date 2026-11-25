@@ -40,15 +40,6 @@ export const SWITCH_ENV = {
   // the landing protocol) with zero concurrency. The rollout/testing answer to
   // 0036 D13's "plan for parallelism, execute serially" trap.
   laneIsolation: "OPENCODE_AUTO_LANE_ISOLATION",
-  // Plan-step consistency verification (plans/0080 §5, default off since
-  // plans/0113): the AI verifier that judges each composed planning prompt
-  // Consented remediation (plans/0082 §5 D8): the blockage dossier's
-  // diagnosis session, the blockage document and the prelude executor — the
-  // machinery that turns a residual blockage into one consented `Choice:`
-  // line. off is the emergency exit returning today's exact static behavior;
-  // the dossier's corrected block line (D2) survives the switch, being
-  // mechanical truth.
-  remediate: "OPENCODE_AUTO_REMEDIATE",
   // The first-run project analysis (plans/0084): on a target with no rounds
   // yet, plan's prelude routes into the assisted analysis flow (the
   // docs/analysis.md stub, the AGENTS.md analysis guidance, the Fork /
@@ -130,6 +121,12 @@ export const RETIRED_SWITCHES: Readonly<Record<string, string>> = {
   // the settlement's checks judge).
   OPENCODE_AUTO_PLAN_VERIFY: "the charter verifier was removed; the plan and append steps are deterministic",
   OPENCODE_AUTO_SYNTHESIS_TIMEOUT: "synthesis runs through an executor lease; the push constructor timeout was removed",
+  // Consented remediation's master switch (plans/0314): the blockage
+  // diagnosis session that read it — the dossier that turned a residual
+  // blockage into one consented `Choice:` line — retired with the push loop.
+  // The plan operation's row still executes the `Choice:` marks a person's
+  // blockage document carries and never read the switch (plans/0172).
+  OPENCODE_AUTO_REMEDIATE: "the blockage diagnosis was removed; no step reads the switch",
 }
 
 // The notice lines the retired switches produce for an environment (pure;
@@ -379,11 +376,6 @@ export type Switches = {
   // protocol, still strictly serially. The isolation rollout stage of the
   // lanes design: full machinery, zero concurrency, per-run only.
   laneIsolation: boolean
-  // Consented remediation (default on, plans/0082 §5 D8): the blockage
-  // dossier's diagnosis session, the `docs/R-NN/blockage-<seq>.md` document
-  // and the prelude row that executes `Choice:` marks. off returns today's
-  // exact static behavior — only removes, never adds.
-  remediate: boolean
   // The first-run project analysis (default on, plans/0084): plan's prelude
   // routes a target with no rounds into the assisted analysis flow before
   // establishing R-01. off is the direct-establishment escape hatch; it only
@@ -434,7 +426,6 @@ const SWITCH_DEFAULTS: Switches = {
   hibernate: undefined,
   agent: undefined,
   laneIsolation: false,
-  remediate: true,
   analysis: true,
   park: true,
   synthesis: true,
@@ -665,7 +656,6 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     recoveryWait: minutes(SWITCH_ENV.recoveryWait, env[SWITCH_ENV.recoveryWait], SWITCH_DEFAULTS.recoveryWait),
     strictResume: onOff(SWITCH_ENV.strictResume, env[SWITCH_ENV.strictResume], SWITCH_DEFAULTS.strictResume),
     hibernate: parseHibernate(env[SWITCH_ENV.hibernate]),
-    remediate: onOff(SWITCH_ENV.remediate, env[SWITCH_ENV.remediate], SWITCH_DEFAULTS.remediate),
     analysis: onOff(SWITCH_ENV.analysis, env[SWITCH_ENV.analysis], SWITCH_DEFAULTS.analysis),
     park: onOff(SWITCH_ENV.park, env[SWITCH_ENV.park], SWITCH_DEFAULTS.park),
     synthesis: onOff(SWITCH_ENV.synthesis, env[SWITCH_ENV.synthesis], SWITCH_DEFAULTS.synthesis),
@@ -710,7 +700,6 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.hibernate === undefined ? undefined : `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
     switches.agent === undefined ? undefined : `${SWITCH_ENV.agent}=${switches.agent}`,
     switches.laneIsolation === SWITCH_DEFAULTS.laneIsolation ? undefined : `${SWITCH_ENV.laneIsolation}=${switches.laneIsolation ? "on" : "off"}`,
-    switches.remediate === SWITCH_DEFAULTS.remediate ? undefined : `${SWITCH_ENV.remediate}=${switches.remediate ? "on" : "off"}`,
     switches.analysis === SWITCH_DEFAULTS.analysis ? undefined : `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
     switches.park === SWITCH_DEFAULTS.park ? undefined : `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
     switches.synthesis === SWITCH_DEFAULTS.synthesis ? undefined : `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,
@@ -741,7 +730,6 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
     `${SWITCH_ENV.agent}=${switches.agent ?? ""}`,
     `${SWITCH_ENV.laneIsolation}=${switches.laneIsolation ? "on" : "off"}`,
-    `${SWITCH_ENV.remediate}=${switches.remediate ? "on" : "off"}`,
     `${SWITCH_ENV.analysis}=${switches.analysis ? "on" : "off"}`,
     `${SWITCH_ENV.park}=${switches.park ? "on" : "off"}`,
     `${SWITCH_ENV.synthesis}=${switches.synthesis ? "on" : "off"}`,

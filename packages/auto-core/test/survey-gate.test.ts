@@ -1,16 +1,16 @@
-// The survey phase and the human clarification gate (plans/0081 D14/D15),
-// driven through the phase loop on the native fake agent over a real git
-// repository: the survey task writes survey.md with a recorded fork, the gate
-// holds the phase open awaiting the person (exit 2, done.md waits), the
-// person's `Clarified: yes` releases the phase and approves the proposed
-// `## Project brief` section — which the driver installs verbatim into
-// .opencode/auto/brief.md in its own commit — and the round then flows into
-// its implement phase, whose final-phase duty self-heals the round report.
+// The survey phase and the human clarification gate (plans/0081 D14/D15) at
+// the person's advance: the survey boundary is seeded by hand — the phase's
+// work done, its survey document recording a fork (the task loop that walked
+// there retired, plans/0314) — and every act is the pull path's. The gate
+// holds the phase open awaiting the person (transfer exits 2, done.md
+// waits), the person's `Clarified: yes` releases the phase and approves the
+// proposed `## Project brief` section — which the advance installs verbatim
+// into .opencode/auto/brief.md in its own commit — and the round then
+// advances into its implement phase.
 import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { appendOneTask, artifactTurns, landPhaseHandover, loopFixture, phaseHandover, promptPhaseDir, type LoopFixture } from "./fixtures/loop"
-import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
+import { donePhase, finishPhaseWork, landPhaseHandover, loopFixture, type LoopFixture } from "./fixtures/loop"
 import { captureRun } from "./fixtures/capture"
 import { establishRound } from "../src/phases"
 import { transferDeterministic } from "../src/transfer"
@@ -41,104 +41,46 @@ const SURVEY_DOC = [
   "",
 ].join("\n")
 
-const ROUND_REPORT = ["# Round report", "", "The round's account for the person.", "", "<!-- auto: eof -->", ""].join("\n")
-
-const wrapupReport = (id: string) =>
-  [
-    `# Report (${id})`,
-    "",
-    "The wrap-up session reviewed the work against the task's acceptance statements and",
-    "recorded the verification evidence: what was delivered, where it lives, and how it",
-    "was checked.",
-    "",
-    "Result: PASS",
-    "",
-    "<!-- auto: eof -->",
-    "",
-  ].join("\n")
-
-// The turn script: the survey task's session writes survey.md (forked, with
-// the `## Project brief` proposal); the wrap-up sessions write their reports;
-// the report self-heal's append lands a report task and the report; the
-// planning and handover sessions ride the artifact turns. surveyDir is a box
-// the fixture fills once the round is established (the whole-task prompt
-// carries no phase directory of its own). analysisBlocks records which
-// planning prompts carried the approved-analysis block (plans/0085 A1: the
-// survey's planner alone).
-const turn = (dir: string, surveyDir: { path?: string }, analysisBlocks: string[] = []): TurnScript => (ctx) => {
-  if (ctx.text.includes("## Input: approved project analysis") && ctx.text.includes("responsible for the whole task")) {
-    // The formulation session's own prompt alone — the wrap-up inlines the
-    // todo too and must not double-count (plans/0095).
-    analysisBlocks.push(ctx.text.includes('"Survey" phase') ? "survey" : ctx.text.includes('"Implementation" phase') ? "implement" : "other")
-  }
-  // The wrap-up check comes first: its prompt embeds the task block too.
-  if (ctx.text.includes("only performs the wrap-up")) {
-    const id = /docs\/(T-\d+)\/report\.md/.exec(ctx.text)?.[1]
-    if (id) {
-      mkdirSync(join(dir, "docs", id), { recursive: true })
-      writeFileSync(join(dir, "docs", id, "report.md"), wrapupReport(id))
-    }
-    return undefined
-  }
-  // The survey task's whole-session: its task block names the planned task
-  // (T-002 since plans/0095 — T-001 is the formulation unit; the done
-  // list's `- [done] T-001:` line never matches the block form).
-  if (ctx.text.includes("# T-002: task T-002\n")) {
-    if (surveyDir.path !== undefined) writeFileSync(join(dir, surveyDir.path, "survey.md"), SURVEY_DOC)
-    return undefined
-  }
-  // The round-report self-heal's append (plans/0081 D4).
-  if (ctx.text.includes("## Input: the task index as it stands") && ctx.text.includes("Round report self-heal")) {
-    const phaseDir = promptPhaseDir(ctx.text)
-    if (phaseDir) {
-      appendOneTask(dir, phaseDir)
-      writeFileSync(join(dir, "docs/R-01/report-for-user.md"), ROUND_REPORT)
-    }
-    return undefined
-  }
-  return artifactTurns(dir)(ctx)
-}
-
-async function fixture(analysisBlocks: string[] = [], surveyDoc: string = SURVEY_DOC): Promise<LoopFixture> {
-  const surveyDir: { path?: string } = {}
-  const writesSurvey = surveyDoc
-  const f = await loopFixture("survey,implement", (dir): FakeAgentOptions => ({
-    turn: (ctx) => {
-      // The variant document (the 0169 regressions): the survey task's
-      // session writes the parameterized survey instead of the default.
-      if (!ctx.text.includes("only performs the wrap-up") && ctx.text.includes("# T-002: task T-002\n") && surveyDir.path !== undefined && writesSurvey !== SURVEY_DOC) {
-        writeFileSync(join(dir, surveyDir.path, "survey.md"), writesSurvey)
-        return undefined
-      }
-      return turn(dir, surveyDir, analysisBlocks)(ctx)
-    },
-  }))
+// The survey boundary state: the round established under a released project
+// analysis whose roadmap line covers it (the tail re-derivation's authority),
+// the survey phase's work done — its formulation unit and the survey task —
+// and the survey document that task wrote.
+async function fixture(surveyDoc: string = SURVEY_DOC): Promise<LoopFixture> {
+  const f = await loopFixture("survey,implement")
   made.push(f)
   await mkdirSync(join(f.dir, ".opencode/auto/phases"), { recursive: true })
   await Bun.write(join(f.dir, ".opencode/auto/phases/survey.md"), SURVEY_TYPE)
   await establishRound(f.dir, { phases: "survey,implement" })
-  // A released project analysis (plans/0085 A1): the survey phase's planning
-  // session must read it; no other planning session gets it.
   await mkdirSync(join(f.dir, "docs"), { recursive: true })
   await Bun.write(
     join(f.dir, "docs/analysis.md"),
     ["# Project analysis", "", "## Analysis", "", "Two modules, one risk area.", "", "## Goals", "", "Ship the port with the protocol intact.", "", "## Project brief", "", "A faithful port.", "", "## Roadmap", "", "- R-01 survey,implement — port the core", "", "Clarified: yes", ""].join("\n"),
   )
-  surveyDir.path = (await f.phase(0)).dir
   await f.commit("round setup")
+  const survey = await f.phase(0)
+  await donePhase(f, survey, ["T-001", "T-002"])
+  await Bun.write(join(f.dir, survey.dir, "survey.md"), surveyDoc)
+  await f.commit("survey done, fork open")
   return f
 }
 
+// The person's release mark, written before the eof terminator and committed
+// like any hand edit.
+async function clarify(f: LoopFixture): Promise<void> {
+  const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
+  writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "Clarified: yes\n\n<!-- auto: eof -->"))
+  await f.commit("clarify the survey")
+}
+
 describe("the survey phase and the human clarification gate (plans/0081 D14/D15; the boundary rhythm of plans/0101 D1/D2)", () => {
-  test("a recorded fork holds the phase at run's boundary stop (no session past it); Clarified: yes releases it and transfer's advance installs the approved brief", async () => {
-    const analysisBlocks: string[] = []
-    const f = await fixture(analysisBlocks)
-    // The survey task's session wrote survey.md with one open fork: the run
-    // completes the phase's work and stops at its boundary (plans/0101 D1)
-    // where the human gate is checked — exit 2, done.md waits, and no
-    // distillation session runs ahead of the person's decision.
-    const held = await f.run()
+  test("a recorded fork holds the phase at the advance; Clarified: yes releases it and the advance installs the approved brief; the round then closes on its listing", async () => {
+    const f = await fixture()
+    const survey = await f.phase(0)
+    const held = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(held.code).toBe(2)
+    // The human gate is checked first (D2): exit 2, done.md waits, and the
+    // stop names the release line — no tokens spent before the person's
+    // decision.
     expect(held.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
     expect(held.lines.some((line) => line.includes("records 1 open Fork: line(s)"))).toBe(true)
     expect(held.lines.some((line) => line.includes("add `Clarified: yes` to release the phase"))).toBe(true)
@@ -146,32 +88,21 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     // carries a `## Project brief` section, so the release line promises the
     // install — the byte-identical floor of the conditional clause.
     expect(held.lines.some((line) => line.includes("the phase completes and the approved `## Project brief` section is installed"))).toBe(true)
-    // The release advice stays on the input's home (plans/0101 D4): the next
-    // phase's planning input is its plan-input.md — `plan --file` on this
-    // route is refused ("after the advance"), so the stop never names it.
-    expect(held.lines.some((line) => line.includes("the next phase's planning input is its `plan-input.md` — write it there; the next `transfer` construct reads it"))).toBe(true)
-    expect(held.lines.some((line) => line.includes("--file <path>"))).toBe(false)
     // The release accepts the recorded defaults (plans/0085 A3): the stop
     // says so, and the fork carries its `Recommend:` clause.
     expect(held.lines.some((line) => line.includes("it accepts every line's `Recommend:` default"))).toBe(true)
     expect(held.lines.some((line) => line.includes("without a `Recommend:` default"))).toBe(false)
-    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/todo.md"))).toBe(true)
-    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/handover.md"))).toBe(false)
+    expect(existsSync(join(f.dir, survey.dir, "todo.md"))).toBe(true)
+    expect(existsSync(join(f.dir, survey.dir, "handover.md"))).toBe(false)
     expect(existsSync(join(f.dir, ".opencode/auto/brief.md"))).toBe(false)
-    // The person's release: the release line beside the fork, committed like
-    // any hand edit.
-    const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
-    writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "Clarified: yes\n\n<!-- auto: eof -->"))
-    await f.commit("clarify the survey")
-    // transfer's advance (plans/0101 D2, the loop under stopBefore
-    // "formulate"): it absorbs what the run re-entry did — the gate
-    // re-check, the release's install — closes the phase, and constructs the
-    // next phase's plan task, stopping at the review seam without
-    // dispatching it.
-    await landPhaseHandover(f, await f.phase(0))
+    await clarify(f)
+    // The advance: the gate re-check, the release's install — it closes the
+    // phase and constructs the next phase's plan task, stopping at the
+    // review seam.
+    await landPhaseHandover(f, survey)
     const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(advanced.code).toBe(0)
-    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
+    expect(existsSync(join(f.dir, survey.dir, "done.md"))).toBe(true)
     // The approved `## Project brief` section is installed verbatim, in its
     // own commit (D15.2; the install names its source document since
     // plans/0084 generalized it beyond the survey).
@@ -180,59 +111,35 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     expect(brief).toContain("rule separation")
     expect(brief).not.toContain("Fork:")
     expect(await f.git("log", "--format=%s")).toContain("PLAN brief install the approved project brief (from docs/R-01/P01-survey/survey.md)")
-    // The next phase's plan task stands constructed and reviewed — the
-    // implementation formulation was NOT dispatched by the advance: the
-    // index holds the formulation line alone, no planned task beside it.
-    const implement = (await f.phase(1)).dir
-    const index = (await Bun.file(join(f.dir, implement, "tasks.md")).text()).trim().split("\n")
+    // The next phase's plan task stands constructed and reviewed.
+    const implement = await f.phase(1)
+    const index = (await Bun.file(join(f.dir, implement.dir, "tasks.md")).text()).trim().split("\n")
     expect(index.filter((line) => /^\- \[ \] T-\d+/.test(line))).toHaveLength(1)
     expect(advanced.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
-    // Rebuild for the legacy planner before exercising its dispatch.
-    expect((await f.run({ stopBefore: "formulate" })).code).toBe(0)
-    const dispatched = await f.run({ stopBefore: "execute" })
-    expect(dispatched.code, dispatched.lines.join("\n")).toBe(0)
-    expect(dispatched.lines.some((line) => line.includes("✓ phase planning complete"))).toBe(true)
-    // run executes the implement phase and stops at the round's last
-    // boundary — the stop names the round close.
-    const executed = await f.run()
-    expect(executed.code).toBe(0)
-    expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(false)
-    expect(executed.lines.some((line) => line.includes("✓ phase boundary: P02-implement Implementation complete"))).toBe(true)
-    expect(executed.lines.some((line) => line.includes("closes the phase and the round"))).toBe(true)
+    // The implement phase's work stands done at the round's last boundary —
+    // its handover landed by the distill grant's counterpart here.
+    await finishPhaseWork(f, implement)
+    await landPhaseHandover(f, implement)
     // The closing advance refuses while the round's own restatement listing
-    // is an unfilled stub (G8's close listing — the person's act); no report
-    // task appends anywhere (the self-heal retired with the mandate,
-    // plans/0109 D3), so the listing alone is the round's remaining work —
-    // the round-close-then-stop split (plans/0101 D2 shape 3).
-    await landPhaseHandover(f, await f.phase(1))
+    // is an unfilled stub (G8's close listing — the person's act); the
+    // listing alone is the round's remaining work (the round-close-then-stop
+    // split, plans/0101 D2 shape 3).
     const unfilled = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(unfilled.code).toBe(2)
     expect(unfilled.lines.some((line) => line.includes("does not pass its round-close checks"))).toBe(true)
     expect(unfilled.lines.some((line) => line.includes("close listing"))).toBe(true)
+    // The round user report was never written and never demanded (plans/0109
+    // D1 — the report is optional).
+    expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(false)
     const roundDoc = join(f.dir, "docs/R-01/round.md")
     writeFileSync(roundDoc, (await Bun.file(roundDoc).text()).replace("## Close", "## Close\n\n- The survey's fork decision is restated in the project brief; nothing accepted as lost."))
     await f.commit("fill the round's close listing")
     const closed = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(closed.code).toBe(0)
-    expect(existsSync(join(f.dir, "docs/R-01/P02-implement/done.md"))).toBe(true)
+    expect(existsSync(join(f.dir, implement.dir, "done.md"))).toBe(true)
     expect(closed.lines.some((line) => line.includes("roadmap") && line.includes("R-02"))).toBe(true)
-    // The report was never written and never demanded (plans/0109 D1).
     expect(existsSync(join(f.dir, "docs/R-01/report-for-user.md"))).toBe(false)
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
-    // The approved analysis reached the survey's planning session alone
-    // (plans/0085 A1): the human-gated phase reads the person's settled
-    // decisions; the implement phase that followed did not.
-    expect(analysisBlocks).toEqual(["survey"])
-  })
-
-  test("flow stops before distillation when survey clarification is pending", async () => {
-    const f = await fixture([])
-    const held = await f.run({ boundary: "flow" })
-    expect(held.code).toBe(2)
-    expect(held.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
-    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/handover.md"))).toBe(false)
-    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/todo.md"))).toBe(true)
-    expect(f.agent.prompts.some(({ text }) => text.includes("You are the handover distiller"))).toBe(false)
   })
 
   // plans/0236 D6 (0165-072): the approved brief installs AHEAD of the
@@ -242,14 +149,10 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
   // the install for good (the phase read done, no other path installs a
   // survey proposal).
   test("the released survey installs the approved brief while the phase is still pending — the kill window between install and rename closed", async () => {
-    const analysisBlocks: string[] = []
-    const f = await fixture(analysisBlocks)
-    const held = await f.run({ boundary: "flow" })
-    expect(held.code).toBe(2)
-    const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
-    writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "Clarified: yes\n\n<!-- auto: eof -->"))
-    await f.commit("clarify the survey")
-    await landPhaseHandover(f, await f.phase(0))
+    const f = await fixture()
+    await clarify(f)
+    const survey = await f.phase(0)
+    await landPhaseHandover(f, survey)
     const released = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(released.code).toBe(0)
     const commits = (await f.git("log", "--format=%H %s")).split("\n")
@@ -265,15 +168,15 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
   })
 
   test("the held boundary is the designed amendment moment: the stop names the reshape channel, and the released advance re-derives the tail (plans/0101 D6)", async () => {
-    const analysisBlocks: string[] = []
-    const f = await fixture(analysisBlocks)
-    // run completes the survey's work and stops at its boundary where the
-    // gate holds: the awaiting lines name the reshape channel beside the
-    // release — the survey's findings in hand, F10's evidence mechanically
-    // acted on. The channel is the authority's (plans/0114 D3): this round is
-    // roadmap-covered, so the stop names moving the roadmap's line — the
-    // config amend wording never reaches a covered round.
-    const held = await f.run()
+    const f = await fixture()
+    const survey = await f.phase(0)
+    // The gate holds at the advance: the awaiting lines name the reshape
+    // channel beside the release — the survey's findings in hand, F10's
+    // evidence mechanically acted on. The channel is the authority's
+    // (plans/0114 D3): this round is roadmap-covered, so the stop names
+    // moving the roadmap's line — the config amend wording never reaches a
+    // covered round.
+    const held = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(held.code).toBe(2)
     expect(held.lines.some((line) => line.includes("to reshape the round from the findings: move or add its `R-01 <phases> — <goal>` line in docs/analysis.md"))).toBe(true)
     expect(held.lines.some((line) => line.includes("the config phases value is init-stamped machinery"))).toBe(true)
@@ -284,19 +187,15 @@ describe("the survey phase and the human clarification gate (plans/0081 D14/D15;
     // one channel).
     const analysis = join(f.dir, "docs/analysis.md")
     writeFileSync(analysis, (await Bun.file(analysis).text()).replace("- R-01 survey,implement —", "- R-01 survey,implement,test —"))
-    const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
-    writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "Clarified: yes\n\n<!-- auto: eof -->"))
-    await f.commit("the findings reshape the round; clarified")
+    await clarify(f)
     // Land the distill output before applying the released boundary.
-    const phase = await f.phase(0)
-    await Bun.write(join(f.dir, phase.dir, "handover.md"), phaseHandover(phase.dir))
-    await f.commit("distill survey handover")
+    await landPhaseHandover(f, survey)
     const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(advanced.code).toBe(0)
     expect(advanced.lines.some((line) => line.includes("✓ unstarted tail of round R-01 re-derived to the roadmap of docs/analysis.md (+ P03-test)"))).toBe(true)
     expect(await Bun.file(join(f.dir, "docs/R-01/phases.md")).text()).toContain("P03 test")
     expect(await f.git("log", "--format=%s")).toContain("PLAN resync R-01 tail to the roadmap of docs/analysis.md (+ P03-test)")
-    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
+    expect(existsSync(join(f.dir, survey.dir, "done.md"))).toBe(true)
     expect(advanced.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
   })
@@ -312,17 +211,16 @@ describe("the survey's person marks (plans/0169)", () => {
   const ZERO_FORK_PROPOSAL = SURVEY_DOC.replace("Fork: scope — the journal too reshapes R-02's schedule; Recommend: the core only.\n\n", "")
 
   test("a zero-fork survey proposing a brief holds for the person; unmarked, nothing installs (0165-001)", async () => {
-    const f = await fixture([], ZERO_FORK_PROPOSAL)
-    const held = await f.run()
+    const f = await fixture(ZERO_FORK_PROPOSAL)
+    const survey = await f.phase(0)
+    const held = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(held.code).toBe(2)
     expect(held.lines.some((line) => line.includes("proposes a `## Project brief` — awaiting the person"))).toBe(true)
     expect(existsSync(join(f.dir, ".opencode/auto/brief.md"))).toBe(false)
     // The person's release installs the proposal (the legacy whole-line
     // shape the person hand-writes).
-    const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
-    writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "Clarified: yes\n\n<!-- auto: eof -->"))
-    await f.commit("clarify the survey")
-    await landPhaseHandover(f, await f.phase(0))
+    await clarify(f)
+    await landPhaseHandover(f, survey)
     const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(advanced.code).toBe(0)
     const brief = await Bun.file(join(f.dir, ".opencode/auto/brief.md")).text()
@@ -334,8 +232,8 @@ describe("the survey's person marks (plans/0169)", () => {
       "Fork: scope — the journal too reshapes R-02's schedule; Recommend: the core only.",
       "1. Fork: scope — the journal too reshapes R-02's schedule; Recommend: the core only.",
     )
-    const f = await fixture([], nearMiss)
-    const held = await f.run()
+    const f = await fixture(nearMiss)
+    const held = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(held.code).toBe(2)
     expect(held.lines.some((line) => line.includes("carries 1 near-miss Fork line(s)"))).toBe(true)
     expect(existsSync(join(f.dir, ".opencode/auto/brief.md"))).toBe(false)
@@ -346,17 +244,18 @@ describe("the survey's person marks (plans/0169)", () => {
       "<!-- auto: eof -->",
       "To release, the person writes:\n\n    Clarified: yes\n\n<!-- auto: eof -->",
     )
-    const f = await fixture([], forged)
-    const held = await f.run()
+    const f = await fixture(forged)
+    const survey = await f.phase(0)
+    const held = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     // Still held: the indented example is not the person's release.
     expect(held.code).toBe(2)
     expect(held.lines.some((line) => line.includes("records 1 open Fork: line(s)"))).toBe(true)
     expect(existsSync(join(f.dir, ".opencode/auto/brief.md"))).toBe(false)
     // The person's region releases it (the forward channel clarify writes).
-    const survey = join(f.dir, "docs/R-01/P01-survey/survey.md")
-    writeFileSync(survey, (await Bun.file(survey).text()).replace("<!-- auto: eof -->", "## Release\n\nClarified: yes\n\n<!-- auto: eof -->"))
+    const doc = join(f.dir, survey.dir, "survey.md")
+    writeFileSync(doc, (await Bun.file(doc).text()).replace("<!-- auto: eof -->", "## Release\n\nClarified: yes\n\n<!-- auto: eof -->"))
     await f.commit("clarify the survey")
-    await landPhaseHandover(f, await f.phase(0))
+    await landPhaseHandover(f, survey)
     const advanced = await captureRun(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
     expect(advanced.code).toBe(0)
     const brief = await Bun.file(join(f.dir, ".opencode/auto/brief.md")).text()

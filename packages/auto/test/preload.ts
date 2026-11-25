@@ -8,9 +8,9 @@
 // $XDG_CONFIG_HOME/opencode-auto/models.json (src/models.ts operatorLayerPath),
 // so only a set value defeats the XDG fallback — deletion would leave the
 // operator's real config home reachable. XDG_CONFIG_HOME itself stays
-// untouched on purpose: the opt-in real-server e2e runs (OPENCODE_AUTO_E2E=1)
-// call runAll in this process and need the operator's real opencode config for
-// the server they start (0055 §4.1's AUTO-DECISION, promoted here from one
+// untouched on purpose: the opt-in real-server checks (OPENCODE_AUTO_E2E=1)
+// start a real opencode server in this process and need the operator's real
+// opencode config for it (0055 §4.1's AUTO-DECISION, promoted here from one
 // test file's module body to the package's own home — every test file now
 // carries the guard from load, not only the files loaded after e2e.test.ts's
 // module body evaluated; the recorded incident of the hand-rolled shape is

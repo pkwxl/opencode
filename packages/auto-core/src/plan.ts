@@ -2,11 +2,12 @@
 // no-session task add lives in src/task-add.ts, plans/0058): the prelude
 // that decides every route needing no AI before an agent starts, and the
 // lines plan prints where it stops. The prelude runs under the run lock the
-// shell holds, before runAll, so it works on the dirty tree a fresh round
-// setup leaves and starts no server just to print a notice; it must never
-// import the loop. The loop (loop-phase, loop-plan) prints the same stop
-// lines through the helpers here, so plan says the same thing wherever it
-// stops.
+// shell holds, so it works on the dirty tree a fresh round setup leaves and
+// starts no server just to print a notice. A `{ type: "loop" }` outcome is
+// the planning route: the session is the executor's formulate grant
+// (plans/0276; the push loop that took the route retired with plans/0314).
+// Stop lines print through the helpers here, so plan, transfer and the
+// person-proxy brief say the same thing wherever they stop.
 // Since plans/0101 D4 plan is the dispatch half of the person-bracketed
 // boundary: bare plan runs the awaiting, reviewed formulation task (one
 // session chain, stop on completion), and every phased state that is not
@@ -94,7 +95,8 @@ type PlanPrelude = { type: "loop" } | PlanStop
 //      apply (plans/0206 D2); m mode keeps the D34 uncommitted re-sync
 //      (unreachable — its tail is the single phase);
 //   4. the route is blocked → exit 1;
-//   5. an open step record → the loop finishes it first; retired append
+//   5. an open step record → the planning route (the executor surface
+//      answers an active record as in-flight work); retired append
 //      records require review and manual recovery;
 //  14. --round → the assisted round-brief preparation stop: the AGENTS.md
 //      round guidance (and the m-mode stub establishment never wrote);
@@ -104,12 +106,13 @@ type PlanPrelude = { type: "loop" } | PlanStop
 //      transfer (nothing is constructed, or the phase is at its boundary);
 //      an input's home is the phase's plan-input.md;
 //   7. phased, execute → an awaiting formulation task of
-//      the phase the route names dispatches (the loop); the input must equal
+//      the phase the route names is the planning route (the formulate
+//      grant); the input must equal
 //      the persisted plan-input.md (an input that changes what the todo
 //      rendered refuses naming the transfer re-run, plans/0101 D4), and the
 //      round brief must be filled (the untouched stub refuses exit 2 naming
 //      the fill, plans/0101 D3); otherwise exit 1 naming run and transfer;
-//   8. m mode, empty task index → input: the loop; else a notice;
+//   8. m mode, empty task index → input: the planning route; else a notice;
 //   9. m mode, tasks listed → refuse a planning input with the task-add remedy; else a notice;
 //  10. --append is retired on all routes (plans/0283).
 //  11. --new-task <title> → add one task the person names, with no session,
@@ -353,11 +356,12 @@ export async function planPrelude(dir: string, opts: {
   // them mechanically (one Auto-Stage: remediation commit per edit,
   // old-span literal match, the planning-input channel through its own
   // commit); the blocked step then re-composes and re-verifies from scratch
-  // as the loop below runs it. A refusal that needs the person or a clean
-  // tree stops with the partial state named; a stale-span rejection is
-  // recorded on its document and the run continues — the step's gate fails
-  // again and re-diagnoses into a fresh, executable document, so a Choice
-  // never dead-ends.
+  // at its next derivation — the executor's synthesize grant on the pull
+  // path (the push loop's step retired with plans/0314). A refusal that needs
+  // the person or a clean tree stops with the partial state named; a
+  // stale-span rejection is recorded on its document and the derivation
+  // continues — the grant's gate fails again and reports the violation as the
+  // holder's problem, so a Choice never dead-ends.
   {
     const executed = await executeBlockageChoices(dir, round)
     if (executed.type === "reblocked" && !executed.stale) return stop(2, [`⏸ remediation re-blocked: ${executed.reason}`, `next: resolve what it names, then re-run: ${surface.plan(dir)}`])
@@ -422,8 +426,9 @@ export async function planPrelude(dir: string, opts: {
   // notices are m mode's alone there — a refusal line needs no advisories
   // ahead of it.
   if (manual && route.type === "plan") for (const line of await planningNotices(dir, route.phase, opts.input, analysisOn)) log(line)
-  // Row 5: the interrupted step is finished first (plans/0018 precedence);
-  // the loop decides whether the record still matches the route. A hand-add
+    // Row 5: the interrupted step is finished first (plans/0018 precedence);
+    // the planning route leaves the record to the executor surface, which
+    // answers an active one as in-flight work. A hand-add
   // must not run under an open step: its snapshot and resume machinery
   // assume they own the phase's index, so --new-task waits until the step is
   // closed out.
@@ -654,11 +659,11 @@ export async function planPrelude(dir: string, opts: {
   return stop(0, executeNotice(dir, route, true))
 }
 
-export function appendInputRetiredLine(dir: string): string {
+function appendInputRetiredLine(dir: string): string {
   return `the task-append session is retired (plans/0283); add one task at a time with ${surfaceOf().tasks(dir, '--new-task "<title>"')}`
 }
 
-export function retiredAppendResumeLine(unit: string): string {
+function retiredAppendResumeLine(unit: string): string {
   return `the task appending step of ${unit} was interrupted and the session is retired; review and commit or revert its partial task changes, then move .auto/progress.json out of the project and retry`
 }
 
@@ -791,8 +796,8 @@ function driftRefusal(dir: string, drift: PhaseTailDrift, from: string, flag: st
 // The open-step refusals (row 5's hand-add, rows 12–13's work orders,
 // rows 14–15's preparation flags): the step's snapshot and resume machinery
 // own the phase's index until closeStep, and anything rendered or added
-// under them would bypass both — returning the loop would silently ignore
-// the flag, so the step is named and finished first; `tail` is the
+// under them would bypass both — returning the planning route would silently
+// ignore the flag, so the step is named and finished first; `tail` is the
 // channel's own resumption after it.
 function openStepRefusal(dir: string, open: { step: string; unit: string }, tail: string): string {
   const { bin } = shellProfile()
@@ -907,8 +912,9 @@ export async function establishRoundSetup(
 // boundary stop, transfer's nothing-to-advance refusal and roadmap-exhausted
 // stop, analysisGate's three analysis stops) gained lines-returning twins
 // here too, so the person-proxy brief (src/driver-helper.ts — deliberately
-// below the loop, like this module) renders the same bytes the terminal
-// prints. The loop-side originals print through these; a brief that could
+// a leaf above no session layer, like this module) renders the same bytes
+// the terminal prints. transfer's originals print through these (the
+// loop-side ones did until the loop retired, plans/0314); a brief that could
 // disagree with the terminal is worse than none.
 
 // The held-phase gate stop (plans/0049 G7). The transfer command, the phase
@@ -976,8 +982,8 @@ export async function logGateStop(directory: string, phase: PhaseUnit, problems:
 // `Clarified: yes` approves the forks and the proposed `## Project brief`
 // section in one act — on release the driver installs that section verbatim
 // into .opencode/auto/brief.md (brief.ts installBriefProposal, shared with
-// the pre-round analysis release of plans/0084; the run's git seam carries
-// the commit strategy). Idempotent: an installed equal brief writes nothing
+// the pre-round analysis release of plans/0084; the caller's git seam
+// carries the commit strategy). Idempotent: an installed equal brief writes nothing
 // and still runs the commit (plans/0209 D2 — the interrupted install
 // recovered by the re-run). A survey released without a proposal installs
 // nothing (an earlier install or the default path's `a`-phase proposal
@@ -994,15 +1000,16 @@ export async function installApprovedBrief(ctx: { directory: string; git: Pick<G
   for (const line of await installBriefProposal(ctx.directory, survey, proposal, ctx.git.commitTree)) log(line)
 }
 
-// The phase-boundary stop (plans/0101 D1; the dir-based twin of loop-phase's
-// boundaryStopLines, verbatim): the phase's planned work is done at a clean
+// The phase-boundary stop (plans/0101 D1; the dir-based twin of the push
+// loop's boundaryStopLines, retired with plans/0314): the phase's planned
+// work is done at a clean
 // end, and everything after is transfer's — the stop names the command, and
 // the round close too when the phase just finished was the round's last.
 // The phase-closed variant (plans/0189 D1, 0165-008): a phase already closed
 // on disk — a handover an interrupted advance's re-entry finished (0101 D1)
 // — stops with the truth: the distillation and the close are done, and
 // transfer's next act is the construction. Derived from the phase's done
-// state, so the loop's stop and the person-proxy brief render the same
+// state, so transfer's stop and the person-proxy brief render the same
 // bytes.
 export async function phaseBoundaryLines(directory: string, phase: PhaseUnit): Promise<string[]> {
   const { bin } = shellProfile()
@@ -1353,9 +1360,9 @@ export function truncateGoal(goal: string): string {
 
 // The phase a planning input would be planned into on a phased plan or
 // handover route: the current phase when it plans tasks, otherwise the first
-// phase the loop reaches after handing it over, passing task-less
-// (knowledge) phases the way the loop does. listed = its task index already
-// lists tasks, so the loop would stop on its execute route instead.
+// phase the advance reaches after handing it over, passing task-less
+// (knowledge) phases the way the advance does. listed = its task index already
+// lists tasks, so the phase carries execute work, not a planning target.
 async function planTarget(dir: string, route: Extract<PhaseRoute<Plan>, { type: "plan" | "handover" }>): Promise<{ phase: PhaseUnit; listed: boolean } | undefined> {
   if (route.type === "plan" && route.phase.entry.hasTasks) return { phase: route.phase, listed: false }
   const state = (await readPhases(dir))!
@@ -1448,7 +1455,7 @@ export function emptyIndexNotice(dir: string, index: string): string[] {
 }
 
 // —— The open round's lines (plans/0243 B; the 0102/0105 family so the
-// person-proxy brief renders the same bytes the loop and transfer print) ——
+// person-proxy brief renders the same bytes transfer prints) ——
 // The open channels every open-round stop teaches: absorbing more work, and
 // closing at the person's ## Close. The round is derived per call (the
 // current round — every open-round stop is about the current round).
@@ -1494,28 +1501,3 @@ export async function openRoundHeldLines(dir: string, pending: number): Promise<
   ]
 }
 
-// A planning step that just ran under plan's stop condition (plans/0053 D6,
-// D15): what was planned, and the review before run. Phased, the review can
-// also edit lines, close a task, or append more (m mode's index is edited by
-// hand and its tasks close the same way, so its line stays plain).
-export function plannedLines(dir: string, phase: PhaseUnit, ids: readonly string[], manual: boolean): string[] {
-  const { bin } = shellProfile()
-  const surface = surfaceOf()
-  const index = taskIndexPath(phase)
-  const next = manual
-    ? `next: review them, then run: ${surface.run(dir)}`
-    : `next: review them (edit lines, close a task, or add more with ${surface.tasks(dir, "--new-task \"<title>\"")}), then run: ${surface.run(dir)}`
-  if (manual) {
-    const span = ids.length > 1 ? `${ids[0]}…${ids[ids.length - 1]}` : (ids[0] ?? "")
-    return [`✓ planned ${ids.length} task(s) (${span}) into ${index}`, next]
-  }
-  return [`✓ planned ${phaseRefText(phase)}: ${ids.length} task(s) in ${index}`, next]
-}
-
-// The round completed inside plan (plans/0053 D8): its ## Close cannot be
-// filled in yet, so the next round opens on the next plan.
-export function roundCompleteNext(dir: string, round: number): string {
-  const { bin } = shellProfile()
-  const surface = surfaceOf()
-  return `next: fill in ## Close of ${roundBriefPath(round)}, commit, then run ${surface.plan(dir)} to open round ${roundDirName(round + 1)}`
-}

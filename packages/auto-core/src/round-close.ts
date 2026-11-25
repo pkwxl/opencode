@@ -34,10 +34,10 @@
 // The round user report is no longer among them (plans/0109 D1: the report
 // retired to optional — the person-proxy brief renders the live account the
 // report used to freeze; a report a person commissions is never read here).
-// Two anchors: the complete route reports it on every run (loop-phase.ts), and
-// the next round's start blocks on it: plan's prelude (plan.ts, exit 2,
-// plans/0053 D4). No state is written, so routing stays a pure function of
-// the files.
+// Two anchors: transfer's advance reports it at the complete round
+// (src/transfer.ts), and the next round's start blocks on it: plan's prelude
+// (plan.ts, exit 2, plans/0053 D4). No state is written, so routing stays a
+// pure function of the files.
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { scrubDriverEnv } from "./agent/opencode/server"

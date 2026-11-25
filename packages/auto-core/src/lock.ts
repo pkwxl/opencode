@@ -1,7 +1,7 @@
 // The run lock .auto/run.lock (plans/0053 D1–D3): one driver process at a time
-// works in a directory. `runAll` holds it for the whole run (so every shell's
-// `run` is covered); a shell's lifecycle commands hold it around their writes
-// and re-enter it through `runAll`. The config commands (init, amend, fix,
+// works in a directory. transfer's advance and the executor coordinator's
+// wire acts hold it for their span; a shell's lifecycle commands hold it
+// around their writes. The config commands (init, amend, fix,
 // reset) write what a running driver reads, so they refuse while it is live;
 // check and status never lock, and status shows a live lock.
 //

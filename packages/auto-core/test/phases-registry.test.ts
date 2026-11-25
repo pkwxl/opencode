@@ -9,7 +9,6 @@ import {
   BUILTIN_PHASE_TYPES,
   PHASE_LETTERS,
   TIERS,
-  anyCodeWork,
   codeWork,
   expandPhases,
   isPhaseLetter,
@@ -73,13 +72,6 @@ describe("builtin phase types", () => {
     expect(codeWork(phaseType("implement"))).toBe(true)
     expect(codeWork(phaseType("design"))).toBe(false)
     expect(codeWork({ codeWork: false })).toBe(false)
-    // The run-level fact the capability clamp threads: the implement type is
-    // required in every valid flow, so a resolved list always has one — and
-    // an unresolvable value conservatively counts as code work.
-    expect(anyCodeWork(expandPhases("m"))).toBe(true)
-    expect(anyCodeWork(expandPhases("admtvk"))).toBe(true)
-    expect(anyCodeWork(null)).toBe(true)
-    expect(anyCodeWork([phaseType("design")!])).toBe(false)
   })
 
   test("standard artifacts follow plans/0047 §5", () => {

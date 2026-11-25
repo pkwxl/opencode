@@ -184,8 +184,8 @@ describe("the switch census (0229)", () => {
   })
 
   test("the registry and the census agree on the counts", () => {
-    expect(parsedSwitches.length).toBe(22)
-    expect(retiredSwitches.length).toBe(6)
+    expect(parsedSwitches.length).toBe(21)
+    expect(retiredSwitches.length).toBe(7)
   })
 })
 

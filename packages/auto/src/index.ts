@@ -1172,8 +1172,9 @@ const syncDryrun = command === "sync" && flags.has("dryrun") && flags.get("dryru
 
 // Legacy layout (M3.7, auto-core plans/0047 R3): an old-layout project is a
 // usage error before init/amend/plan/close/fix writes anything, status
-// reads anything or run starts (runAll, planPrelude and closeUnit repeat the
-// check for other shells). fix used to stay available so an old tree could
+// reads anything or run starts (the daemon's plan and close operations repeat
+// the check for other shells — planPrelude and closeUnit). fix used to stay
+// available so an old tree could
 // still be repaired, and `check` ran on one — but the driver refuses an old
 // layout everywhere else, so the repair had no consumer, and with `check`
 // retired its legacy-layout exemption ended: `fix --dryrun`, the gate that
@@ -1190,9 +1191,9 @@ if (command === "init" || command === "amend" || command === "close" || command 
 // The run lock (auto-core plans/0053 D3): these commands write what a running
 // driver reads (config.json, the agent contract, the AGENTS.md block, the round
 // setup), so they refuse while another process holds .auto/run.lock; -f does
-// not override it. run takes the lock inside runAll; plan and close take it
-// themselves — plan before its prelude (re-entered through runAll), close
-// around closeUnit — so neither joins this refusal list. fix --dryrun reads
+// not override it. plan and close take it themselves — plan before its
+// prelude, close around closeUnit — so neither joins this refusal list. fix
+// --dryrun reads
 // and prints only, so it runs beside a live run (the one write-side gate it
 // skips); sync joins the family beside fix (it rewrites the materialized
 // bundle files a run's sessions read, plans/0100 D4) with the same dryrun
@@ -1223,10 +1224,11 @@ if (command === "init" || command === "amend" || command === "reset" || (command
 // appends the tasks it plans to the current phase) and --new-task (which
 // takes neither), then --force-close (D28: close a unit and keep planning in
 // this process), the strict config load and the mode check, then the run lock
-// ("plan", held across a force-close, the prelude and the loop; runAll
-// re-enters it), the prelude, and runAll.
-// A prelude stop prints its lines and exits with its code; runAll's exit
-// codes are run's.
+// ("plan", held across a force-close, the prelude and the loop), the prelude,
+// and the loop — the push loop and its runAll entry retired with auto-core
+// plans/0314.
+// A prelude stop prints its lines and exits with its code; the loop's exit
+// codes were run's.
 // transfer (auto-core plans/0101 D2): the single advance command — the
 // person-bracketed boundaries, one advance per invocation, resolved by
 // state: the project start (the assisted analysis flow of plans/0084, re-homed
@@ -1237,8 +1239,8 @@ if (command === "init" || command === "amend" || command === "reset" || (command
 // review), the round close (stopping there, the person's moment with the
 // round's report), and the round open (the roadmap's next line applied, or
 // the roadmap-exhausted stop naming the extend-the-document channel). It
-// takes the run lock itself ("transfer", re-entered by the runAll the
-// advance delegates to) and run's session options only; m mode refuses (its
+// takes the run lock itself ("transfer") and run's session options only; m
+// mode refuses (its
 // planning and execution keep the plan/run shapes). Exit codes: the review,
 // round-open and exhausted stops 0; the gate-held and nothing-to-advance
 // refusals 2; usage and state errors 1.
@@ -1488,8 +1490,8 @@ async function requireConfigFile(verb: string, first: boolean, legacyRuns = fals
 }
 
 // The run lock's acquisition tail plan, close and land share: each holds it
-// around its own writes (re-entered by the runAll a plan delegates to), and a
-// refusal prints the lock's lines and exits 1 — the returned lock is always
+// around its own writes, and a refusal prints the lock's lines and exits 1 —
+// the returned lock is always
 // the acquired one.
 type AcquiredRunLock = Extract<ReturnType<typeof acquireRunLock>, { ok: true }>
 function takeRunLock(holder: string): AcquiredRunLock {
@@ -1679,7 +1681,7 @@ async function loadRunConfig(directory: string): Promise<{ config: ProjectConfig
 // one emitter family (auto-core src/banner.ts, plans/0193 D1), rendered here
 // through the log sink.
 
-// The runAll options run and plan share (auto-core plans/0053 D14): the config
+// The options run and plan shared (auto-core plans/0053 D14): the config
 // init froze (threaded by the core's one configRunOptions, plans/0193 D1)
 // plus this run's session flags. run adds --wait-between, --dryrun
 // and --max-sessions; plan adds its stop condition and planning input.

@@ -35,8 +35,9 @@ export async function runBannerLines(dir: string, config: ProjectConfig): Promis
 // The phase progress line (shared by the banner and the status view; ✓ = done,
 // ▶ = current, the rest = not started), carrying a round annotation when rounds
 // continue (the greatest docs/R-NN round number > 1). A missing or invalid
-// phase index only warns here — runAll's phase routing exits 1 as an
-// environment error. The missing-index remedy is phased-aware (plans/0101 D4,
+// phase index only warns here — the commands that route by it (plan's
+// prelude, transfer's advance) refuse it as an environment error, exit 1.
+// The missing-index remedy is phased-aware (plans/0101 D4,
 // the rule status.ts already carried): a phased project's round is established
 // by transfer (plan cannot establish a phased round), m mode's by plan — the
 // command named through the shell's served surface, the profile's bin under

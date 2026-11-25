@@ -1,32 +1,23 @@
-// Loop harness (plans/0053 §8, A7): drives runPhaseLoop — the loop runAll
-// hands control to once preflight is done — as a LoopCtx over the native fake
-// agent (fixtures/agent.ts), on a real git repository so the commit boundary
-// stays live (the planning input is committed on its own, plans/0053 D9; the
-// unit clean gate, the unified commit and the close-out check all run). The
-// fake agent's default turn writes the artifacts the collect checks look for
-// (F14: no core test drives the loop with a real agent): a planning turn
+// Repository harness over the native fake agent (fixtures/agent.ts), on a
+// real git repository so the commit boundary stays live: the suites that
+// drive session work directly use it, and the pull-path suites seed by hand
+// the boundary states the task loop once walked to (donePhase,
+// finishPhaseWork, landPhaseHandover). The loop this harness drove — the
+// phase loop behind runAll — retired with plans/0314; its run() member and
+// its scrub-and-capture wrapper went with it.
+// The fake agent's default turn writes the artifacts the collect checks look for
+// (F14: no core test drives a session with a real agent): a planning turn
 // writes the phase's task index and task documents, a handover turn writes the
 // four-section handover document; both then take the default turn, whose idle
 // event settles the session. The append turns (§8, B6) do the same for the
 // appending session: a good turn appends one index line with its task
 // document, and a bad first turn edits an existing line and document so the
 // collect's feedback retry and the snapshot reset are exercisable.
-// OPENCODE_AUTO_* environment is scrubbed around each run and console.log is
-// captured, so the loop's switches (step pauses, strict resume, hibernation)
-// default deterministically and its printed lines are assertable.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
-import { spyOn } from "bun:test"
-import type { AgentHost, AgentMessage } from "../../src/agent/types"
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+import type { AgentMessage } from "../../src/agent/types"
 import { EOF_MARK } from "../../src/doccheck"
-import { singleHost } from "../../src/agent-pool"
-import { runPhaseLoop } from "../../src/loop-phase"
-import type { RunAllOpts } from "../../src/loop-preflight"
-import type { LoopCtx } from "../../src/loop-task"
-import type { RoutingFacts } from "../../src/routing"
-import type { Interactive } from "../../src/interactive"
-import { services } from "../../src/services"
 import { readPhases, type PhaseUnit } from "../../src/phases"
 import { renderTaskIndex } from "../../src/tasks"
 import { fakeAgent, ev, type FakeAgent, type FakeAgentOptions, type TurnContext, type TurnScript } from "./agent"
@@ -110,14 +101,38 @@ export async function landPhaseHandover(fixture: LoopFixture, phase: PhaseUnit):
   await fixture.commit("distill phase handover")
 }
 
+// A phase whose work is done the way the task loop left it at a clean phase
+// end (plans/0314: the loop retired, the boundary's suites seed its state):
+// every row of the index ticked, each task's done.md on disk, the phase's own
+// todo.md standing — the completion rename is the advance's. One commit.
+export async function donePhase(fixture: LoopFixture, phase: PhaseUnit, ids: readonly string[], subject = "phase done"): Promise<void> {
+  const qualified = phaseDirId(phase.dir)
+  mkdirSync(join(fixture.dir, phase.dir), { recursive: true })
+  writeFileSync(join(fixture.dir, phase.dir, "tasks.md"), renderTaskIndex(qualified, ids.map((id) => ({ id, title: `task ${id}`, done: true }))))
+  for (const id of ids) {
+    mkdirSync(join(fixture.dir, "docs", id), { recursive: true })
+    writeFileSync(join(fixture.dir, "docs", id, "done.md"), taskDoc(id, qualified))
+  }
+  await fixture.commit(subject)
+}
+
+// Finish a phase's listed work in place over an index a construction wrote:
+// every pending row of this phase ticked, each row's todo.md renamed done.md
+// (its text unchanged) — the state the phase's executed tasks leave. One
+// commit. Tasks the phase's index does not list are never touched.
+export async function finishPhaseWork(fixture: LoopFixture, phase: PhaseUnit, subject = "phase work done"): Promise<void> {
+  const index = join(fixture.dir, phase.dir, "tasks.md")
+  const text = await Bun.file(index).text()
+  const ids = [...text.matchAll(/^- \[[ x]\] (T-\d+) /gm)].map((match) => match[1]!)
+  await Bun.write(index, text.replace(/^- \[ \] /gm, "- [x] "))
+  for (const id of ids) {
+    const todo = join(fixture.dir, "docs", id, "todo.md")
+    if (existsSync(todo)) renameSync(todo, join(fixture.dir, "docs", id, "done.md"))
+  }
+  await fixture.commit(subject)
+}
+
 export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => {
-  // The blockage diagnosis session (plans/0082 §4) never writes through
-  // this script's planning branches: its prompt names the phase's task index
-  // in the dossier's block map, which the tasks.md regex below would mistake
-  // for a planning prompt. Returning undefined gives it the default turn (no
-  // artifact) — exactly the fail-closed case; the diagnosis suites script a
-  // real plan through diagnosisTurn.
-  if (ctx.text.includes("You are the blockage diagnosis session")) return undefined
   // The wrap-up verification session (plans/0083, every task unit since
   // plans/0095 — the formulation task included): a passing report in the
   // evidence form, the result line verbatim.
@@ -183,31 +198,6 @@ export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => 
   return undefined
 }
 
-// —— Diagnosis turns (plans/0082 §4, the agent-fake cases) ——
-
-// The diagnosis prompt's opening marker (templates/prompts/diagnose.md).
-const DIAGNOSIS_MARK = "You are the blockage diagnosis session"
-
-// One diagnosis turn: the session writes the remediation plan it was given
-// to the file the prompt names ("write the remediation plan to <path>").
-// The plan text is the strict format verbatim (Analysis / Options or
-// Escalation); undefined plan means "reply without writing" (the fail-closed
-// case — the default turn).
-export const diagnosisTurn = (dir: string, plan?: (file: string) => string | undefined): TurnScript => (ctx: TurnContext) => {
-  if (!ctx.text.includes(DIAGNOSIS_MARK)) return undefined
-  const file = /write the remediation plan to (\S+\.md)/i.exec(ctx.text)?.[1]
-  if (plan !== undefined && file !== undefined) {
-    // undefined from the callback means "reply without writing" — the
-    // fail-closed case (the default turn, no artifact).
-    const text = plan(file)
-    if (text !== undefined) {
-      mkdirSync(join(dir, dirname(file)), { recursive: true })
-      writeFileSync(join(dir, file), text)
-    }
-  }
-  return undefined
-}
-
 export function appendOneTask(dir: string, phaseDir: string): string {
   const file = join(dir, phaseDir, "tasks.md")
   const task = padTask(nextTaskNumber(dir))
@@ -223,7 +213,7 @@ export function appendOneTask(dir: string, phaseDir: string): string {
 
 // A completed past assistant message with real context usage, so a session id
 // seeded into the fake agent's history counts as alive and reusable (the
-// resume check in src/artifact.ts).
+// resume checks of the session-driving layer).
 export const pastMessage = (session: string, contextUsed = 500): AgentMessage => ({
   id: `${session}_seed`,
   role: "assistant",
@@ -232,8 +222,6 @@ export const pastMessage = (session: string, contextUsed = 500): AgentMessage =>
   failed: false,
   contextUsed,
 })
-
-export type LoopRunResult = { code: number; lines: string[] }
 
 export type LoopFixture = {
   dir: string
@@ -245,37 +233,6 @@ export type LoopFixture = {
   git: (...args: string[]) => Promise<string>
   // Stage and commit everything (round setup, seeded tasks).
   commit: (subject: string) => Promise<void>
-  // One pass of the phase loop, as run would drive it (planInput rides the
-  // ctx, not the opts; opts.stopBefore is plan's stop condition). routing is
-  // the LoopCtx field runAll fills from the loaded registry — the harness
-  // takes it the same way for the cases that need one (the plan verifier's
-  // deep planning-route entry, plans/0080 §5 as amended by plans/0113); git
-  // overrides the run's git service the same way (a wrapper over
-  // services().git observing a commit seam, plans/0236 D6).
-  run: (opts?: Partial<RunAllOpts> & { routing?: RoutingFacts; repl?: Interactive; git?: LoopCtx["git"] }) => Promise<LoopRunResult>
-}
-
-const OPENCODE_AUTO = /^OPENCODE_AUTO_/
-// The lane-log seam (plans/0151 D1) rides the scrub instead of being
-// scrubbed: an output redirect, not a switch — a run through the loop here
-// reaches the wall's regression lanes, and losing the seam would send their
-// logs to the machine-shared default /tmp/opencode (the test preload points
-// it at a per-global scratch dir so parallel workers never share it).
-const LANE_LOG_SEAM = "OPENCODE_AUTO_LANE_LOG_DIR"
-
-async function withQuietConsole(run: () => Promise<number>): Promise<LoopRunResult> {
-  const saved = Object.entries(process.env).filter(([key]) => OPENCODE_AUTO.test(key) && key !== LANE_LOG_SEAM)
-  for (const [key] of saved) delete process.env[key]
-  const lines: string[] = []
-  const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-    lines.push(args.map((arg) => String(arg)).join(" "))
-  })
-  try {
-    return { code: await run(), lines }
-  } finally {
-    printed.mockRestore()
-    for (const [key, value] of saved) if (value !== undefined) process.env[key] = value
-  }
 }
 
 // agentOptions may be a factory over the fixture directory, so a turn script
@@ -291,10 +248,6 @@ export async function loopFixture(
   await git(dir, "commit", "-qm", "setup")
   const options = typeof agentOptions === "function" ? agentOptions(dir) : agentOptions
   const agent = fakeAgent({ ...options, turn: options.turn ?? artifactTurns(dir) })
-  const host: AgentHost = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
-  // The loop's server control is the pool surface; the harness wraps its one
-  // fake host in it (no registry, one agent).
-  const pool: LoopCtx["server"] = { ...singleHost(host), startedAgents: () => ["fake"] }
   return {
     dir,
     agent,
@@ -304,39 +257,6 @@ export async function loopFixture(
     commit: async (subject) => {
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", subject)
-    },
-    async run(opts = {}) {
-      const { planInput, routing, repl, git, ...rest } = opts
-      const ctx: LoopCtx = {
-        directory: dir,
-        opts: { phases, ...rest },
-        server: pool,
-        agentName: "auto",
-        phases,
-        manual: phases === "m",
-        ran: 0,
-        input: planInput,
-        // The interactive sideband (0082 §6 D9's fast path): a case that
-        // needs one passes it per run; absent = the detached protocol.
-        ...(repl !== undefined ? { repl } : {}),
-        // The run's registry routing facts (loop.ts fills the field from the
-        // loaded registry; the fixture's runs hold no routing decision state,
-        // and the boundary hooks read it only through ctx) — a case that
-        // needs one (the plan verifier) passes it per run.
-        router: services().router,
-        ...(routing !== undefined ? { routing } : {}),
-        // The run's control service (loop.ts fills the field the same way
-        // from the installed services): the boundary hooks read the /exit
-        // request through it.
-        control: services().control,
-        // The run's git service (loop.ts fills the field the same way from
-        // the installed services): the harness runs on a real git
-        // repository precisely so the commit boundary stays live, so the
-        // production instance is the right member here — a case observing a
-        // commit seam passes its wrapper (plans/0236 D6).
-        git: git ?? services().git,
-      }
-      return withQuietConsole(() => runPhaseLoop(ctx))
     },
   }
 }

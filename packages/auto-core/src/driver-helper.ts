@@ -380,10 +380,9 @@ export async function renderHelperBrief(dir: string, opts: HelperBriefOpts): Pro
       }
     } else if (route && (await roundIsOpen(dir))) {
       // An open round (plans/0243 B): the light kind's rhythm — tasks absorb
-      // with task-add, execution runs, and the person's filled
-      // ## Close plus transfer closes the round. The loop's and transfer's
-      // own lines verbatim (the brief renders the same bytes the terminal
-      // prints, D3).
+        // with task-add, execution runs, and the person's filled
+        // ## Close plus transfer closes the round. transfer's own lines
+        // verbatim (the brief renders the same bytes the terminal prints, D3).
       if (route.type === "plan") {
         stopLines.push(...(await openRoundEmptyLines(dir, route.plan.index)))
         channels.push(`tasks — add one at a time (the task-add channel); the round stays open`)

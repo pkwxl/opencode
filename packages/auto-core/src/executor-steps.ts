@@ -535,8 +535,9 @@ export async function readSynthesisAssembly(
   const todoText = await Bun.file(join(dir, taskStatePaths(awaiting.id).pending)).text().catch(() => undefined)
   if (todoText === undefined) return undefined
   if (ledgerOf(todoText) !== undefined) return undefined
-  // The sources: the same evidential assembly the push compose builds
-  // (formulationParts' gathering, read here without its booking half).
+    // The sources: the evidential assembly's source read
+    // (readFormulationSources — the push compose's gathering that booked the
+    // stats beside it retired with plans/0314).
   const state = await phaseState(dir)
   const parts = await readFormulationSources(dir, phase, state)
   const brief = (await projectBriefText(dir)) || undefined
@@ -597,9 +598,8 @@ export async function readSynthesisAssembly(
 // assembly): the renderFormulationTodo base input plus the standing prefix
 // and digest records, derived from disk alone — one derivation the synthesize
 // assembly, the deterministic transfer's floor construction and the
-// settlement's composition all read (P5/P6; loop-plan's compose builds the
-// same input inline for the push pipeline, the demolition track retiring
-// that twin when its callers empty).
+// settlement's composition all read (P5/P6; loop-plan's compose built the
+// same input inline for the push pipeline until plans/0314 retired it).
 export type FormulationBase = {
   input: Omit<Parameters<typeof renderFormulationTodo>[1], "synthesis">
   prefixIds: string[]

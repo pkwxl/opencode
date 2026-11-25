@@ -572,10 +572,10 @@ export async function routePhase<P extends { tasks: readonly { status: string }[
 // every consumer of routePhase — and the phase machinery it fronts
 // (readPhases, loadPlan, the tail-drift guards) — prints the blocked reason
 // through these two forms, so the wording cannot drift across plan,
-// transfer, run's loop, the phase loop and close. phaseFlowBlockedLine is
-// the ⏸-prefixed terminal form; phaseFlowBlockedText is the bare message
-// the run-status failure event carries.
-export function phaseFlowBlockedText(reason: string): string {
+// transfer, close and the person-proxy brief. phaseFlowBlockedLine is
+// the ⏸-prefixed terminal form; phaseFlowBlockedText is the bare message,
+// the form the retired push run's status failure event carried.
+function phaseFlowBlockedText(reason: string): string {
   return `phase flow blocked: ${reason}`
 }
 
@@ -697,8 +697,9 @@ export async function establishRound(dir: string, opts: { phases: string; round?
 }
 
 // Whether the current (or named) round is an open round (plans/0243 B): the
-// one predicate every open-aware consumer reads (the loop's never-closing
-// arm, transfer's intercept, the read-outs) — derived from the index's Kind
+// one predicate every open-aware consumer reads (transfer's never-closing
+// intercept, plan's open-round routes, the read-outs) — derived from the
+// index's Kind
 // line, no persisted state. A missing or unreadable index is not open (the
 // caller's own routing names the real problem).
 export async function roundIsOpen(dir: string, round?: number): Promise<boolean> {
@@ -725,7 +726,7 @@ export async function roundKnowledgeDocs(dir: string, round: number): Promise<st
 // the index. A closed phase's index line carries ` (closed: <reason>)` (D16).
 // No previous round directory, or nothing in it → undefined.
 // Lenient: an unusable index drops ② and the closed suffixes, since a digest is
-// prompt input and strict failure belongs to the loop's own readPhases.
+// prompt input and strict failure belongs to the routing's own readPhases.
 export async function prevRoundDigest(dir: string): Promise<string | undefined> {
   const prev = (await currentRound(dir)) - 1
   if (prev < 1) return undefined

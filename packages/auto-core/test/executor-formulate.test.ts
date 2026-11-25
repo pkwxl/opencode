@@ -313,6 +313,41 @@ test("the collect: an invalid planned document blocks replayable; a removed pre-
     if (prefix.kind !== "blocked") throw new Error(JSON.stringify(prefix))
     expect(prefix.detail).toContain("lists 1 task(s) but held 2 before the session")
     expect(prefix.detail).toContain("the pre-existing lines are fixed")
+
+    // The pre-existing row edited in place (a session taking the person's
+    // --new-task row for its own): the same discipline naming the edited
+    // line — the pin moved from the retired loop's transfer walkthrough
+    // (plans/0314).
+    write(dir, PHASE_INDEX, renderTaskIndex("R-01.P01", [
+      { id: "T-004", title: taskTitle("T-004") },
+      { id: "T-001", title: "the session's planned task" },
+    ]))
+    const edited = await coordinator.report(worker, grant.id, grant.lease, "ended")
+    expect(edited).toMatchObject({ kind: "blocked", reason: "commitFailed" })
+    if (edited.kind !== "blocked") throw new Error(JSON.stringify(edited))
+    expect(edited.detail).toContain("the existing line of T-001 was edited; pre-existing lines are fixed")
+
+    // A planned task carrying the driver's `Formulate:` marker (plans/0171
+    // D6, the pin moved from the retired push collect's suite, plans/0314):
+    // a collect problem — the marker is the driver's, never a planned
+    // task's to carry.
+    write(dir, PHASE_INDEX, renderTaskIndex("R-01.P01", [
+      { id: "T-004", title: taskTitle("T-004") },
+      { id: "T-001", title: taskTitle("T-001") },
+      { id: "T-005", title: taskTitle("T-005") },
+    ]))
+    write(dir, "docs/T-005/todo.md", renderTaskTodo({
+      id: "T-005", title: taskTitle("T-005"), phase: "R-01.P01",
+      goal: "A goal long enough to pass the shape threshold of the collect.",
+      scope: "src/.", acceptance: "It reads back.",
+    }).replace(/^Phase: (.+)$/m, "Phase: $1\nFormulate: R-01.P01"))
+    const forged = await coordinator.report(worker, grant.id, grant.lease, "ended")
+    expect(forged).toMatchObject({ kind: "blocked", reason: "commitFailed" })
+    if (forged.kind !== "blocked") throw new Error(JSON.stringify(forged))
+    expect(forged.detail).toContain("carries a `Formulate:` field")
+    expect(forged.detail).toContain("the driver's marker of the phase's formulation unit; remove the field line")
+    rmSync(join(dir, "docs/T-005"), { recursive: true, force: true })
+
     // The dropped own row: the unit's row must stay (the driver ticks and
     // closes through it) — the holder's remedy, restoring its own row.
     write(dir, PHASE_INDEX, renderTaskIndex("R-01.P01", [

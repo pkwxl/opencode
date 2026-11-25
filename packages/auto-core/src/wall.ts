@@ -38,7 +38,8 @@
 //       re-admission channel — any in-tree symlink resolving (or, dangling,
 //       pointing) under or over a recorded target, and the coverage
 //       evaluated with opencode's own semantics (D3); a sealing phase's
-//       gates are checked read-only ahead of the wall (D4, loop-phase).
+//       gates are checked read-only ahead of the wall (D4 — the push loop's
+//       boundary arm, transfer's advance since plans/0282).
 //   D3  the admission instrument is 0121's divergence lane (a regression-cost
 //       row), run fresh over the tree about to go clean — private
 //       identifiers are hard findings and block; post-wall the same class
@@ -107,7 +108,8 @@ export type WallRecord = { sha: string; doors: WallDoor[]; sealed: string[] }
 const WALL_STAGE_LINE = "Auto-Stage: wall"
 
 // What the boundary and the close need from the run's context — LoopCtx
-// satisfies it structurally (RunAllOpts carries the lane timings and the
+// satisfied it structurally while the push loop lived; the advance's
+// WallCtx satisfies it now (RunAllOpts carries the lane timings and the
 // stop condition; the wall's own gate is the stopBefore "formulate" that
 // names the person's advance path). pollMs rides for the watchdog's poll
 // cadence like the regression lane's own opts.

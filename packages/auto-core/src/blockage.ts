@@ -1,129 +1,15 @@
-// Blockage dossier and honest block line (plans/0082 §2 D1/D2), the strict
-// remediation-plan format (§4 D5) and the blockage document's shape (§5 D6):
-// the pure half of the consented-remediation design. Every covered block site
-// mechanically assembles a dossier before printing anything — the block map
-// of the composed prompt (which block came from which file), the span
-// locator's results over the block-map sources and the round's process
-// documents, the state snapshot — so the block line names located files
-// instead of assumed roles. The session half (the diagnosis session, the
-// document commit, the interactive pick) lives in src/blockage-diagnose.ts;
-// the executor in src/blockage-execute.ts; both build on this module, and
-// plan.ts imports the executor only (the prelude imports no session layer).
-//
-// The locator is honest about limits (D2): model-written evidence may
-// paraphrase; a fragment that locates nowhere simply drops the file claim.
+// The strict remediation-plan format (plans/0082 §4 D5) and the blockage
+// document's shape (§5 D6): the pure half of the consented-remediation
+// design the executor reads. The executor lives in src/blockage-execute.ts
+// and builds on this module, and plan.ts imports the executor only (the
+// prelude imports no session layer). The diagnosis half — the block map, the
+// span locator, the honest block line, the dossier and the reblock
+// suspension — and the session that assembled them retired with the push
+// loop (plans/0314); the documents already on disk stay readable and
+// executable here.
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
-import { changedFiles } from "./git"
 import { roundDirName } from "./docpaths"
-
-// —— the block map (D1) ——
-
-// One block of the composed prompt: its role and its source path. The source
-// string is display text ("(absent)" when the block's file does not exist),
-// assembled where the prompt was composed — the driver's own composition
-// state, never a guess read back out of the prompt.
-export type BlockMapEntry = { block: string; source: string }
-
-function renderBlockMap(blocks: readonly BlockMapEntry[]): string {
-  return blocks.map((entry) => `- ${entry.block} → ${entry.source}`).join("\n")
-}
-
-// —— the span locator (D2) ——
-
-// One located fragment: file and 1-based line range, or explicitly
-// unlocated. A hit is the first literal occurrence in the first source (in
-// search order) that contains the fragment.
-type SpanHit = { fragment: string; file: string; lineStart: number; lineEnd: number } | { fragment: string; unlocated: true }
-
-// The fragments worth locating: the evidence's backtick spans and
-// double-quoted spans (the verifier's verdict quotes both ways), plus — for
-// the render gate — the offending literals themselves. Short fragments and
-// pure placeholders locate nothing but noise; the floor is 8 characters.
-export function evidenceFragments(evidence: string): string[] {
-  const found: string[] = []
-  for (const match of evidence.matchAll(/`([^`]{8,})`|"([^"]{8,})"/g)) {
-    const fragment = (match[1] ?? match[2] ?? "").trim().replace(/[.,;:]+$/, "")
-    if (fragment.length >= 8) found.push(fragment)
-  }
-  return [...new Set(found)]
-}
-
-// Locate fragments literally over the sources (in order), then over the
-// round's process documents (D1: "the block-map sources first, then the
-// round's process documents"). Binary-looking and oversized files are
-// skipped; a fragment that appears nowhere is reported unlocated.
-export async function locateSpans(dir: string, fragments: readonly string[], sources: readonly string[]): Promise<SpanHit[]> {
-  const searchPaths = [...new Set([...sources, ...(await roundProcessDocs(dir))])]
-  const texts = new Map<string, string | undefined>()
-  for (const rel of searchPaths) {
-    if (!texts.has(rel)) texts.set(rel, await readLocatable(join(dir, rel)))
-  }
-  const hits: SpanHit[] = []
-  for (const fragment of fragments) {
-    let hit: SpanHit | undefined
-    for (const [rel, text] of texts) {
-      if (text === undefined) continue
-      const at = text.indexOf(fragment)
-      if (at < 0) continue
-      const lineStart = text.slice(0, at).split("\n").length
-      const lineEnd = lineStart + fragment.split("\n").length - 1
-      hit = { fragment, file: rel, lineStart, lineEnd }
-      break
-    }
-    hits.push(hit ?? { fragment, unlocated: true })
-  }
-  return hits
-}
-
-// A scannable source: missing, oversized (2 MB) or NUL-bearing files return
-// undefined (the resolve.ts collector's discipline — markers and spans live
-// in human-written text).
-async function readLocatable(path: string): Promise<string | undefined> {
-  const file = Bun.file(path)
-  const size = await file.exists().then((ok) => (ok ? file.size : -1)).catch(() => -1)
-  if (size < 0 || size > 2 * 1024 * 1024) return undefined
-  const text = await file.text().catch(() => undefined)
-  return text === undefined || text.includes("\x00") ? undefined : text
-}
-
-// The round's process documents (the locator's fallback tier): every file
-// under docs/R-NN/ plus the task documents docs/T-NNN/, the brief and the
-// materialized default pack — the surfaces a block's evidence can quote.
-async function roundProcessDocs(dir: string, round?: number): Promise<string[]> {
-  const found: string[] = []
-  const walk = async (rootRel: string): Promise<void> => {
-    for (const entry of await readdir(join(dir, rootRel), { withFileTypes: true }).catch(() => [])) {
-      const rel = join(rootRel, entry.name)
-      if (entry.isDirectory()) await walk(rel)
-      else if (entry.name.endsWith(".md")) found.push(rel)
-    }
-  }
-  await walk(join("docs", roundDirName(round ?? 1)))
-  for (const entry of await readdir(join(dir, "docs"), { withFileTypes: true }).catch(() => [])) {
-    if (entry.isDirectory() && /^T-\d+$/.test(entry.name)) await walk(join("docs", entry.name))
-  }
-  found.push(join(".opencode", "auto", "brief.md"), join(".opencode", "auto", "intents", "default.md"))
-  return [...new Set(found)]
-}
-
-// —— the honest block lines (D2) ——
-
-function locatedSpanLines(hits: readonly SpanHit[]): string[] {
-  return hits.map((hit) =>
-    "unlocated" in hit
-      ? `  the span "${hit.fragment}" located no file (the verdict's evidence may paraphrase — no file is named for it)`
-      : `  the conflicting span is ${hit.file}:${hit.lineStart}${hit.lineEnd !== hit.lineStart ? `-${hit.lineEnd}` : ""}`,
-  )
-}
-
-// The corrected block line (D2): located files, not assumed roles. The
-// incident's shape — "the conflicting span is docs/R-01/P02-design/
-// handover.md:139 (an earlier phase's handover). Rewrite it, or amend the
-// intent — the driver never rewrites your words".
-export function honestBlockLines(input: { intro: string; hits: readonly SpanHit[]; next: string }): string[] {
-  return [input.intro, ...locatedSpanLines(input.hits), input.next]
-}
 
 // —— the strict remediation-plan format (D5) ——
 
@@ -153,7 +39,7 @@ export type RemediationOption = {
   consequences: string
 }
 
-export type RemediationPlan =
+type RemediationPlan =
   | { kind: "options"; analysis: string; options: RemediationOption[]; recommendation: string }
   | { kind: "escalation"; analysis: string; escalation: string }
 
@@ -393,17 +279,6 @@ export function rejectedMark(text: string): boolean {
     .split("\n")
     .some((line) => /^Rejected:\s*[A-Z]\b/.test(line))
 }
-
-// The document's Step field (its diagnosis-suspension key, D8): the step
-// string the gate blocked, e.g. "phase-plan R-01.P03".
-export function blockageStep(text: string): string | undefined {
-  for (const line of text.split("\n")) {
-    const field = /^-\s*Step:\s*(.+)$/.exec(line)
-    if (field) return field[1]!.trim()
-  }
-  return undefined
-}
-
 // All of one round's blockage documents in seq order.
 export async function readBlockageDocs(dir: string, round: number): Promise<Array<{ seq: number; file: string; text: string }>> {
   const root = join("docs", roundDirName(round))
@@ -416,63 +291,4 @@ export async function readBlockageDocs(dir: string, round: number): Promise<Arra
     docs.push({ seq: Number(seq[1]), file, text })
   }
   return docs.sort((a, b) => a.seq - b.seq)
-}
-
-// The next document's sequence number (1 when the round holds none).
-export function nextBlockageSeq(docs: readonly { seq: number }[]): number {
-  return docs.reduce((max, doc) => Math.max(max, doc.seq), 0) + 1
-}
-
-// The two-consecutive-reblocks suspension (D8): when the last two blockage
-// documents of one step both carried executed marks, diagnosis for that step
-// suspends — repeated disagreement signals a diagnosis quality problem or a
-// person who keeps approving the wrong option; either way the human reads.
-export function diagnosisSuspended(docs: readonly { seq: number; text: string }[], step: string): boolean {
-  const ofStep = docs.filter((doc) => blockageStep(doc.text) === step)
-  const lastTwo = ofStep.slice(-2)
-  return lastTwo.length === 2 && lastTwo.every((doc) => executedMark(doc.text) !== undefined)
-}
-
-// —— the dossier (D1) ——
-
-type BlockageDossier = {
-  gate: string
-  step: string
-  verdict: string
-  blockMap: readonly BlockMapEntry[]
-  hits: readonly SpanHit[]
-  state: string
-}
-
-export function renderDossier(dossier: BlockageDossier): string {
-  const spans = dossier.hits.length
-    ? dossier.hits
-        .map((hit) =>
-          "unlocated" in hit
-            ? `  - "${hit.fragment}" → unlocated`
-            : `  - "${hit.fragment}" → ${hit.file}:${hit.lineStart}${hit.lineEnd !== hit.lineStart ? `-${hit.lineEnd}` : ""}`,
-        )
-        .join("\n")
-    : "  - (no quotable span in the verdict — the evidence named no literal)"
-  return [
-    `Gate: ${dossier.gate}`,
-    `Step: ${dossier.step}`,
-    `Verdict: ${dossier.verdict}`,
-    "Block map (each block of the composed prompt and its source):",
-    renderBlockMap(dossier.blockMap) || "  (none)",
-    "Span locator (the verdict's quoted fragments, searched literally over the sources above, then the round's documents):",
-    spans,
-    "State snapshot:",
-    dossier.state,
-  ].join("\n")
-}
-
-// The state snapshot (D1): the dirty files and the round's audit tail. Read
-// here so every block site assembles the same shape.
-export async function dossierState(dir: string, auditTail: readonly string[]): Promise<string> {
-  const dirty = await changedFiles(dir).catch(() => [] as string[])
-  return [
-    dirty.length ? `dirty tree: ${dirty.join(", ")}` : "dirty tree: clean",
-    auditTail.length ? `audit tail:\n${auditTail.map((line) => `  ${line}`).join("\n")}` : "audit tail: (no verdicts recorded yet this round)",
-  ].join("\n")
 }

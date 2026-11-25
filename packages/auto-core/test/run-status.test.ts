@@ -4,27 +4,21 @@
 // daemon's own transport), the question lifecycle's ordering through the
 // questions concern (the routing seam the emitter hangs on), the
 // SERVICE_ENTRIES length ratchet (the emitter is the log.ts
-// setter-injection family's shape, never a services member), and the
-// acceptance: one fixture run observed end-to-end through typed events only
-// — run-start, unit/task transitions, the question lifecycle pair, run-end
-// with the correct exit code — with no prose parsed anywhere (the assertions
-// read typed event objects alone).
+// setter-injection family's shape, never a services member). The journal's
+// end-to-end acceptance — one whole run's typed events, no prose parsed —
+// rode the push loop's run and retired with it (plans/0314); no live path
+// writes a run bracket today (auto-server's observe routes still read the
+// journal — plans/0256's standing journals decision).
 import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { AgentHost } from "../src/agent/types"
-import { EOF_MARK } from "../src/doccheck"
-import { runAll } from "../src/loop"
 import { questionsConcern } from "../src/engine/concerns/questions"
 import { emitStatus, endRunStatus, RUN_STATUS_FILE, startRunStatus, stopRunStatus } from "../src/run-status"
 import { RUN_STATUS_EVENT_TYPES, type RunStatusEvent } from "../src/run-status-schema"
 import { SERVICE_ENTRIES } from "../src/services"
-import { defaultTurn, ev, fakeAgent, type TurnScript } from "./fixtures/agent"
-import { captureRun } from "./fixtures/capture"
-import { freshRepo, git } from "./fixtures/runner"
-import { seedUnits } from "./fixtures/units"
+import { defaultTurn, ev } from "./fixtures/agent"
 import { fakeTurnFx, turnContext, viewOver } from "./fixtures/turn"
 
 // The journal's parsed lines (the observation channel — the same stream the
@@ -216,96 +210,4 @@ describe("the question lifecycle events (the questions concern routes them)", ()
       await rm(dir, { recursive: true, force: true })
     }
   })
-})
-
-// —— the acceptance: one fixture run observed through typed events only —— //
-
-// The wrap-up prompt names the report path; the fake agent writes the report
-// the wrap-up gate reads (non-trivial above the stub threshold, terminator,
-// PASS verdict).
-const REPORT = [
-  "# T-001 report",
-  "",
-  "The widget was built and read back. The session wrote the widget module, exercised it against the fake agent's scripted turn, and confirmed the read-back path works end to end without touching anything outside the task's declared scope.",
-  "",
-  "Result: PASS",
-  "",
-  EOF_MARK,
-  "",
-].join("\n")
-
-// Scrub the ambient OPENCODE_AUTO_* layer around a run and capture the
-// terminal (the fixtures/capture.ts wrapper; the deliverables doc's
-// driver-environment rule). Its finally carries the switch-snapshot reset
-// this suite documented: the run freezes the snapshot at its fleet start,
-// and every later clamp in this process would throw on a frozen memo.
-const withQuietConsole = captureRun
-
-describe("the subscriber e2e (one fixture run through typed events only)", () => {
-  test("a run with a question: run-start, the unit/task transitions, the question pair, run-end with the code — all typed, no prose parsed", async () => {
-    const dir = await freshRepo()
-    const turn: TurnScript = (ctx) => {
-      // The wrap-up prompt (plans/0170 D1's reservation sentence names the
-      // report path in the work prompt too, so the wrap-up's own marker keys
-      // this branch).
-      if (ctx.text.includes("only performs the wrap-up")) {
-        writeFileSync(join(dir, "docs", "T-001", "report.md"), REPORT)
-        return undefined
-      }
-      // The lead's first turn raises one question beside the default
-      // settle; under default switches the driver answers it outright.
-      if (ctx.n === 1) return [ev.question(ctx.session, "req_widget", "Which storage should the widget use?"), ...defaultTurn(ctx)]
-      return undefined
-    }
-    const agent = fakeAgent({ turn })
-    const host: AgentHost = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
-    await seedUnits(dir, "## T-001: the widget [pending]\nBuild the widget.\n")
-    await Bun.write(join(dir, ".opencode", "agent", "auto.md"), "contract\n")
-    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
-    await git(dir, "add", "-A")
-    await git(dir, "commit", "-qm", "baseline")
-    try {
-      const { code } = await withQuietConsole(() => runAll(dir, { managed: host }))
-      expect(code).toBe(0)
-      // The observation channel is the journal the daemon's SSE tail reads;
-      // a line's 1-based position is its sequence id.
-      const events = journalOf(dir)
-
-      // The bracket: the first event opens the run on this directory, the
-      // last closes it with the code the process exits with.
-      expect(events[0]).toMatchObject({ type: "run-start", directory: dir })
-      const run = events[0]!.run
-      expect(events.at(-1)).toMatchObject({ type: "run-end", code: 0 })
-      expect(events.filter((event) => event.run !== run)).toEqual([])
-
-      // The task narrative: the bracket, the unit transitions (pending →
-      // in_progress → done) and the completed task-end.
-      expect(events).toContainEqual(expect.objectContaining({ type: "task-start", task: "T-001" }))
-      expect(events).toContainEqual({ type: "unit-transition", run, at: expect.any(Number), unit: "T-001", level: "task", from: "pending", to: "in_progress" })
-      expect(events).toContainEqual({ type: "unit-transition", run, at: expect.any(Number), unit: "T-001", level: "task", from: "in_progress", to: "done" })
-      const taskEnd = events.find((event) => event.type === "task-end")!
-      expect(taskEnd).toMatchObject({ type: "task-end", task: "T-001", outcome: "completed" })
-
-      // The question lifecycle: raised (agent origin, the request joins the
-      // agent stream) then answered by the driver — in that order.
-      const raisedAt = events.findIndex((event) => event.type === "question-raised")
-      const answeredAt = events.findIndex((event) => event.type === "question-answered")
-      expect(raisedAt).toBeGreaterThanOrEqual(0)
-      expect(answeredAt).toBeGreaterThan(raisedAt)
-      expect(events[raisedAt]).toMatchObject({ type: "question-raised", origin: "agent", question: "Which storage should the widget use?", request: "req_widget" })
-      expect(events[answeredAt]).toMatchObject({ type: "question-answered", by: "driver", request: "req_widget" })
-
-      // Usage: at least one session roll-up with a session id, and the run
-      // roll-up right before the run-end.
-      const session = events.find((event) => event.type === "usage-rollup" && event.scope === "session")!
-      expect(session).toMatchObject({ scope: "session", session: expect.any(String) })
-      expect(events.at(-2)).toMatchObject({ type: "usage-rollup", scope: "run" })
-
-      // Every journaled line is a member of the frozen vocabulary.
-      for (const event of events) expect(RUN_STATUS_EVENT_TYPES).toContain(event.type)
-    } finally {
-      stopRunStatus()
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 120_000)
 })

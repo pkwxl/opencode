@@ -1,7 +1,8 @@
 // Transfer resolves the person's boundary over real repositories. The
-// push loop's own construction and dispatch regressions use its fixture.
+// boundary states the task loop once walked to are seeded by hand (the loop
+// retired, plans/0314): a phase's work done, its handover landed.
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { releasedRoadmapRounds } from "../src/roadmap"
 import { transferDeterministic } from "../src/transfer"
@@ -15,10 +16,9 @@ import { renderRoundBrief } from "../src/round-brief"
 import { renderTaskIndex } from "../src/tasks"
 import { reportForUserPath } from "../src/docpaths"
 import { EOF_MARK } from "../src/doccheck"
-import type { TurnScript } from "./fixtures/agent"
 import { captureRun } from "./fixtures/capture"
 import { freshRepo, git } from "./fixtures/runner"
-import { artifactTurns, landPhaseHandover, loopFixture, phaseDirId, phaseHandover, promptPhaseDir, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { donePhase, landPhaseHandover, loopFixture, phaseHandover, taskDoc, type LoopFixture } from "./fixtures/loop"
 
 const made: string[] = []
 const fixtures: LoopFixture[] = []
@@ -335,41 +335,39 @@ describe("transfer: the review gate and the rejected-edit channel (plans/0101 D3
     expect(existsSync(join(dir, "docs/R-01/phases.md"))).toBe(false)
   })
 
-  test("the review stop names the round-brief duty of a stub round.md; the fill and the re-run reconstruct on it (the walkthrough's step)", async () => {
+  test("the fill of a stub round.md is absorbed by the re-run's reconstruct: the todo re-renders on the filled brief (the walkthrough's step)", async () => {
     const f = await loopFixture("mt")
     fixtures.push(f)
     await establishRound(f.dir, { phases: "mt" })
     await f.commit("round setup")
-    // run executes P01 and stops at its boundary (D1); the advance
-    // constructs P02's plan task — round.md still the stub the whole way.
-    expect((await f.run()).code).toBe(0)
+    // P01's work stands done at its clean end (seeded — the task loop
+    // retired, plans/0314); the advance constructs P02's plan task —
+    // round.md still the stub the whole way.
+    await donePhase(f, await f.phase(0), ["T-001", "T-002"])
     await landPhaseHandover(f, await f.phase(0))
     const advanced = await capture(() => transferDeterministic(f.dir, { phases: "mt" }))
     expect(advanced.code).toBe(0)
     expect(advanced.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
     expect(advanced.lines.some((line) => line.includes("driver-owned, fix its inputs, never the todo"))).toBe(true)
-    // The duty (D3): the stop says round.md is still the untouched stub,
-    // names the fill and the transfer re-run whose reconstruct absorbs it.
-    const reviewed = await f.run({ stopBefore: "formulate" })
-    expect(reviewed.lines.some((line) => line.includes("⚠ the round brief docs/R-01/round.md is still the untouched stub"))).toBe(true)
-    expect(reviewed.lines.some((line) => line.includes("plan refuses to dispatch while it stays a stub"))).toBe(true)
-    // The audit pointer: this round holds no prompt-audit.md (the
-    // charter-less construct writes no records), so the records line stays
-    // quiet beside the todo.
+    // The stub-brief duty is plan's refusal (plan.test.ts's stub-round row):
+    // the advance constructs and stops, and a charter-less construct writes
+    // no prompt-audit records — the records line stays quiet beside the todo.
     expect(existsSync(join(f.dir, "docs/R-01/prompt-audit.md"))).toBe(false)
     expect(advanced.lines.some((line) => line.includes("the construction's records sit beside it"))).toBe(false)
     // The person fills the round brief: the reconstruct absorbs it — the
-    // todo re-renders (a new floor), the duty line goes quiet.
+    // todo re-renders (a new floor).
     writeFileSync(
       join(f.dir, "docs/R-01/round.md"),
       renderRoundBrief(1).replace("## Goal", "## Goal\n\nPort the core; the journal deferred."),
     )
     await f.commit("fill the round brief")
-    const reconstructed = await f.run({ stopBefore: "formulate" })
+    const reconstructed = await capture(() => transferDeterministic(f.dir, { phases: "mt" }))
     expect(reconstructed.code).toBe(0)
-    expect(reconstructed.lines.some((line) => line.includes("the landed formulation todo of"))).toBe(false)
-    expect(reconstructed.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
-    expect(reconstructed.lines.some((line) => line.includes("is still the untouched stub"))).toBe(false)
+    expect(reconstructed.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
+    // The reconstruct is rewrite-on-diff: the moved floor lands on its own
+    // construction commit (the standing unit is reported "current" either
+    // way — the word names the unit, never a kept text).
+    expect((await f.git("log", "--format=%s")).split("\n").filter((subject) => subject === "PLAN formulate P02-test Testing")).toHaveLength(2)
     // The re-rendered todo carries the filled brief's goal (the construct
     // reads round.md), its id the index's pending formulation line.
     const index = (await Bun.file(join(f.dir, "docs/R-01/P02-test/tasks.md")).text()).trim().split("\n")
@@ -378,8 +376,6 @@ describe("transfer: the review gate and the rejected-edit channel (plans/0101 D3
     const id = /^- \[ \] (T-\d+)/.exec(pending[0]!)![1]!
     const todo = await Bun.file(join(f.dir, "docs", id, "todo.md")).text()
     expect(todo).toContain("Port the core; the journal deferred.")
-    // plan dispatches the reviewed task (the loop's formulation route).
-    expect((await f.run({ stopBefore: "execute" })).code).toBe(0)
   })
 })
 
@@ -387,19 +383,22 @@ describe("transfer: the review gate and the rejected-edit channel (plans/0101 D3
 // S08-09): `plan --new-task` beside a reviewed formulation todo is the one
 // supported way to add work at the stop (plans/0101 stage C widened every
 // dispatch predicate to it) — the constructor's recognition, the todo's
-// teaching, the numbering and the collect all absorb it, and the person's
-// task survives the dispatch.
+// teaching and the numbering all absorb it, and the person's task survives.
+// The dispatch half (the session's collect over the prefix) is the executor
+// formulate grant's: executor-formulate.test.ts pins it there.
 describe("transfer: the review seam beside a hand-added task (plans/0205)", () => {
-  // The walkthrough's fixed half: run to P01's boundary, advance to P02's
-  // review stop, add the person's task, fill the round brief (the probe's
-  // two edits — the brief changes the floor, so the reconstruct path runs
-  // on top of the added row).
-  const setup = async (turn?: (dir: string) => TurnScript): Promise<{ f: LoopFixture; test: PhaseUnit; todoId: string }> => {
-    const f = await loopFixture("mt", turn ? (dir) => ({ turn: turn(dir) }) : {})
+  // The walkthrough's fixed half: P01 done at its boundary, the advance to
+  // P02's review stop, add the person's task, fill the round brief (the
+  // probe's two edits — the brief changes the floor, so the reconstruct path
+  // runs on top of the added row).
+  const setup = async (): Promise<{ f: LoopFixture; test: PhaseUnit; todoId: string }> => {
+    const f = await loopFixture("mt")
     fixtures.push(f)
     await establishRound(f.dir, { phases: "mt" })
     await f.commit("round setup")
-    expect((await f.run()).code).toBe(0)
+    // P01's two tasks done (the formulation unit and the task it planned) —
+    // the state the task loop left at the boundary, seeded (plans/0314).
+    await donePhase(f, await f.phase(0), ["T-001", "T-002"])
     await landPhaseHandover(f, await f.phase(0))
     const advanced = await capture(() => transferDeterministic(f.dir, { phases: "mt" }))
     expect(advanced.code).toBe(0)
@@ -418,61 +417,14 @@ describe("transfer: the review seam beside a hand-added task (plans/0205)", () =
     return { f, test, todoId }
   }
 
-  // A formulation session that follows its prompt's taught numbering (the
-  // finding's compliant session: the stale "increment continuously from
-  // T-004" is the instruction the collision rode) — the first planned task
-  // takes the taught start, appended after the existing lines.
-  const taughtTurn = (dir: string): TurnScript => (ctx) => {
-    if (!ctx.text.includes("you are this task's verification session") && /# (T-\d+): Formulate /.test(ctx.text)) {
-      const phaseDir = promptPhaseDir(ctx.text)
-      const taught = /increment continuously from T-(\d+)/.exec(ctx.text)?.[1]
-      if (phaseDir && taught) {
-        const task = `T-${taught.padStart(3, "0")}`
-        mkdirSync(join(dir, "docs", task), { recursive: true })
-        writeFileSync(join(dir, "docs", task, "todo.md"), taskDoc(task, phaseDirId(phaseDir)))
-        const file = join(dir, phaseDir, "tasks.md")
-        const current = existsSync(file) ? readFileSync(file, "utf8") : renderTaskIndex(phaseDirId(phaseDir), [])
-        const line = `- [ ] ${task} task ${task}`
-        writeFileSync(file, current.endsWith("\n") ? `${current}${line}\n` : `${current}\n${line}\n`)
-        return undefined
-      }
-    }
-    return artifactTurns(dir)(ctx)
-  }
-
-  // A session that ignores the teaching and takes the pre-existing task's
-  // id anyway (the finding's shape: replacing the person's document and
-  // index line inside the formulation's exec commit) — only once the
-  // pre-existing task exists (P01's earlier formulation plans normally).
-  const clobberTurn = (dir: string): TurnScript => (ctx) => {
-    if (
-      !ctx.text.includes("you are this task's verification session") &&
-      /# (T-\d+): Formulate /.test(ctx.text) &&
-      existsSync(join(dir, "docs", "T-004", "todo.md"))
-    ) {
-      const phaseDir = promptPhaseDir(ctx.text)!
-      const own = /# (T-\d+): Formulate /.exec(ctx.text)![1]!
-      writeFileSync(join(dir, "docs", "T-004", "todo.md"), taskDoc("T-004", phaseDirId(phaseDir), "the session's planned task"))
-      writeFileSync(
-        join(dir, phaseDir, "tasks.md"),
-        renderTaskIndex(phaseDirId(phaseDir), [
-          { id: own, title: "Formulate the Testing tasks" },
-          { id: "T-004", title: "the session's planned task" },
-        ]),
-      )
-      return undefined
-    }
-    return artifactTurns(dir)(ctx)
-  }
-
-  test("the reconstruct rewrites the todo beside the added row; the taught numbering passes it; the person's task survives the dispatch", async () => {
-    const { f, test, todoId } = await setup(taughtTurn)
+  test("the reconstruct rewrites the todo beside the added row and teaches the numbering past it; the person's task stands", async () => {
+    const { f, test, todoId } = await setup()
     // S08-01: the reconstruct absorbs the state — exit 0 at the review stop
     // (pre-fix: exit 2, "lists work beyond the formulation task", and plan
     // pointing back at transfer — no command out).
-    const reconstructed = await f.run({ stopBefore: "formulate" })
+    const reconstructed = await capture(() => transferDeterministic(f.dir, { phases: "mt" }))
     expect(reconstructed.code).toBe(0)
-    expect(reconstructed.lines.some((line) => line.includes("review stop: the formulation todo of"))).toBe(true)
+    expect(reconstructed.lines.some((line) => line.includes("its todo is the review object"))).toBe(true)
     const index = await Bun.file(join(f.dir, test.dir, "tasks.md")).text()
     expect(index).toContain(`- [ ] ${todoId} Formulate the Testing tasks`)
     expect(index).toContain("- [ ] T-004 the person's hand-added task")
@@ -485,32 +437,8 @@ describe("transfer: the review seam beside a hand-added task (plans/0205)", () =
     expect(todo).toContain("increment continuously from T-005")
     expect(todo).toContain(`Prefix: T-004`)
     expect(todo).toMatch(/^Floor-Digest: [0-9a-f]{16}$/m)
-    // The dispatch: a session that follows its prompt plans T-005 — the
-    // person's document and row survive, the collect accepting the batch
-    // with the prefix named (pre-fix: the session took T-004 and the
-    // person's Goal was gone, accepted with no line).
-    const dispatched = await f.run({ stopBefore: "execute" })
-    expect(dispatched.code).toBe(0)
-    expect(dispatched.lines.some((line) => line.includes(`✓ ${todoId} formulation output accepted: docs/R-01/P02-test/tasks.md lists 1 planned task(s), beside 1 pre-existing task(s) kept unchanged`))).toBe(true)
-    expect(dispatched.lines.some((line) => line.includes("✓ phase planning complete"))).toBe(true)
+    // The person's document and row survive the reconstruct untouched.
     expect(await Bun.file(join(f.dir, "docs/T-004/todo.md")).text()).toContain("PERSON-WRITTEN GOAL")
-    const after = await Bun.file(join(f.dir, test.dir, "tasks.md")).text()
-    expect(after).toContain("- [ ] T-004 the person's hand-added task")
-    expect(after).toContain("- [ ] T-005 task T-005")
-  })
-
-  test("the collect's fixed prefix guards a session that replaces the person's task anyway", async () => {
-    const { f } = await setup(clobberTurn)
-    expect((await f.run({ stopBefore: "formulate" })).code).toBe(0)
-    // The reconstruct landed the teaching; the session ignores it and takes
-    // T-004 — the collect's unit-start baseline check blocks naming the
-    // edited line (pre-fix: accepted as planned work, the person's task
-    // replaced inside the exec commit with no line).
-    const dispatched = await f.run({ stopBefore: "execute" })
-    expect(dispatched.code).toBe(2)
-    expect(dispatched.lines.some((line) => line.includes("the existing line of T-004 was edited; pre-existing lines are fixed"))).toBe(true)
-    expect(dispatched.lines.some((line) => line.includes("formulation output accepted"))).toBe(false)
-    expect(dispatched.lines.some((line) => line.includes("phase planning complete"))).toBe(false)
   })
 })
 // phase with no directory work and no planning yet — is reshaping state the
@@ -525,10 +453,10 @@ describe("transfer: the re-derivable tail (plans/0101 D6)", () => {
     fixtures.push(f)
     await establishRound(f.dir, { phases: "mt", round: 1 })
     await f.commit("round setup")
-    // run executes P01's work and stops at its boundary (D1) — the review
-    // moment the person amends at (the shell's amend wrote the new config
-    // value; the hold admitted it here).
-    expect((await f.run()).code).toBe(0)
+    // P01's work stands done at its boundary (seeded — the task loop
+    // retired, plans/0314) — the review moment the person amends at (the
+    // shell's amend wrote the new config value; the hold admitted it here).
+    await donePhase(f, await f.phase(0), ["T-001", "T-002"])
     const phase = await f.phase(0)
     await Bun.write(join(f.dir, phase.dir, "handover.md"), phaseHandover(phase.dir))
     await f.commit("distill handover")

@@ -29,7 +29,7 @@
 //
 // A `Plan` is the current phase's plan of work: the loaded index with its
 // tasks. The name survives from PLAN.md because the concept did.
-import { mkdir, rename, rm } from "node:fs/promises"
+import { mkdir, rename } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { EOF_MARK } from "./doccheck"
 import { taskDoc } from "./docpaths"
@@ -916,15 +916,6 @@ export async function setSplit(dir: string, id: string, split: UnitBaseline | un
   await updateTask(dir, id, (entry) => ({ ...entry, split, leadUsed: split !== undefined ? leadUsed : undefined }))
 }
 
-// Reads the split point a task's registry entry records (Task.split, without
-// loading a plan): the lane report's writer reads it from the lane
-// worktree's own .auto/units.json (plans/0068 S5 — the record travels by the
-// report to the parent's registry at landing).
-export async function runtimeSplit(dir: string, id: string): Promise<UnitBaseline | undefined> {
-  const units = await readUnits(dir)
-  return parseSplitPoint(units.tasks[id]?.split)
-}
-
 // —— Formulation idempotence (plans/0097 D6) ——
 // The floor-assembly digest: recorded when a formulation unit is constructed,
 // compared at re-entry. Pending + digest unchanged → the landed todo stands
@@ -1003,8 +994,8 @@ export async function setParked(dir: string, id: string, blocker: string | undef
   if (blocker !== undefined) emitStatus({ type: "unit-transition", unit: id, level: "task", from, to: "pending" })
 }
 
-// Reads a unit's parked record without loading a plan (the lane report's
-// writer reads it from the lane worktree's own registry, like runtimeSplit).
+// Reads a unit's parked record without loading a plan (the executor
+// coordinator's reconciliation reads it from the project's own registry).
 export async function runtimeParked(dir: string, id: string): Promise<string | undefined> {
   const units = await readUnits(dir)
   const parked = units.tasks[id]?.parked
@@ -1280,18 +1271,3 @@ export async function doneTaskIds(dir: string): Promise<Set<string>> {
   return done
 }
 
-// Clear a planning session's output before it (re)runs: the task directories
-// the phase's index lists that are neither taken nor done, then the index
-// itself. Only a planning session writes an index that the plan route sees
-// as empty, so nothing here predates it.
-export async function resetPlanning(dir: string, phase: PlanPhase): Promise<void> {
-  const index = join(dir, taskIndexPath(phase))
-  const text = await Bun.file(index).text().catch(() => undefined)
-  if (text === undefined) return
-  const taken = await takenTaskIds(dir, phase)
-  for (const entry of parseIndex(text, "task").entries) {
-    if (taken.has(entry.id)) continue
-    await rm(join(dir, "docs", entry.id), { recursive: true, force: true })
-  }
-  await rm(index, { force: true })
-}

@@ -2,9 +2,9 @@
 // constructFormulation-pattern unit the close arms build when a round's
 // close-due rows lack adjudication receipts and no audit phase produces
 // them — construct (the terminal phase, exactly the due rows in the
-// prompt), dispatch through the ordinary session pipeline (the loop
-// fixture's fake agent, the same machinery `run` hands control to),
-// verify (the `Result:` read, the wrap-up), commit, the red path's exit 2
+// brief), the unit's work over the executor protocol (the audit share
+// landing the findings, the verify share closing the unit — the task
+// loop's dispatch retired, plans/0314), commit, the red path's exit 2
 // with the findings routed to the person, and the green path's baseline
 // citation (the table stays the single memory — the cited cell moves
 // mechanically). Both round kinds walk the whole road: the open round
@@ -14,12 +14,15 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { ASSURANCE_DOC } from "../src/docpaths"
+import { CONFIG_FILE } from "../src/config"
 import { establishRound } from "../src/phases"
 import { renderRoundBrief } from "../src/round-brief"
 import { transferDeterministic } from "../src/transfer"
-import type { TurnScript } from "./fixtures/agent"
+import { openExecutorCoordinator } from "../src/executor-coordinator"
+import { readExecutorPreview } from "../src/executor-steps"
+import { EOF_MARK } from "../src/doccheck"
 import { captureRun } from "./fixtures/capture"
-import { artifactTurns, loopFixture, phaseHandover, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { loopFixture, phaseHandover, taskDoc, type LoopFixture } from "./fixtures/loop"
 
 const capture = captureRun
 
@@ -42,42 +45,77 @@ const write = (dir: string, rel: string, text: string) => {
   writeFileSync(join(dir, rel), text)
 }
 
-// The close-audit session's turn: the whole-task prompt over the unit's todo
-// opens with the template's framing; the turn writes the findings document
-// the prompt names — one section per due row it carries, the verdict the
-// test chooses — then the composed artifactTurns take the wrap-up report.
-const closeAuditTurn =
-  (dir: string, result: "PASS" | "FAIL"): TurnScript =>
-  (ctx) => {
-    if (!ctx.text.includes("close-due assurance rows")) return undefined
-    const id = /docs\/(T-\d{3})\/findings\.md/.exec(ctx.text)?.[1]
-    const rows = [...ctx.text.matchAll(/^- (S-\d+) \(/gm)].map((match) => match[1]!)
-    if (!id || !rows.length) return undefined
-    write(
-      dir,
-      join("docs", id, "findings.md"),
-      [
-        `# Findings (${id})`,
-        "",
-        ...rows.map((row) => [`## ${row} — the adjudicated row`, "", `The round's delta raises nothing on this surface; the invariant holds first-hand.`, ""].join("\n")),
-        result === "PASS" ? "Result: PASS" : "Result: FAIL the row does not hold at the closing tree",
-        "",
-      ].join("\n"),
-    )
-    return undefined
-  }
-
-// The completed unit's close-out the wrap-up path performs (the report the
-// verification session writes rides artifactTurns); seeded here as one done
-// task of the closing round, the state past a first fix's run. The agent
-// contract the advance's full preflight demands rides the work commit (the
-// setup commit stays the round's G1 anchor, so the delta measures the
-// round's work — never the establishment).
+// One completed task of the closing round, seeded by hand (the task loop
+// retired, plans/0314) — the state past the round's work. The agent contract
+// the close's checks read rides the work commit (the setup commit stays the
+// round's G1 anchor, so the delta measures the round's work — never the
+// establishment).
 async function seedDoneTask(f: LoopFixture) {
   write(f.dir, join(".opencode", "agent", "auto.md"), "contract\n")
   const phase = await f.phase(0)
   write(f.dir, join(phase.dir, "tasks.md"), `# Tasks (R-01.P01)\n\n- [x] T-001 task T-001\n`)
   write(f.dir, "docs/T-001/done.md", taskDoc("T-001", "R-01.P01"))
+}
+
+// The unit's work over the executor protocol (the audit suite's own
+// lifecycle, executor-audit.test.ts): the brief names the unit and its due
+// rows; the audit share lands the findings document — one section per due
+// row the todo carries, the verdict this test chooses — and the verify
+// share closes the unit on a passing report (the report the push pipeline's
+// wrap-up session wrote).
+async function auditUnit(f: LoopFixture, unit: string, result: "PASS" | "FAIL"): Promise<string> {
+  const preview = await readExecutorPreview(f.dir)
+  if (preview.kind !== "audit") throw new Error(JSON.stringify(preview))
+  expect(preview.unit).toBe(unit)
+  // The brief carried the due rows the unit's todo carries, verbatim (the
+  // unit scales with the due set — nothing standing).
+  const todo = readFileSync(join(f.dir, "docs", unit, "todo.md"), "utf8")
+  const rows = [...todo.matchAll(/^- (S-\d+) \(/gm)].map((match) => match[1]!)
+  expect(rows.length).toBeGreaterThan(0)
+  for (const row of rows) expect(preview.prompt).toContain(`- ${row} (`)
+  const coordinator = await openExecutorCoordinator(f.dir)
+  try {
+    // The audit share: claimed on the clean tree, the findings written
+    // inside the lease — one section per due row, the verdict this test
+    // chooses — and landed.
+    const auditor = { token: "auditor", channel: "solo" }
+    const grant = await coordinator.claim(auditor, unit, "audit")
+    if (grant.kind !== "audit") throw new Error(JSON.stringify(grant))
+    expect(grant.findings).toBe(preview.findings)
+    await Bun.write(
+      join(f.dir, grant.findings),
+      [
+        `# Findings (${unit})`,
+        "",
+        ...rows.map((row) => [`## ${row} — the adjudicated row`, "", "The round's delta raises nothing on this surface; the invariant holds first-hand.", ""].join("\n")),
+        result === "PASS" ? "Result: PASS" : "Result: FAIL the row does not hold at the closing tree",
+        "",
+      ].join("\n"),
+    )
+    expect(await coordinator.report(auditor, grant.id, grant.lease, "ended")).toMatchObject({ kind: "landed" })
+    // The verify share closes the unit on a passing report (the report the
+    // push pipeline's wrap-up session wrote).
+    const verifier = { token: "verifier", channel: "verify" }
+    const verify = await coordinator.claim(verifier)
+    if (verify.kind !== "verify") throw new Error(JSON.stringify(verify))
+    await Bun.write(
+      join(f.dir, "docs", unit, "report.md"),
+      [
+        `# Verification (${unit})`,
+        "",
+        "The findings document carries one section per due row, its verdict line last, and the adjudication cites what it examined.",
+        "",
+        "Result: PASS",
+        "",
+        EOF_MARK,
+        "",
+      ].join("\n"),
+    )
+    expect(await coordinator.report(verifier, verify.id, verify.lease, "ended")).toMatchObject({ kind: "landed", verdict: "pass" })
+  } finally {
+    await coordinator.close()
+  }
+  return preview.prompt
 }
 
 async function fillClose(f: LoopFixture) {
@@ -87,10 +125,12 @@ async function fillClose(f: LoopFixture) {
 }
 
 describe("the close-audit unit (plans/0244 D5, S4)", () => {
-  test("the open round's road: the close arm constructs the unit, run executes it through the ordinary pipeline, the green findings adjudicate, the baselines cite, the close lands", async () => {
-    const f = await loopFixture("implement", (dir) => ({ turn: (ctx) => closeAuditTurn(dir, "PASS")(ctx) ?? artifactTurns(dir)(ctx)! }))
+  test("the open round's road: the close arm constructs the unit, its audit share adjudicates green, the baselines cite, the close lands", async () => {
+    const f = await loopFixture("implement")
     fixtures.push(f)
     await establishRound(f.dir, { phases: "implement", open: { goal: "absorb fixes" } })
+    // The project config the executor coordinator requires (init's write).
+    await Bun.write(join(f.dir, CONFIG_FILE), JSON.stringify({ phases: "implement", subtask: "off" }))
     await f.commit("round setup")
     await seedDoneTask(f)
     await fillClose(f)
@@ -105,7 +145,7 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     expect(refused.lines.some((line) => line.includes("✓ close-audit unit T-002 constructed in docs/R-01/P01-implement"))).toBe(true)
     // The constructed todo: the prompt copy (the registered template), the
     // due rows and only them, the delta, the findings path and the verdict
-    // grammar — the ordinary whole-task session's single input.
+    // grammar — the unit's single input over the executor protocol.
     const todo = readFileSync(join(f.dir, "docs/T-002/todo.md"), "utf8")
     expect(todo).toContain("Close-audit: R-01")
     expect(todo).toContain("Decompose: whole")
@@ -114,19 +154,15 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     expect(todo).toContain("docs/T-002/findings.md")
     expect(todo).toContain("`Result: PASS`")
     expect(todo).toContain("the round's measured delta (driver-measured)")
-    // run (the ordinary pipeline): the close-audit session runs, the
-    // findings land, the wrap-up verifies, the close-out commits — the
-    // accrue row riding uncovered all the way.
-    const ran = await f.run()
-    expect(ran.code).toBe(0)
+    // The unit's work: the audit share lands the findings, the verify share
+    // closes the unit — the accrue row riding uncovered all the way.
+    const brief = await auditUnit(f, "T-002", "PASS")
     expect(existsSync(join(f.dir, "docs/T-002/findings.md"))).toBe(true)
     expect(existsSync(join(f.dir, "docs/T-002/done.md"))).toBe(true)
     expect(readFileSync(join(f.dir, "docs/T-002/report.md"), "utf8")).toContain("Result: PASS")
-    // The session's prompt carried the due rows verbatim (the unit scales
-    // with the due set — nothing standing).
-    const auditPrompt = f.agent.prompts.find((prompt) => prompt.text.includes("close-due assurance rows"))
-    expect(auditPrompt?.text).toContain("- S-20 (clean-room independence)")
-    expect(auditPrompt?.text).not.toContain("S-22")
+    // The accrue row never reached the brief (the unit scales with the due
+    // set — nothing standing).
+    expect(brief).not.toContain("S-22")
     // transfer again: the findings adjudicate the row, the baseline citation
     // lands on its own commit, the open close completes.
     const closed = await capture(() => transferDeterministic(f.dir, { phases: "implement" }))
@@ -152,20 +188,22 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
   })
 
   test("the red path: a FAIL adjudication never covers — exit 2 with the findings routed to the person, never an in-round repair", async () => {
-    const f = await loopFixture("implement", (dir) => ({ turn: (ctx) => closeAuditTurn(dir, "FAIL")(ctx) ?? artifactTurns(dir)(ctx)! }))
+    const f = await loopFixture("implement")
     fixtures.push(f)
     await establishRound(f.dir, { phases: "implement", open: { goal: "absorb fixes" } })
+    // The project config the executor coordinator requires (init's write).
+    await Bun.write(join(f.dir, CONFIG_FILE), JSON.stringify({ phases: "implement", subtask: "off" }))
     await f.commit("round setup")
     await seedDoneTask(f)
     await fillClose(f)
     write(f.dir, ASSURANCE_DOC, table([S_CLOSE_DUE]))
     await f.commit("task done, close intent, the table declared")
     expect((await capture(() => transferDeterministic(f.dir, { phases: "implement" }))).code).toBe(2)
-    // The unit runs and completes (its own work verified — the report
-    // passes), but the FINDINGS' verdict is the row's adjudication: a FAIL
-    // is a finding for the person, routed at the close.
-    const ran = await f.run()
-    expect(ran.code).toBe(0)
+    // The unit's work lands and the unit completes (its own work verified —
+    // the report passes), but the FINDINGS' verdict is the row's
+    // adjudication: a FAIL is a finding for the person, routed at the close.
+    await auditUnit(f, "T-002", "FAIL")
+    expect(existsSync(join(f.dir, "docs/T-002/done.md"))).toBe(true)
     expect(readFileSync(join(f.dir, "docs/T-002/findings.md"), "utf8")).toContain("Result: FAIL")
     expect(existsSync(join(f.dir, "docs/T-002/done.md"))).toBe(true)
     const held = await capture(() => transferDeterministic(f.dir, { phases: "implement" }))
@@ -185,9 +223,11 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
   })
 
   test("the phased round's road: the terminal phase re-opened, the unit executed, the phase completing again at its own boundary, the advance landing the close", async () => {
-    const f = await loopFixture("implement", (dir) => ({ turn: (ctx) => closeAuditTurn(dir, "PASS")(ctx) ?? artifactTurns(dir)(ctx)! }))
+    const f = await loopFixture("implement")
     fixtures.push(f)
     await establishRound(f.dir, { phases: "implement" })
+    // The project config the executor coordinator requires (init's write).
+    await Bun.write(join(f.dir, CONFIG_FILE), JSON.stringify({ phases: "implement", subtask: "off" }))
     await f.commit("round setup")
     await seedDoneTask(f)
     write(f.dir, "docs/R-01/round.md", renderRoundBrief(1).replace("## Close", "## Close\n\n- Everything restated into the target's own docs; nothing accepted as lost."))
@@ -202,11 +242,9 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     expect(refused.lines.some((line) => line.includes("✓ close-audit unit T-002 constructed in docs/R-01/P01-implement"))).toBe(true)
     expect(refused.lines.some((line) => line.includes("the terminal phase P01-implement Implementation re-opened for it"))).toBe(true)
     expect(readFileSync(join(f.dir, "docs/R-01/phases.md"), "utf8").trimEnd().endsWith("- [ ] P01 implement")).toBe(true)
-    // run: the ordinary pipeline executes the unit and stops at the phase
-    // boundary (plans/0101 D1 — the distillation and the completion belong
-    // to the advance); the unit's findings and close-out have landed.
-    const ran = await f.run()
-    expect(ran.code).toBe(0)
+    // The unit's work lands over the executor protocol; the distillation
+    // and the completion belong to the advance.
+    await auditUnit(f, "T-002", "PASS")
     expect(readFileSync(join(f.dir, "docs/T-002/findings.md"), "utf8")).toContain("Result: PASS")
     expect(existsSync(join(f.dir, "docs/T-002/done.md"))).toBe(true)
     write(f.dir, join(phase.dir, "handover.md"), phaseHandover(phase.dir))
@@ -223,7 +261,7 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
     expect((await f.git("status", "--porcelain")).trim()).toBe("")
     // The no-table floor beside the whole road: the same phased state with
     // no docs/assurance.md closes with no unit, no citation — today's bytes.
-    const bare = await loopFixture("implement", (dir) => ({ turn: artifactTurns(dir) }))
+    const bare = await loopFixture("implement")
     fixtures.push(bare)
     await establishRound(bare.dir, { phases: "implement" })
     await bare.commit("round setup")
@@ -238,7 +276,7 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
   })
 
   test("a round carrying an audit phase constructs no unit — the remedy names the audit phase's findings (D5's shape key)", async () => {
-    const f = await loopFixture("implement,audit", (dir) => ({ turn: artifactTurns(dir) }))
+    const f = await loopFixture("implement,audit")
     fixtures.push(f)
     // The audit type: a custom phase whose Task-artifacts declare the
     // findings document — the audit artifact grammar's own name, the data
@@ -249,6 +287,8 @@ describe("the close-audit unit (plans/0244 D5, S4)", () => {
       ["# Spec audit", "", "Task-artifacts: findings.md", "", "## plan duties", "", "Audit the dimensions.", "", "<!-- auto: eof -->", ""].join("\n"),
     )
     await establishRound(f.dir, { phases: "implement,audit" })
+    // The project config the executor coordinator requires (init's write).
+    await Bun.write(join(f.dir, CONFIG_FILE), JSON.stringify({ phases: "implement,audit", subtask: "off" }))
     await f.commit("round setup")
     write(f.dir, join(".opencode", "agent", "auto.md"), "contract\n")
     const implement = await f.phase(0)

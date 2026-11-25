@@ -108,10 +108,14 @@ export const COLLECT_POLICIES = [
   // The task index lines and each task document validated against the unit
   // grammar — tasks.ts plannedTaskProblems.
   "index-docs",
-  // The four mandatory handover sections (document/roles.ts validHandover)
-  // and the acceptance-draft rules — loop-phase.ts.
-  "handover-sections",
-  // The diagnosis session collects its one artifact through requireArtifact.
+    // The four mandatory handover sections (document/roles.ts validHandover)
+    // and the acceptance-draft rules — the push boundary's collect
+    // (loop-phase.ts, retired with plans/0314; the distill settlement judges
+    // the sections, executor-coordinator.ts).
+    "handover-sections",
+    // The diagnosis session collects its one artifact through requireArtifact
+    // (src/artifact.ts, retired with plans/0314 — the kind's own retirement
+    // docketed to the session-layer slice).
   "document-marker",
 ] as const
 type CollectPolicy = (typeof COLLECT_POLICIES)[number]
@@ -259,9 +263,10 @@ export const SESSION_ROLE_DESCRIPTORS: readonly SessionRoleEntry[] = [
     role: "diagnose",
     name: "blockage diagnosis (the read-only side channel)",
     // The knowledge extraction's one-shot variants are retired (plans/0283);
-    // the side-channel shape they shared lives on for the blockage diagnosis
-    // (plans/0082 §4 D4): a read-only one-artifact session over the
-    // requireArtifact skeleton, its strict parse the backstop.
+      // the side-channel shape they shared lives on for the blockage diagnosis
+      // (plans/0082 §4 D4): a read-only one-artifact session over the
+      // requireArtifact skeleton (src/artifact.ts, retired with plans/0314),
+      // its strict parse the backstop.
     routing: ["diagnose"],
     templates: ["diagnose"],
     tier: "simple",

@@ -149,7 +149,6 @@ const CLASSIFIED: Record<string, Domain> = {
   // prelude's route helper; driver, not document, because it reads the
   // phases domain's fork/clarified parsers and registry resolution directly.
   analysis: "driver",
-  artifact: "driver",
   // The assurance family's single home (plans/0244): the round-delta
   // measurement (D1), and — as its stages land — the assurance table
   // loader, the due set and the cover-set check (D2/D4). Driver, in the
@@ -223,11 +222,6 @@ const CLASSIFIED: Record<string, Domain> = {
   // The manual-driver prompt suite installer (plans/0093): resyncs the
   // suite's files into a target directory; embedded copies, no rendering.
   "install-prompts": "driver",
-  // The plan-step consistency verifier (plans/0080 §5): the classifier's
-  // one-shot sibling that judges each composed planning prompt against the
-  // active pack's verify-plan charter — strict reply parser, fail-closed
-  // retry, the audit-entry line the planning step appends.
-  "prompt-verify": "driver",
   // The control modules' shared vocabulary (the Boundary and Interactive
   // types), a types-only leaf (LEAVES): step, interactive, exit and failback
   // all depend on it instead of on each other, which is what broke the
@@ -389,14 +383,10 @@ const CLASSIFIED: Record<string, Domain> = {
   // The run lock .auto/run.lock (plans/0053 D1–D3).
   lock: "driver",
   log: "driver",
-  "loop-phase": "driver",
-  // Phase planning, moved out of loop-phase (plans/0053 A2).
-  "loop-plan": "driver",
   // The append step (plans/0053 D23–D25), split out of loop-plan (plans/0235).
   "loop-preflight": "driver",
   "loop-progress": "driver",
   "loop-task": "driver",
-  loop: "driver",
   // Candidate lists of the model registry (plans/0055 §6.1): route, tier and
   // the ordered names of a session, pure over a loaded registry.
   "model-route": "driver",
@@ -434,9 +424,6 @@ const CLASSIFIED: Record<string, Domain> = {
   // The planning renderers, moved out of prompt.ts (plans/0053 A2).
   "formulate": "driver",
   "prompt-plan": "driver",
-  // The plan-step gate both planning sessions pass (plans/0080 §5) and the
-  // render facts they share, split out of loop-plan (plans/0235).
-  "plan-gate": "driver",
   // The formulation synthesis module (plans/0097): the ledger grammar,
   // the mechanical validation and the constructor one-shot — beside its
   // orchestration home loop-plan, above the prompt/render domains it reads.
@@ -563,10 +550,6 @@ const CLASSIFIED: Record<string, Domain> = {
   // starts no session and imports no session-driving layer, exactly the
   // constraint plan itself lives under.
   "blockage-execute": "driver",
-  // The blockage diagnosis session and document (plans/0082 §4-§6
-  // D3-D8): the requireArtifact dispatch, the strict parse, the committed
-  // blockage document and the interactive fast path.
-  "blockage-diagnose": "driver",
   // Charter-clamped provisional defaults (plans/0082 §10 D12): the clamp
   // orchestration over the resolve ledger, the check caller injected by the
   // run start (the log.ts setter family — keeps the kernel below the
@@ -706,7 +689,6 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   usage: "policies",
   "quota-windows": "policies",
   classify: "policies",
-  "prompt-verify": "policies",
   stuck: "policies",
   "model-step": "policies",
   capability: "policies",
@@ -739,13 +721,8 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // functions over the task store's structures and the document domain's
   // unit machinery, reaching no session-driving layer.
   lanes: "pipeline",
-  loop: "pipeline",
-  "loop-phase": "pipeline",
-  "loop-plan": "pipeline",
-  // The append step (0053 D23–D25) and the two planning halves' shared
-  // modules — the plan-step gate (0080 §5) and the composition state
-  // (0097 D3) — split out of loop-plan by plans/0235.
-  "plan-gate": "pipeline",
+  // The composition state the formulation renderers share (0097 D3), split
+  // out of the retired loop-plan by plans/0235.
   "formulate-parts": "pipeline",
   "loop-preflight": "pipeline",
   "loop-progress": "pipeline",
@@ -792,7 +769,6 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // primitives, never the loop.
   "close-audit": "pipeline",
   wrapup: "pipeline",
-  artifact: "pipeline",
   knowledge: "pipeline",
   conclusion: "pipeline",
   status: "pipeline",
@@ -811,7 +787,6 @@ const SUBDOMAIN: Record<string, Subdomain> = {
   // loops that call them and the plan prelude that executes the marks).
   blockage: "pipeline",
   "blockage-execute": "pipeline",
-  "blockage-diagnose": "pipeline",
   "charter-clamp": "pipeline",
   // runtime — the process plane: switches, logging, services, options,
   // config, the agent start, the shell profile and the run lock.
@@ -1004,7 +979,6 @@ const SEAM_POLICY_REACH: Array<{ from: string; to: string; why: string }> = [
     watch: 20,
     attempt: 21,
     session: 22,
-    artifact: 23,
     "exec-session": 23,
     execute: 24,
     runner: 25,
@@ -1013,11 +987,6 @@ const SEAM_POLICY_REACH: Array<{ from: string; to: string; why: string }> = [
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept
 // explicit (some are implied by RANK) so the failure message carries the rationale.
 const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
-  {
-    from: "transfer",
-    to: ["loop", "loop-phase"],
-    why: "transfer applies boundaries directly. Executor grants perform the session work.",
-  },
   {
     from: "testrun",
     to: ["session", "attempt", "watch", "exec-session", "execute", "runner"],
@@ -1029,67 +998,59 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
     why: "the commit boundary sits below watch; it must not depend on the session-driving layer (0024 §D.2)",
   },
   {
-    from: "session",
-    to: ["artifact"],
-    why: "artifact → session is the sanctioned direction (requireArtifact calls runSession); nothing in session may call back into artifact",
-  },
-  {
     from: "close",
-    to: ["loop", "loop-phase", "loop-plan", "plan-gate", "formulate-parts", "loop-task", "loop-preflight", "runner", "artifact", "session"],
+    to: ["formulate-parts", "loop-task", "loop-preflight", "runner", "session"],
     why: "close is a deterministic driver command that starts no session (plans/0053 D17–D21); it must not import the loop or the session-driving layer",
   },
   {
     from: "plan",
-    to: ["loop", "loop-phase", "loop-plan", "plan-gate", "formulate-parts", "loop-task", "loop-preflight", "runner", "artifact", "session"],
+    to: ["formulate-parts", "loop-task", "loop-preflight", "runner", "session"],
     why: "plan's prelude decides the routes that need no AI before any agent starts (plans/0053 D4); the loop imports plan for its stop lines, never the reverse",
   },
   // AUTO-DECISION: driver-helper gets a one-way rule beside its classification row (plans/0105 D4 — the read-only command renders the person-proxy brief and does nothing else: no writes, no lock, no services, no session)
   {
     from: "driver-helper",
-    to: ["loop", "loop-phase", "loop-plan", "plan-gate", "formulate-parts", "loop-task", "loop-preflight", "runner", "artifact", "session", "execute", "exec-session", "attempt", "watch"],
+    to: ["formulate-parts", "loop-task", "loop-preflight", "runner", "session", "execute", "exec-session", "attempt", "watch"],
     why: "the person-proxy brief is read-only rendering over the existing predicates (plans/0105 D1/D4): it must not import the loops, the session-driving layer or the task pipeline — the stop lines reach it through plan.ts's lines-returning twins, never the loop",
   },
   // AUTO-DECISION: models gets a one-way rule besides its classification row (selection and preflight will import it from below the session layer, so an upward import would form a cycle; the rule states that before the first consumer lands)
   {
     from: "models",
-    to: ["loop", "loop-phase", "loop-plan", "plan-gate", "formulate-parts", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice"],
+    to: ["formulate-parts", "loop-task", "loop-preflight", "runner", "session", "attempt", "watch", "agent-choice"],
     why: "the model registry is read-only data loaded at run start (plans/0055 §4.1); selection, preflight and the models command build on it, so it must not import the loop, the session-driving layer or the agent start",
   },
   // AUTO-DECISION: tier gets a one-way rule besides its classification row (like models, it will be imported by selection below the session layer, so an upward import would form a cycle; the rule states that before the first consumer lands)
   {
     from: "tier",
-    to: ["loop", "loop-phase", "loop-plan", "plan-gate", "formulate-parts", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice", "models"],
+    to: ["formulate-parts", "loop-task", "loop-preflight", "runner", "session", "attempt", "watch", "agent-choice", "models"],
     why: "a session's default tier is a pure function of its role and the phase type (plans/0055 §5); it must not import the loop, the session-driving layer, the agent start or the operator's model registry, which never decides a tier (§3)",
   },
   // AUTO-DECISION: model-route gets a one-way rule besides its classification row (selection will import it from below the session layer, as it does models and tier, so an upward import would form a cycle)
   {
     from: "model-route",
-    to: ["loop", "loop-phase", "loop-plan", "plan-gate", "formulate-parts", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice", "models-describe"],
+    to: ["formulate-parts", "loop-task", "loop-preflight", "runner", "session", "attempt", "watch", "agent-choice", "models-describe"],
     why: "a session's candidate list is a pure function of the loaded registry, its role and the phase type (plans/0055 §6.1); selection and the models command build on it, so it must not import the loop, the session-driving layer, the agent start or the models command's data",
   },
   // AUTO-DECISION: models-describe gets a one-way rule besides its classification row (the models command must start no agent and write nothing, plans/0055 §9; forbidding the agent start and the session-driving layer states that in the table)
   {
     from: "models-describe",
-    to: ["loop", "loop-phase", "loop-plan", "plan-gate", "formulate-parts", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice", "agent/opencode/server", "agent/claude/host"],
+    to: ["formulate-parts", "loop-task", "loop-preflight", "runner", "session", "attempt", "watch", "agent-choice", "agent/opencode/server", "agent/claude/host"],
     why: "the models command prints the registry without starting any agent (plans/0055 §9); preflight imports its shared refusal, so it must not import the loop, the session-driving layer, the agent start or an agent host",
   },
   // AUTO-DECISION: agent-env gets a one-way rule besides its classification row (the agent start and preflight import it, and the agent pool will, so an upward import would form a cycle; it may read the registry's types but never start an agent)
   {
     from: "agent-env",
-    to: ["loop", "loop-phase", "loop-plan", "plan-gate", "formulate-parts", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice", "agent/opencode/server", "agent/claude/host"],
+    to: ["formulate-parts", "loop-task", "loop-preflight", "runner", "session", "attempt", "watch", "agent-choice", "agent/opencode/server", "agent/claude/host"],
     why: "a profile's env is resolved for the host the agent start builds, and preflight reads the proxy warning (plans/0055 §4.2, §8.10); it must not import the loop, the session-driving layer, the agent start or an agent host",
   },
   // AUTO-DECISION: select gets a one-way rule besides its classification row (it is the resolver behind every dispatch under a registry — attempt, session, unit-commit and the failback override — so an upward import would form a cycle; §12 places it below the session layer and above the agent domain)
   {
     from: "select",
     to: [
-      "loop",
-      "loop-phase",
-      "loop-plan", "plan-gate", "formulate-parts",
+      "formulate-parts",
       "loop-task",
       "loop-preflight",
       "runner",
-      "artifact",
       "session",
       "attempt",
       "watch",
@@ -1104,13 +1065,10 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
   {
     from: "routing",
     to: [
-      "loop",
-      "loop-phase",
-      "loop-plan", "plan-gate", "formulate-parts",
+      "formulate-parts",
       "loop-task",
       "loop-preflight",
       "runner",
-      "artifact",
       "session",
       "attempt",
       "watch",
@@ -1129,13 +1087,10 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
   {
     from: "keyring",
     to: [
-      "loop",
-      "loop-phase",
-      "loop-plan", "plan-gate", "formulate-parts",
+      "formulate-parts",
       "loop-task",
       "loop-preflight",
       "runner",
-      "artifact",
       "session",
       "attempt",
       "watch",
@@ -1156,13 +1111,10 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
   {
     from: "classify",
     to: [
-      "loop",
-      "loop-phase",
-      "loop-plan", "plan-gate", "formulate-parts",
+      "formulate-parts",
       "loop-task",
       "loop-preflight",
       "runner",
-      "artifact",
       "session",
       "attempt",
       "watch",
@@ -1181,13 +1133,10 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
   {
     from: "router",
     to: [
-      "loop",
-      "loop-phase",
-      "loop-plan", "plan-gate", "formulate-parts",
+      "formulate-parts",
       "loop-task",
       "loop-preflight",
       "runner",
-      "artifact",
       "session",
       "attempt",
       "watch",
@@ -1206,13 +1155,10 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
   {
     from: "agent-pool",
     to: [
-      "loop",
-      "loop-phase",
-      "loop-plan", "plan-gate", "formulate-parts",
+      "formulate-parts",
       "loop-task",
       "loop-preflight",
       "runner",
-      "artifact",
       "session",
       "attempt",
       "watch",
@@ -1229,13 +1175,10 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
   {
     from: "lanes",
     to: [
-      "loop",
-      "loop-phase",
-      "loop-plan", "plan-gate", "formulate-parts",
+      "formulate-parts",
       "loop-task",
       "loop-preflight",
       "runner",
-      "artifact",
       "session",
       "attempt",
       "watch",
@@ -1259,7 +1202,7 @@ const LEAVES: Record<string, string> = {
 }
 
 // runner is the top of the task pipeline; exactly these modules may import it.
-const RUNNER_IMPORTERS = new Set(["loop", "loop-task"])
+const RUNNER_IMPORTERS = new Set(["loop-task"])
 
 // The core does not know shells (shell-contract): never import shell packages,
 // and never import this package by name instead of relatively.

@@ -236,7 +236,8 @@ export type SynthesisSourceInputs = {
   prevRoundExpected?: boolean
 }
 
-// The evidential source list (loop-plan's D3 assembly, one home): the
+// The evidential source list (plans/0097 D3's assembly, one home — its push
+// caller, loop-plan, retired with plans/0314): the
 // project brief (named by its path), the round brief (this round's
 // round.md), the approved analysis (human-gated phases), the planning
 // input, each done prior phase's handover document, the prior-round

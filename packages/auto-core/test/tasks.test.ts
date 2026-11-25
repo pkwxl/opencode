@@ -24,7 +24,6 @@ import {
   renderTaskIndex,
   renderTaskTodo,
   resetInProgress,
-  resetPlanning,
   setForkBase,
   setLane,
   setParked,
@@ -866,7 +865,7 @@ describe("planning output", () => {
     expect(fullwidth.decl).toEqual({ id: "T-013", depends: "none" })
   })
 
-  test("taken ids = other phases' indexes and completed tasks; resetPlanning clears only this phase's own output", async () => {
+  test("taken ids = other phases' indexes and completed tasks", async () => {
     const [p1, p2] = await syncPhaseIndex(dir, 1, "adm")
     await Bun.write(join(dir, p1!.dir, "tasks.md"), renderTaskIndex("R-01.P01", [{ id: "T-001", title: "a" }]))
     await mkdir(join(dir, "docs/T-001"), { recursive: true })
@@ -876,10 +875,6 @@ describe("planning output", () => {
     await Bun.write(join(dir, p2!.dir, "tasks.md"), renderTaskIndex("R-01.P02", [{ id: "T-001", title: "reused" }, { id: "T-002", title: "b" }]))
     await writeTask("T-002")
     expect([...(await takenTaskIds(dir, p2!))].sort()).toEqual(["T-001", "T-009"])
-    await resetPlanning(dir, p2!)
-    expect(await Bun.file(join(dir, p2!.dir, "tasks.md")).exists()).toBe(false)
-    expect(await Bun.file(join(dir, "docs/T-002/todo.md")).exists()).toBe(false)
-    expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
   })
 })
 

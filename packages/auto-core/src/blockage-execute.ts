@@ -127,7 +127,7 @@ export async function executeBlockageChoices(dir: string, round: number): Promis
 // is honored verbatim (the ratification semantics: the marked text became
 // their words). An unparsable document (edited past the format) re-blocks
 // naming it, never executes a guess.
-export async function executeBlockageChoice(dir: string, file: string, text: string): Promise<ExecutionOk | ExecutionStop> {
+async function executeBlockageChoice(dir: string, file: string, text: string): Promise<ExecutionOk | ExecutionStop> {
   const mark = choiceMark(text)
   if (mark === undefined) return { type: "reblocked", file, landed: [], reason: `${file} carries no Choice line` }
   if (executedMark(text) !== undefined) return { type: "reblocked", file, landed: [], reason: `${file} was already executed` }

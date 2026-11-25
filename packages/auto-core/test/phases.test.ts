@@ -464,19 +464,6 @@ describe("rounds (M section + the per-round directory scheme): currentRound / ne
     }
   })
 
-  test("runAll preflight: a legacy layout exits 1 as a usage error before any read or write (entries outside the shell are caught the same)", async () => {
-    const { readdirSync } = await import("node:fs")
-    const { runAll } = await import("../src/loop")
-    const dir = tempDir()
-    try {
-      writeFileSync(join(dir, "PLAN.md"), "# plan\n")
-      expect(await runAll(dir, {})).toBe(1)
-      expect(readdirSync(dir)).toEqual(["PLAN.md"])
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
   test("establishRound: creates the round directory + the phase index and phase directories; writes no PLAN.md (retired M3.4) and no AGENTS.md.bak (retired plans/0054 D1)", async () => {
     const dir = tempDir()
     try {

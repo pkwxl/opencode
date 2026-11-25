@@ -942,8 +942,8 @@ async function runPlan(request: OpRequest): Promise<OpOutcome> {
 // single advance command — the person-bracketed boundaries, one advance per
 // invocation, resolved by state (the project start, the phase boundary, the
 // round close/open), now as an in-process deterministic apply: the session
-// halves the push advance ran inside runAll (the handover distillation, the
-// construction's synthesis, the charter verifier) are the executor
+// halves the push advance ran inside the push run (the handover distillation,
+// the construction's synthesis, the charter verifier) are the executor
 // protocol's grants (distill, synthesize — 0281 — and the verify share),
 // and transferDeterministic performs the apply halves alone — git and
 // document writes, zero agent processes (the pull-only posture 0279

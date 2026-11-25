@@ -359,7 +359,8 @@ async function load(dir: string): Promise<Loaded> {
   return { handle, resumed }
 }
 
-// Called at runAll startup: read disk (corrupt/missing = start over from now)
+// Called at the push run's start gate (src/loop-preflight.ts): read disk
+// (corrupt/missing = start over from now)
 // → depreciate → round rollover → open this process's first segment. Returns
 // printable resume information when an old document exists; a brand-new
 // directory, a repeat call (no double depreciation) or dir === undefined
@@ -370,10 +371,12 @@ export async function loadStats(dir: string | undefined): Promise<StatsResume | 
   return (await ensure(dir)).resumed
 }
 
-// Graceful close-out in runAll's finally: fold the open segment, then close it
+// Graceful close-out: fold the open segment, then close it
 // and persist (the document keeps no open, so the next process loads with
 // nothing to depreciate), and unload the handle (a later loadStats reads from
-// disk again). No-op without a handle or when dir === undefined.
+// disk again). No-op without a handle or when dir === undefined. The push
+// run's `finally` was the caller until plans/0314 retired the loop; test
+// fixtures of the session layer are its callers today.
 export async function flushStats(dir: string | undefined): Promise<void> {
   if (!dir) return
   if (!handles.has(dir) && !loading.has(dir)) return
@@ -414,12 +417,14 @@ function extrapolate(doc: StatsDoc, bucket: Bucket): Bucket {
   return copy
 }
 
-// Phase switch (runPhaseLoop after routePhase / the non-phased "m" run): fold
+// Phase switch: fold
 // the current segment into the old bucket, then, when the phase id changes,
 // reset phaseB (id = the qualified phase id R-NN.P<nn>, since = now) and
 // persist; the same id is idempotent (no reset, keeps accumulating). The id is
 // per phase unit, not per type (M3.6: a type may repeat within a round).
 // boot.phase resets with the bucket, keeping "this process's increment" aligned.
+// The push loop's routePhase was the caller until plans/0314 retired it; test
+// fixtures of the session layer are its callers today.
 export async function statsPhase(dir: string | undefined, phase: string): Promise<void> {
   if (!dir) return
   const { handle } = await ensure(dir)

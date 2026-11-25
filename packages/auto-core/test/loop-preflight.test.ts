@@ -13,19 +13,14 @@ import { statSync } from "node:fs"
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import type { AgentHost } from "../src/agent/types"
 import { ensurePointer } from "../src/agents-block"
 import { beginUnit, changedFiles, commitTree } from "../src/git"
-import { runAll } from "../src/loop"
 import { preflight, removeRetiredCurrent, removeRetiredInvalidRefs, removeRetiredNumberingRecord, type RunAllOpts } from "../src/loop-preflight"
 import { saveProgress } from "../src/resume"
 import { MODELS_FILE } from "../src/models"
 import { unprotect } from "../src/protect"
-import { services } from "../src/services"
-import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
-import { setShellProfile } from "../src/shell"
+import { autoSwitches } from "../src/switches"
 import { flushStats } from "../src/stats"
-import { fakeAgent } from "./fixtures/agent"
 import { freshRepo, git } from "./fixtures/runner"
 
 const MIRROR = "# Current task (maintained by opencode-auto, do not edit manually)\n\n## T-003: task T-003 [blocked]\n\nbody\n"
@@ -828,58 +823,6 @@ describe("the run-start composition order (the services stage)", () => {
     expect(result.services.clock.now()).toBeGreaterThan(0)
     expect(result.services.git.records).toBe(true)
     expect(Object.isFrozen(autoSwitches())).toBe(false)
-  })
-
-  test("runAll: the holder is installed before the fleet starts; the snapshot freezes after the fleet's clamp and the run uninstalls it", async () => {
-    const dir = await project()
-    // A fake agent behind the shell profile whose host factory records what
-    // is in effect when the fleet starts. Its missing steer capability
-    // forces the degradation clamp's patch non-empty (steer off), so a
-    // snapshot frozen ahead of the clamp would make the run crash here.
-    let atFleet: { installed: boolean; frozen: boolean } | undefined
-    const agent = fakeAgent({ capabilities: { steer: false } })
-    const host: AgentHost = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
-    setShellProfile({
-      agent: {
-        name: "fake",
-        host: async () => {
-          atFleet = { installed: services() !== before, frozen: Object.isFrozen(autoSwitches()) }
-          return host
-        },
-      },
-    })
-    const before = services()
-    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
-    for (const [key] of ambient) delete process.env[key]
-    const printed = spyOn(console, "log").mockImplementation(() => {})
-    let code: number | undefined
-    try {
-      code = await runAll(dir, { dryrun: true })
-    } finally {
-      printed.mockRestore()
-      setShellProfile({ agent: undefined })
-      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
-      await unprotect(dir)
-      await flushStats(dir)
-    }
-    // The dryrun preflight session over the fake agent completes the run.
-    expect(code).toBe(0)
-    // At the fleet's start: the run's holder in effect (installed between
-    // preflight and the fleet), the snapshot not yet frozen.
-    expect(atFleet).toEqual({ installed: true, frozen: false })
-    // After the run: the snapshot is frozen and carries the clamp's value
-    // (steer forced off inside the fleet, then frozen in place), and the
-    // run's holder is gone — the preload's holder is back.
-    expect(Object.isFrozen(autoSwitches())).toBe(true)
-    expect(autoSwitches().steer).toBe(false)
-    expect(services()).toBe(before)
-    // The run froze the switch snapshot at its fleet start (the run's own
-    // invariant); the assertions above have read the frozen state, so this
-    // re-parses the facts back to an unfrozen snapshot — the documented
-    // reset (test/run-status.test.ts's pair) — or every later clamp in this
-    // process throws.
-    setSwitchModelRegistry(undefined)
-    autoSwitches()
   })
 })
 

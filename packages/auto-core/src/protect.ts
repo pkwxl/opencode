@@ -63,8 +63,8 @@ let sealed: string[] = []
 // at unprotect (a file left read-only after the run) is never silently
 // armed or silently stranded. This module is document-domain and logs
 // nothing itself (D8): the arming calls return the rendered lines and their
-// driver-plane callers log them (loop-preflight's protect and its stops,
-// loop's unprotect paths, the wall's protectAdditional).
+// driver-plane callers log them (loop-preflight's protect and its stops'
+// unprotect, the wall's protectAdditional).
 async function set(path: string, mode: number): Promise<string | undefined> {
   const failure = await chmod(path, mode).then(
     () => undefined,

@@ -69,8 +69,9 @@ export type Settlement = (typeof SETTLEMENTS)[number]
 
 // The control actions (the transport-neutral in-worker seams the assessment
 // verified, mapped one to one): `exit` → Control.requestExit (the graceful
-// /exit pause, exit 3 with progress persisted, auto-core src/exit.ts:37-42
-// and src/loop.ts' ExitRequested catch); `failback` → Router.requestFailback
+// /exit pause, exit 3 with progress persisted, auto-core src/exit.ts's
+// requestExit; the push loop's ExitRequested catch that produced it retired
+// with auto-core plans/0314); `failback` → Router.requestFailback
 // (auto-core src/router.ts). Mid-run control, never config mutation — the
 // config freeze is untouched.
 export const CONTROL_ACTIONS = ["exit", "failback"] as const

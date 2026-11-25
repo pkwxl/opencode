@@ -2,7 +2,7 @@
 // atomic creation, re-entry, stale and foreign-host/namespace holders, an
 // unparsable file, the exit handler, and runAll taking the lock before
 // preflight.
-import { afterEach, describe, expect, spyOn, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -282,36 +282,5 @@ describe("process exit (D2)", () => {
     const lock = acquireRunLock(work, "run")
     expect(lock.ok).toBe(true)
     if (lock.ok) lock.release()
-  })
-})
-
-describe("runAll (D3)", () => {
-  test("refuses with exit 1 while another process holds the lock, before preflight", async () => {
-    const { runAll } = await import("../src/loop")
-    const dir = tempDir()
-    // A legacy-layout project would fail preflight; the lock refusal comes first.
-    writeFileSync(join(dir, "PLAN.md"), "# plan\n")
-    plant(dir, { pid: process.ppid, command: "run" })
-    const printed = spyOn(console, "log").mockImplementation(() => {})
-    try {
-      expect(await runAll(dir, {})).toBe(1)
-      expect(printed.mock.calls.map((call) => String(call[0]))).toEqual([expect.stringContaining("another opencode-auto process holds the run lock")])
-    } finally {
-      printed.mockRestore()
-    }
-    expect(readHolder(dir).pid).toBe(process.ppid)
-  })
-
-  test("re-enters a lock this process holds and leaves it held", async () => {
-    const { runAll } = await import("../src/loop")
-    const dir = tempDir()
-    const lock = acquireRunLock(dir, "plan")
-    // The D11 interactive refusal exits 1 in preflight, after runAll
-    // re-entered the lock (any post-lock preflight exit serves; this one
-    // asks nothing of the directory).
-    expect(await runAll(dir, { maxSessions: 2, interactive: true })).toBe(1)
-    expect(readHolder(dir)).toMatchObject({ pid: process.pid, command: "plan" })
-    if (lock.ok) lock.release()
-    expect(readdirSync(dir)).toEqual([])
   })
 })

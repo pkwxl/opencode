@@ -121,7 +121,8 @@ export const TERMINAL_STATES: readonly TerminalState[] = ["completed", "failed",
 //   2 → blocked                   needs a human (re-run resumes)
 //   3 → paused / resumable        the graceful /exit pause, progress
 //                                 persisted, re-run resumes precisely
-//                                 (auto-core src/loop.ts:226-239)
+//                                 (the retired push run's pause; its loop
+//                                 retired with auto-core plans/0314)
 //   130 → killed                  force-terminated (double Ctrl+C; the
 //                                 daemon's kill is the same path)
 // A death by signal (no exit code — a SIGKILL from outside, or a SIGINT that
@@ -535,10 +536,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     }
   }
 
-  // DELETE /runs/<id>: mid-run control in P1 is kill-only. The core's
-  // process owns SIGINT (a single press is captured and logged; the second
-  // within the window force-terminates with exit 130 — auto-core
-  // src/loop.ts:82-96), so the daemon's kill is the double press: two
+  // DELETE /runs/<id>: mid-run control in P1 is kill-only. The push run's
+  // process owned SIGINT (a single press captured and logged; the second
+  // within the window force-terminating with exit 130 — its loop retired
+  // with auto-core plans/0314), so the daemon's kill is the double press: two
   // SIGINTs inside the window, producing exactly the 130 the vocabulary
   // maps to killed. The graceful /exit pause needs the P3 transport
   // (Control.requestExit is an in-process service) and is not reachable
@@ -819,12 +820,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       }
       const dispatch = async (): Promise<Response> => {
         const envelope = (outcome: OpOutcome): Response => json(outcome.status, { project: project.name, directory: project.directory, ...outcome.body })
-        // The plan operation's unlocked loop route spawns a planning run
-        // (P3c): the same startRun POST /runs uses, carrying the plan
-        // payload (stopBefore === "execute" through the worker entry). The
-        // op has released the run lock by the time it calls this (the
-        // worker's own runAll takes the lock, and the daemon's in-process
-        // hold would refuse its own child).
+        // A write operation owns its directory while it runs: a second write
+        // operation on the same project answers 409 while one is in flight
+        // (each acquires the run lock around its own span), and any
+        // operation answers 409 beside a live coordinator run.
         if (!op.write(body)) return envelope(await op.run({ project, body, query: url.searchParams }))
         if (opInFlight.has(project.directory)) {
           return json(409, {

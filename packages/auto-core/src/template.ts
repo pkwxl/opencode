@@ -40,7 +40,6 @@ import tplDecomposeV from "../templates/prompts/decompose-v.md" with { type: "fi
 import tplClassifyError from "../templates/prompts/classify-error.md" with { type: "file" }
 import tplCloseAudit from "../templates/prompts/close-audit.md" with { type: "file" }
 import tplContextBase from "../templates/prompts/context-base.md" with { type: "file" }
-import tplDefaultCheck from "../templates/prompts/default-check.md" with { type: "file" }
 import tplDiagnose from "../templates/prompts/diagnose.md" with { type: "file" }
 import tplDigestIndex from "../templates/prompts/digest-index.md" with { type: "file" }
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
@@ -48,7 +47,6 @@ import tplFanout from "../templates/prompts/fanout.md" with { type: "file" }
 import tplFix from "../templates/prompts/fix.md" with { type: "file" }
 import tplFormulateSynthesize from "../templates/prompts/formulate-synthesize.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
-import tplModeBrief from "../templates/prompts/_mode-brief.md" with { type: "file" }
 import tplParkRelease from "../templates/prompts/park-release.md" with { type: "file" }
 import tplPartials from "../templates/prompts/_partials.md" with { type: "file" }
 import tplPlanVerify from "../templates/prompts/plan-verify.md" with { type: "file" }
@@ -95,10 +93,6 @@ const embedded: Record<string, string> = {
   // the close arms (src/close-audit.ts).
   "close-audit": tplCloseAudit,
   "context-base": tplContextBase,
-  // The record-time charter check (plans/0082 §10 D12) and the planning
-  // input's admission warn (D14b): one bare one-shot over the charter and a
-  // recorded text, its `Clamp:` line driver-parsed.
-  "default-check": tplDefaultCheck,
   // The blockage diagnosis session (plans/0082 §4 D4/D5): the mode brief +
   // dossier prompt whose reply is the strictly parsed remediation plan.
   diagnose: tplDiagnose,
@@ -114,10 +108,6 @@ const embedded: Record<string, string> = {
   // strict delimiters.
   "formulate-synthesize": tplFormulateSynthesize,
   "handoff-steer": tplHandoffSteer,
-  // The core-owned operating-mode brief (plans/0082 §3 D3): registered data,
-  // rendered as pre-built text the way intent-pack sections are, injected at
-  // diagnosis time only — never a persisted copy in the target.
-  "_mode-brief": tplModeBrief,
   // The dependency park's release note (plans/0096 D7): the resumed task's
   // first dispatch carries it — the blocker's id, how it ended and the
   // re-merge surface (the blocker's changed paths ∩ the task's Touches:).
@@ -203,19 +193,11 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // reply's one JSON line by these two keys, and an override must still show
   // the error text and the current time the reset time is resolved against.
   "classify-error": ['"class"', '"resetAt"', "{{error}}", "{{now}}"],
-  // The record-time charter check (plans/0082 §10 D12): the driver parses
-  // the reply's `Clamp:` line verbatim, and an override must still show the
-  // charter and the text under review — a clamp judged against nothing.
-  "default-check": ["Clamp:", "{{charter}}", "{{text}}"],
   // The blockage diagnosis session (plans/0082 §4 D5): the driver parses the
   // remediation plan's sections strictly (blockage.ts parseRemediationPlan)
   // and the charter line is the read-only discipline where the adapter
   // cannot enforce it — an override dropping either breaks the contract.
   diagnose: ["## Analysis", "## Options", "## Escalation", "Recommendation:", "{{dossier}}", "{{file}}"],
-  // The operating-mode brief (plans/0082 §3 D3): the ownership table and the
-  // channel list are the brief's whole point — an override dropping the
-  // channel table would propose remediations against imaginary mechanics.
-  "_mode-brief": ["## Surfaces and ownership", "## Remediation channels", "Driver-exclusive state"],
   // The capped digest's index form (plans/0061 R3/A7): the index lines are
   // the form's entire content — an override dropping {{index}} would send a
   // cap notice with no data (the figure slots are filled at render time,

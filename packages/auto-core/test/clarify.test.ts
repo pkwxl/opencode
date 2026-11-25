@@ -6,9 +6,10 @@
 // survey, the dirty tree, nothing awaiting, already released) and the two
 // dirty-tree shapes (the person's uncommitted answer folds into the release
 // commit; anything beyond the target refuses). The analysis surface drives
-// plain repositories (transfer.test's shapes); the survey surface rides the
-// loop fixture through run's boundary stop and the advance that follows
-// (survey-gate's walkthrough with the command in place of the hand edit).
+// plain repositories (transfer.test's shapes); the survey surface seeds the
+// held boundary by hand (the task loop retired, plans/0314) and follows it
+// with the advance (survey-gate's walkthrough with the command in place of
+// the hand edit).
 import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -19,14 +20,12 @@ import { briefProposal } from "../src/brief"
 import { transferDeterministic } from "../src/transfer"
 import { autoSwitches, setSwitchModelRegistry } from "../src/switches"
 import { renderTaskIndex } from "../src/tasks"
-import { artifactTurns, loopFixture, phaseHandover, taskDoc, type LoopFixture } from "./fixtures/loop"
+import { phaseHandover, taskDoc } from "./fixtures/loop"
 import { freshRepo, git } from "./fixtures/runner"
 
 const made: string[] = []
-const fixtures: LoopFixture[] = []
 afterEach(() => {
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true })
-  for (const fixture of fixtures.splice(0)) rmSync(fixture.dir, { recursive: true, force: true })
 })
 
 // Scrub the ambient OPENCODE_AUTO_* layer and capture the terminal around a
@@ -320,98 +319,60 @@ describe("clarify: an unreleased analysis past the project start (plans/0204 D1)
 })
 
 describe("clarify: the survey release (plans/0116 D1/D4)", () => {
-  test("the held boundary: the mark lands before the eof terminator, the gate passes, and the advance completes the phase with the brief installed", async () => {
+  test("the held boundary: the stop teaches the command, the mark lands before the eof terminator, the gate passes, and the advance completes the phase with the brief installed", async () => {
     // The survey-gate walkthrough with the command in place of the hand
-    // edit: run stops at the held boundary, clarify releases, the advance
+    // edit: the boundary is seeded held (the task loop retired, plans/0314)
+    // — the phase's work done, its survey recording one fork and proposing a
+    // brief — the advance holds there, clarify releases, the advance
     // completes the phase and installs the approved brief.
-    const f = await loopFixture("survey,implement", (dir) => ({
-      turn: (ctx) => {
-        if (ctx.text.includes("only performs the wrap-up")) {
-          const id = /docs\/(T-\d+)\/report\.md/.exec(ctx.text)?.[1]
-          if (id) {
-            mkdirSync(join(dir, "docs", id), { recursive: true })
-            writeFileSync(
-              join(dir, "docs", id, "report.md"),
-              [
-                `# Report (${id})`,
-                "",
-                "- every acceptance criterion: met (the fake agent inspected the unit's work).",
-                "",
-                "## Overall conclusion",
-                "",
-                "Done.",
-                "",
-                "Result: PASS",
-                "",
-                "<!-- auto: eof -->",
-                "",
-              ].join("\n"),
-            )
-          }
-          return undefined
-        }
-        if (ctx.text.includes("# T-002: task T-002\n")) {
-          const surveyDir = join(dir, "docs/R-01/P01-survey")
-          mkdirSync(surveyDir, { recursive: true })
-          writeFileSync(
-            join(surveyDir, "survey.md"),
-            [
-              "# Survey (docs/R-01/P01-survey/survey.md)",
-              "",
-              "Fork: scope — the journal too reshapes R-02's schedule; Recommend: the core only.",
-              "",
-              "## Project brief",
-              "",
-              "A clean-room reimplementation of the core.",
-              "",
-              "<!-- auto: eof -->",
-              "",
-            ].join("\n"),
-          )
-          return undefined
-        }
-        return artifactTurns(dir)(ctx)
-      },
-    }))
-    fixtures.push(f)
-    await mkdirSync(join(f.dir, ".opencode/auto/phases"), { recursive: true })
-    await Bun.write(join(f.dir, ".opencode/auto/phases/survey.md"), SURVEY_TYPE)
-    await establishRound(f.dir, { phases: "survey,implement" })
-    await mkdirSync(join(f.dir, "docs"), { recursive: true })
+    const dir = await repo()
+    await mkdirSync(join(dir, "docs"), { recursive: true })
     await Bun.write(
-      join(f.dir, "docs/analysis.md"),
+      join(dir, "docs/analysis.md"),
       ["# Project analysis", "", "## Analysis", "", "Two modules.", "", "## Goals", "", "Ship it.", "", "## Project brief", "", "A faithful port.", "", "## Roadmap", "", "- R-01 survey,implement — port the core", "", `${CLARIFIED_MARK}`, ""].join("\n"),
     )
-    await f.commit("round setup")
-    const held = await f.run()
+    await surveyBoundary(dir, [
+      "# Survey (docs/R-01/P01-survey/survey.md)",
+      "",
+      "Fork: scope — the journal too reshapes R-02's schedule; Recommend: the core only.",
+      "",
+      "## Project brief",
+      "",
+      "A clean-room reimplementation of the core.",
+      "",
+      "<!-- auto: eof -->",
+      "",
+    ])
+    const held = await captureAdvance(() => transferDeterministic(dir, { phases: "survey,implement" }))
     expect(held.code).toBe(2)
     expect(held.lines.some((line) => line.includes("P01-survey Survey awaits your clarification"))).toBe(true)
     // The stop teaches the command (D7).
     expect(held.lines.some((line) => line.includes("then release it: opencode-auto clarify"))).toBe(true)
     // The release: the fork and its default printed for review, the mark
     // written before the terminator, the driver's own commit.
-    const { result } = await capture(() => clarifyGate(f.dir, { phases: "survey,implement" }))
+    const { result } = await capture(() => clarifyGate(dir, { phases: "survey,implement" }))
     expect(result.type).toBe("released")
     expect(result.lines.some((line) => line.includes("the release of docs/R-01/P01-survey/survey.md accepts every recorded default:"))).toBe(true)
     expect(result.lines.some((line) => line.includes("Fork: scope — the journal too reshapes R-02's schedule; Recommend: the core only."))).toBe(true)
-    const surveyText = await Bun.file(join(f.dir, "docs/R-01/P01-survey/survey.md")).text()
+    const surveyText = await Bun.file(join(dir, "docs/R-01/P01-survey/survey.md")).text()
     expect(surveyText.trimEnd().endsWith("<!-- auto: eof -->")).toBe(true)
     expect(surveyText.includes(CLARIFIED_MARK)).toBe(true)
-    expect(await git(f.dir, "log", "--format=%s")).toContain("PLAN clarify R-01.P01 survey (release the recorded forks)")
-    expect((await git(f.dir, "status", "--porcelain")).trim()).toBe("")
+    expect(await git(dir, "log", "--format=%s")).toContain("PLAN clarify R-01.P01 survey (release the recorded forks)")
+    expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
     // Byte-equivalence at the gate: the same problems pass that the hand
     // edit clears, and the brief proposal is in force for the install.
-    const state = (await readPhases(f.dir, 1))!
-    expect(await phaseGateProblems(f.dir, state.phases[0]!, phaseGates(state.phases[0]!, []))).toEqual([])
+    const state = (await readPhases(dir, 1))!
+    expect(await phaseGateProblems(dir, state.phases[0]!, phaseGates(state.phases[0]!, []))).toEqual([])
     expect(briefProposal(surveyText)).toContain("clean-room reimplementation")
     // The advance applies the landed handover and installs the approved brief.
     const phase = state.phases[0]!
-    await Bun.write(join(f.dir, phase.dir, "handover.md"), phaseHandover(phase.dir))
-    await f.commit("distill released survey")
-    const advanced = await captureAdvance(() => transferDeterministic(f.dir, { phases: "survey,implement" }))
+    await Bun.write(join(dir, phase.dir, "handover.md"), phaseHandover(phase.dir))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "distill released survey")
+    const advanced = await captureAdvance(() => transferDeterministic(dir, { phases: "survey,implement" }))
     expect(advanced.code).toBe(0)
-    expect(existsSync(join(f.dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
-    expect(await Bun.file(join(f.dir, ".opencode/auto/brief.md")).text()).toContain("clean-room reimplementation")
+    expect(existsSync(join(dir, "docs/R-01/P01-survey/done.md"))).toBe(true)
+    expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toContain("clean-room reimplementation")
   })
 
   test("the person's uncommitted answer beside the fork rides the release commit; changes beyond the survey refuse", async () => {

@@ -3,11 +3,11 @@
 // driver-side construction — allocate the number, write the formulation
 // task's todo.md (the single synthesized prompt input, rendered by
 // prompt-plan's renderFormulationTodo) and the index's first line, land the
-// `PLAN formulate` commit — plus the recognition helpers the loop, the runner
-// and closeUnit share. Modeled on addTask (plans/0058): no session starts
-// here, the write path is beginUnit-gated, and the landing is idempotent (a
-// re-entry that would rewrite the same body writes nothing). It never imports
-// the loop or the session-driving layer.
+// `PLAN formulate` commit — plus the recognition helpers the executor steps,
+// transfer's advance and the read-outs share. Modeled on addTask (plans/0058):
+// no session starts here, the write path is beginUnit-gated, and the landing
+// is idempotent (a re-entry that would rewrite the same body writes nothing).
+// It never imports the session-driving layer.
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { beginUnit, commitTree } from "./git"
@@ -36,9 +36,9 @@ export const isFormulation = (task: Pick<Task, "formulate">, phase: PlanPhase): 
 // not yet run — pending or blocked, never in flight — wherever it sits in the
 // index (beside hand-added tasks too, the review-seam state --new-task
 // creates). The one predicate of the dispatch seam: plan's dispatch route,
-// transfer's advance pre-check, the loop's stop-condition branch and the
-// compose digest-keep all ask this same question, so a hand-added task beside
-// the todo never hides the awaiting review.
+// transfer's advance (its pre-check and its digest-keep), the executor's
+// grants and the read-outs all ask this same question, so a hand-added task
+// beside the todo never hides the awaiting review.
 export function awaitingFormulation<T extends Pick<Task, "id" | "formulate" | "status">>(tasks: readonly T[], phase: PlanPhase): T | undefined {
   return tasks.find((task) => isFormulation(task, phase) && task.status !== "done" && task.status !== "in_progress")
 }

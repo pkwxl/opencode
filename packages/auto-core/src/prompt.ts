@@ -251,8 +251,9 @@ export function docConcurrencyVars(facts: PromptFacts, maxSessions: number | und
 // The single render exit, now also the guarantees gate (plans/0080 §3): when
 // the active pack declares `### asserts`, every composed prompt is checked
 // against them before it leaves the render layer — a violation throws
-// PromptGuaranteeError, which the run boundary (loop.ts) maps to a blocked
-// exit. The gate sees this function's output only; driver-authored feedback
+// PromptGuaranteeError, which the executor's synthesize step reports as the
+// grant's problems. The gate sees this function's output only;
+// driver-authored feedback
 // appended at call sites and non-template sends (steer placeholder fills,
 // probes) are outside its claim by design. A pack without the subsection
 // renders byte-identically (the zero-intent floor).

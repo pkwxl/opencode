@@ -101,7 +101,7 @@ describe("the ambient-holder boundary (auto-core plans/0194)", () => {
     // …the dynamic form too…
     expect(holderImports([{ file: "src/index.ts", text: `const s = await import("@opencode-ai/auto-core/services")` }])).toEqual(["src/index.ts"])
     // …while other core subpaths are not the holder…
-    expect(holderImports([{ file: "src/index.ts", text: `import { runAll } from "@opencode-ai/auto-core/loop"` }])).toEqual([])
+    expect(holderImports([{ file: "src/index.ts", text: `import { transferDeterministic } from "@opencode-ai/auto-core/transfer"` }])).toEqual([])
     // …and prose naming the path without the quoted specifier is not an
     // import (headers may teach the rule they enforce).
     expect(holderImports([{ file: "src/index.ts", text: `// never import the ambient holder (auto-core/services) from here` }])).toEqual([])
@@ -135,7 +135,7 @@ describe("the specifier-only boundary (auto-core plans/0196 D3)", () => {
     expect(escapeImports([{ file: "test/e2e.test.ts", text: `import { main } from "../src/index"` }], pkgRoot)).toEqual([])
     expect(escapeImports([{ file: "src/index.ts", text: `import { x } from "./templates.d"` }], pkgRoot)).toEqual([])
     // …and the package specifier is the sanctioned route, not a violation…
-    expect(escapeImports([{ file: "src/index.ts", text: `import { runAll } from "@opencode-ai/auto-core/loop"` }], pkgRoot)).toEqual([])
+    expect(escapeImports([{ file: "src/index.ts", text: `import { transferDeterministic } from "@opencode-ai/auto-core/transfer"` }], pkgRoot)).toEqual([])
     // …and prose without a quoted relative specifier after from/import( is
     // not an import (headers may teach the rule they enforce).
     expect(escapeImports([{ file: "src/index.ts", text: `// reach the core only through @opencode-ai/auto-core/* — never a relative path out` }], pkgRoot)).toEqual([])

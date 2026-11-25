@@ -66,8 +66,8 @@ const BRIEF_DOC_PUNCTUATION = new Set([CLARIFIED_MARK])
 // The `## Project brief` proposal inside a survey (plans/0081 D15.1): the
 // section body between the heading and the next level-1/2 heading, comments
 // stripped, or undefined when the survey carries none or the body is empty.
-// Pure, so the install step (loop-phase.ts) and the tests share one
-// extraction.
+// Pure, so the release arms that install it (src/plan.ts) and the tests
+// share one extraction.
 export function briefProposal(surveyText: string): string | undefined {
   const lines = stripComments(surveyText).split("\n")
   const start = lines.findIndex((line) => line.trim() === BRIEF_PROPOSAL_HEADING)
@@ -121,10 +121,11 @@ export async function writeBrief(dir: string, text: string): Promise<void> {
 }
 
 // The commit seam the brief install runs through: the free commitTree of
-// git.ts and the run's git service share this shape, so the loop's install
-// (through ctx.git, the no-commit test double included) and the prelude's
-// (the free function) are one implementation. The optional paths parameter
-// is the install's own pathspec (plans/0207 D1) — a seam that ignores it
+// git.ts and the run's git service share this shape, so the prelude's install
+// (the free function) and the advance's (through its ctx.git seam, the
+// no-commit test double included) are one implementation. The optional paths
+// parameter is the install's own pathspec (plans/0207 D1) — a seam that
+// ignores it
 // (the doc-lane decorator, a three-argument test double) keeps its own
 // scoping, exactly as before.
 type BriefCommitter = (
@@ -151,11 +152,11 @@ type BriefCommitter = (
 // document still uncommitted rides the install as its evidence; a released-
 // and-committed one contributes nothing), never the person's unrelated
 // uncommitted work — the release consumptions run ahead of the clean gate,
-// and what they fold is unlisted otherwise. Inside the loop the tree is
-// clean, so the pathspec is behavior-neutral there except that the install
-// no longer absorbs the completion rename that precedes it — the transition
-// commit keeps the phase's close-out booking. The commit failure is a
-// warning line, never a throw — the caller's stop owns the exit code.
+// and what they fold is unlisted otherwise. Inside the push loop the tree
+// was clean, so the pathspec was behavior-neutral there except that the
+// install no longer absorbed the completion rename that preceded it — the
+// transition commit keeps the phase's close-out booking. The commit failure
+// is a warning line, never a throw — the caller's stop owns the exit code.
 export async function installBriefProposal(dir: string, source: string, proposal: string, commit: BriefCommitter): Promise<string[]> {
   const target = join(dir, BRIEF_FILE)
   const equal = (await Bun.file(target).text().catch(() => "")) === `${proposal}\n`

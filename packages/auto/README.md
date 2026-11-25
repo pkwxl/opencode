@@ -1266,7 +1266,6 @@ shows the full set. Switches whose `off` is an emergency exit say so.
 | `OPENCODE_AUTO_PARK` | on | The dependency park (`Status: park <blocker>`); `off` reads the park line as the invalid-handoff case it was (the emergency exit) |
 | `OPENCODE_AUTO_RECOVERY_WAIT` | 30 | Wait-and-probe interval in minutes for session failures that exhaust the ladder |
 | `OPENCODE_AUTO_REGRESSION` | on | The regression lane and its phase-close hold where the pack declares a regression-cost row; `off` launches nothing (the emergency stop) |
-| `OPENCODE_AUTO_REMEDIATE` | on | Consented remediation (the blockage dossier and the `Choice:` executor); `off` returns the static behavior (the emergency exit) |
 | `OPENCODE_AUTO_RETRY_WAITS` | 0,1,2,4,8 | The retry ladder for transient session errors, waits in minutes, the element count the cap; `off` = no retries |
 | `OPENCODE_AUTO_STEER` | on | Session-handover context management (usage notices, `docs/T-NNN/handoff.md`); `off` is the floor — no notices, no handover demand |
 | `OPENCODE_AUTO_STEP` | off | Step mode: hard-pause at `phase` / `task` / `subtask` boundaries, waiting for Enter |
@@ -1276,7 +1275,8 @@ shows the full set. Switches whose `off` is an emergency exit say so.
 
 Retired variables (permanent tombstones): `OPENCODE_AUTO_REF_CHECK`, `OPENCODE_AUTO_REUSE_SESSION`,
 `OPENCODE_AUTO_HANDOVER_CONCURRENT`, `OPENCODE_AUTO_TASK_CONTEXT`, `OPENCODE_AUTO_PLAN_VERIFY`,
-and `OPENCODE_AUTO_SYNTHESIS_TIMEOUT`. Synthesis now runs through an executor lease. A set retired
+`OPENCODE_AUTO_SYNTHESIS_TIMEOUT` and `OPENCODE_AUTO_REMEDIATE`. Synthesis runs through an executor lease;
+the blockage diagnosis is removed, and no step reads the remediation switch. A set retired
 variable prints one
 `⚠ … is retired` notice at run start and changes nothing; a notice, never a usage error, so a stale
 shell profile cannot cost an unattended run.

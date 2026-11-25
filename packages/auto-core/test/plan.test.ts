@@ -5,11 +5,11 @@
 // D8) needs the loop harness (plans/0053 A7, B6); run's drift stop (D34)
 // lands here too — it precedes the agent pool's start, so runAll drives it without an
 // agent over the same fixtures.
-import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { completePhase, currentRound, establishRound, phaseLabel, phaseTailDrift, readPhases, type PhaseUnit } from "../src/phases"
-import { planPrelude, plannedLines, roundCompleteNext } from "../src/plan"
+import { planPrelude } from "../src/plan"
 import { saveProgress } from "../src/resume"
 import { setSwitchModelRegistry, SWITCH_ENV } from "../src/switches"
 import { qualifiedPhase, renderTaskIndex } from "../src/tasks"
@@ -807,105 +807,6 @@ describe("planPrelude: --new-task (row 11, plans/0058)", () => {
     })
     expect(await exists(dir, "docs/R-01/P01-implement/tasks.md")).toBe(false)
   }))
-})
-
-describe("plan's stop lines (D8, D15)", () => {
-  test(
-    "planned: the phase and count when phased, the id span in m mode",
-    withDir(async (dir) => {
-      await establishRound(dir, { phases: "am" })
-      const [analysis] = await phasesOf(dir)
-      expect(plannedLines("/p", analysis!, ["T-004", "T-005"], false)).toEqual([
-        "✓ planned R-01.P01 analysis: 2 task(s) in docs/R-01/P01-analysis/tasks.md",
-        `next: review them (edit lines, close a task, or add more with opencode-auto plan /p --new-task "<title>"), then run: opencode-auto run /p`,
-      ])
-      expect(plannedLines("/p", analysis!, ["T-012", "T-013", "T-015"], true)[0]).toBe("✓ planned 3 task(s) (T-012…T-015) into docs/R-01/P01-analysis/tasks.md")
-      expect(plannedLines("/p", analysis!, ["T-012"], true)[0]).toBe("✓ planned 1 task(s) (T-012) into docs/R-01/P01-analysis/tasks.md")
-    }),
-  )
-
-  test("a round completed inside plan: the next round opens on the next plan", () => {
-    expect(roundCompleteNext("/p", 1)).toBe("next: fill in ## Close of docs/R-01/round.md, commit, then run opencode-auto plan /p to open round R-02")
-  })
-})
-
-describe("run's drift stop (D34)", () => {
-  // The OPENCODE_AUTO_* environment is scrubbed and console.log captured
-  // around each runAll (the loop harness's conventions): hibernation windows
-  // and ambient switches stay out, and the stop line is assertable.
-  async function runQuiet(run: () => Promise<number>): Promise<{ code: number; lines: string[] }> {
-    const saved = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key))
-    for (const [key] of saved) delete process.env[key]
-    const lines: string[] = []
-    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-      lines.push(args.map((arg) => String(arg)).join(" "))
-    })
-    try {
-      return { code: await run(), lines }
-    } finally {
-      printed.mockRestore()
-      for (const [key, value] of saved) if (value !== undefined) process.env[key] = value
-    }
-  }
-
-  // The fixture preflight needs: a git repository as init leaves it, with the
-  // agent contract and a committed round — the stop the drift check makes
-  // precedes the agent pool's start, so no agent has to exist.
-  test(
-    "runAll exits 1 naming transfer and writes nothing; a value the sync refuses stops with the guard's error",
-    withDir(async (dir) => {
-      const { runAll } = await import("../src/loop")
-      await establishRound(dir, { phases: "amt" })
-      await completePhase(dir, (await phasesOf(dir))[0]!)
-      mkdirSync(join(dir, ".opencode", "agent"), { recursive: true })
-      writeFileSync(join(dir, ".opencode", "agent", "auto.md"), "contract\n")
-      await commitAll(dir)
-      const before = await read(dir, "docs/R-01/phases.md")
-      const stopped = await runQuiet(() => runAll(dir, { phases: "amv" }))
-      expect(stopped.code).toBe(1)
-      expect(stopped.lines).toContain(
-        `⏸ the phase index of round R-01 (P01-analysis, P02-implement, P03-test) differs from config phases ` +
-          `(P01-analysis, P02-implement, P03-acceptance): run opencode-auto transfer ${dir} to re-derive its unstarted phases`,
-      )
-      expect(await read(dir, "docs/R-01/phases.md")).toBe(before)
-      expect(await exists(dir, "docs/R-01/P03-acceptance")).toBe(false)
-      expect(await exists(dir, "docs/R-01/P03-test/todo.md")).toBe(true)
-      const refused = await runQuiet(() => runAll(dir, { phases: "mt" }))
-      expect(refused.code).toBe(1)
-      expect(refused.lines).toContain(
-        '⏸ phase flow blocked: phases "mt" would drop the completed phase docs/R-01/P01-analysis/ from docs/R-01/phases.md',
-      )
-    }),
-  )
-
-  test(
-    "a moved roadmap line is run's drift authority too: the stop names the roadmap, never config (D5)",
-    withDir(async (dir) => {
-      const { runAll } = await import("../src/loop")
-      await commitAll(dir)
-      mkdirSync(join(dir, "docs"), { recursive: true })
-      // The released roadmap's R-01 line (amt) established the round; the
-      // person then edits the line to am — run refuses before the pool,
-      // naming the roadmap as the value the index drifted from (config "am"
-      // agrees with the edited line; naming config would name nothing).
-      writeFileSync(join(dir, "docs/analysis.md"), FILLED_ANALYSIS)
-      await establishRound(dir, { phases: "amt" })
-      mkdirSync(join(dir, ".opencode", "agent"), { recursive: true })
-      writeFileSync(join(dir, ".opencode", "agent", "auto.md"), "contract\n")
-      await commitAll(dir)
-      // The person's line edit, committed like theirs would be — run's start
-      // requires a clean tree.
-      writeFileSync(join(dir, "docs/analysis.md"), FILLED_ANALYSIS.replace("- R-01 amt — port the core and its tests", "- R-01 am — port the core"))
-      await commitAll(dir)
-      const stopped = await runQuiet(() => runAll(dir, { phases: "am" }))
-      expect(stopped.code).toBe(1)
-      expect(stopped.lines).toContain(
-        `⏸ the phase index of round R-01 (P01-analysis, P02-implement, P03-test) differs from the roadmap of docs/analysis.md ` +
-          `(P01-analysis, P02-implement): run opencode-auto transfer ${dir} to re-derive its unstarted phases`,
-      )
-      expect(stopped.lines.some((line) => line.includes("differs from config phases"))).toBe(false)
-    }),
-  )
 })
 
 // A filled, releasable analysis document: every section holds content, one

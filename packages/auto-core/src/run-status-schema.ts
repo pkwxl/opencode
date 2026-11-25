@@ -78,8 +78,9 @@ export const RUN_STATUS_EVENT_TYPES = [
 
 export type RunStatusEventType = (typeof RUN_STATUS_EVENT_TYPES)[number]
 
-// The run's exit vocabulary (src/loop.ts' exit-code comment and its
-// ExitRequested catch): 0 = all tasks done; 1 = usage/setup error; 2 =
+// The run's exit vocabulary (the push loop's exit-code comment and its
+// ExitRequested catch — the module retired with plans/0314, the codes
+// standing as the vocabulary): 0 = all tasks done; 1 = usage/setup error; 2 =
 // blocked, waiting for a human outside the session and re-run; 3 = the
 // graceful /exit pause (progress persisted, re-run resumes precisely); 130 =
 // force-killed by double Ctrl+C.

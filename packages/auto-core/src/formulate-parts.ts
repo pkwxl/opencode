@@ -1,22 +1,16 @@
-// The phased formulation's composition state (plans/0097 D3's gathering,
-// split out of src/loop-plan.ts by plans/0235 so that module keeps its
-// under-600 promise): the earlier phases' distilled handovers (shared by the
-// planning and appending prompts, so both sessions see the same chain), the
-// first-planning-session digest block (the booking half, read once), the
-// remediable sources re-read before every compose pass
-// (readFormulationSources — plans/0208 D2's split of 0156 D4's captured
-// set), the floor's block map, and the verify-time preview document.
-// Direction: loop-plan → formulate-parts → the provider
-// domains; never imports the loops.
+// The formulation's source assembly (plans/0097 D3's gathering, split out of
+// the former loop-plan module by plans/0235; the push compose's booking half
+// retired with that module, plans/0314): the remediable sources re-read
+// before every derivation (readFormulationSources — plans/0208 D2's split of
+// 0156 D4's captured set), the prior-round digest block's pure computation,
+// and the floor preview document.
+// Direction: the executor steps (src/executor-steps.ts) → formulate-parts →
+// the provider domains; never imports a session-driving module.
 import { join } from "node:path"
 import { analysisText } from "./analysis"
 import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
-import { formatTokens, log } from "./log"
-import type { LoopCtx } from "./loop-task"
-import { DEFAULT_CONTEXT_LIMIT } from "./opts"
-import { phaseHandoverDoc, phaseState, phaseTitle, prevRoundDigest, type PhaseState, type PhaseUnit } from "./phases"
+import { phaseHandoverDoc, phaseTitle, prevRoundDigest, type PhaseState, type PhaseUnit } from "./phases"
 import { roundBriefText } from "./round-brief"
-import { statsDigest } from "./stats"
 import { renderTaskTodo } from "./tasks"
 import { estimateTokens } from "./usage"
 
@@ -42,42 +36,31 @@ export function previewFormulationDocument(todo: { goal: string; scope: string; 
   })
 }
 
-// The phased formulation's composition state (the former phasePlanPrompt's
-// gathering, plans/0095 D1; split from the render by plans/0097 D3 so the
-// synthesis pipeline reads the same parts as the floor): the earlier phases'
-// handovers (the joined text for the floor, per document for the synthesis
-// source list), the first-planning-session prior-round digest, the round
-// brief, the approved analysis (human-gated phases), the final-phase report
-// duty and the pipeline-trimming note. The per-source health findings (the
-// missing handover documents, the expected-but-absent digest) ride along —
-// the crux's "never silence" rule. Two halves (plans/0208 D2): the sources
-// readFormulationSources derives (handovers, round, analysis — remediable
-// process documents) re-read before every compose pass; the booking half
-// (the digest block below) and the driver-exclusive state read once.
-export type FormulationParts = {
-  state: PhaseState
+// The earlier phases' distilled handovers (the joined text the prompt
+// injects), the round brief and the approved analysis — the side-effect-free
+// sources of the formulation's composition (plans/0095 D1's gathering,
+// plans/0097 D3's split from the render). The per-source health findings (the
+// missing handover documents) ride along — the crux's "never silence" rule.
+type FormulationSources = {
   handovers: string
   handoverDocs: { path: string; text: string }[]
   missingHandovers: string[]
-  prevRound: string | undefined
-  prevRoundExpected: boolean
   round: string | undefined
   analysis: string | undefined
-  trimmedPhases: boolean
 }
 
 // The side-effect-free sources of the composition state (plans/0208 D2): the
 // documents the remediation executor's channel table passes — the handovers,
 // the round brief, the analysis — read over the phase state (itself
 // driver-exclusive, never remediated, so the captured state serves every
-// pass). One derivation home: the entry read and every freshen pass compose
-// through it, so a remediated source reaches the next compose pass, never a
-// stale capture (0156 D4's contract, held for the whole remediable set).
+// pass). One derivation home, so a remediated source reaches the next
+// derivation, never a stale capture (0156 D4's contract, held for the whole
+// remediable set).
 export async function readFormulationSources(
   directory: string,
   phase: PhaseUnit,
   state: PhaseState,
-): Promise<Pick<FormulationParts, "handovers" | "handoverDocs" | "missingHandovers" | "round" | "analysis">> {
+): Promise<FormulationSources> {
   // Earlier phases' handovers (injection discipline): only the distilled
   // handovers are injected, never the earlier phases' raw docs/. Each done phase
   // that precedes this one in the phase index is appended in order; the handover
@@ -106,56 +89,19 @@ export async function readFormulationSources(
   return { handovers, handoverDocs, missingHandovers, round, analysis }
 }
 
-export async function formulationParts(ctx: LoopCtx, phase: PhaseUnit): Promise<FormulationParts> {
-  const { directory, opts } = ctx
-  const state = await phaseState(directory)
-  const sources = await readFormulationSources(directory, phase, state)
-  // Extra injection for the round's first planning session: ① prior knowledge
-  // (the shell's startup distillation of existing migration results,
-  // docs/R-NN/prior-kb.md, see src/knowledge.ts); ② the previous round's
-  // conclusions (when a previous round directory exists). Later phases follow
-  // the handover chain and get neither again.
-  // "First" = no completed phase of this round has tasks (plans/0049 G4): a
-  // leading task-less knowledge phase has no planning session and must not
-  // swallow the digest.
-  const block = await priorRoundBlock(directory, state, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT)
-  if (block.prevRound) {
-    log(
-      block.capped
-        ? `ℹ prior migration conclusions exceed the digest cap (${formatTokens(block.total)} tokens > ${formatTokens(block.cap)}); injecting the index form instead — the session opens what it needs`
-        : "ℹ injecting prior migration conclusions (prior knowledge + previous round's archive excerpts)",
-    )
-  }
-  await statsDigest(directory, block.stats)
-  // The round brief and the analysis ride `sources` (readFormulationSources
-  // above — the fresh half); the digest block stays here, the booking half.
-  return {
-    state,
-    ...sources,
-    prevRound: block.prevRound,
-    prevRoundExpected: block.prevRoundExpected,
-    // No analysis/design phase delivered in this round's index → the
-    // implement phase's planning gets the pipeline-trimming note. A closed
-    // analysis/design phase (plans/0053 D16: done for scheduling, not
-    // delivered) counts as absent.
-    trimmedPhases: !state.phases.some((unit) => (unit.type === "analysis" || unit.type === "design") && !state.closed.has(unit.id)),
-  }
-}
-
 // The prior-round digest block's pure computation (plans/0281's split of the
 // 0097 D3 gathering): the digest cap logic above a quarter of the context
 // limit (estimated by the same token estimate the usage source uses), the
-// index form above it — one derivation home shared by the push compose loop
-// (formulationParts, which logs and books the stats beside it) and the
-// executor's synthesize derivation (readSynthesisAssembly, which reads it
-// read-only — a preview writes nothing, P6).
+// index form above it — one derivation home; the push compose loop that
+// logged and booked the stats beside it retired with plans/0314, and the
+// executor's synthesize derivation (readSynthesisAssembly) reads it
+// read-only — a preview writes nothing, P6.
 export type PriorRoundBlock = {
   prevRound: string | undefined
   prevRoundExpected: boolean
   capped: boolean
   total: number
   cap: number
-  stats: { priorKnowledge?: number; prevRound?: number; capped: boolean }
 }
 
 export async function priorRoundBlock(directory: string, state: PhaseState, contextLimit: number): Promise<PriorRoundBlock> {
@@ -176,24 +122,14 @@ export async function priorRoundBlock(directory: string, state: PhaseState, cont
     capped = joined !== undefined && total > cap
     prevRound = capped ? renderDigestIndex(await digestIndexEntries(directory), { total, cap }) : joined
   }
-  return {
-    prevRound,
-    prevRoundExpected,
-    capped,
-    total,
-    cap,
-    stats: {
-      priorKnowledge: prior === undefined ? undefined : estimateTokens(prior),
-      prevRound: prev === undefined ? undefined : estimateTokens(prev),
-      capped,
-    },
-  }
+  return { prevRound, prevRoundExpected, capped, total, cap }
 }
 
 // The earlier phases' distilled handovers in index order, one block per done
 // phase that precedes `phase` (the injection discipline: only distilled
-// handovers, never the earlier phases' raw docs/). Shared by the planning and
-// appending prompts, so both sessions see the same chain.
+// handovers, never the earlier phases' raw docs/). Read by the source
+// assembly above — the push planning and appending prompts that shared it
+// are retired (plans/0283, plans/0314).
 export async function earlierHandovers(directory: string, phase: PhaseUnit, state: PhaseState): Promise<string> {
   const earlier = state.phases.slice(0, state.phases.findIndex((unit) => unit.id === phase.id))
   return (

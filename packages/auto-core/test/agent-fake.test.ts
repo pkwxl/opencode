@@ -21,7 +21,6 @@ import { preflight } from "../src/loop-preflight"
 import { unprotect } from "../src/protect"
 import { attempt } from "../src/attempt"
 import { singleHost, startPool } from "../src/agent-pool"
-import { requireArtifact } from "../src/artifact"
 import { degrade } from "../src/capability"
 import { ExitRequested } from "../src/exit"
 import type { SessionChain, Watch } from "../src/chain"
@@ -56,8 +55,8 @@ import type { Plan, Task } from "../src/tasks"
 import { watch } from "../src/watch"
 import { workOrder } from "../src/work-order"
 import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgentOptions, MODEL, type TurnContext, type TurnScript, WINDOW } from "./fixtures/agent"
-import { artifactTurns, appendOneTask, loopFixture, promptPhaseDir, type LoopFixture } from "./fixtures/loop"
-import { clockAt, fixedClock, manualClock } from "./fixtures/clock"
+import { artifactTurns, appendOneTask, promptPhaseDir } from "./fixtures/loop"
+import { fixedClock, manualClock } from "./fixtures/clock"
 import { freshRepo, git, task } from "./fixtures/runner"
 import { reloadUnits, seedUnits, unitsText } from "./fixtures/units"
 import { establishRound, readPhases, type PhaseUnit } from "../src/phases"
@@ -639,7 +638,6 @@ describe("registry routing (plans/0055 §6, §7)", () => {
         ]
       : undefined
 
-
   test("every prompt names the tier's first model; the dispatch line format comes from the selection", async () => {
     const agent = make()
     const chain = deepChain()
@@ -1155,7 +1153,6 @@ describe("context steps (plans/0055 §4.5)", () => {
   const stepsOpts = (over: Partial<Opts> = {}): Opts => ({ routing: facts([entry("k3", { model: BASE, wider: [WIDE] })]), ...over })
   const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
   const steerInputs = (agent: FakeAgent) => agent.argsOf("promptAsync").map((args) => args[0] as { session: string; text: string; model?: string })
-
 
   test("the steer at the step-up point names the next id and the chain records the reached step", async () => {
     const lines: string[] = []
@@ -2229,172 +2226,6 @@ describe("usage windows (plans/0057 §5.2)", () => {
   })
 })
 
-// Sessions bound to their agent (plans/0055 §8.2, §8.3): the persisted
-// records carry the agent profile their session lives on, and on resume a
-// recorded session is used only if its agent is this run's and its recorded
-// model is usable now — or, since plans/0219 D2, curable by its own schedule
-// (blocked only by its window and opening at a known instant) — otherwise it
-// is a dead session, and the resume takes the existing path of a new session
-// with the resume note.
-// Strict resume's default flipped to on (2026-10, ruling P-1 of
-// plans/0070): these binding verdicts are branch-independent, and the
-// records here are not git-backed (no unit baseline), so the cases pin the
-// non-strict branch — the switch goes explicit-off, the emergency-off.
-describe("session-agent binding (plans/0055 §8.2, §8.3)", () => {
-  const LOOSE = parseSwitches({ [SWITCH_ENV.strictResume]: "off" })
-  const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
-  const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
-  // Friday 2026-09-25 12:00 UTC: w's only window (18:00-24:00) is closed.
-  const NOW = Date.parse("2026-09-25T12:00:00Z")
-  const w = (() => {
-    const parsed = parseWindow("18:00-24:00")
-    if ("error" in parsed) throw new Error(parsed.error)
-    return entry("w", { model: "prov/w", only: [parsed.window] })
-  })()
-  const facts = (): RoutingFacts => ({
-    registry: {
-      layers: [{ name: "operator", path: "/unused/models.json" }],
-      tz: "UTC",
-      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
-      models: new Map([w, entry("b", { model: "prov/b" })].map((item) => [item.name, item])),
-      tiers: { deep: tierList("deep", ["w", "b"]), simple: tierList("simple", ["b"]) },
-      routes: new Map(),
-      unused: [],
-    },
-    agentFilter: "opencode",
-    filterSource: undefined,
-    defaultAgent: "opencode",
-    runAgent: "opencode",
-    router: services().router,
-    clock: clockAt(NOW),
-  })
-  const planTask = { id: "PLAN", title: "phase planning", status: "in_progress" as const, attempts: 0, body: "" }
-  const spec = (reset: () => void) => ({
-    kind: "phase planning",
-    step: { step: "phase-plan" as const, unit: "R-01.P01" },
-    artifact: "a filled task index",
-    requirement: "write the index",
-    reset: async () => {
-      reset()
-    },
-    collect: async () => 4,
-  })
-  const seededRecord = async (dir: string, record: { agent?: string; model?: string }) => {
-    await saveProgress(dir, {
-      task: "PLAN",
-      session: "ses_old",
-      at: 1,
-      active: true,
-      phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" },
-      ...record,
-    })
-  }
-
-  test("a session whose recorded model is not usable now is dead: the step is redone in a new session (0219 D2 re-pointed the old window shape — a window-only block is eligible-with-wait, the dead arm keeps the gone-model shape)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-bind-dead-"))
-    const lines: string[] = []
-    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-      lines.push(args.map(String).join(" "))
-    })
-    try {
-      // "gone" names no entry of the registry's lists — a stale record of a
-      // removed entry, a true dead verdict (the shapes 0219 D2 keeps).
-      await seededRecord(dir, { agent: "opencode", model: "gone" })
-      const agent = make()
-      let resetCalled = false
-      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => (resetCalled = true)), LOOSE)
-      expect(value).toBe(4)
-      // Dead session: the original is never prompted or forked; the step is
-      // redone in a new session (the existing redo path: reset + fresh
-      // dispatch, no note — the note belongs to the task-level resume).
-      expect(resetCalled).toBe(true)
-      expect(agent.prompts).toHaveLength(1)
-      expect(agent.prompts[0]!.session).not.toBe("ses_old")
-      expect(agent.argsOf("fork")).toEqual([])
-      // The new session dispatches on a usable candidate, not the recorded one.
-      expect(agent.prompts[0]!.model).toBe("prov/b")
-      expect(lines.some((line) => line.includes("the recorded session's model gone is not usable now") && line.includes("redoing this step in a new session"))).toBe(true)
-      // The record the new dispatch writes names the run's agent.
-      expect((await recallProgress(dir, "PLAN"))?.agent).toBe("opencode")
-    } finally {
-      printed.mockRestore()
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a recorded model blocked only by its window is eligible-with-wait: the session is resumed, the dispatch failing over to the usable candidate (plans/0219 D2, 0165-129)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-bind-window-"))
-    const lines: string[] = []
-    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-      lines.push(args.map(String).join(" "))
-    })
-    try {
-      // w is outside its only window at the record's clock, but it reopens at
-      // 18:00 — a schedule, not evidence of death: the alive session's
-      // context is kept (P20), and its next dispatch takes the first
-      // candidate usable now (the failover to b), §6.2's own law.
-      await seededRecord(dir, { agent: "opencode", model: "w" })
-      const agent = make()
-      let resetCalled = false
-      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => (resetCalled = true)), LOOSE)
-      expect(value).toBe(4)
-      expect(resetCalled).toBe(false)
-      expect(agent.prompts).toHaveLength(1)
-      expect(agent.prompts[0]!.session).toBe("ses_old")
-      expect(agent.prompts[0]!.text).toContain("You are continuing in the original, interrupted session")
-      // The reused session's dispatch fails over to the usable candidate.
-      expect(agent.prompts[0]!.model).toBe("prov/b")
-      expect(lines.some((line) => line.includes("not usable now"))).toBe(false)
-      expect((await recallProgress(dir, "PLAN"))?.agent).toBe("opencode")
-    } finally {
-      printed.mockRestore()
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a recorded session of another agent is dead even with a usable model", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-bind-agent-"))
-    const lines: string[] = []
-    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
-      lines.push(args.map(String).join(" "))
-    })
-    try {
-      await seededRecord(dir, { agent: "claude-b", model: "b" })
-      const agent = make()
-      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => {}), LOOSE)
-      expect(value).toBe(4)
-      expect(agent.prompts).toHaveLength(1)
-      expect(agent.prompts[0]!.session).not.toBe("ses_old")
-      expect(agent.argsOf("fork")).toEqual([])
-      expect(lines.some((line) => line.includes("the recorded session lives on agent claude-b") && line.includes("redoing this step in a new session"))).toBe(true)
-    } finally {
-      printed.mockRestore()
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a live record on this run's agent with a usable model is resumed and keeps its model", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-bind-live-"))
-    try {
-      // b is the second candidate but the only usable one; the resumed
-      // session continues on it (the continuation keeps the recorded entry).
-      await seededRecord(dir, { agent: "opencode", model: "b" })
-      const agent = make()
-      let resetCalled = false
-      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => (resetCalled = true)), LOOSE)
-      expect(value).toBe(4)
-      expect(resetCalled).toBe(false)
-      expect(agent.prompts).toHaveLength(1)
-      expect(agent.prompts[0]!.session).toBe("ses_old")
-      expect(agent.prompts[0]!.text).toContain("You are continuing in the original, interrupted session")
-      expect(agent.prompts[0]!.model).toBe("prov/b")
-      expect(agent.argsOf("create")).toEqual([])
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
-
 // The per-agent fork base (plans/0055 §8.4) over a two-agent pool of different
 // capabilities: the digest base is built lazily on the agent of the first
 // subtask that forks on it, dispatched with the model the `subtask` route
@@ -3447,202 +3278,6 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       clampSwitches({ steer: true })
     }
   })
-})
-
-// The plan-step consistency verifier (plans/0080 §5), driven through the
-// loop harness on the native fake agent over a real git repository: before a
-// planning session runs, one bare verifier session (the registry's classifier
-// entry) judges the composed planning prompt against the active pack's
-// `### verify-plan` charter. `Consistent: no` blocks the step (exit 2) with
-// the verdict recorded in the round's docs/R-NN/prompt-audit.md; a consistent
-// reply proceeds to the planning session; an unparsable reply fails closed
-// after its retry; a pack without the charter never opens a verifier session;
-// and a repair round's append input carries the active pack's `### repair`
-// discipline (plans/0080 §6 — the section that had no consumer before).
-//
-// Writing these cases found and fixed two wiring gaps in the landed §5
-// mechanism (the exact category this coverage exists for): oneShot ignored
-// the title parameter its verifier caller passes (src/classify.ts — the
-// session was created titled "auto: classify error"), and the audit write
-// landed uncommitted between the input commit and the planning unit's entry
-// clean gate, blocking the very step it documents (src/plan-gate.ts — it now
-// commits on its own ahead of the session, the savePlanInput pattern).
-describe("the plan step without the charter verifier (plans/0283: the verifier retired, the steps deterministic)", () => {
-  const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
-  const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
-  const routing = (): RoutingFacts => ({
-    registry: {
-      layers: [{ name: "operator", path: "/unused/models.json" }],
-      tz: "UTC",
-      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
-      models: new Map([entry("a", { model: "prov/a" }), entry("b", { model: "prov/b" }), entry("free", { model: "free/model" })].map((item) => [item.name, item])),
-      tiers: { deep: tierList("deep", ["a", "b"]), simple: tierList("simple", ["b"]) },
-      routes: new Map(),
-      unused: [],
-      classifier: { names: ["free"], layer: "operator" },
-    },
-    agentFilter: "opencode",
-    filterSource: undefined,
-    defaultAgent: "opencode",
-    runAgent: "opencode",
-    router: services().router,
-    clock: services().clock,
-  })
-
-  // The verifier prompt opens with this line (templates/prompts/plan-verify.md);
-  // the composed planning prompt it embeds carries the planning markers too, so
-  // this check comes first in every turn script below.
-  const VERIFY_MARK = "You read one prompt that a planning step"
-  const VERIFY_TITLE = "auto: plan consistency check"
-  const CHARTER = "This project runs a clean room: the reference implementation is never to be read, copied or translated."
-  const CONTRARY_INPUT = "Copy the reference implementation's modules over verbatim, reading its source directly."
-  const CHARTER_PACK = `# verify\n\n## guarantees\n\n### verify-plan\n\n${CHARTER}\n`
-
-  // A fixture over m mode with a pack overlay committed before the round: the
-  // planning step verifies against the pack's charter, the deep planning
-  // route's first entry (a) serving the verifier session (plans/0113).
-  async function verifierFixture(pack: string, turn: (dir: string) => TurnScript): Promise<LoopFixture> {
-    const f = await loopFixture("m", (dir): FakeAgentOptions => ({ turn: turn(dir) }))
-    await mkdir(join(f.dir, ".opencode", "auto", "intents"), { recursive: true })
-    await writeFile(join(f.dir, ".opencode", "auto", "intents", "verify.md"), pack)
-    await establishRound(f.dir, { phases: "m" })
-    await f.commit("round setup")
-    return f
-  }
-
-  // The verifier's scripted reply rides a bare one-shot session; everything
-  // else takes the artifact turns (planning writes the index and task
-  // documents, wrap-up writes a report per task — FAIL for the ids in
-  // `failing`, PASS for everything else).
-  const verdictTurn = (verdict: string | undefined, failing: ReadonlySet<string> = new Set()) => (dir: string): TurnScript => (ctx) => {
-    if (verdict !== undefined && ctx.text.includes(VERIFY_MARK)) {
-      return [ev.text(ctx.session, `vrf_${ctx.n}`, verdict), ev.idle(ctx.session)]
-    }
-    if (ctx.text.includes("only performs the wrap-up")) {
-      const id = /docs\/(T-\d+)\/report\.md/.exec(ctx.text)?.[1]
-      if (id) {
-        mkdirSync(join(dir, "docs", id), { recursive: true })
-        if (failing.has(id)) {
-          // The verification loop's FAIL channel (plans/0083 D2/D3): no
-          // report at all — the gap list instead, its closing result line the
-          // verdict, no terminator.
-          writeFileSync(
-            join(dir, "docs", id, "gaps.md"),
-            [
-              `# Gaps (${id})`,
-              "",
-              "## Verified OK",
-              "",
-              "- The wrap-up session inspected the work against the task's acceptance statements.",
-              "",
-              "## Gaps",
-              "",
-              "### Gap 1 — the acceptance gap stands",
-              "",
-              "The required behavior is not delivered (src/widget.ts): do what the acceptance asks.",
-              "",
-              "Result: FAIL the acceptance gap",
-              "",
-            ].join("\n"),
-          )
-        } else {
-          writeFileSync(
-            join(dir, "docs", id, "report.md"),
-            [
-              `# Report (${id})`,
-              "",
-              "The wrap-up session reviewed the work against the task's acceptance statements and",
-              "recorded the verification evidence: what was delivered, where it lives, and how it",
-              "was checked.",
-              "",
-              "Result: PASS",
-              "",
-              "<!-- auto: eof -->",
-              "",
-            ].join("\n"),
-          )
-        }
-      }
-      return undefined
-    }
-    return artifactTurns(dir)(ctx)
-  }
-
-  test("a contradictory planning input runs the planning session: no verifier session, no audit verdict, the charter's judgment nobody's machine (plans/0283)", async () => {
-    const f = await verifierFixture(
-      CHARTER_PACK,
-      verdictTurn(
-        'Consistent: no — the charter\'s "never to be read, copied or translated" contradicts the prompt\'s "Copy the reference implementation\'s modules over verbatim, reading its source directly" (in the planning input)',
-      ),
-    )
-    try {
-      const { code } = await f.run({ planInput: { text: CONTRARY_INPUT }, intent: "verify", routing: routing() })
-      // The retirement floor: the planning proceeds over the contradictory
-      // input — no verifier session opens (the switch itself is a
-      // tombstone), no audit verdict records, the run's own completion the
-      // only outcome.
-      expect(code).toBe(0)
-      expect(f.agent.prompts.some((prompt) => prompt.text.includes(VERIFY_MARK))).toBe(false)
-      const audit = await Bun.file(join(f.dir, "docs/R-01/prompt-audit.md")).text().catch(() => "")
-      expect(audit).not.toMatch(/(formulation|admission|handover) [^:]*: (INCONSISTENT|FAILED|consistent)/)
-      expect(existsSync(join(f.dir, "docs/R-01/P01-implement/tasks.md"))).toBe(true)
-    } finally {
-      await rm(f.dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a pack that declares a charter never opens a verifier session either: the run proceeds, nothing recorded (the retirement floor, plans/0283)", async () => {
-    const f = await verifierFixture(CHARTER_PACK, verdictTurn("Consistent: yes"))
-    try {
-      const { code } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing() })
-      expect(code).toBe(0)
-      expect(f.agent.prompts.some((prompt) => prompt.text.includes(VERIFY_MARK))).toBe(false)
-      const audit = await Bun.file(join(f.dir, "docs/R-01/prompt-audit.md")).text().catch(() => "")
-      expect(audit).not.toMatch(/(formulation|admission|handover) [^:]*: (INCONSISTENT|FAILED|consistent)/)
-      expect(existsSync(join(f.dir, "docs/R-01/P01-implement/tasks.md"))).toBe(true)
-    } finally {
-      await rm(f.dir, { recursive: true, force: true })
-    }
-  })
-
-  test("the formulation session routes the planning word (plans/0217 D1): the deep tier, the operator's phase-plan route, the unit's tail keeping its own roles", async () => {
-    // The fleet: deep [a, b], simple [b] — pre-0217 the formulation task
-    // dispatched as an ordinary whole task on the implement type's execute
-    // tier (b), the operator's planning route never reaching the session it
-    // was written for (0165-031).
-    const f = await verifierFixture(CHARTER_PACK, verdictTurn("Consistent: yes"))
-    try {
-      const { code } = await f.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routing() })
-      expect(code).toBe(0)
-      // The formulation task's session — the phase's planning, the one that
-      // writes every task document — takes the planning role's deep tier
-      // (a), and the unit's wrap-up keeps its own role (the simple tier's
-      // b): the override is stage-scoped. (The bare filter keeps the find
-      // off the verifier session, whose embedded copy of the composed
-      // prompt carries the same single-input mark — on the planning route
-      // already.)
-      const formulation = f.agent.prompts.find((prompt) => prompt.text.includes("single input of this formulation task") && prompt.bare !== true)
-      expect(formulation).toMatchObject({ model: "prov/a" })
-      const wrapup = f.agent.prompts.find((prompt) => prompt.text.includes("This session only performs the wrap-up"))
-      expect(wrapup).toMatchObject({ model: "prov/b" })
-    } finally {
-      await rm(f.dir, { recursive: true, force: true })
-    }
-    // The operator's phase-plan route reaches the formulation too: a route
-    // keyed by the planning word pins the session to its own entry.
-    const routed = routing()
-    routed.registry = { ...routed.registry, routes: new Map([["phase-plan", { key: "phase-plan", layer: "operator", names: ["b"] }]]) }
-    const g = await verifierFixture(CHARTER_PACK, verdictTurn("Consistent: yes"))
-    try {
-      const { code } = await g.run({ planInput: { text: "Reimplement the widget from the specification alone." }, intent: "verify", routing: routed })
-      expect(code).toBe(0)
-      const formulation = g.agent.prompts.find((prompt) => prompt.text.includes("single input of this formulation task") && prompt.bare !== true)
-      expect(formulation).toMatchObject({ model: "prov/b" })
-    } finally {
-      await rm(g.dir, { recursive: true, force: true })
-    }
-  })
-
 })
 
 // —— Doc lanes (plans/0099 stage C: the loop) —— //

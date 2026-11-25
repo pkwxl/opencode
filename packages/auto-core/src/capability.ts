@@ -77,7 +77,7 @@ type DegradeOpts = {
   dryrun?: boolean
   subtask?: SubtaskMode
   // The run-level derived fact "this run includes a code-producing phase"
-  // (plans/0083 D9, registry.ts anyCodeWork): the --test-by-driver steer
+  // (plans/0083 D9): the --test-by-driver steer
   // error below applies only to a run whose test channel can ever run — a
   // run over non-code phases only never steers a test result, so a fleet
   // without mid-turn steer is fine there. Absent = the channel may run

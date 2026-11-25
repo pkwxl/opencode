@@ -292,7 +292,8 @@ async function advanceDeterministic(directory: string, round: number, opts: RunA
   }
 }
 
-// The boundary's apply (plans/0282): the loop's own deterministic tail —
+// The boundary's apply (plans/0282 lifted the push loop's own deterministic
+// tail; the loop itself retired with plans/0314) —
 // the resume point closed, the gates and the wall read-only, the approved
 // brief installed, the completion rename, the transition commit. The loop's
 // session arms (the regression repair append, the verdict repair round) are
@@ -314,7 +315,7 @@ async function applyBoundaryDeterministic(
   if (gateProblems.length === 0) {
     // The wall ctx threads the advance's own intent (plans/0288, 0286 F1's
     // fix): the admission instrument reads the project's pack through it —
-    // the loop's own site passes the run's full ctx, and the deterministic
+    // the loop's own site passed the run's full ctx, and the deterministic
     // apply's minimal ctx here dropped the key, so the boundary held on
     // "no instrument" on any intent-bearing project even with the op
     // threading it. The remaining optional keys (idleMs and friends) stay
@@ -368,9 +369,10 @@ async function constructAndStopDeterministic(directory: string, phase: PhaseUnit
   return 0
 }
 
-// The round close (plans/0282): the loop's complete-route stopBefore-formulate
-// arm — the close-audit construction, the round-close checks gating the stop,
-// the baselines committed — the deterministic whole of it.
+// The round close (plans/0282): the push loop's complete-route
+// stopBefore-formulate arm — the close-audit construction, the round-close
+// checks gating the stop, the baselines committed — the deterministic whole
+// of it.
 async function roundCloseDeterministic(directory: string, round: number, opts: RunAllOpts): Promise<number> {
   const { bin } = shellProfile()
   const audit = await ensureCloseAudit(directory, round)

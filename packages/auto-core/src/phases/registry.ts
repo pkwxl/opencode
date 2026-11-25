@@ -287,17 +287,6 @@ export function codeWork(entry: { codeWork?: boolean } | undefined): boolean {
   return (entry ?? phaseType(REQUIRED_TYPE))!.codeWork === true
 }
 
-// Whether a phases value includes at least one code-producing type (the
-// run-level fact the capability clamp threads, plans/0083 D9): the run start
-// knows the phases value, not the per-task phase, and a run without any
-// code-producing phase never runs the test channel — so its steer-capability
-// error is moot. types is the resolved entry list (resolvePhases's output);
-// an unresolvable value (null — a usage error elsewhere) conservatively
-// counts as code work so the clamp never goes quiet on a broken config.
-export function anyCodeWork(entries: readonly PhaseTypeEntry[] | null): boolean {
-  return entries === null || entries.some((entry) => codeWork(entry))
-}
-
 // Resolve unit-relative artifact specs against a unit directory (repository-
 // relative, e.g. docs/R-01/P02-design or docs/T-014). Returns fresh objects.
 export function unitArtifactSpecs(specs: readonly ArtifactSpec[], unitDir: string): ArtifactSpec[] {

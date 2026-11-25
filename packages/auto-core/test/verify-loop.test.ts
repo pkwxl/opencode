@@ -23,14 +23,12 @@ import { renderWrapup } from "../src/prompt"
 import { promptFacts } from "../src/prompt-facts"
 import { promptViews } from "../src/tasks"
 import { taskDocPaths } from "../src/docpaths"
-import { establishRound } from "../src/phases"
 import { BUILTIN_PHASE_TYPES } from "../src/phases/registry"
-import { loopFixture, artifactTurns, type LoopFixture } from "./fixtures/loop"
+import { type LoopFixture } from "./fixtures/loop"
 import { reloadUnits, seedUnits } from "./fixtures/units"
 import { fakeClient, freshRepo, git } from "./fixtures/runner"
 import type { Opts } from "../src/opts"
 import type { SessionChain } from "../src/chain"
-import type { FakeAgentOptions, TurnScript } from "./fixtures/agent"
 
 const made: LoopFixture[] = []
 afterEach(() => {
@@ -108,51 +106,6 @@ describe("the per-row wrap-up of a ledger-bearing formulation task (0097 D8)", (
 })
 
 describe("the verification loop (0083 D1–D7)", () => {
-  // The loop fixture's turn script: the whole-task session writes source,
-  // the first verify session FAILs (the gap list), the fix session closes
-  // it, the re-verification passes.
-  const fixableTurns = (dir: string): TurnScript => {
-    let wrapups = 0
-    return (ctx) => {
-      if (ctx.text.includes("You are the fix session")) {
-        writeFileSync(join(dir, "FIXES.md"), `fix round ${wrapups}\n`)
-        return undefined
-      }
-      if (ctx.text.includes("only performs the wrap-up")) {
-        wrapups++
-        mkdirSync(join(dir, "docs", "T-001"), { recursive: true })
-        writeFileSync(join(dir, "docs", "T-001", wrapups === 1 ? "gaps.md" : "report.md"), wrapups === 1 ? gapListText("T-001") : passReport)
-        return undefined
-      }
-      if (ctx.text.includes("You are responsible for the whole task")) {
-        writeFileSync(join(dir, "src.ts"), "// the work\nexport const x = 1\n")
-        return undefined
-      }
-      return artifactTurns(dir)(ctx)
-    }
-  }
-
-  test("FAIL → fix → re-verify from scratch → PASS completes: the fix commit, the deleted gap list, the evidence report", async () => {
-    const f = await loopFixture("m", (dir): FakeAgentOptions => ({ turn: fixableTurns(dir) }))
-    made.push(f)
-    await establishRound(f.dir, { phases: "m" })
-    await f.commit("round setup")
-    const { code } = await f.run({ planInput: { text: "migrate the widget" } })
-    expect(code).toBe(0)
-    // The fix round committed with the execute stage and the round's subject.
-    const bodies = (await f.git("log", "--format=%B%n---")).split("---")
-    expect(bodies.some((body) => body.includes("Auto-Stage: execute") && body.includes("T-001 fix 1"))).toBe(true)
-    // The gap list is transient: deleted at the PASS close-out (the deletion
-    // landed in the wrap-up commit), the evidence report stands.
-    expect(existsSync(join(f.dir, "docs/T-001/gaps.md"))).toBe(false)
-    const report = await Bun.file(join(f.dir, "docs/T-001/report.md")).text()
-    expect(report).toContain("Result: PASS")
-    expect(report.trimEnd().endsWith(EOF_MARK)).toBe(true)
-    expect(await Bun.file(join(f.dir, "docs/T-001/done.md")).text()).toContain("# T-001")
-    expect((await f.git("status", "--porcelain")).trim()).toBe("")
-    expect((await f.git("log", "--format=%s")).split("\n").filter((line) => line.startsWith("T-001 fix "))).toHaveLength(1)
-  })
-
   test("a FAIL verdict without a gap list: one re-prompt with feedback, still failing → blocked, nothing committed", async () => {
     const dir = await freshRepo()
     try {

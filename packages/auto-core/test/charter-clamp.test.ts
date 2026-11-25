@@ -1,40 +1,32 @@
-// The record-time charter check and the clamp (plans/0082 §10 D12, §13's
-// Part II): parseDefaultCheckReply's strict grammar; clampRecordedResolves
-// over the ledger — a charter-consistent default passes silently, a
+// The record-time charter check's clamp (plans/0082 §10 D12, §13's Part
+// II): clampRecordedResolves over the ledger — a charter-consistent default passes silently, a
 // charter-touching default is flagged, re-recorded (the charter-consistent
 // reading in force, the wider grant the OPEN option) and carried OPEN
 // through the ledger; the phase-boundary surfacing line; and a check that
 // could not judge clamps fail-closed with the failure named, never a silent
 // flag (plans/0208 D1). Beside them the
 // Part II template pins: the shipped cleanroom charter's boundary sentence
-// (a golden for the bundle's verify-plan text, D11), the plan-verify
+// (a golden for the bundle's verify-plan text, D11) and the plan-verify
 // template's OPEN-judging rule and its location enumeration naming
-// handovers (D14c/d — the mechanical halves; the reply parser pins both
-// directions), and the admission warn's record shape (D14b).
+// handovers (D14c/d — the mechanical halves). The check's own session,
+// parser and prompt are gone (plans/0314); the clamp stays as the ledger's
+// re-recording half.
 import { describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { clampLine, clampMarkerLine, clampRecordedResolves, clampedItemsOf, setClampCaller } from "../src/charter-clamp"
-import { OPEN_FALLBACK_READING, parseDefaultCheckReply } from "../src/prompt-verify"
-import { parseVerifyReply } from "../src/prompt-verify"
 import { parseResolveLine, recordResolves, resolvesOf, type ResolveItem } from "../src/resolve"
 import { materializeIntentBundle, parseIntentBundle, resolveIntentBundle } from "../src/bundle"
 import { renderPrompt } from "../src/prompt"
 import { packSubsection } from "../src/intent/load"
 import { promptFacts } from "../src/prompt-facts"
 
-// —— the strict reply parser ——
-
-describe("parseDefaultCheckReply (plans/0082 §10 D12)", () => {
-  test("`Clamp: none` passes; `Clamp: <reading>` flags with the reading; the last line that parses wins", () => {
-    expect(parseDefaultCheckReply("some prose\n\nClamp: none")).toEqual({ clamp: false })
-    expect(parseDefaultCheckReply("Clamp: constants come only from the restated ABI")).toEqual({ clamp: true, reading: "constants come only from the restated ABI" })
-    expect(parseDefaultCheckReply("Clamp: none\n\nClamp: no reference-header reads")).toEqual({ clamp: true, reading: "no reference-header reads" })
-    expect(parseDefaultCheckReply("no protocol line at all")).toBeUndefined()
-    expect(parseDefaultCheckReply("Clamp:")).toBeUndefined()
-  })
-})
+// The failed arm's reading (plans/0208 D1): the check's strict fallback rides
+// in the arm it hands the clamp. The check itself — its one-shot session,
+// its reply parser and their prompt — retired with the push loop's run start
+// (plans/0314); the value stays here as the fixture the arm carries.
+const OPEN_FALLBACK_READING = "no default in force — the question is OPEN until the person rules"
 
 // —— the clamp over the ledger ——
 
@@ -325,14 +317,6 @@ describe("Part II template pins (plans/0082 §10 D11 / D14c-d)", () => {
     expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
-  test("the reply parser pins both directions (the OPEN deference and the settled contradiction are verdicts the driver parses)", () => {
-    const open = parseVerifyReply('Consistent: yes')
-    expect(open).toEqual({ consistent: true })
-    const settled = parseVerifyReply('Consistent: no — the charter\'s "never access" contradicts the prompt\'s "may be read by grep" (in the handovers)')
-    expect(settled).toEqual({ consistent: false, evidence: 'the charter\'s "never access" contradicts the prompt\'s "may be read by grep" (in the handovers)' })
-    expect(parseVerifyReply("garbage")).toBeUndefined()
-  })
-
   test("the ⚡ clamp line names the standing-decisions surface (plans/0109 D5 re-keying)", () => {
     const item = { question: "which key ring?", clamp: "rotate on the primary only" } as ResolveItem
     const line = clampLine(item, item.clamp!)
@@ -341,12 +325,4 @@ describe("Part II template pins (plans/0082 §10 D11 / D14c-d)", () => {
     expect(line).toContain("driver-helper renders the standing decisions")
   })
 
-  test("the default-check template carries the charter and the text under review with its Clamp protocol", () => {
-    const text = renderPrompt(promptFacts(), "default-check", { charter: "CHARTER-TEXT", label: "the recorded default of T-001", text: "DEFAULT-TEXT" })
-    expect(text).toContain("CHARTER-TEXT")
-    expect(text).toContain("DEFAULT-TEXT")
-    expect(text).toContain("the recorded default of T-001")
-    expect(text).toContain("Clamp: none")
-    expect(text).not.toMatch(/\{\{|\}\}/)
-  })
 })
